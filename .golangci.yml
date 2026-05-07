@@ -1,0 +1,25 @@
+version: "2"
+
+linters:
+  enable:
+    - gocyclo
+    - gocognit
+    - dupl
+    - funlen
+    - maintidx
+    - goconst
+  settings:
+    gocyclo:
+      min-complexity: 100
+    gocognit:
+      min-complexity: 150
+    dupl:
+      threshold: 100
+    funlen:
+      lines: 80
+      statements: 50
+    maintidx:
+      under: 20
+    goconst:
+      min-len: 3
+      min-occurrences: 3

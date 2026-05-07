@@ -1,0 +1,20 @@
+name: Go
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  go:
+    name: fmt / lint / test / coverage
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Nix
+        uses: DeterminateSystems/determinate-nix-action@v3.19.0
+      # Run the full default Make target inside the dev shell. This mirrors
+      # exactly what the local pre-commit hook enforces (gofumpt check,
+      # golangci-lint, go test, coverage regression vs coverage.txt).
+      - name: make all
+        run: nix develop --command make all

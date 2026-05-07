@@ -1,0 +1,17 @@
+# Build output
+/result
+/result-*
+/daft
+/cmd/daft/daft
+
+# Coverage artefacts (transient — coverage.txt baseline IS committed)
+/coverage.out
+
+# Direnv / Nix
+/.direnv/
+/.envrc.local
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.swo
