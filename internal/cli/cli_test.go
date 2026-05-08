@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -110,4 +111,69 @@ func TestVersionInvariantNonEmpty(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when version.Version is empty, got nil")
 	}
+}
+
+// FuzzExecute exercises the CLI dispatcher with arbitrary argv slices.
+//
+// Go's native fuzzer (go test -fuzz=FuzzExecute) only supports primitive
+// argument types, so we pass a single string and split on NUL to derive
+// argv. This lets the fuzzer explore both single-arg invocations
+// ("version") and multi-arg ones ("completion\x00bash", "-v\x00version", ...)
+// without inventing a binary protocol.
+//
+// Invariant tested: Execute must never panic. *Errors* are fine — most
+// random argv combinations correctly produce "unknown command" or a flag
+// parse failure. We only fail the fuzz iteration if the process would
+// crash (Go's fuzzer reports panics as failures automatically).
+//
+// Reproducers for any failure are written to
+// testdata/fuzz/FuzzExecute/<hash> and become permanent regression cases
+// replayed by every future `go test` run — commit those files.
+//
+// Run locally with:
+//
+//	go test -run='^$' -fuzz=FuzzExecute -fuzztime=30s ./internal/cli
+//
+// Without -fuzz, only the seed corpus below is exercised, behaving as
+// regular table-driven test cases.
+func FuzzExecute(f *testing.F) {
+	seeds := []string{
+		"",
+		"version",
+		"completion\x00bash",
+		"completion\x00zsh",
+		"completion\x00fish",
+		"completion\x00powershell",
+		"--help",
+		"-v\x00version",
+		"--verbose\x00version",
+		"--unknown-flag",
+		"definitely-not-a-real-subcommand",
+		// Pathological seeds — long strings, embedded NULs at boundaries,
+		// non-ASCII. The fuzzer mutates these into stranger inputs.
+		"version\x00\x00\x00",
+		"\x00",
+		"日本語",
+		strings.Repeat("a", 1024),
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		// Hermetically clear the env-var that PersistentPreRunE consults,
+		// otherwise host environment leakage could change behavior between
+		// runs and turn the fuzzer non-deterministic.
+		t.Setenv("DAFT_VERBOSE", "")
+
+		var args []string
+		if raw != "" {
+			args = strings.Split(raw, "\x00")
+		}
+
+		// Errors are expected for ill-formed input; we only care that
+		// Execute returns rather than panicking. Output is discarded —
+		// we're testing the dispatcher, not the rendering.
+		_ = Execute(args, io.Discard, io.Discard)
+	})
 }

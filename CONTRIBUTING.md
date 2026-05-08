@@ -61,6 +61,54 @@ you have a legitimate reason to drop coverage (e.g. you removed a heavily-
 tested package), update `coverage.txt` (`make cover`) in the same commit and
 explain why in the commit message.
 
+### Fuzz where you can
+
+> If something can be fuzzed, it should be fuzzed.
+
+Any function that ingests input from outside the program — CLI arguments,
+environment variables, files, network bytes, parsed configs, anything
+bytes-shaped from an untrusted source — gets a `FuzzXxx` target alongside
+its unit tests. Fuzzers find edge cases that hand-written tables miss, and
+they cost almost nothing once the harness is wired up.
+
+Mechanics:
+
+- Use Go's built-in fuzzer (`go test -fuzz`). No third-party dependency.
+- Seed the corpus generously with `f.Add(...)` — every interesting case you
+  can think of by hand. The fuzzer mutates outward from there.
+- Fuzz targets only accept primitive types. For structured input, take a
+  single `string` or `[]byte` and parse it into the shape you want inside
+  the fuzz body. See `FuzzExecute` in `internal/cli/cli_test.go` for the
+  pattern (NUL-separated argv).
+- Assert only invariants the fuzzer can verify mechanically: "doesn't panic",
+  "round-trips", "output satisfies property X". Don't write fuzz tests that
+  assert specific outputs — they'll fail constantly on every new input.
+- Make the test hermetic: clear or fix any environment variables, globals,
+  or filesystem state the function reads. Otherwise host noise turns the
+  fuzzer non-deterministic.
+
+Running fuzzers:
+
+```sh
+# Run only the seed corpus (acts as regular tests; this is what `make test` does):
+go test ./internal/cli
+
+# Actively fuzz for 30 seconds:
+go test -run='^$' -fuzz=FuzzExecute -fuzztime=30s ./internal/cli
+
+# Or by iteration count:
+go test -run='^$' -fuzz=FuzzExecute -fuzztime=100000x ./internal/cli
+```
+
+Without `-fuzztime`, fuzzing runs until you Ctrl-C — useful when hardening
+a feature, but pick a budget for routine local runs.
+
+When the fuzzer finds a crash, Go writes the failing input to
+`testdata/fuzz/<FuzzName>/<hash>` in the package directory. **Commit those
+files.** From then on, every `go test` (with no flags) replays them
+deterministically as regression cases — a one-time discovery becomes a
+permanent test forever.
+
 ## Code style
 
 ### Document with comments the toolchain picks up

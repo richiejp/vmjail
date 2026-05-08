@@ -37,6 +37,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
 - Every feature ships with tests.
 - Use runtime assertions liberally: any invariant that can be checked, should be.
 - Write doc comments on exported identifiers (so `go doc` picks them up).
+- Any function that ingests outside input gets a `FuzzXxx` target — see
+  `CONTRIBUTING.md` for the pattern.
 
 ## Open questions
 
