@@ -101,6 +101,44 @@
             };
           };
 
+          # Cloud Hypervisor — our v1 VMM, built from our pinned submodule
+          # rather than nixpkgs. Static-musl is the eventual goal per
+          # PLAN.md; for the first pass we accept the dynamic build that
+          # cargo+rustc produce by default and tighten in a later slice.
+          cloud-hypervisor = pkgs.rustPlatform.buildRustPackage {
+            pname = "cloud-hypervisor";
+            version = "51.1";
+
+            src = ./third_party/cloud-hypervisor;
+
+            cargoLock = {
+              lockFile = ./third_party/cloud-hypervisor/Cargo.lock;
+              outputHashes = {
+                "micro_http-0.1.0" = "sha256-7/4qOdb983JD70ZgpZv/fa5HFWMSQk5JseRpPQ0OU0k=";
+              };
+            };
+
+            # The workspace ships several binaries; we only need the main
+            # cloud-hypervisor for boot. ch-remote is useful for poking at
+            # a running VM from the shell — keep it too.
+            cargoBuildFlags = [ "--bin" "cloud-hypervisor" "--bin" "ch-remote" ];
+
+            # Cloud Hypervisor's tests assume a fully-featured KVM host
+            # plus root and a network. None of that is available in the
+            # Nix build sandbox.
+            doCheck = false;
+
+            nativeBuildInputs = with pkgs; [ pkg-config ];
+
+            meta = with pkgs.lib; {
+              description = "Cloud Hypervisor microVM monitor";
+              homepage = "https://www.cloudhypervisor.org/";
+              license = with licenses; [ asl20 bsd3 ];
+              maintainers = [ ];
+              platforms = [ "x86_64-linux" "aarch64-linux" ];
+            };
+          };
+
           # u-root command, built from our pinned submodule rather than
           # nixpkgs. We use it in a later slice to assemble the initramfs
           # cpio that boots the sandbox VM. The vendorHash pins the Go
