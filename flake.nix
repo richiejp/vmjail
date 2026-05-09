@@ -132,15 +132,45 @@
             };
           };
 
-          # Sandbox-VM initramfs: a cpio with daft-agent as /init.
+          # Sandbox-VM initramfs, assembled by u-root.
+          #
+          # Layout:
+          #   /init           — u-root's pure-Go init (cmds/core/init);
+          #                     mounts /proc, /sys, devtmpfs, cgroup2, etc.,
+          #                     reaps zombies, and execs /bin/uinit.
+          #   /bin/uinit ->   /bin/daft-agent (symlink, set via -uinitcmd)
+          #   /bin/daft-agent — our statically-linked agent.
+          #
+          # Hardening posture (matches PLAN.md "Hardening"):
+          #   -defaultsh=""    no shell symlink
+          #   -base=/dev/null  no default /etc, /bin/sh, etc.
+          # Only u-root's `init` busybox-binary and our agent end up in the
+          # archive — no interpreters, no diagnostic tools, zero setuid.
           initramfs = pkgs.runCommand "daft-initramfs.cpio.gz" {
-            nativeBuildInputs = with pkgs; [ cpio gzip ];
+            nativeBuildInputs = [ pkgs.go pkgs.gzip pkgs.cpio ];
           } ''
-            mkdir -p root
-            cp ${daft-agent}/bin/daft-agent root/init
-            chmod +x root/init
-            (cd root && find . -print0 | cpio --null --create --format=newc) \
-              | gzip > $out
+            export HOME=$TMPDIR
+            export GOCACHE=$TMPDIR/go-cache
+            export GOPATH=$TMPDIR/go
+            # u-root spawns `go` to compile init; it locates the toolchain
+            # via $GOROOT/bin/go, so spell GOROOT out explicitly. (Nix's
+            # `go` package puts the toolchain under share/go.)
+            export GOROOT=${pkgs.go}/share/go
+            # u-root needs to resolve cmds/core/init's package path inside
+            # its own module, so run from the u-root checkout.
+            cp -r ${./third_party/u-root} u-root-src
+            chmod -R u+w u-root-src
+            cd u-root-src
+
+            ${u-root}/bin/u-root \
+              -o $TMPDIR/initramfs.cpio \
+              -defaultsh="" \
+              -base=/dev/null \
+              -files "${daft-agent}/bin/daft-agent:bin/daft-agent" \
+              -uinitcmd=/bin/daft-agent \
+              ./cmds/core/init
+
+            gzip < $TMPDIR/initramfs.cpio > $out
           '';
 
           # Linux kernel for the sandbox VM, built from the pinned

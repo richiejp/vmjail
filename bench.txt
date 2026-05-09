@@ -1,0 +1,4 @@
+BenchmarkConfigFromEnv 98.95
+BenchmarkExecuteVersion 28271
+BenchmarkHelloBoot 307110555
+BenchmarkScanForBanner 38194

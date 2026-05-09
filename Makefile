@@ -1,4 +1,4 @@
-.PHONY: all fmt check-fmt lint test cover cover-check hooks build build-daft build-daft-agent build-daft-sandboxd clean help
+.PHONY: all fmt check-fmt lint test cover cover-check bench bench-check hooks build build-daft build-daft-agent build-daft-sandboxd clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -22,6 +22,8 @@ help:
 	@echo "  test        - go test ./..."
 	@echo "  cover       - update committed coverage.txt baseline"
 	@echo "  cover-check - fail if coverage drops > 1pp vs coverage.txt"
+	@echo "  bench       - update committed bench.txt baseline"
+	@echo "  bench-check - fail on >2x regressions, warn on >1.1x, vs bench.txt"
 	@echo "  hooks       - install git pre-commit hook into .git/hooks"
 	@echo "  build       - build daft, daft-agent, daft-sandboxd (statically)"
 
@@ -84,6 +86,36 @@ cover-check:
 		} \
 		printf "OK: coverage delta %.2fpp (baseline %.2f -> current %.2f)\n", -drop, b, c; \
 	}'
+
+## Benchmarks ----------------------------------------------------------------
+#
+# We track ns/op per benchmark in bench.txt to catch order-of-magnitude
+# regressions — performance noise is too high for a tight gate, but a
+# 2x slowdown almost always means a bug.
+#
+# `make bench` updates the baseline; `make bench-check` runs the
+# benchmarks and compares them to the baseline (>2x fails, >1.1x warns).
+# The integration boot benchmark (BenchmarkHelloBoot) is gated on the
+# DAFT_* artifact env vars and /dev/kvm; without them it self-skips and
+# we just compare whichever benches did run.
+
+BENCH_BASELINE := bench.txt
+BENCH_OUT := bench.out
+# Use the default 1s benchtime: tiny benches run millions of iterations
+# and stabilise; the e2e BenchmarkHelloBoot at ~300 ms/op gets 3-4
+# iterations naturally. Lower benchtimes (e.g. -benchtime=3x) flap badly
+# on the microbenchmarks because cobra setup is dominated by GC noise.
+BENCH_FLAGS := -bench=. -run=^$$ -benchmem
+
+bench:
+	@go test $(BENCH_FLAGS) $(OUR_GO_PKGS) | tee $(BENCH_OUT)
+	@awk '/^Benchmark/ { name = $$1; sub(/-[0-9]+$$/, "", name); print name, $$3 }' \
+		$(BENCH_OUT) | sort > $(BENCH_BASELINE)
+	@rm -f $(BENCH_OUT)
+	@echo "Updated baseline $(BENCH_BASELINE)"
+
+bench-check:
+	@go test $(BENCH_FLAGS) $(OUR_GO_PKGS) | scripts/bench-check.sh $(BENCH_BASELINE)
 
 ## Git hooks -----------------------------------------------------------------
 

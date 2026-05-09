@@ -26,11 +26,14 @@ the same change.
 ## Quick commands
 
 ```sh
-make fmt      # format Go code
-make lint     # golangci-lint
-make test     # go test ./...
-make cover    # update coverage.txt baseline
-make hooks    # install pre-commit hook into .git/hooks
+make fmt          # format Go code
+make lint         # golangci-lint
+make test         # go test ./...
+make cover        # update coverage.txt baseline
+make bench        # update bench.txt baseline (run with DAFT_* env vars
+                  # set to also include BenchmarkHelloBoot)
+make bench-check  # fail >2x regressions, warn >1.1x, vs bench.txt
+make hooks        # install pre-commit hook into .git/hooks
 ```
 
 ## Things that bite
@@ -39,5 +42,9 @@ make hooks    # install pre-commit hook into .git/hooks
   than 1.0 percentage point vs `coverage.txt`. If you legitimately need a
   bigger drop (e.g. you deleted a heavily-tested package), update `coverage.txt`
   in the same commit and explain it in the message.
+- The pre-commit hook also fails if any benchmark in `bench.txt` regresses by
+  more than 2.00× (>100% slower); a >1.10× regression only warns. The point is
+  to catch order-of-magnitude bugs, not micro-optimisations. Update `bench.txt`
+  with `make bench` if a real perf change is intentional.
 - Tag pushes are validated against `version.txt` by CI — bump `version.txt`
   before tagging.

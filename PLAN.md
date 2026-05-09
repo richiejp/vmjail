@@ -94,7 +94,14 @@ Out of Scope:
 - [x] All shipped binaries statically linked (Go via CGO=0, Cloud
       Hypervisor via static-musl). Single-executable `daft-sandboxd`
       bundles VMM + kernel + initramfs (~23 MiB).
-- [ ] u-root-based init (replace daft-agent-as-PID-1)
+- [x] u-root-based init: `cmds/core/init` runs as PID 1, mounts /proc,
+      /sys, devtmpfs, cgroup2, then execs daft-agent via /bin/uinit.
+      Initramfs is assembled by the `u-root` command driven from the
+      Nix flake.
+- [x] Performance regression gate: `make bench` writes a ns/op baseline
+      to `bench.txt`; `make bench-check` (run by the pre-commit hook)
+      fails on >2.00× regressions and warns on >1.10×. Includes a
+      KVM-gated `BenchmarkHelloBoot` end-to-end boot-time benchmark.
 - [ ] HTTP/2 + mTLS auth: client ↔ orchestrator
 - [ ] Workspace sync: desync chunks + daft-fuse
 

@@ -31,6 +31,11 @@ import (
 // for anyone scripting against the CLI.
 const envPrefix = "DAFT_"
 
+// versionCmdName is the name of the `daft version` sub-command. Promoted
+// to a constant so tests and benchmarks reference the same string the
+// command tree registers.
+const versionCmdName = "version"
+
 // NewRootCmd constructs the daft command tree. It is exported (lower-case
 // would be sufficient for cmd/daft, but tests in this package construct the
 // tree directly to exercise it without a subprocess).
@@ -126,7 +131,7 @@ func newSandboxHelloCmd() *cobra.Command {
 // command's configured Out writer (so tests can capture it).
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "version",
+		Use:   versionCmdName,
 		Short: "Print the daft version",
 		Long: "Print the embedded build version of the daft binary.\n\n" +
 			"The version is injected at build time via -ldflags from version.txt.\n" +

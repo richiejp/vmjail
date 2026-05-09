@@ -25,4 +25,7 @@ make --no-print-directory test
 echo "[pre-commit] coverage regression check (limit: 1.00pp drop)..."
 make --no-print-directory cover-check
 
+echo "[pre-commit] benchmark regression check (fail >2.00x, warn >1.10x)..."
+make --no-print-directory bench-check
+
 echo "[pre-commit] OK"
