@@ -146,9 +146,22 @@ Workspace:
 - Configuration of the sandbox and workspace itself
 
 ### file layout
-- `cmd/<name>/main.go` — entry points for binaries. Currently only `daft`.
+- `cmd/<name>/main.go` — entry points for binaries. Three so far:
+  - `cmd/daft` — host-side client CLI (`daft sandbox hello`, `daft version`,
+    `daft completion`).
+  - `cmd/daft-agent` — in-VM agent. Linux-only; runs as PID 1's child via
+    u-root's `-uinitcmd`.
+  - `cmd/daft-sandboxd` — sandbox-host single-executable bundle (~26 MiB).
+    Embeds cloud-hypervisor + virtiofsd + the kernel + the initramfs and
+    extracts them to `$XDG_CACHE_HOME/daft-sandboxd` on first run.
 - `internal/<pkg>` — non-exported library code; everything that isn't a `main`
   package or a top-level config file lives here.
+- `third_party/` — vendored upstream sources as git submodules (Linux
+  kernel 6.19.14, Cloud Hypervisor 51.1, virtiofsd 1.9.0, u-root 0.16.0).
+  No Go code under here is owned by us — Makefile and golangci-lint are
+  scoped to `cmd/` + `internal/` only.
+- `bench.txt`, `coverage.txt` — committed baselines; pre-commit hook
+  fails on coverage drop > 1pp or any benchmark > 2× regression.
 - `version.txt` — single source of truth for the released version. Read by
   `flake.nix` (Nix package version) and embedded into the `daft` binary at
   build time.
@@ -196,15 +209,22 @@ Client CLI:
   - Go control: vendor the OpenAPI spec, generate client with `oapi-codegen`; wrap behind `internal/vmm` interface
   - Fallbacks behind the same interface: Firecracker (no virtiofs/PCI, but snapshot-restore < 50 ms); QEMU q35 for exotic passthrough
   - Boot-to-agent target: 150–250 ms cold; sub-50 ms with snapshot-restore later
+  - Measured (BenchmarkHelloBoot, KVM, Intel i5-14500): ~310 ms cold,
+    ~349 ms with virtiofs share. Above target — kernel decompression and
+    cgroup setup dominate; revisit when we have a snapshot path or a
+    leaner kernel config.
 - Kernel: custom build, LLVM cross-compiled, stripped defconfig
   - Reuse the kernel-build approach from `richiejp/m`; replace its Zig init
   - On for CH guest: `CONFIG_VIRTIO_PCI`, `CONFIG_VIRTIO_FS`, `CONFIG_VSOCKETS`, `CONFIG_VIRTIO_VSOCKETS`, `CONFIG_FUSE_FS`, `CONFIG_VFIO_PCI`, `CONFIG_BPF`, `CONFIG_BPF_LSM`
   - Cmdline: `console=hvc0 reboot=t panic=-1 tsc=reliable clocksource=tsc random.trust_cpu=on`
 - Init: **u-root** `cmds/core/init` only (`github.com/u-root/u-root`)
   - Pure Go; mounts essentials, reaps zombies, execs `-uinitcmd`
-  - **No shell, no diagnostic tools shipped** — debugging is the agent's job over vsock
-  - daft-agent launched as `-uinitcmd`
-  - Replace with bespoke ~300-line Go init only if u-root blocks us
+  - Initramfs is built from the flake via `u-root -base=/dev/null
+    -defaultsh="" -uinitcmd=/bin/daft-agent ./cmds/core/init` so only
+    u-root's busybox-style init binary and our agent end up in the
+    image — no shell, no diagnostic tools.
+  - daft-agent runs as `/bin/uinit` (symlink to `/bin/daft-agent`).
+  - Replace with bespoke ~300-line Go init only if u-root blocks us.
 
 ### Container runtime (inside the VM)
 
@@ -319,11 +339,24 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
 
 ## Open questions
 
-- What is the actual product? `daft` is currently a shell with no real
-  subcommands beyond `completion` and `version`.
-- Code coverage baseline: the pre-commit hook compares against `coverage.txt`
-  in the repo root. Initial baseline is whatever the first run produces; we
-  refuse new commits that drop coverage by more than 1.0 percentage points.
+- **Authentication ergonomics**: TOFU + manual `daft auth approve` works
+  for SSH-style trust but is awkward for a fleet of sandbox-hosts. When
+  do we promote the orchestrator to a CA and stop bothering the user
+  for every new host?
+- **Workspace sync UX**: do we want a `daft push` / `daft pull` model
+  (explicit, diff-visible, matches the "user controls when data moves"
+  principle) or live virtiofs streaming with a "freeze on suspicious IO"
+  hook (faster iteration, but the user trusts the policy engine to
+  catch exfil)? PLAN.md currently assumes the explicit model — revisit
+  when we have a real workload.
+- **virtiofsd static-musl**: nixpkgs' `pkgsStatic.libcap_ng` is missing
+  libc symbol references at archive-link time, so virtiofsd is the
+  only dynamic-linked binary in the daft-sandboxd bundle. Acceptable
+  for now (matches what nixpkgs ships), but breaks the
+  "no-dependency-on-host-libc" property on glibc-less hosts. Fix
+  upstream or work around with a custom link recipe.
+- **Boot-time gap**: measured ~310 ms vs the 150–250 ms target. Worth
+  the kernel-config diet before snapshot-restore lands?
 
 ## How to update this plan
 
