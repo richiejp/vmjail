@@ -1,5 +1,6 @@
 # bench.txt v1 — ns/op baseline; updated by 'make bench'.
-BenchmarkConfigFromEnv 97.21
-BenchmarkExecuteVersion 29272
-BenchmarkHelloBoot 310257852
-BenchmarkScanForBanner 37539
+BenchmarkConfigFromEnv 128.9
+BenchmarkExecuteVersion 28305
+BenchmarkHelloBoot 311470571
+BenchmarkHelloBootWithShare 349064971
+BenchmarkScanForBanner 36350
