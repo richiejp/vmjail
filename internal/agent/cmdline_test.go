@@ -92,6 +92,102 @@ func TestFormatShareCmdlineRoundTrips(t *testing.T) {
 	}
 }
 
+func TestParseBundleCmdline(t *testing.T) {
+	tests := []struct {
+		name      string
+		cmdline   string
+		want      string
+		wantOK    bool
+		wantErr   bool
+		errSubstr string
+	}{
+		{
+			name:    "absent",
+			cmdline: "console=hvc0 daft.share=ws:/share",
+			wantOK:  false,
+		},
+		{
+			name:    "happy path",
+			cmdline: "console=hvc0 daft.bundle=/share/bundle reboot=t",
+			want:    testBundlePath,
+			wantOK:  true,
+		},
+		{
+			name:      "empty value",
+			cmdline:   "daft.bundle= console=hvc0",
+			wantErr:   true,
+			errSubstr: "value is empty",
+		},
+		{
+			name:      "relative path",
+			cmdline:   "daft.bundle=relative/path",
+			wantErr:   true,
+			errSubstr: "must be absolute",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok, err := ParseBundleCmdline(tt.cmdline)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseBundleCmdline(%q) = nil err, want error containing %q", tt.cmdline, tt.errSubstr)
+				}
+				if !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Fatalf("err = %v, want substring %q", err, tt.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if ok && got != tt.want {
+				t.Fatalf("path = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatBundleCmdlineRoundTrips(t *testing.T) {
+	for _, p := range []string{testBundlePath, "/mnt/work/oci"} {
+		s := FormatBundleCmdline(p)
+		got, ok, err := ParseBundleCmdline(s)
+		if err != nil || !ok || got != p {
+			t.Errorf("round-trip of %q via %q: got=%q ok=%v err=%v", p, s, got, ok, err)
+		}
+	}
+}
+
+// FuzzParseBundleCmdline mirrors FuzzParseShareCmdline — guards the
+// bundle-path parser against panics on arbitrary kernel-cmdline-shaped
+// input. Same threat model as the share parser: untrusted bytes from
+// the cmdline.
+//
+// Run actively with:
+//
+//	go test -run='^$' -fuzz=FuzzParseBundleCmdline -fuzztime=30s ./internal/agent
+func FuzzParseBundleCmdline(f *testing.F) {
+	seeds := []string{
+		"",
+		"daft.bundle=/share/bundle",
+		"console=hvc0 daft.bundle=/x",
+		"daft.bundle=",
+		"daft.bundle=/",
+		"daft.bundle=relative",
+		"daft.bundle=/" + strings.Repeat("a", 4096),
+		"daft.bundle=\x00",
+		"daft.bundle=日本語",
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		_, _, _ = ParseBundleCmdline(raw)
+	})
+}
+
 // FuzzParseShareCmdline guards the cmdline parser against panics on
 // arbitrary kernel-cmdline-shaped input. The kernel cmdline is
 // bytes-shaped untrusted input from the host (someone could pass

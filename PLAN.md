@@ -117,8 +117,26 @@ Out of Scope:
         bundle. Static-musl build hits unresolved libc symbols in
         nixpkgs' libcap_ng-static; revisit when nixpkgs ships a
         complete static build, or contribute the fix.
-- [ ] Run a container inside the VM (using the share to deliver the
-      bundle: crun + a hand-built OCI bundle on the share path)
+- [x] Container in the VM (v0): crun vendored at third_party/crun
+      v1.9.2, built static-musl, bundled into the initramfs at
+      `/bin/crun`. A new in-repo binary `daft-hello-container` plus
+      a hand-rolled `contrib/hello-bundle/config.json` produce a
+      Nix-built OCI bundle (`.#hello-bundle`). `Config.Bundle` on the
+      sandbox API surfaces a `daft.bundle=<path>` token on the kernel
+      cmdline; the agent parses it after the share, execs
+      `crun run --no-pivot --bundle <path> daft-container`, and
+      forwards the container's stdout+stderr line-by-line with
+      `container: <…>` prefix on the shared console. KVM-gated
+      `TestHelloIntegrationBootsVMWithContainer` and
+      `BenchmarkHelloBootWithContainer` cover the e2e path; mock
+      tests + a fake-crun TestMain self-exec cover unit-level
+      branches; `FuzzParseBundleCmdline` joins the cmdline-parser
+      fuzz family. Container tax measured at ~10 ms over the
+      share-only baseline (343→353 ms cold-boot).
+      - **Note**: `--no-pivot` is needed because the bundle is
+        delivered through the share, so the rootfs is a sub-dir of a
+        virtiofs mount rather than its own mountpoint. Acceptable
+        for v0 — the VM is the security boundary, not the container.
 - [ ] HTTP/2 + mTLS auth: client ↔ orchestrator
 - [ ] Workspace sync: desync chunks + daft-fuse
 

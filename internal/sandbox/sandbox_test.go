@@ -37,8 +37,12 @@ const (
 	// ignores its args, so the paths only need to exist.
 	devNull = "/dev/null"
 	// testMountpoint is the in-VM share mountpoint reused across share
-	// tests. Promoted to a constant to satisfy goconst.
-	testMountpoint = "/share"
+	// tests; testTagDaftshare is the virtio-fs tag used by share +
+	// container integration tests; testBundlePath is the in-VM
+	// bundle path. Promoted to constants to satisfy goconst.
+	testMountpoint   = "/share"
+	testTagDaftshare = "daftshare"
+	testBundlePath   = "/share/bundle"
 )
 
 func TestMain(m *testing.M) {
@@ -437,6 +441,24 @@ func TestBuildKernelCmdlineIncludesShare(t *testing.T) {
 	}
 }
 
+func TestBuildKernelCmdlineIncludesBundle(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.Bundle = testBundlePath
+	got := buildKernelCmdline(cfg)
+	if !strings.Contains(got, agent.BundleCmdlineKey+"=/share/bundle") {
+		t.Errorf("cmdline %q missing bundle path", got)
+	}
+}
+
+func TestHelloRejectsRelativeBundle(t *testing.T) {
+	cfg := validCfg()
+	cfg.Bundle = "relative/bundle"
+	err := Hello(t.Context(), io.Discard, cfg)
+	if err == nil || !strings.Contains(err.Error(), "absolute") {
+		t.Fatalf("err = %v, want mention of absolute path", err)
+	}
+}
+
 func TestBuildMemoryArgAddsSharedOnForShare(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	if buildMemoryArg(cfg) != "size="+defaultMemory {
@@ -597,7 +619,7 @@ func TestHelloIntegrationBootsVMWithShare(t *testing.T) {
 
 	cfg.Share = &ShareConfig{
 		HostDir:    dir,
-		Tag:        "daftshare",
+		Tag:        testTagDaftshare,
 		Mountpoint: testMountpoint,
 	}
 
@@ -613,6 +635,90 @@ func TestHelloIntegrationBootsVMWithShare(t *testing.T) {
 	if !strings.Contains(buf.String(), wantLine) {
 		t.Fatalf("share line %q missing; full console output:\n%s", wantLine, buf.String())
 	}
+}
+
+// TestHelloIntegrationBootsVMWithContainer is the e2e proof of the
+// container slice: the host shares a bundle dir over virtiofs, sets
+// daft.bundle=/share on the cmdline, the agent mounts the share and
+// execs crun, and the host scanner sees the container's stdout
+// (forwarded with ContainerReportPrefix) before the agent banner.
+//
+// Skipped unless artifact env vars + DAFT_VIRTIOFSD + DAFT_BUNDLE +
+// /dev/kvm are all available.
+func TestHelloIntegrationBootsVMWithContainer(t *testing.T) {
+	cfg, err := ConfigFromEnv()
+	if err != nil {
+		t.Skipf("artifact env vars not set; skipping: %v", err)
+	}
+	if cfg.Virtiofsd == "" {
+		t.Skipf("%s not set; skipping", EnvVirtiofsd)
+	}
+	bundleSrc := os.Getenv(EnvBundle)
+	if bundleSrc == "" {
+		t.Skipf("%s not set; skipping", EnvBundle)
+	}
+	if _, err := os.Stat("/dev/kvm"); err != nil {
+		t.Skipf("/dev/kvm not available; skipping: %v", err)
+	}
+
+	// virtiofsd needs the share dir on a real filesystem with a path
+	// it can read; t.TempDir() qualifies. We populate it by copying
+	// the Nix-built bundle (which is read-only in the store) under
+	// share/bundle so the in-VM agent runs crun against /share/bundle.
+	shareDir := t.TempDir()
+	bundleInShare := filepath.Join(shareDir, "bundle")
+	if err := copyTree(bundleSrc, bundleInShare); err != nil {
+		t.Fatalf("copy bundle into share: %v", err)
+	}
+
+	cfg.Share = &ShareConfig{
+		HostDir:    shareDir,
+		Tag:        testTagDaftshare,
+		Mountpoint: "/share",
+	}
+	cfg.Bundle = testBundlePath
+
+	var buf bytes.Buffer
+	if err := Hello(t.Context(), &buf, cfg); err != nil {
+		t.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
+	}
+	wantLine := agent.ContainerReportPrefix + agent.ContainerBanner
+	if !strings.Contains(buf.String(), wantLine) {
+		t.Fatalf("container line %q missing; full console:\n%s", wantLine, buf.String())
+	}
+}
+
+// copyTree is a tiny os.CopyFS-style helper for the integration test.
+// Resolves symlinks at the root (Nix outputs are symlinks into the
+// store) so the walk descends into the actual directory tree.
+func copyTree(src, dst string) error {
+	resolved, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	return filepath.Walk(resolved, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(resolved, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		switch {
+		case info.IsDir():
+			return os.MkdirAll(target, 0o755)
+		default:
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			return os.WriteFile(target, data, info.Mode().Perm())
+		}
+	})
 }
 
 func TestHelloIntegrationBootsVM(t *testing.T) {

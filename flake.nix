@@ -47,6 +47,19 @@
         packages = rec {
           default = daft;
 
+          # goSrc is the project source as Go's tooling sees it: our
+          # repo minus third_party/crun, which contains a stray
+          # validate.go (under libocispec/runtime-spec/schema/) that
+          # references a Go module dep we don't want in our go.sum.
+          # crun is a C project; its Go file is upstream test
+          # infrastructure, irrelevant to our build.
+          goSrc = pkgs.lib.cleanSourceWith {
+            src = ./.;
+            filter = path: _type:
+              let rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
+              in !(pkgs.lib.hasPrefix "third_party/crun" rel);
+          };
+
           # mkDaftBinary builds one of our two cmd/ binaries from the
           # repo's go.mod. Shared so vendorHash stays defined once —
           # otherwise it drifts the next time go.mod changes.
@@ -66,7 +79,7 @@
           }: pkgs.buildGoModule {
             pname = name;
             inherit version;
-            src = ./.;
+            src = goSrc;
             vendorHash = "sha256-pprnK2JKmPuR3Q+F8+vMDEdowlb3oX4BOOzW8NGOqgs=";
             env.CGO_ENABLED = if cgoEnabled then "1" else "0";
             ldflags = [
@@ -98,6 +111,29 @@
             platforms = pkgs.lib.platforms.linux;
           };
 
+          # daft-hello-container is the workload binary in the v0
+          # smoke-test OCI bundle. It runs *inside the container*
+          # (which runs inside the sandbox VM), prints
+          # agent.ContainerBanner, and exits 0.
+          daft-hello-container = mkDaftBinary {
+            name = "daft-hello-container";
+            subPackage = "cmd/daft-hello-container";
+            description = "darkaifactory hello-world container workload";
+            platforms = pkgs.lib.platforms.linux;
+          };
+
+          # hello-bundle is the OCI runtime bundle the agent feeds to
+          # crun: a directory containing config.json + rootfs/ with
+          # one statically-linked /hello binary. The host shares the
+          # bundle dir into the guest via virtiofs and surfaces its
+          # path as `daft.bundle=...` on the kernel cmdline.
+          hello-bundle = pkgs.runCommand "daft-hello-bundle" {} ''
+            mkdir -p $out/rootfs
+            cp ${daft-hello-container}/bin/daft-hello-container $out/rootfs/hello
+            chmod +x $out/rootfs/hello
+            cp ${./contrib/hello-bundle/config.json} $out/config.json
+          '';
+
           # daft-sandboxd is the single-executable sandbox-host. It
           # embeds cloud-hypervisor, the guest kernel, and the
           # initramfs into the binary at build time, so the resulting
@@ -106,7 +142,7 @@
           daft-sandboxd = pkgs.buildGoModule {
             pname = "daft-sandboxd";
             inherit version;
-            src = ./.;
+            src = goSrc;
             vendorHash = "sha256-pprnK2JKmPuR3Q+F8+vMDEdowlb3oX4BOOzW8NGOqgs=";
             env.CGO_ENABLED = "0";
 
@@ -141,12 +177,15 @@
           #                     reaps zombies, and execs /bin/uinit.
           #   /bin/uinit ->   /bin/daft-agent (symlink, set via -uinitcmd)
           #   /bin/daft-agent — our statically-linked agent.
+          #   /bin/crun       — the OCI runtime the agent execs to launch
+          #                     workload containers; static-musl build.
           #
           # Hardening posture (matches PLAN.md "Hardening"):
           #   -defaultsh=""    no shell symlink
           #   -base=/dev/null  no default /etc, /bin/sh, etc.
-          # Only u-root's `init` busybox-binary and our agent end up in the
-          # archive — no interpreters, no diagnostic tools, zero setuid.
+          # Only u-root's `init` busybox-binary, our agent, and crun end up
+          # in the archive — no interpreters, no diagnostic tools, zero
+          # setuid (crun is built without the +s helper bits).
           initramfs = pkgs.runCommand "daft-initramfs.cpio.gz" {
             nativeBuildInputs = [ pkgs.go pkgs.gzip pkgs.cpio ];
           } ''
@@ -169,6 +208,7 @@
               -defaultsh="" \
               -base=/dev/null \
               -files "${daft-agent}/bin/daft-agent:bin/daft-agent" \
+              -files "${crun}/bin/crun:bin/crun" \
               -uinitcmd=/bin/daft-agent \
               ./cmds/core/init
 
@@ -322,6 +362,93 @@
               license = with licenses; [ asl20 bsd3 ];
               maintainers = [ ];
               platforms = [ "x86_64-linux" "aarch64-linux" ];
+            };
+          };
+
+          # crun — OCI container runtime, built from the pinned submodule
+          # and statically linked against musl. The agent execs this
+          # inside the VM to run the workload container; static linking
+          # means we just drop the binary into the initramfs and trust
+          # nothing else.
+          #
+          # We disable every optional integration (systemd, CRIU,
+          # libkrun, wasm, python/lua bindings) — the VM is the
+          # security boundary and we don't want extra C deps in the
+          # initramfs. Capabilities + seccomp + bpf stay on (they're
+          # the basic isolation primitives crun configures via cgroup
+          # v2 + namespaces).
+          crun = pkgs.pkgsStatic.stdenv.mkDerivation {
+            pname = "crun";
+            version = "1.9.2";
+
+            # builtins.path copies the working-tree contents directly,
+            # which is what we want here: crun's libocispec submodule has
+            # its own deeper submodules (image-spec, runtime-spec, yajl)
+            # and Nix flakes' inputs.self.submodules only recurses one
+            # level. Using a path src side-steps the flake resolver.
+            src = builtins.path {
+              name = "crun-source";
+              path = ./third_party/crun;
+            };
+
+            nativeBuildInputs = with pkgs; [
+              autoreconfHook
+              pkg-config
+              python3
+              go-md2man
+              git
+            ];
+            buildInputs = with pkgs.pkgsStatic; [
+              libcap
+              libseccomp
+              yajl
+              # musl doesn't ship glibc's argp_parse; crun's CLI parser
+              # needs it, so link the standalone implementation.
+              argp-standalone
+            ];
+
+            configureFlags = [
+              "--disable-systemd"
+              "--disable-criu"
+              "--disable-shared"
+              "--enable-embedded-yajl"
+              "--disable-dl"
+            ];
+
+            # crun ships a vendored libocispec via submodule; the
+            # nested submodule is checked in here as third_party/crun/
+            # libocispec, but autoreconf runs from the crun root.
+            #
+            # The Makefile generates git-version.h from `git describe`,
+            # which doesn't work in the Nix sandbox (no .git here);
+            # pre-write the tarball variant the Makefile falls back to,
+            # so the generated header is just a static version string.
+            postPatch = ''
+              patchShebangs build-aux libocispec/build-aux 2>/dev/null || true
+              echo '#define GIT_VERSION "1.9.2"' > .tarball-git-version.h
+            '';
+
+            # The build links libcrun.a into crun, then the final crun
+            # binary against pkgsStatic libcap / libseccomp / yajl. With
+            # --disable-shared and pkgsStatic libs the resulting ELF is
+            # statically linked.
+            #
+            # crun's tree includes a fuzzer test (tests_libcrun_fuzzer.c)
+            # that fails to build on gcc 15 due to a sig_chld function
+            # pointer mismatch. We don't run any of crun's tests — they
+            # need a privileged Linux host — so allow the incompatible
+            # pointer types error as a warning. Affects only test
+            # builds; the crun binary itself doesn't include them.
+            env.NIX_CFLAGS_COMPILE = "-Wno-error=incompatible-pointer-types";
+
+            doCheck = false;
+
+            meta = with pkgs.lib; {
+              description = "OCI container runtime (static-musl)";
+              homepage = "https://github.com/containers/crun";
+              license = licenses.gpl2Plus;
+              maintainers = [ ];
+              platforms = platforms.linux;
             };
           };
 

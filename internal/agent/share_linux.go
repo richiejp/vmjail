@@ -19,6 +19,12 @@ func defaultShareDeps() ShareDeps {
 	}
 }
 
+// defaultContainerDeps wires execContainerLinux. Used by Run() in
+// production; tests inject their own ContainerDeps.
+func defaultContainerDeps() ContainerDeps {
+	return ContainerDeps{Exec: execContainerLinux}
+}
+
 // readKernelCmdline returns the contents of /proc/cmdline. Errors
 // short-circuit cmdline-driven features (sharing) without failing the
 // agent — Linux without /proc is exotic enough that we treat it as a

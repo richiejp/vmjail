@@ -15,6 +15,11 @@ const (
 	EnvMemory          = "DAFT_MEMORY"
 	EnvCPUs            = "DAFT_CPUS"
 	EnvVirtiofsd       = "DAFT_VIRTIOFSD"
+	// EnvBundle is consulted only by the integration test to point at
+	// a host-side OCI bundle. The bundle is copied into the share dir
+	// and then surfaced inside the VM via daft.bundle=/share/bundle.
+	// Not part of the production Config; ConfigFromEnv ignores it.
+	EnvBundle = "DAFT_BUNDLE"
 )
 
 // ConfigFromEnv builds a Config from environment variables. Returns an

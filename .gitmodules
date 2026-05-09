@@ -10,3 +10,6 @@
 [submodule "third_party/virtiofsd"]
 	path = third_party/virtiofsd
 	url = https://gitlab.com/virtio-fs/virtiofsd.git
+[submodule "third_party/crun"]
+	path = third_party/crun
+	url = https://github.com/containers/crun.git

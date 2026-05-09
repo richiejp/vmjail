@@ -18,6 +18,7 @@ import (
 const (
 	testMountpoint = "/share"
 	testTag        = "workspace"
+	testBundlePath = "/share/bundle"
 )
 
 // fakeShareDeps is a ShareDeps that never touches the real filesystem.

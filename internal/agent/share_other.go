@@ -3,7 +3,9 @@
 package agent
 
 import (
+	"context"
 	"errors"
+	"io"
 	"os"
 )
 
@@ -23,4 +25,14 @@ func defaultShareDeps() ShareDeps {
 
 func readKernelCmdline() (string, error) {
 	return "", errors.New("agent: /proc/cmdline unsupported off Linux")
+}
+
+// defaultContainerDeps on non-Linux returns Exec that always errors —
+// crun is Linux-only.
+func defaultContainerDeps() ContainerDeps {
+	return ContainerDeps{
+		Exec: func(_ context.Context, _ io.Writer, _, _, _ string) error {
+			return errors.New("agent: container exec unsupported off Linux")
+		},
+	}
 }

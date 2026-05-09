@@ -4,10 +4,43 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+// TestMain doubles the test binary as a "fake crun" when invoked with
+// the fakeCrunEnv var set — this lets execContainerLinux be covered
+// by a unit test without needing the real crun binary or a privileged
+// host. Mirrors the fake-VMM/fake-virtiofsd pattern in internal/sandbox.
+//
+// The check happens before m.Run, so flag.Parse never sees the
+// `run --no-pivot --bundle ... <id>` argv we'd otherwise have to
+// thread through the test binary's own flag set.
+func TestMain(m *testing.M) {
+	if v := os.Getenv(fakeCrunEnv); v != "" {
+		runFakeCrun(v)
+		return
+	}
+	os.Exit(m.Run())
+}
+
+// runFakeCrun emulates crun-as-child: write the requested stdout,
+// then exit with the configured code. Defaults to 0.
+func runFakeCrun(stdoutPayload string) {
+	if stdoutPayload != "" {
+		fmt.Println(stdoutPayload)
+	}
+	if v := os.Getenv(fakeCrunExitEnv); v != "" {
+		code, err := strconv.Atoi(v)
+		if err == nil {
+			os.Exit(code)
+		}
+	}
+}
 
 func TestRunPrintsBannerAndBlocksUntilContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)

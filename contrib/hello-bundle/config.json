@@ -1,0 +1,64 @@
+{
+  "ociVersion": "1.0.2",
+  "process": {
+    "terminal": false,
+    "user": {"uid": 0, "gid": 0},
+    "args": ["/hello"],
+    "env": ["PATH=/", "TERM=xterm"],
+    "cwd": "/",
+    "capabilities": {
+      "bounding": [],
+      "effective": [],
+      "permitted": [],
+      "ambient": []
+    },
+    "rlimits": [],
+    "noNewPrivileges": true
+  },
+  "root": {"path": "rootfs", "readonly": true},
+  "hostname": "daft-container",
+  "mounts": [
+    {
+      "destination": "/proc",
+      "type": "proc",
+      "source": "proc"
+    },
+    {
+      "destination": "/dev",
+      "type": "tmpfs",
+      "source": "tmpfs",
+      "options": ["nosuid", "strictatime", "mode=755", "size=65536k"]
+    },
+    {
+      "destination": "/sys",
+      "type": "sysfs",
+      "source": "sysfs",
+      "options": ["nosuid", "noexec", "nodev", "ro"]
+    }
+  ],
+  "linux": {
+    "namespaces": [
+      {"type": "pid"},
+      {"type": "ipc"},
+      {"type": "uts"},
+      {"type": "mount"},
+      {"type": "network"},
+      {"type": "cgroup"}
+    ],
+    "maskedPaths": [
+      "/proc/kcore",
+      "/proc/keys",
+      "/proc/latency_stats",
+      "/proc/timer_list",
+      "/proc/sched_debug"
+    ],
+    "readonlyPaths": [
+      "/proc/asound",
+      "/proc/bus",
+      "/proc/fs",
+      "/proc/irq",
+      "/proc/sys",
+      "/proc/sysrq-trigger"
+    ]
+  }
+}

@@ -53,6 +53,11 @@ type Config struct {
 	// virtio-fs. The agent mounts it at Share.Mountpoint and reads
 	// Share.Mountpoint/agent.ShareMarkerFile.
 	Share *ShareConfig
+	// Bundle is the *in-guest* absolute path of an OCI bundle the
+	// agent should crun-run. Usually a sub-path under Share.Mountpoint
+	// so the host can ship the bundle into the VM via the same
+	// virtiofs share. Empty (the default) means no container is run.
+	Bundle string
 }
 
 // ShareConfig describes one host→guest virtiofs mount. v0 supports a
@@ -89,6 +94,9 @@ func (c *Config) validate() error {
 		if err := c.Share.validate(); err != nil {
 			return err
 		}
+	}
+	if c.Bundle != "" && !strings.HasPrefix(c.Bundle, "/") {
+		return fmt.Errorf("sandbox: Bundle %q must be an absolute in-guest path", c.Bundle)
 	}
 	return nil
 }
@@ -245,16 +253,20 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 }
 
 // buildKernelCmdline returns the cmdline string CH boots with. Adds
-// `daft.share=<tag>:<mp>` when the config has a share so the in-VM
-// agent picks up the mount instructions.
+// `daft.share=<tag>:<mp>` and `daft.bundle=<path>` tokens as needed so
+// the in-VM agent picks up the mount + container-launch instructions.
 func buildKernelCmdline(cfg Config) string {
-	if cfg.Share == nil {
-		return kernelCmdlineBase
+	parts := []string{kernelCmdlineBase}
+	if cfg.Share != nil {
+		parts = append(parts, agent.FormatShareCmdline(agent.ShareSpec{
+			Tag:        cfg.Share.Tag,
+			Mountpoint: cfg.Share.Mountpoint,
+		}))
 	}
-	return kernelCmdlineBase + " " + agent.FormatShareCmdline(agent.ShareSpec{
-		Tag:        cfg.Share.Tag,
-		Mountpoint: cfg.Share.Mountpoint,
-	})
+	if cfg.Bundle != "" {
+		parts = append(parts, agent.FormatBundleCmdline(cfg.Bundle))
+	}
+	return strings.Join(parts, " ")
 }
 
 // buildMemoryArg returns the value for `--memory size=...`. virtio-fs

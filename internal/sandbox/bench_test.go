@@ -93,9 +93,48 @@ func BenchmarkHelloBootWithShare(b *testing.B) {
 	}
 	cfg.Share = &ShareConfig{
 		HostDir:    dir,
-		Tag:        "daftshare",
+		Tag:        testTagDaftshare,
 		Mountpoint: testMountpoint,
 	}
+
+	for b.Loop() {
+		var buf bytes.Buffer
+		if err := Hello(b.Context(), &buf, cfg); err != nil {
+			b.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
+		}
+	}
+}
+
+// BenchmarkHelloBootWithContainer measures the full container slice:
+// virtiofsd + kernel boot + share mount + crun --no-pivot + container
+// exec to completion. Same skip gate as BenchmarkHelloBootWithShare,
+// plus DAFT_BUNDLE must be set.
+func BenchmarkHelloBootWithContainer(b *testing.B) {
+	cfg, err := ConfigFromEnv()
+	if err != nil {
+		b.Skipf("artifact env vars not set: %v", err)
+	}
+	if cfg.Virtiofsd == "" {
+		b.Skipf("%s not set; skipping container VM boot benchmark", EnvVirtiofsd)
+	}
+	bundleSrc := os.Getenv(EnvBundle)
+	if bundleSrc == "" {
+		b.Skipf("%s not set; skipping container VM boot benchmark", EnvBundle)
+	}
+	if _, err := os.Stat("/dev/kvm"); err != nil {
+		b.Skipf("/dev/kvm not available; skipping: %v", err)
+	}
+
+	dir := b.TempDir()
+	if err := copyTree(bundleSrc, dir+"/bundle"); err != nil {
+		b.Fatalf("copy bundle: %v", err)
+	}
+	cfg.Share = &ShareConfig{
+		HostDir:    dir,
+		Tag:        testTagDaftshare,
+		Mountpoint: testMountpoint,
+	}
+	cfg.Bundle = testBundlePath
 
 	for b.Loop() {
 		var buf bytes.Buffer
