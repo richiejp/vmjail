@@ -101,6 +101,79 @@
             };
           };
 
+          # Linux kernel for the sandbox VM, built from the pinned
+          # submodule with our defconfig fragment merged on top of the
+          # x86_64 defconfig. Output: bzImage (suitable for Cloud
+          # Hypervisor PVH or bzImage boot).
+          kernel = pkgs.stdenv.mkDerivation {
+            pname = "linux-daft";
+            version = "6.19.14";
+
+            src = ./third_party/linux;
+
+            nativeBuildInputs = with pkgs; [
+              bc
+              bison
+              cpio
+              elfutils
+              flex
+              gmp
+              libmpc
+              mpfr
+              openssl
+              pahole
+              perl
+              rsync
+              zstd
+              python3
+            ];
+
+            # Some kernel build steps look for /usr/bin/env or /usr/bin/perl
+            # via shebangs; let Nix patch them.
+            postPatch = ''
+              patchShebangs scripts/
+            '';
+
+            configurePhase = ''
+              runHook preConfigure
+              make x86_64_defconfig
+              cat ${./third_party/kernel-config/daft.config} >> .config
+              # Fold the fragment options into a coherent .config (sets
+              # defaults for any new dependencies, drops obsolete keys).
+              make olddefconfig
+              runHook postConfigure
+            '';
+
+            buildPhase = ''
+              runHook preBuild
+              make -j$NIX_BUILD_CORES bzImage
+              runHook postBuild
+            '';
+
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out
+              cp arch/x86/boot/bzImage $out/bzImage
+              cp .config $out/config
+              cp System.map $out/System.map
+              runHook postInstall
+            '';
+
+            # The kernel build determinism story is not great — timestamps
+            # and the like leak in. Don't pretend otherwise.
+            enableParallelBuilding = true;
+            dontStrip = true;
+            dontPatchELF = true;
+
+            meta = with pkgs.lib; {
+              description = "Linux kernel for the daft sandbox VM";
+              homepage = "https://kernel.org/";
+              license = licenses.gpl2Only;
+              maintainers = [ ];
+              platforms = [ "x86_64-linux" ];
+            };
+          };
+
           # Cloud Hypervisor — our v1 VMM, built from our pinned submodule
           # rather than nixpkgs. Static-musl is the eventual goal per
           # PLAN.md; for the first pass we accept the dynamic build that
