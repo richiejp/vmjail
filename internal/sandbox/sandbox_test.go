@@ -335,6 +335,50 @@ func TestHelloIntegrationBootsVM(t *testing.T) {
 	}
 }
 
+// FuzzScanForBanner exercises scanForBanner with arbitrary byte
+// streams. The reader consumed in production is the VMM subprocess's
+// stdout — bytes-shaped input from an untrusted source — which is
+// exactly the shape CONTRIBUTING.md mandates a FuzzXxx target for.
+//
+// Invariant: scanForBanner must never panic. Banner-not-seen and read
+// errors are fine; we only fail iterations the Go fuzzer detects as
+// crashes (it already does that automatically).
+//
+// Run actively with:
+//
+//	go test -run='^$' -fuzz=FuzzScanForBanner -fuzztime=30s ./internal/sandbox
+func FuzzScanForBanner(f *testing.F) {
+	seeds := []string{
+		"",
+		agent.Banner,
+		agent.Banner + "\n",
+		"prefix\n" + agent.Banner + "\nsuffix",
+		"no banner here\nor here\n",
+		// Embedded NULs and other control bytes — kernel boot output
+		// can contain weird control sequences.
+		"\x00\x01\x02 " + agent.Banner + " \x7f",
+		// Long lines, including over the initial scanner buffer (64K).
+		strings.Repeat("a", 100*1024),
+		// Many newlines.
+		strings.Repeat("\n", 1024),
+		// Many banner-like lines.
+		strings.Repeat(agent.Banner+"\n", 100),
+		// Banner split across what could look like a chunk boundary.
+		strings.Repeat("x", 60*1024) + "\n" + agent.Banner,
+		// Non-UTF8 bytes interleaved with the banner.
+		"\xff\xfe\xfd " + agent.Banner,
+	}
+	for _, s := range seeds {
+		f.Add(s)
+	}
+
+	f.Fuzz(func(t *testing.T, raw string) {
+		// Output is discarded — we're testing the parser, not the
+		// rendering. Errors are expected for most random inputs.
+		_ = scanForBanner(io.Discard, strings.NewReader(raw))
+	})
+}
+
 // clearVars wipes the env vars Hello and ConfigFromEnv consult so each
 // test starts from a known clean state regardless of caller environment.
 func clearVars(t *testing.T) {
