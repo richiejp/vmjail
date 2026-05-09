@@ -101,6 +101,23 @@
             };
           };
 
+          # Initramfs cpio for the sandbox VM. First-pass minimum:
+          # daft-agent acts as /init directly. PLAN.md's longer-term
+          # plan is u-root's `cmds/core/init` with daft-agent as
+          # -uinitcmd; that lands in a follow-up slice. The current
+          # arrangement is enough to validate the boot path end-to-end:
+          # kernel decompresses, jumps to /init, which is daft-agent,
+          # which prints its banner to the serial console.
+          initramfs = pkgs.runCommand "daft-initramfs.cpio.gz" {
+            nativeBuildInputs = with pkgs; [ cpio gzip ];
+          } ''
+            mkdir -p root
+            cp ${daft-agent}/bin/daft-agent root/init
+            chmod +x root/init
+            (cd root && find . -print0 | cpio --null --create --format=newc) \
+              | gzip -9 > $out
+          '';
+
           # Linux kernel for the sandbox VM, built from the pinned
           # submodule with our defconfig fragment merged on top of the
           # x86_64 defconfig. Output: bzImage (suitable for Cloud

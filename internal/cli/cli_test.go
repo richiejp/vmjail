@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -114,10 +113,24 @@ func TestSandboxHelloIsRegistered(t *testing.T) {
 	}
 }
 
-func TestSandboxHelloSurfacesNotWiredError(t *testing.T) {
+// TestSandboxHelloRequiresArtifactEnv verifies that running `daft sandbox
+// hello` without the artifact env vars fails with a clear error instead
+// of silently doing nothing or panicking. This is the user-facing
+// behaviour when someone runs `daft sandbox hello` outside the dev shell
+// without the artifact paths set.
+func TestSandboxHelloRequiresArtifactEnv(t *testing.T) {
+	for _, k := range []string{
+		sandbox.EnvCloudHypervisor, sandbox.EnvKernel, sandbox.EnvInitramfs,
+	} {
+		t.Setenv(k, "")
+	}
+
 	_, _, err := runCmd(t, "sandbox", "hello")
-	if !errors.Is(err, sandbox.ErrNotWired) {
-		t.Fatalf("daft sandbox hello returned %v, want sandbox.ErrNotWired", err)
+	if err == nil {
+		t.Fatal("daft sandbox hello with no env returned nil, want error")
+	}
+	if !strings.Contains(err.Error(), "missing required env vars") {
+		t.Errorf("error should mention missing env vars, got: %v", err)
 	}
 }
 

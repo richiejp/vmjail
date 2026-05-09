@@ -87,8 +87,13 @@ Out of Scope:
 - [x] CONTRIBUTING.md
 - [x] `daft` CLI scaffolding (cobra-based, with `completion` and `version` subcommands)
 - [x] GitHub CI (`validate-build`, `validate-tag`)
-- [ ] Define project domain and scope (what does `daft` actually do?)
-- [ ] First feature slice
+- [x] Define project domain and scope (what does `daft` actually do?)
+- [x] First feature slice — `daft sandbox hello` boots a custom kernel +
+      cpio initramfs in Cloud Hypervisor and captures the daft-agent's
+      banner from the serial console. Cold boot ~300 ms.
+- [ ] u-root-based init (replace daft-agent-as-PID-1)
+- [ ] HTTP/2 + mTLS auth: client ↔ orchestrator
+- [ ] Workspace sync: desync chunks + daft-fuse
 
 ## Architecture
 

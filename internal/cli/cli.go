@@ -113,7 +113,11 @@ func newSandboxHelloCmd() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return sandbox.Hello(cmd.Context(), cmd.OutOrStdout())
+			cfg, err := sandbox.ConfigFromEnv()
+			if err != nil {
+				return err
+			}
+			return sandbox.Hello(cmd.Context(), cmd.OutOrStdout(), cfg)
 		},
 	}
 }
