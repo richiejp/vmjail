@@ -19,10 +19,9 @@ make --no-print-directory check-fmt
 echo "[pre-commit] golangci-lint..."
 make --no-print-directory lint
 
-echo "[pre-commit] go test..."
-make --no-print-directory test
-
-echo "[pre-commit] coverage regression check (limit: 1.00pp drop)..."
+# cover-check runs the full test suite under -coverprofile, so we don't
+# also need a separate `make test` — that would double-run every test.
+echo "[pre-commit] go test + coverage regression check (limit: 1.00pp drop)..."
 make --no-print-directory cover-check
 
 echo "[pre-commit] benchmark regression check (fail >2.00x, warn >1.10x)..."

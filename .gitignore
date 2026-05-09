@@ -11,9 +11,6 @@
 # Coverage artefacts (transient — coverage.txt baseline IS committed)
 /coverage.out
 
-# Benchmark artefacts (transient — bench.txt baseline IS committed)
-/bench.out
-
 # Direnv / Nix
 /.direnv/
 /.envrc.local

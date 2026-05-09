@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 #
-# Compare current Go benchmarks against bench.txt baseline.
+# Compare current Go benchmarks against the bench.txt baseline, or
+# refresh the baseline.
 #
-# Reads `go test -bench` output on stdin, extracts ns/op per benchmark
-# (stripping the GOMAXPROCS -N suffix so results are host-portable), and
-# compares against the committed baseline.
+# Reads `go test -bench` output on stdin and extracts ns/op per
+# benchmark, stripping the GOMAXPROCS -N suffix so results are
+# host-portable.
 #
-# Per benchmark in baseline:
+# Modes:
+#   bench-check.sh <baseline>            — compare stdin to baseline
+#   bench-check.sh --update <baseline>   — overwrite baseline from stdin
+#
+# Compare-mode verdicts (per benchmark):
 #   ratio > 2.00x -> FAIL  (caught: an order-of-magnitude regression)
 #   ratio > 1.10x -> WARN  (printed; does not fail the build — perf is noisy)
 #   else          -> OK
@@ -14,43 +19,73 @@
 # baseline but absent from this run (e.g. e2e bench skipped without
 # /dev/kvm) are ignored.
 #
-# Usage:
-#   go test -bench=. -run='^$' -benchtime=3x ./... | scripts/bench-check.sh bench.txt
+# Baseline format: one benchmark per line, "<name> <ns/op>". Lines
+# starting with `#` are comments and ignored.
 
 set -euo pipefail
 
-if [ $# -ne 1 ]; then
-	echo "usage: $0 <baseline-file>" >&2
+usage() {
+	echo "usage: $0 [--update] <baseline-file>" >&2
 	exit 2
-fi
+}
 
+mode=compare
+case "${1:-}" in
+	--update) mode=update; shift ;;
+	-h|--help) usage ;;
+	"") usage ;;
+esac
+
+[ $# -eq 1 ] || usage
 baseline="$1"
 
-if [ ! -f "$baseline" ]; then
-	echo "No $baseline baseline yet; run 'make bench' to create one."
-	# Drain stdin so the producer doesn't get SIGPIPE.
-	cat > /dev/null
-	exit 0
-fi
-
-current="$(mktemp)"
-trap 'rm -f "$current"' EXIT
-
-# Parse stdin: lines like "BenchmarkName-20  3  326935767 ns/op  ..."
-# yield "BenchmarkName 326935767".
-awk '/^Benchmark/ {
+# Extract `Benchmark<Name>-<GOMAXPROCS>  <iters>  <ns/op>  ...` into
+# `<Name> <ns/op>`. The single source of truth for `go test -bench`
+# output shape — both update and compare modes feed stdin through this.
+extract_awk='/^Benchmark/ {
 	name = $1
 	sub(/-[0-9]+$/, "", name)
 	print name, $3
-}' | sort > "$current"
+}'
 
+if [ "$mode" = update ]; then
+	# Merge semantics: entries seen in this run overwrite the baseline;
+	# entries in the baseline but absent from this run are preserved.
+	# This matters for the e2e BenchmarkHelloBoot — running `make bench`
+	# on a machine without /dev/kvm must not silently drop it from the
+	# committed baseline.
+	current="$(mktemp)"
+	trap 'rm -f "$current"' EXIT
+	awk "$extract_awk" > "$current"
+
+	{
+		echo "# bench.txt v1 — ns/op baseline; updated by 'make bench'."
+		awk '
+			NR == FNR { merged[$1] = $2; next }
+			/^#/ || NF == 0 { next }
+			!($1 in merged) { merged[$1] = $2 }
+			END { for (name in merged) print name, merged[name] }
+		' "$current" "$baseline" 2>/dev/null | sort
+	} > "$baseline.tmp"
+	mv "$baseline.tmp" "$baseline"
+	echo "Updated baseline $baseline"
+	exit 0
+fi
+
+if [ ! -f "$baseline" ]; then
+	echo "No $baseline baseline yet; run 'make bench' to create one."
+	cat > /dev/null  # drain stdin so producer doesn't see SIGPIPE
+	exit 0
+fi
+
+# Compare in a single awk pass: baseline as the first file (NR == FNR),
+# the extractor's output as the second via process substitution.
 awk -v fail_thresh=2.0 -v warn_thresh=1.1 '
-	FNR == NR {
-		if ($0 ~ /^[#[:space:]]*$/ || $0 ~ /^#/) next
+	NR == FNR {
+		if ($0 ~ /^#/ || $0 ~ /^[[:space:]]*$/) next
 		base[$1] = $2
 		next
 	}
-	$0 ~ /^[#[:space:]]*$/ { next }
 	{
 		name = $1; cur = $2 + 0
 		if (!(name in base)) {
@@ -70,4 +105,4 @@ awk -v fail_thresh=2.0 -v warn_thresh=1.1 '
 		}
 	}
 	END { exit failed ? 1 : 0 }
-' "$baseline" "$current"
+' "$baseline" <(awk "$extract_awk")

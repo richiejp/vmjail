@@ -1,4 +1,5 @@
-BenchmarkConfigFromEnv 98.95
-BenchmarkExecuteVersion 28271
-BenchmarkHelloBoot 307110555
-BenchmarkScanForBanner 38194
+# bench.txt v1 — ns/op baseline; updated by 'make bench'.
+BenchmarkConfigFromEnv 97.21
+BenchmarkExecuteVersion 29272
+BenchmarkHelloBoot 310257852
+BenchmarkScanForBanner 37539

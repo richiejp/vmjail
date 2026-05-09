@@ -157,9 +157,10 @@
             # `go` package puts the toolchain under share/go.)
             export GOROOT=${pkgs.go}/share/go
             # u-root needs to resolve cmds/core/init's package path inside
-            # its own module, so run from the u-root checkout.
-            cp -r ${./third_party/u-root} u-root-src
-            chmod -R u+w u-root-src
+            # its own module, so run from a writable copy of the checkout.
+            # --no-preserve=mode lands the files writable so we don't need
+            # a follow-up chmod -R u+w.
+            cp -r --no-preserve=mode ${./third_party/u-root} u-root-src
             cd u-root-src
 
             ${u-root}/bin/u-root \

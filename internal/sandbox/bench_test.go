@@ -62,7 +62,6 @@ func BenchmarkHelloBoot(b *testing.B) {
 	if _, err := os.Stat("/dev/kvm"); err != nil {
 		b.Skipf("/dev/kvm not available; skipping: %v", err)
 	}
-	b.ResetTimer()
 	for b.Loop() {
 		var buf bytes.Buffer
 		if err := Hello(b.Context(), &buf, cfg); err != nil {

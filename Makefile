@@ -100,7 +100,6 @@ cover-check:
 # we just compare whichever benches did run.
 
 BENCH_BASELINE := bench.txt
-BENCH_OUT := bench.out
 # Use the default 1s benchtime: tiny benches run millions of iterations
 # and stabilise; the e2e BenchmarkHelloBoot at ~300 ms/op gets 3-4
 # iterations naturally. Lower benchtimes (e.g. -benchtime=3x) flap badly
@@ -108,11 +107,7 @@ BENCH_OUT := bench.out
 BENCH_FLAGS := -bench=. -run=^$$ -benchmem
 
 bench:
-	@go test $(BENCH_FLAGS) $(OUR_GO_PKGS) | tee $(BENCH_OUT)
-	@awk '/^Benchmark/ { name = $$1; sub(/-[0-9]+$$/, "", name); print name, $$3 }' \
-		$(BENCH_OUT) | sort > $(BENCH_BASELINE)
-	@rm -f $(BENCH_OUT)
-	@echo "Updated baseline $(BENCH_BASELINE)"
+	@go test $(BENCH_FLAGS) $(OUR_GO_PKGS) | scripts/bench-check.sh --update $(BENCH_BASELINE)
 
 bench-check:
 	@go test $(BENCH_FLAGS) $(OUR_GO_PKGS) | scripts/bench-check.sh $(BENCH_BASELINE)
