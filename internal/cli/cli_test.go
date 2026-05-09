@@ -2,10 +2,12 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
+	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/version"
 )
 
@@ -99,6 +101,23 @@ func TestVerboseFlagRejectsBadEnv(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "DAFT_VERBOSE") {
 		t.Errorf("error should mention DAFT_VERBOSE, got: %v", err)
+	}
+}
+
+func TestSandboxHelloIsRegistered(t *testing.T) {
+	stdout, _, err := runCmd(t, "sandbox", "--help")
+	if err != nil {
+		t.Fatalf("daft sandbox --help: unexpected error: %v", err)
+	}
+	if !strings.Contains(stdout, "hello") {
+		t.Fatalf("`daft sandbox --help` should advertise the hello sub-command, got:\n%s", stdout)
+	}
+}
+
+func TestSandboxHelloSurfacesNotWiredError(t *testing.T) {
+	_, _, err := runCmd(t, "sandbox", "hello")
+	if !errors.Is(err, sandbox.ErrNotWired) {
+		t.Fatalf("daft sandbox hello returned %v, want sandbox.ErrNotWired", err)
 	}
 }
 

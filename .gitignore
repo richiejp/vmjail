@@ -2,7 +2,9 @@
 /result
 /result-*
 /daft
+/daft-agent
 /cmd/daft/daft
+/cmd/daft-agent/daft-agent
 
 # Coverage artefacts (transient — coverage.txt baseline IS committed)
 /coverage.out

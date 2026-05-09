@@ -1,4 +1,4 @@
-.PHONY: all fmt check-fmt lint test cover cover-check hooks build clean help
+.PHONY: all fmt check-fmt lint test cover cover-check hooks build build-daft build-daft-agent clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -15,7 +15,7 @@ help:
 	@echo "  cover       - update committed coverage.txt baseline"
 	@echo "  cover-check - fail if coverage drops > 1pp vs coverage.txt"
 	@echo "  hooks       - install git pre-commit hook into .git/hooks"
-	@echo "  build       - build daft into ./daft"
+	@echo "  build       - build daft and daft-agent (statically) into ./"
 
 ## Formatting ----------------------------------------------------------------
 
@@ -87,8 +87,17 @@ hooks:
 
 ## Building ------------------------------------------------------------------
 
-build:
+# build: produce both shipped binaries.
+#   - daft: the host-side CLI
+#   - daft-agent: the in-VM agent. CGO_ENABLED=0 so it links statically and
+#     can run inside our minimal VM rootfs (no glibc, no dynamic loader).
+build: build-daft build-daft-agent
+
+build-daft:
 	go build -ldflags '$(LDFLAGS)' -o daft ./cmd/daft
 
+build-daft-agent:
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o daft-agent ./cmd/daft-agent
+
 clean:
-	rm -f daft $(COVER_OUT)
+	rm -f daft daft-agent $(COVER_OUT)

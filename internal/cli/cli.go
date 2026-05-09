@@ -22,6 +22,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/version"
 )
 
@@ -73,11 +74,48 @@ func NewRootCmd() *cobra.Command {
 	}
 
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newSandboxCmd())
 	// Note: cobra auto-generates a `completion` sub-command for us; we don't
 	// need to register it explicitly. Keeping it auto-generated means it
 	// stays in sync with cobra's supported shells.
 
 	return root
+}
+
+// newSandboxCmd returns the `daft sandbox` parent command. Its sub-commands
+// drive sandbox VMs on the configured sandbox-host. Each sub-command
+// delegates to internal/sandbox so the CLI layer stays a thin wrapper.
+func newSandboxCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "sandbox",
+		Short: "Manage sandbox VMs",
+		Long: "Sandbox sub-commands boot, inspect, and tear down sandbox VMs on the\n" +
+			"configured sandbox-host. The microVM stack and protocol details are\n" +
+			"described in PLAN.md.",
+	}
+	cmd.AddCommand(newSandboxHelloCmd())
+	return cmd
+}
+
+// newSandboxHelloCmd returns `daft sandbox hello`. It boots a minimal
+// sandbox VM that runs the daft-agent stub, captures the agent's banner
+// from the serial console, and prints it. Used to verify the full
+// kernel/init/agent boot path end to end.
+func newSandboxHelloCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "hello",
+		Short: "Boot a minimal sandbox VM and print its hello banner",
+		Long: "Boot a minimal sandbox VM that runs the daft-agent stub, capture the\n" +
+			"agent's banner from the serial console, and print it on stdout. Returns\n" +
+			"non-zero if the VM fails to boot or the banner does not appear.\n\n" +
+			"This is the smoke test for the microVM stack and is expected to work\n" +
+			"on any sandbox-host with /dev/kvm available.",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return sandbox.Hello(cmd.Context(), cmd.OutOrStdout())
+		},
+	}
 }
 
 // newVersionCmd returns the `daft version` sub-command. Output goes to the
