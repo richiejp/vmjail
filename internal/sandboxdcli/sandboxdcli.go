@@ -116,6 +116,7 @@ func runHelloWith(ctx context.Context, w io.Writer, deps helloDeps) error {
 		CloudHypervisor: paths.CloudHypervisor,
 		Kernel:          paths.Kernel,
 		Initramfs:       paths.Initramfs,
+		Virtiofsd:       paths.Virtiofsd,
 	})
 }
 

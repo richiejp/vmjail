@@ -14,6 +14,7 @@ const (
 	EnvInitramfs       = "DAFT_INITRAMFS"
 	EnvMemory          = "DAFT_MEMORY"
 	EnvCPUs            = "DAFT_CPUS"
+	EnvVirtiofsd       = "DAFT_VIRTIOFSD"
 )
 
 // ConfigFromEnv builds a Config from environment variables. Returns an
@@ -28,6 +29,7 @@ func ConfigFromEnv() (Config, error) {
 		Kernel:          os.Getenv(EnvKernel),
 		Initramfs:       os.Getenv(EnvInitramfs),
 		Memory:          os.Getenv(EnvMemory),
+		Virtiofsd:       os.Getenv(EnvVirtiofsd),
 	}
 	if v := os.Getenv(EnvCPUs); v != "" {
 		n, err := strconv.Atoi(v)

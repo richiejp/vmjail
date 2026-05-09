@@ -69,3 +69,38 @@ func BenchmarkHelloBoot(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkHelloBootWithShare is the share-enabled twin of
+// BenchmarkHelloBoot. It captures the additional cost of starting
+// virtiofsd alongside CH and the agent mounting+reading the share —
+// the per-VM tax of file sharing. Same skip gate as the no-share
+// benchmark, plus DAFT_VIRTIOFSD must be set.
+func BenchmarkHelloBootWithShare(b *testing.B) {
+	cfg, err := ConfigFromEnv()
+	if err != nil {
+		b.Skipf("artifact env vars not set; skipping share VM boot benchmark: %v", err)
+	}
+	if cfg.Virtiofsd == "" {
+		b.Skipf("%s not set; skipping share VM boot benchmark", EnvVirtiofsd)
+	}
+	if _, err := os.Stat("/dev/kvm"); err != nil {
+		b.Skipf("/dev/kvm not available; skipping: %v", err)
+	}
+
+	dir := b.TempDir()
+	if err := os.WriteFile(dir+"/"+agent.ShareMarkerFile, []byte("bench"), 0o644); err != nil {
+		b.Fatalf("write marker: %v", err)
+	}
+	cfg.Share = &ShareConfig{
+		HostDir:    dir,
+		Tag:        "daftshare",
+		Mountpoint: testMountpoint,
+	}
+
+	for b.Loop() {
+		var buf bytes.Buffer
+		if err := Hello(b.Context(), &buf, cfg); err != nil {
+			b.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
+		}
+	}
+}

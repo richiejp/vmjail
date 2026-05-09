@@ -25,6 +25,9 @@ var kernelBin []byte
 //go:embed assets/initramfs.cpio.gz
 var initramfsBin []byte
 
+//go:embed assets/virtiofsd
+var virtiofsdBin []byte
+
 // Paths is the set of file paths to the extracted artifacts. The
 // fields line up 1:1 with sandbox.Config so callers can copy them
 // straight in.
@@ -32,6 +35,7 @@ type Paths struct {
 	CloudHypervisor string
 	Kernel          string
 	Initramfs       string
+	Virtiofsd       string
 }
 
 // ErrNotBundled is returned when the binary was built without the
@@ -52,7 +56,8 @@ const minBundledSize = 4 * 1024
 func IsBundled() bool {
 	return len(cloudHypervisorBin) >= minBundledSize &&
 		len(kernelBin) >= minBundledSize &&
-		len(initramfsBin) >= minBundledSize
+		len(initramfsBin) >= minBundledSize &&
+		len(virtiofsdBin) >= minBundledSize
 }
 
 // Extract writes the embedded artifacts to dir (creating it if needed)
@@ -64,13 +69,14 @@ func IsBundled() bool {
 // persistent cache (e.g. $XDG_CACHE_HOME/daft) to avoid recopying ~20
 // MiB on every invocation.
 func Extract(dir string) (Paths, error) {
-	return extractTo(dir, cloudHypervisorBin, kernelBin, initramfsBin)
+	return extractTo(dir, cloudHypervisorBin, kernelBin, initramfsBin, virtiofsdBin)
 }
 
 // extractTo is Extract with the source bytes injected, so tests can
 // exercise the file-writing logic with fake data without rebuilding.
-func extractTo(dir string, ch, kernel, initramfs []byte) (Paths, error) {
-	if len(ch) < minBundledSize || len(kernel) < minBundledSize || len(initramfs) < minBundledSize {
+func extractTo(dir string, ch, kernel, initramfs, virtiofsd []byte) (Paths, error) {
+	if len(ch) < minBundledSize || len(kernel) < minBundledSize ||
+		len(initramfs) < minBundledSize || len(virtiofsd) < minBundledSize {
 		return Paths{}, ErrNotBundled
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -80,6 +86,7 @@ func extractTo(dir string, ch, kernel, initramfs []byte) (Paths, error) {
 		CloudHypervisor: filepath.Join(dir, "cloud-hypervisor"),
 		Kernel:          filepath.Join(dir, "bzImage"),
 		Initramfs:       filepath.Join(dir, "initramfs.cpio.gz"),
+		Virtiofsd:       filepath.Join(dir, "virtiofsd"),
 	}
 	for _, f := range []struct {
 		path string
@@ -89,6 +96,7 @@ func extractTo(dir string, ch, kernel, initramfs []byte) (Paths, error) {
 		{p.CloudHypervisor, ch, 0o755},
 		{p.Kernel, kernel, 0o644},
 		{p.Initramfs, initramfs, 0o644},
+		{p.Virtiofsd, virtiofsd, 0o755},
 	} {
 		if err := writeIfChanged(f.path, f.data, f.perm); err != nil {
 			return Paths{}, err

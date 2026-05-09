@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -25,10 +27,18 @@ import (
 // cloud-hypervisor flags our parent passes us.
 const (
 	fakeVMMEnv = "DAFT_TEST_FAKE_VMM_LINES"
+	// fakeVirtiofsdEnv: when set the test binary impersonates virtiofsd
+	// well enough for the sidecar's spawn / wait-for-socket / stop
+	// dance — it parses --socket-path, creates a Unix socket node
+	// there, and blocks until killed.
+	fakeVirtiofsdEnv = "DAFT_TEST_FAKE_VIRTIOFSD"
 	// devNull is /dev/null. Used as a stand-in for the kernel and
 	// initramfs paths in tests that swap in a fake VMM — the fake
 	// ignores its args, so the paths only need to exist.
 	devNull = "/dev/null"
+	// testMountpoint is the in-VM share mountpoint reused across share
+	// tests. Promoted to a constant to satisfy goconst.
+	testMountpoint = "/share"
 )
 
 func TestMain(m *testing.M) {
@@ -36,7 +46,35 @@ func TestMain(m *testing.M) {
 		runFakeVMM(script)
 		return
 	}
+	if os.Getenv(fakeVirtiofsdEnv) != "" {
+		runFakeVirtiofsd(os.Args)
+		return
+	}
 	os.Exit(m.Run())
+}
+
+// runFakeVirtiofsd impersonates virtiofsd's startup contract just
+// enough for the sidecar tests: parse --socket-path, listen on it (so
+// a socket inode appears), and block until killed. Other args are
+// ignored; the real virtiofsd parses them strictly but the sidecar
+// only cares about the socket appearing.
+func runFakeVirtiofsd(args []string) {
+	var socketPath string
+	for i, a := range args {
+		if a == "--socket-path" && i+1 < len(args) {
+			socketPath = args[i+1]
+			break
+		}
+	}
+	if socketPath == "" {
+		os.Exit(2)
+	}
+	l, err := net.Listen("unix", socketPath)
+	if err != nil {
+		os.Exit(3)
+	}
+	defer func() { _ = l.Close() }()
+	select {}
 }
 
 // runFakeVMM emulates the cloud-hypervisor binary just enough for
@@ -64,18 +102,46 @@ func runFakeVMM(script string) {
 // fakeRunner is a runner that returns a fixed reader and records that
 // stop was called. Used to test helloWith without spawning anything.
 type fakeRunner struct {
-	output     string
-	startErr   error
-	stopCalled bool
+	output         string
+	startErr       error
+	stopCalled     bool
+	gotShareSocket string // captured shareSocket arg, for share tests
 }
 
-func (f *fakeRunner) run(_ context.Context, _ Config) (io.ReadCloser, func(), error) {
+func (f *fakeRunner) run(_ context.Context, _ Config, shareSocket string) (io.ReadCloser, func(), error) {
+	f.gotShareSocket = shareSocket
 	if f.startErr != nil {
 		return nil, nil, f.startErr
 	}
 	return io.NopCloser(strings.NewReader(f.output)),
 		func() { f.stopCalled = true },
 		nil
+}
+
+// fakeShareSidecar is a shareSidecar that returns a canned socket path
+// without spawning anything. Used to test the share-orchestration
+// branches of helloWith.
+type fakeShareSidecar struct {
+	socket     string
+	startErr   error
+	stopCalled bool
+}
+
+func (f *fakeShareSidecar) start(_ context.Context, _ Config) (string, func(), error) {
+	if f.startErr != nil {
+		return "", nil, f.startErr
+	}
+	return f.socket, func() { f.stopCalled = true }, nil
+}
+
+// noShareSidecar implements shareSidecar but is never called — passed
+// to helloWith in tests that exercise the no-share path. Tests assert
+// helloWith honoured Config.Share == nil by checking that start was
+// never invoked (panics on call).
+type noShareSidecar struct{}
+
+func (noShareSidecar) start(context.Context, Config) (string, func(), error) {
+	panic("noShareSidecar.start called: helloWith should not start virtiofsd when Share is nil")
 }
 
 // validCfg returns a Config with all required fields populated. The
@@ -145,7 +211,7 @@ func TestHelloWithFakeRunnerFindsBanner(t *testing.T) {
 		output: "[    0.001] kernel boot\nrandom log\n" + agent.Banner + "\nlater output\n",
 	}
 	var buf bytes.Buffer
-	err := helloWith(t.Context(), &buf, validCfg(), r)
+	err := helloWith(t.Context(), &buf, validCfg(), r, noShareSidecar{})
 	if err != nil {
 		t.Fatalf("helloWith: %v", err)
 	}
@@ -165,7 +231,7 @@ func TestHelloWithFakeRunnerFindsBanner(t *testing.T) {
 func TestHelloWithFakeRunnerReportsMissingBanner(t *testing.T) {
 	r := &fakeRunner{output: "no banner here\nor here\n"}
 	var buf bytes.Buffer
-	err := helloWith(t.Context(), &buf, validCfg(), r)
+	err := helloWith(t.Context(), &buf, validCfg(), r, noShareSidecar{})
 	if !errors.Is(err, ErrBannerNotSeen) {
 		t.Fatalf("err = %v, want ErrBannerNotSeen", err)
 	}
@@ -177,7 +243,7 @@ func TestHelloWithFakeRunnerReportsMissingBanner(t *testing.T) {
 func TestHelloWithFakeRunnerPropagatesStartError(t *testing.T) {
 	startErr := errors.New("synthetic start failure")
 	r := &fakeRunner{startErr: startErr}
-	err := helloWith(t.Context(), io.Discard, validCfg(), r)
+	err := helloWith(t.Context(), io.Discard, validCfg(), r, noShareSidecar{})
 	if !errors.Is(err, startErr) {
 		t.Fatalf("err = %v, want %v", err, startErr)
 	}
@@ -250,6 +316,197 @@ func TestCloudHypervisorRunnerStopKillsChild(t *testing.T) {
 	}
 }
 
+func TestHelloWithShareStartsSidecarAndPassesSocketToRunner(t *testing.T) {
+	dir := t.TempDir()
+
+	cfg := validCfg()
+	cfg.Virtiofsd = "/nonexistent/virtiofsd"
+	cfg.Share = &ShareConfig{
+		HostDir:    dir,
+		Tag:        "workspace",
+		Mountpoint: testMountpoint,
+	}
+
+	r := &fakeRunner{output: agent.Banner + "\n"}
+	sc := &fakeShareSidecar{socket: "/tmp/fake.sock"}
+
+	if err := helloWith(t.Context(), io.Discard, cfg, r, sc); err != nil {
+		t.Fatalf("helloWith: %v", err)
+	}
+	if !sc.stopCalled {
+		t.Error("share sidecar stop function was not called")
+	}
+	if r.gotShareSocket != sc.socket {
+		t.Errorf("runner saw shareSocket=%q, want %q", r.gotShareSocket, sc.socket)
+	}
+}
+
+func TestHelloWithSharePropagatesSidecarStartError(t *testing.T) {
+	dir := t.TempDir()
+	cfg := validCfg()
+	cfg.Virtiofsd = "/nonexistent/virtiofsd"
+	cfg.Share = &ShareConfig{HostDir: dir, Tag: "ws", Mountpoint: testMountpoint}
+
+	startErr := errors.New("synthetic virtiofsd failure")
+	sc := &fakeShareSidecar{startErr: startErr}
+	r := &fakeRunner{output: agent.Banner + "\n"}
+
+	err := helloWith(t.Context(), io.Discard, cfg, r, sc)
+	if !errors.Is(err, startErr) {
+		t.Fatalf("err = %v, want wrap of %v", err, startErr)
+	}
+	if r.gotShareSocket != "" {
+		t.Error("runner must not be called when share sidecar fails")
+	}
+}
+
+func TestHelloRejectsShareWithoutVirtiofsd(t *testing.T) {
+	dir := t.TempDir()
+	cfg := validCfg()
+	cfg.Share = &ShareConfig{HostDir: dir, Tag: "ws", Mountpoint: testMountpoint}
+	// No cfg.Virtiofsd set.
+
+	err := Hello(t.Context(), io.Discard, cfg)
+	if err == nil || !strings.Contains(err.Error(), "Virtiofsd") {
+		t.Fatalf("err = %v, want mention of Virtiofsd", err)
+	}
+}
+
+func TestShareConfigValidate(t *testing.T) {
+	dir := t.TempDir()
+	tmpFile := filepath.Join(dir, "regular-file")
+	if err := os.WriteFile(tmpFile, nil, 0o600); err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		s         ShareConfig
+		errSubstr string
+	}{
+		{
+			name:      "missing host dir",
+			s:         ShareConfig{Tag: "t", Mountpoint: "/m"},
+			errSubstr: "Share.HostDir",
+		},
+		{
+			name:      "relative host dir",
+			s:         ShareConfig{HostDir: "rel", Tag: "t", Mountpoint: "/m"},
+			errSubstr: "must be absolute",
+		},
+		{
+			name:      "missing tag",
+			s:         ShareConfig{HostDir: dir, Mountpoint: "/m"},
+			errSubstr: "Share.Tag",
+		},
+		{
+			name:      "relative mountpoint",
+			s:         ShareConfig{HostDir: dir, Tag: "t", Mountpoint: "rel"},
+			errSubstr: "must be absolute",
+		},
+		{
+			name:      "host dir nonexistent",
+			s:         ShareConfig{HostDir: "/nope/does-not-exist", Tag: "t", Mountpoint: "/m"},
+			errSubstr: "Share.HostDir",
+		},
+		{
+			name:      "host dir is a file",
+			s:         ShareConfig{HostDir: tmpFile, Tag: "t", Mountpoint: "/m"},
+			errSubstr: "not a directory",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.s.validate()
+			if err == nil || !strings.Contains(err.Error(), tt.errSubstr) {
+				t.Fatalf("err = %v, want substring %q", err, tt.errSubstr)
+			}
+		})
+	}
+}
+
+func TestBuildKernelCmdlineIncludesShare(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.Share = &ShareConfig{Tag: "ws", Mountpoint: testMountpoint}
+	got := buildKernelCmdline(cfg)
+	if !strings.Contains(got, agent.ShareCmdlineKey+"=ws:/share") {
+		t.Errorf("cmdline %q missing share spec", got)
+	}
+	if !strings.Contains(got, "console=hvc0") {
+		t.Errorf("cmdline %q lost the base cmdline", got)
+	}
+}
+
+func TestBuildMemoryArgAddsSharedOnForShare(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	if buildMemoryArg(cfg) != "size="+defaultMemory {
+		t.Errorf("no-share memory = %q, want size=%s", buildMemoryArg(cfg), defaultMemory)
+	}
+	cfg.Share = &ShareConfig{Tag: "ws", Mountpoint: testMountpoint}
+	if got := buildMemoryArg(cfg); !strings.Contains(got, "shared=on") {
+		t.Errorf("with-share memory = %q, want shared=on", got)
+	}
+}
+
+// TestVirtiofsdSidecarStartViaFakeBinary points the real
+// virtiofsdSidecar at this test binary, which TestMain turns into a
+// fake "virtiofsd" that just creates the socket node and blocks. This
+// covers the spawn / wait-for-socket / stop logic without needing a
+// real virtiofsd or its dependencies.
+func TestVirtiofsdSidecarStartViaFakeBinary(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(fakeVirtiofsdEnv, "1")
+
+	cfg := Config{
+		Virtiofsd: os.Args[0],
+		Share: &ShareConfig{
+			HostDir:    dir,
+			Tag:        "ws",
+			Mountpoint: testMountpoint,
+		},
+	}
+
+	socket, stop, err := virtiofsdSidecar{}.start(t.Context(), cfg)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer stop()
+
+	if socket == "" {
+		t.Fatal("start returned empty socket path")
+	}
+	info, err := os.Stat(socket)
+	if err != nil {
+		t.Fatalf("stat socket: %v", err)
+	}
+	if info.Mode()&os.ModeSocket == 0 {
+		t.Fatalf("path %s is not a socket: mode=%v", socket, info.Mode())
+	}
+}
+
+func TestVirtiofsdSidecarTimesOutWhenSocketNeverAppears(t *testing.T) {
+	dir := t.TempDir()
+	// fakeVirtiofsdEnv unset → fake refuses to create the socket.
+
+	cfg := Config{
+		Virtiofsd: os.Args[0],
+		Share: &ShareConfig{
+			HostDir:    dir,
+			Tag:        "ws",
+			Mountpoint: testMountpoint,
+		},
+	}
+
+	// Tighten the timeout for the test by using a context deadline.
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+
+	_, _, err := virtiofsdSidecar{}.start(ctx, cfg)
+	if err == nil {
+		t.Fatal("start succeeded with no socket; want timeout error")
+	}
+}
+
 func TestConfigFromEnvReportsMissingVars(t *testing.T) {
 	clearVars(t)
 
@@ -311,6 +568,53 @@ func TestConfigFromEnvRejectsBadCPUs(t *testing.T) {
 //	DAFT_KERNEL=$(nix build --print-out-paths .#kernel)/bzImage \
 //	DAFT_INITRAMFS=$(nix build --print-out-paths .#initramfs) \
 //	  go test -run TestHelloIntegrationBootsVM ./internal/sandbox
+//
+// TestHelloIntegrationBootsVMWithShare is the e2e proof of file
+// sharing: the host writes a marker file, the agent in the VM mounts
+// virtio-fs, reads it, and reports the contents on the console.
+//
+// Skipped unless artifact env vars + DAFT_VIRTIOFSD + /dev/kvm are
+// available. See TestHelloIntegrationBootsVM for the no-share variant.
+func TestHelloIntegrationBootsVMWithShare(t *testing.T) {
+	cfg, err := ConfigFromEnv()
+	if err != nil {
+		t.Skipf("artifact env vars not set; skipping: %v", err)
+	}
+	if cfg.Virtiofsd == "" {
+		t.Skipf("%s not set; skipping share integration test", EnvVirtiofsd)
+	}
+	if _, err := os.Stat("/dev/kvm"); err != nil {
+		t.Skipf("/dev/kvm not available; skipping: %v", err)
+	}
+
+	// Marker file the agent will read inside the VM and echo to the
+	// console via ShareReportPrefix.
+	dir := t.TempDir()
+	const payload = "share-payload-from-integration-test"
+	if err := os.WriteFile(filepath.Join(dir, agent.ShareMarkerFile), []byte(payload), 0o644); err != nil {
+		t.Fatalf("write marker file: %v", err)
+	}
+
+	cfg.Share = &ShareConfig{
+		HostDir:    dir,
+		Tag:        "daftshare",
+		Mountpoint: testMountpoint,
+	}
+
+	var buf bytes.Buffer
+	err = Hello(t.Context(), &buf, cfg)
+	if err != nil {
+		t.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
+	}
+	if !strings.Contains(buf.String(), agent.Banner) {
+		t.Fatalf("banner missing from output:\n%s", buf.String())
+	}
+	wantLine := agent.ShareReportPrefix + payload
+	if !strings.Contains(buf.String(), wantLine) {
+		t.Fatalf("share line %q missing; full console output:\n%s", wantLine, buf.String())
+	}
+}
+
 func TestHelloIntegrationBootsVM(t *testing.T) {
 	cfg, err := ConfigFromEnv()
 	if err != nil {

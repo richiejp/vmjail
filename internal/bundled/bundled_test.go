@@ -9,13 +9,13 @@ import (
 )
 
 func TestExtractReturnsErrNotBundledOnStubs(t *testing.T) {
-	_, err := extractTo(t.TempDir(), nil, nil, nil)
+	_, err := extractTo(t.TempDir(), nil, nil, nil, nil)
 	if !errors.Is(err, ErrNotBundled) {
 		t.Fatalf("err = %v, want ErrNotBundled", err)
 	}
 
 	tiny := []byte{0x7f}
-	_, err = extractTo(t.TempDir(), tiny, tiny, tiny)
+	_, err = extractTo(t.TempDir(), tiny, tiny, tiny, tiny)
 	if !errors.Is(err, ErrNotBundled) {
 		t.Fatalf("err with sub-threshold blobs = %v, want ErrNotBundled", err)
 	}
@@ -26,8 +26,9 @@ func TestExtractWritesAllArtifacts(t *testing.T) {
 	ch := bytes.Repeat([]byte("CH"), minBundledSize)
 	kernel := bytes.Repeat([]byte("KERNEL"), minBundledSize)
 	initramfs := bytes.Repeat([]byte("INITRD"), minBundledSize)
+	virtiofsd := bytes.Repeat([]byte("VFSD"), minBundledSize)
 
-	p, err := extractTo(dir, ch, kernel, initramfs)
+	p, err := extractTo(dir, ch, kernel, initramfs, virtiofsd)
 	if err != nil {
 		t.Fatalf("extractTo: %v", err)
 	}
@@ -40,6 +41,7 @@ func TestExtractWritesAllArtifacts(t *testing.T) {
 		{p.CloudHypervisor, ch, 0o755},
 		{p.Kernel, kernel, 0o644},
 		{p.Initramfs, initramfs, 0o644},
+		{p.Virtiofsd, virtiofsd, 0o755},
 	} {
 		got, err := os.ReadFile(want.path)
 		if err != nil {
@@ -70,8 +72,9 @@ func TestExtractIsIdempotent(t *testing.T) {
 	ch := bytes.Repeat([]byte("CH"), minBundledSize)
 	kernel := bytes.Repeat([]byte("KERNEL"), minBundledSize)
 	initramfs := bytes.Repeat([]byte("INITRD"), minBundledSize)
+	virtiofsd := bytes.Repeat([]byte("VFSD"), minBundledSize)
 
-	p1, err := extractTo(dir, ch, kernel, initramfs)
+	p1, err := extractTo(dir, ch, kernel, initramfs, virtiofsd)
 	if err != nil {
 		t.Fatalf("first extractTo: %v", err)
 	}
@@ -82,7 +85,7 @@ func TestExtractIsIdempotent(t *testing.T) {
 
 	// Re-running with the same data must not rewrite the file —
 	// callers depend on this for caching.
-	p2, err := extractTo(dir, ch, kernel, initramfs)
+	p2, err := extractTo(dir, ch, kernel, initramfs, virtiofsd)
 	if err != nil {
 		t.Fatalf("second extractTo: %v", err)
 	}
@@ -101,13 +104,13 @@ func TestExtractIsIdempotent(t *testing.T) {
 func TestExtractRewritesOnSizeChange(t *testing.T) {
 	dir := t.TempDir()
 	old := bytes.Repeat([]byte("X"), minBundledSize)
-	if _, err := extractTo(dir, old, old, old); err != nil {
+	if _, err := extractTo(dir, old, old, old, old); err != nil {
 		t.Fatalf("first extractTo: %v", err)
 	}
 
 	// Different size → must overwrite.
 	newer := bytes.Repeat([]byte("X"), minBundledSize+10)
-	if _, err := extractTo(dir, newer, newer, newer); err != nil {
+	if _, err := extractTo(dir, newer, newer, newer, newer); err != nil {
 		t.Fatalf("second extractTo: %v", err)
 	}
 	got, err := os.ReadFile(filepath.Join(dir, "cloud-hypervisor"))

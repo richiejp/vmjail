@@ -102,6 +102,23 @@ Out of Scope:
       to `bench.txt`; `make bench-check` (run by the pre-commit hook)
       fails on >2.00× regressions and warns on >1.10×. Includes a
       KVM-gated `BenchmarkHelloBoot` end-to-end boot-time benchmark.
+- [x] Host → guest file sharing (v0): virtiofsd vendored as submodule
+      (third_party/virtiofsd, v1.9.0) and bundled into daft-sandboxd.
+      `Config.Share` causes Hello() to spawn virtiofsd alongside CH;
+      the in-VM agent reads `daft.share=<tag>:<mp>` from `/proc/cmdline`,
+      mounts the share, reads `<mp>/hello.txt`, and reports its
+      contents on the console with `share: <payload>`. Fuzz target
+      `FuzzParseShareCmdline` covers the cmdline parser; mock-based
+      unit tests cover the orchestration; KVM-gated
+      `BenchmarkHelloBootWithShare` and `TestHelloIntegrationBootsVMWithShare`
+      cover the end-to-end path.
+      - **TODO (hardening)**: virtiofsd is currently dynamic-linked
+        (glibc) — the only non-static binary in the daft-sandboxd
+        bundle. Static-musl build hits unresolved libc symbols in
+        nixpkgs' libcap_ng-static; revisit when nixpkgs ships a
+        complete static build, or contribute the fix.
+- [ ] Run a container inside the VM (using the share to deliver the
+      bundle: crun + a hand-built OCI bundle on the share path)
 - [ ] HTTP/2 + mTLS auth: client ↔ orchestrator
 - [ ] Workspace sync: desync chunks + daft-fuse
 

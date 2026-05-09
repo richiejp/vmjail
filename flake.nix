@@ -116,6 +116,7 @@
               cp ${cloud-hypervisor}/bin/cloud-hypervisor internal/bundled/assets/cloud-hypervisor
               cp ${kernel}/bzImage internal/bundled/assets/bzImage
               cp ${initramfs} internal/bundled/assets/initramfs.cpio.gz
+              cp ${virtiofsd}/bin/virtiofsd internal/bundled/assets/virtiofsd
             '';
 
             ldflags = [
@@ -278,6 +279,46 @@
             meta = with pkgs.lib; {
               description = "Cloud Hypervisor microVM monitor (static-musl)";
               homepage = "https://www.cloudhypervisor.org/";
+              license = with licenses; [ asl20 bsd3 ];
+              maintainers = [ ];
+              platforms = [ "x86_64-linux" "aarch64-linux" ];
+            };
+          };
+
+          # virtiofsd — vhost-user virtio-fs daemon, built from the
+          # pinned submodule. Spawned by the sandbox controller alongside
+          # cloud-hypervisor to back `--fs tag=...,socket=...` shares;
+          # the in-VM kernel mounts the share via virtiofs.
+          #
+          # Dynamic-linked (glibc) at the moment because nixpkgs'
+          # static libcap_ng is missing libc symbol references at
+          # archive-link time. This is the only non-static binary in
+          # the daft-sandboxd bundle — see PLAN.md TODO. The dynamic
+          # build matches what nixpkgs ships upstream.
+          virtiofsd = pkgs.rustPlatform.buildRustPackage {
+            pname = "virtiofsd";
+            version = "1.9.0";
+
+            src = ./third_party/virtiofsd;
+
+            cargoLock = {
+              lockFile = ./third_party/virtiofsd/Cargo.lock;
+            };
+
+            nativeBuildInputs = [ pkgs.pkg-config ];
+            buildInputs = with pkgs; [ libseccomp libcap_ng ];
+
+            # libcap-ng's Rust binding looks at $LIBCAPNG_LINK_TYPE to
+            # decide static vs dynamic. We want dynamic to match the
+            # libcap_ng we build against.
+            env.LIBCAPNG_LINK_TYPE = "dylib";
+            env.LIBCAPNG_LIB_PATH = "${pkgs.libcap_ng}/lib";
+
+            doCheck = false;
+
+            meta = with pkgs.lib; {
+              description = "virtio-fs vhost-user device daemon";
+              homepage = "https://virtio-fs.gitlab.io/";
               license = with licenses; [ asl20 bsd3 ];
               maintainers = [ ];
               platforms = [ "x86_64-linux" "aarch64-linux" ];
