@@ -1,4 +1,4 @@
-.PHONY: all fmt check-fmt lint test cover cover-check hooks build build-daft build-daft-agent clean help
+.PHONY: all fmt check-fmt lint test cover cover-check hooks build build-daft build-daft-agent build-daft-sandboxd clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -23,7 +23,7 @@ help:
 	@echo "  cover       - update committed coverage.txt baseline"
 	@echo "  cover-check - fail if coverage drops > 1pp vs coverage.txt"
 	@echo "  hooks       - install git pre-commit hook into .git/hooks"
-	@echo "  build       - build daft and daft-agent (statically) into ./"
+	@echo "  build       - build daft, daft-agent, daft-sandboxd (statically)"
 
 ## Formatting ----------------------------------------------------------------
 
@@ -95,17 +95,24 @@ hooks:
 
 ## Building ------------------------------------------------------------------
 
-# build: produce both shipped binaries.
-#   - daft: the host-side CLI
-#   - daft-agent: the in-VM agent. CGO_ENABLED=0 so it links statically and
-#     can run inside our minimal VM rootfs (no glibc, no dynamic loader).
-build: build-daft build-daft-agent
+# build: produce all shipped binaries, statically linked (CGO=0).
+#   - daft:           host-side client CLI
+#   - daft-agent:     in-VM PID-1 agent
+#   - daft-sandboxd:  sandbox-host single executable. Note: a `make
+#     build` produces a daft-sandboxd with STUB embedded artifacts —
+#     the real cloud-hypervisor / kernel / initramfs are pulled in
+#     only by the Nix build (`nix build .#daft-sandboxd`). Use Nix
+#     for any release artefact.
+build: build-daft build-daft-agent build-daft-sandboxd
 
 build-daft:
-	go build -ldflags '$(LDFLAGS)' -o daft ./cmd/daft
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o daft ./cmd/daft
 
 build-daft-agent:
 	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o daft-agent ./cmd/daft-agent
 
+build-daft-sandboxd:
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o daft-sandboxd ./cmd/daft-sandboxd
+
 clean:
-	rm -f daft daft-agent $(COVER_OUT)
+	rm -f daft daft-agent daft-sandboxd $(COVER_OUT)

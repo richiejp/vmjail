@@ -91,6 +91,9 @@ Out of Scope:
 - [x] First feature slice — `daft sandbox hello` boots a custom kernel +
       cpio initramfs in Cloud Hypervisor and captures the daft-agent's
       banner from the serial console. Cold boot ~300 ms.
+- [x] All shipped binaries statically linked (Go via CGO=0, Cloud
+      Hypervisor via static-musl). Single-executable `daft-sandboxd`
+      bundles VMM + kernel + initramfs (~23 MiB).
 - [ ] u-root-based init (replace daft-agent-as-PID-1)
 - [ ] HTTP/2 + mTLS auth: client ↔ orchestrator
 - [ ] Workspace sync: desync chunks + daft-fuse

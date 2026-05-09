@@ -1,0 +1,130 @@
+package bundled
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestExtractReturnsErrNotBundledOnStubs(t *testing.T) {
+	_, err := extractTo(t.TempDir(), nil, nil, nil)
+	if !errors.Is(err, ErrNotBundled) {
+		t.Fatalf("err = %v, want ErrNotBundled", err)
+	}
+
+	tiny := []byte{0x7f}
+	_, err = extractTo(t.TempDir(), tiny, tiny, tiny)
+	if !errors.Is(err, ErrNotBundled) {
+		t.Fatalf("err with sub-threshold blobs = %v, want ErrNotBundled", err)
+	}
+}
+
+func TestExtractWritesAllArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	ch := bytes.Repeat([]byte("CH"), minBundledSize)
+	kernel := bytes.Repeat([]byte("KERNEL"), minBundledSize)
+	initramfs := bytes.Repeat([]byte("INITRD"), minBundledSize)
+
+	p, err := extractTo(dir, ch, kernel, initramfs)
+	if err != nil {
+		t.Fatalf("extractTo: %v", err)
+	}
+
+	for _, want := range []struct {
+		path string
+		data []byte
+		perm os.FileMode
+	}{
+		{p.CloudHypervisor, ch, 0o755},
+		{p.Kernel, kernel, 0o644},
+		{p.Initramfs, initramfs, 0o644},
+	} {
+		got, err := os.ReadFile(want.path)
+		if err != nil {
+			t.Errorf("reading %s: %v", want.path, err)
+			continue
+		}
+		if !bytes.Equal(got, want.data) {
+			t.Errorf("%s: content mismatch (got %d bytes, want %d)", want.path, len(got), len(want.data))
+		}
+		fi, err := os.Stat(want.path)
+		if err != nil {
+			t.Errorf("stat %s: %v", want.path, err)
+			continue
+		}
+		// Mask out non-perm bits; some umask environments add the
+		// directory bit etc. We only care that exec is preserved
+		// (or not) for the binary vs the data files.
+		gotExec := fi.Mode().Perm() & 0o111
+		wantExec := want.perm & 0o111
+		if gotExec != wantExec {
+			t.Errorf("%s: exec bits = %o, want %o", want.path, gotExec, wantExec)
+		}
+	}
+}
+
+func TestExtractIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	ch := bytes.Repeat([]byte("CH"), minBundledSize)
+	kernel := bytes.Repeat([]byte("KERNEL"), minBundledSize)
+	initramfs := bytes.Repeat([]byte("INITRD"), minBundledSize)
+
+	p1, err := extractTo(dir, ch, kernel, initramfs)
+	if err != nil {
+		t.Fatalf("first extractTo: %v", err)
+	}
+	mtime1, err := os.Stat(p1.CloudHypervisor)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+
+	// Re-running with the same data must not rewrite the file —
+	// callers depend on this for caching.
+	p2, err := extractTo(dir, ch, kernel, initramfs)
+	if err != nil {
+		t.Fatalf("second extractTo: %v", err)
+	}
+	if p1 != p2 {
+		t.Errorf("paths changed between calls: %+v vs %+v", p1, p2)
+	}
+	mtime2, err := os.Stat(p2.CloudHypervisor)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if !mtime1.ModTime().Equal(mtime2.ModTime()) {
+		t.Errorf("cloud-hypervisor was rewritten on no-op extract (mtime changed)")
+	}
+}
+
+func TestExtractRewritesOnSizeChange(t *testing.T) {
+	dir := t.TempDir()
+	old := bytes.Repeat([]byte("X"), minBundledSize)
+	if _, err := extractTo(dir, old, old, old); err != nil {
+		t.Fatalf("first extractTo: %v", err)
+	}
+
+	// Different size → must overwrite.
+	newer := bytes.Repeat([]byte("X"), minBundledSize+10)
+	if _, err := extractTo(dir, newer, newer, newer); err != nil {
+		t.Fatalf("second extractTo: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "cloud-hypervisor"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !bytes.Equal(got, newer) {
+		t.Errorf("file not rewritten on size change")
+	}
+}
+
+func TestIsBundledReflectsBuildState(t *testing.T) {
+	// In `go test` runs (no Nix preBuild), the embedded slices are
+	// stubs, so IsBundled should be false. The Nix-built binary
+	// inverts this; that path is exercised by the daft-sandboxd
+	// integration test, not here.
+	if IsBundled() {
+		t.Error("IsBundled() = true in plain `go test`; expected stubs")
+	}
+}

@@ -53,11 +53,15 @@
           #
           # Update vendorHash with `nix build` when go.mod changes; Nix
           # prints the new value in the error.
+          # All Go binaries default to CGO_ENABLED=0 so we ship static
+          # ELFs that run on any libc. Pure Go has no libc dependency
+          # to begin with; CGO=0 just makes that explicit and prevents
+          # accidental dynamic-link via a future cgo import.
           mkDaftBinary = {
             name,
             subPackage,
             description,
-            cgoEnabled ? true,
+            cgoEnabled ? false,
             platforms ? pkgs.lib.platforms.unix,
           }: pkgs.buildGoModule {
             pname = name;
@@ -84,13 +88,48 @@
           };
 
           # daft-agent runs inside our minimal microVM rootfs which has
-          # no libc, so it must be statically linked. CGO=0 + pure Go.
+          # no libc, so it must be statically linked. (Default cgoEnabled
+          # = false on mkDaftBinary makes this implicit; kept here only
+          # for the platform restriction.)
           daft-agent = mkDaftBinary {
             name = "daft-agent";
             subPackage = "cmd/daft-agent";
             description = "darkaifactory in-VM sandbox agent";
-            cgoEnabled = false;
             platforms = pkgs.lib.platforms.linux;
+          };
+
+          # daft-sandboxd is the single-executable sandbox-host. It
+          # embeds cloud-hypervisor, the guest kernel, and the
+          # initramfs into the binary at build time, so the resulting
+          # ELF runs on any Linux distro of the same arch with no
+          # external runtime dependencies.
+          daft-sandboxd = pkgs.buildGoModule {
+            pname = "daft-sandboxd";
+            inherit version;
+            src = ./.;
+            vendorHash = "sha256-pprnK2JKmPuR3Q+F8+vMDEdowlb3oX4BOOzW8NGOqgs=";
+            env.CGO_ENABLED = "0";
+
+            # Stage the real artifacts into internal/bundled/assets/
+            # before the Go build, so //go:embed picks them up.
+            preBuild = ''
+              cp ${cloud-hypervisor}/bin/cloud-hypervisor internal/bundled/assets/cloud-hypervisor
+              cp ${kernel}/bzImage internal/bundled/assets/bzImage
+              cp ${initramfs} internal/bundled/assets/initramfs.cpio.gz
+            '';
+
+            ldflags = [
+              "-s" "-w"
+              "-X github.com/richiejp/darkaifactory/internal/version.Version=${version}"
+            ];
+            subPackages = [ "cmd/daft-sandboxd" ];
+
+            meta = with pkgs.lib; {
+              description = "darkaifactory sandbox-host (single-executable, statically linked)";
+              license = licenses.mit;
+              maintainers = [ ];
+              platforms = platforms.linux;
+            };
           };
 
           # Sandbox-VM initramfs: a cpio with daft-agent as /init.
@@ -178,9 +217,11 @@
           };
 
           # Cloud Hypervisor — our v1 VMM, built from our pinned
-          # submodule. Currently a default dynamic cargo build; a
-          # static-musl variant is on the PLAN.md roadmap.
-          cloud-hypervisor = pkgs.rustPlatform.buildRustPackage {
+          # submodule, statically linked against musl so the resulting
+          # ELF runs on any Linux distro of the same arch. We bundle it
+          # into the sandbox-host single executable (daft-sandboxd), so
+          # static linking is load-bearing for portability.
+          cloud-hypervisor = pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "cloud-hypervisor";
             version = "51.1";
 
@@ -203,10 +244,8 @@
             # Nix build sandbox.
             doCheck = false;
 
-            nativeBuildInputs = with pkgs; [ pkg-config ];
-
             meta = with pkgs.lib; {
-              description = "Cloud Hypervisor microVM monitor";
+              description = "Cloud Hypervisor microVM monitor (static-musl)";
               homepage = "https://www.cloudhypervisor.org/";
               license = with licenses; [ asl20 bsd3 ];
               maintainers = [ ];
@@ -226,6 +265,8 @@
             # u-root checks in its vendored dependencies, so we don't need
             # Nix to pre-fetch a module cache for it.
             vendorHash = null;
+
+            env.CGO_ENABLED = "0";
 
             subPackages = [ "." ];
 
