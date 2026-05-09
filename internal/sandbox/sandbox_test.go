@@ -58,12 +58,7 @@ func runFakeVMM(script string) {
 	if exitAfter {
 		return
 	}
-	// Block until the parent kills us. select{} would burn no CPU but
-	// also wouldn't unwind on signals; sleeping in a loop both behaves
-	// well and gives a clean stack trace if anything goes wrong.
-	for {
-		time.Sleep(time.Hour)
-	}
+	select {}
 }
 
 // fakeRunner is a runner that returns a fixed reader and records that

@@ -15,10 +15,8 @@ import (
 	"os/signal"
 )
 
-// Banner is the line printed by Run on start-up. The end-to-end test that
-// boots a real VM looks for this exact string on the serial console;
-// changing it without updating the sandbox integration test will break the
-// hello-world slice.
+// Banner is the line Run prints on start-up. The sandbox package matches
+// against this exact string on the VM console.
 const Banner = "hello world from daft-agent"
 
 // Run prints Banner to w and then blocks until ctx is cancelled, returning

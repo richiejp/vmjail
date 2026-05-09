@@ -3,6 +3,7 @@ package sandbox
 import (
 	"fmt"
 	"os"
+	"strconv"
 )
 
 // Env var names. Stable so external scripting (and our integration
@@ -29,8 +30,8 @@ func ConfigFromEnv() (Config, error) {
 		Memory:          os.Getenv(EnvMemory),
 	}
 	if v := os.Getenv(EnvCPUs); v != "" {
-		var n int
-		if _, err := fmt.Sscanf(v, "%d", &n); err != nil {
+		n, err := strconv.Atoi(v)
+		if err != nil {
 			return Config{}, fmt.Errorf("sandbox: invalid %s=%q: %w", EnvCPUs, v, err)
 		}
 		cfg.CPUs = n

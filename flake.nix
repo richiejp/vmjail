@@ -47,67 +47,53 @@
         packages = rec {
           default = daft;
 
-          daft = pkgs.buildGoModule {
-            pname = "daft";
+          # mkDaftBinary builds one of our two cmd/ binaries from the
+          # repo's go.mod. Shared so vendorHash stays defined once —
+          # otherwise it drifts the next time go.mod changes.
+          #
+          # Update vendorHash with `nix build` when go.mod changes; Nix
+          # prints the new value in the error.
+          mkDaftBinary = {
+            name,
+            subPackage,
+            description,
+            cgoEnabled ? true,
+            platforms ? pkgs.lib.platforms.unix,
+          }: pkgs.buildGoModule {
+            pname = name;
             inherit version;
-
             src = ./.;
-
-            # vendorHash pins the Go module dependency closure for
-            # reproducible builds. Update with `nix build` when go.mod
-            # changes — Nix prints the new hash in the error.
             vendorHash = "sha256-pprnK2JKmPuR3Q+F8+vMDEdowlb3oX4BOOzW8NGOqgs=";
-
-            # Embed the version string into the binary at build time.
+            env.CGO_ENABLED = if cgoEnabled then "1" else "0";
             ldflags = [
               "-s" "-w"
               "-X github.com/richiejp/darkaifactory/internal/version.Version=${version}"
             ];
-
-            subPackages = [ "cmd/daft" ];
-
+            subPackages = [ subPackage ];
             meta = with pkgs.lib; {
-              description = "darkaifactory daft CLI";
+              inherit description platforms;
               license = licenses.mit;
               maintainers = [ ];
-              platforms = platforms.unix;
             };
           };
 
-          # daft-agent is the in-VM agent. It must run inside our minimal
-          # microVM rootfs which has no libc, so build statically with
-          # CGO_ENABLED=0. Pure Go has no runtime libc dependency.
-          daft-agent = pkgs.buildGoModule {
-            pname = "daft-agent";
-            inherit version;
-
-            src = ./.;
-            vendorHash = "sha256-pprnK2JKmPuR3Q+F8+vMDEdowlb3oX4BOOzW8NGOqgs=";
-
-            env.CGO_ENABLED = "0";
-
-            ldflags = [
-              "-s" "-w"
-              "-X github.com/richiejp/darkaifactory/internal/version.Version=${version}"
-            ];
-
-            subPackages = [ "cmd/daft-agent" ];
-
-            meta = with pkgs.lib; {
-              description = "darkaifactory in-VM sandbox agent";
-              license = licenses.mit;
-              maintainers = [ ];
-              platforms = platforms.linux;
-            };
+          daft = mkDaftBinary {
+            name = "daft";
+            subPackage = "cmd/daft";
+            description = "darkaifactory daft CLI";
           };
 
-          # Initramfs cpio for the sandbox VM. First-pass minimum:
-          # daft-agent acts as /init directly. PLAN.md's longer-term
-          # plan is u-root's `cmds/core/init` with daft-agent as
-          # -uinitcmd; that lands in a follow-up slice. The current
-          # arrangement is enough to validate the boot path end-to-end:
-          # kernel decompresses, jumps to /init, which is daft-agent,
-          # which prints its banner to the serial console.
+          # daft-agent runs inside our minimal microVM rootfs which has
+          # no libc, so it must be statically linked. CGO=0 + pure Go.
+          daft-agent = mkDaftBinary {
+            name = "daft-agent";
+            subPackage = "cmd/daft-agent";
+            description = "darkaifactory in-VM sandbox agent";
+            cgoEnabled = false;
+            platforms = pkgs.lib.platforms.linux;
+          };
+
+          # Sandbox-VM initramfs: a cpio with daft-agent as /init.
           initramfs = pkgs.runCommand "daft-initramfs.cpio.gz" {
             nativeBuildInputs = with pkgs; [ cpio gzip ];
           } ''
@@ -115,7 +101,7 @@
             cp ${daft-agent}/bin/daft-agent root/init
             chmod +x root/init
             (cd root && find . -print0 | cpio --null --create --format=newc) \
-              | gzip -9 > $out
+              | gzip > $out
           '';
 
           # Linux kernel for the sandbox VM, built from the pinned
@@ -191,10 +177,9 @@
             };
           };
 
-          # Cloud Hypervisor — our v1 VMM, built from our pinned submodule
-          # rather than nixpkgs. Static-musl is the eventual goal per
-          # PLAN.md; for the first pass we accept the dynamic build that
-          # cargo+rustc produce by default and tighten in a later slice.
+          # Cloud Hypervisor — our v1 VMM, built from our pinned
+          # submodule. Currently a default dynamic cargo build; a
+          # static-musl variant is on the PLAN.md roadmap.
           cloud-hypervisor = pkgs.rustPlatform.buildRustPackage {
             pname = "cloud-hypervisor";
             version = "51.1";
@@ -229,10 +214,9 @@
             };
           };
 
-          # u-root command, built from our pinned submodule rather than
-          # nixpkgs. We use it in a later slice to assemble the initramfs
-          # cpio that boots the sandbox VM. The vendorHash pins the Go
-          # module dependency closure for reproducible builds.
+          # u-root command, built from our pinned submodule. Used to
+          # assemble future-slice initramfs variants once we move off
+          # daft-agent-as-PID-1.
           u-root = pkgs.buildGoModule {
             pname = "u-root";
             version = "0.16.0";

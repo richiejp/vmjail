@@ -42,10 +42,6 @@ type Config struct {
 	Memory string
 	// CPUs is the number of vCPUs to assign. Defaults to 1 when zero.
 	CPUs int
-	// ExtraArgs are appended verbatim to the cloud-hypervisor command
-	// line. Used by tests to flag a self-exec'd helper as a fake VMM
-	// without the helper having to understand cloud-hypervisor syntax.
-	ExtraArgs []string
 }
 
 // validate returns an error listing every missing required field.
@@ -95,19 +91,22 @@ type runner interface {
 // captures its console (hvc0) on stdout. It implements runner.
 type cloudHypervisorRunner struct{}
 
+// kernelCmdline is the boot cmdline we pass to every sandbox VM. console
+// drives kernel logs and our agent's stdout to the host's controlling
+// terminal; reboot=t/panic=-1 ensures the guest doesn't hang on a panic.
+const kernelCmdline = "console=hvc0 reboot=t panic=-1"
+
 func (cloudHypervisorRunner) run(ctx context.Context, cfg Config) (io.ReadCloser, func(), error) {
-	args := []string{
+	cmd := exec.CommandContext(
+		ctx, cfg.CloudHypervisor,
 		"--kernel", cfg.Kernel,
 		"--initramfs", cfg.Initramfs,
-		"--cmdline", "console=hvc0 reboot=t panic=-1",
+		"--cmdline", kernelCmdline,
 		"--console", "tty",
 		"--serial", "off",
 		"--cpus", fmt.Sprintf("boot=%d", cfg.CPUs),
-		"--memory", "size=" + cfg.Memory,
-	}
-	args = append(args, cfg.ExtraArgs...)
-
-	cmd := exec.CommandContext(ctx, cfg.CloudHypervisor, args...)
+		"--memory", "size="+cfg.Memory,
+	)
 
 	// Cloud Hypervisor sends both kernel logs and our agent's banner
 	// over the virtio-console (hvc0 → its stdout) when --console tty
@@ -173,7 +172,9 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner) error {
 // Buffer is sized for kernel boot lines, which can be long.
 func scanForBanner(w io.Writer, r io.Reader) error {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	// 64 KiB initial, 256 KiB cap. Real kernel boot lines are <1 KiB;
+	// the cap is just a hostile-input ceiling.
+	scanner.Buffer(make([]byte, 64*1024), 256*1024)
 
 	for scanner.Scan() {
 		line := scanner.Text()
