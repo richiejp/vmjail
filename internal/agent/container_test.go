@@ -25,21 +25,17 @@ const fakeCrunExitEnv = "DAFT_TEST_FAKE_CRUN_EXIT"
 // fakeContainerDeps records exec invocations and lets tests script
 // stdout / errors per call.
 type fakeContainerDeps struct {
-	gotRuntime string
-	gotBundle  string
-	gotID      string
-	stdout     string
-	err        error
-	calls      int
+	gotBundle string
+	stdout    string
+	err       error
+	calls     int
 }
 
 func (f *fakeContainerDeps) toContainerDeps() ContainerDeps {
 	return ContainerDeps{
-		Exec: func(_ context.Context, w io.Writer, runtime, bundle, id string) error {
+		Exec: func(_ context.Context, w io.Writer, bundle string) error {
 			f.calls++
-			f.gotRuntime = runtime
 			f.gotBundle = bundle
-			f.gotID = id
 			if f.stdout != "" {
 				_, _ = io.WriteString(w, f.stdout)
 			}
@@ -48,15 +44,26 @@ func (f *fakeContainerDeps) toContainerDeps() ContainerDeps {
 	}
 }
 
+// withTestRuntime swaps ContainerRuntime for the duration of t to point
+// at the given binary. Used by execContainerLinux tests that re-exec
+// the test binary as a fake crun.
+func withTestRuntime(t *testing.T, path string) {
+	t.Helper()
+	orig := ContainerRuntime
+	ContainerRuntime = path
+	t.Cleanup(func() { ContainerRuntime = orig })
+}
+
 // TestExecContainerLinuxViaFakeBinary points execContainerLinux at the
 // test binary itself, which TestMain reroutes into a fake crun. Covers
 // the production exec wiring (StdoutPipe, prefixCopy, cmd.Wait) without
 // needing the real OCI runtime or a privileged host.
 func TestExecContainerLinuxViaFakeBinary(t *testing.T) {
+	withTestRuntime(t, os.Args[0])
 	t.Setenv(fakeCrunEnv, "stdout-from-fake-crun")
 
 	var buf bytes.Buffer
-	if err := execContainerLinux(t.Context(), &buf, os.Args[0], "/unused-bundle", "fake-id"); err != nil {
+	if err := execContainerLinux(t.Context(), &buf, "/unused-bundle"); err != nil {
 		t.Fatalf("execContainerLinux: %v", err)
 	}
 	if !strings.Contains(buf.String(), ContainerReportPrefix+"stdout-from-fake-crun") {
@@ -65,11 +72,12 @@ func TestExecContainerLinuxViaFakeBinary(t *testing.T) {
 }
 
 func TestExecContainerLinuxReportsNonZeroExit(t *testing.T) {
+	withTestRuntime(t, os.Args[0])
 	t.Setenv(fakeCrunEnv, "before-exit")
 	t.Setenv(fakeCrunExitEnv, "42")
 
 	var buf bytes.Buffer
-	err := execContainerLinux(t.Context(), &buf, os.Args[0], "/unused", "fake-id")
+	err := execContainerLinux(t.Context(), &buf, "/unused")
 	if err == nil {
 		t.Fatal("expected error for non-zero exit, got nil")
 	}
@@ -83,8 +91,10 @@ func TestExecContainerLinuxReportsNonZeroExit(t *testing.T) {
 }
 
 func TestExecContainerLinuxStartFailureReportsError(t *testing.T) {
+	withTestRuntime(t, "/nonexistent/crun")
+
 	var buf bytes.Buffer
-	err := execContainerLinux(t.Context(), &buf, "/nonexistent/crun", "/b", "id")
+	err := execContainerLinux(t.Context(), &buf, "/b")
 	if err == nil {
 		t.Fatal("expected error for missing runtime binary")
 	}
@@ -102,9 +112,8 @@ func TestRunContainerHappyPath(t *testing.T) {
 	if f.calls != 1 {
 		t.Fatalf("Exec called %d times, want 1", f.calls)
 	}
-	if f.gotRuntime != ContainerRuntime || f.gotBundle != testBundlePath || f.gotID != ContainerID {
-		t.Errorf("Exec args: runtime=%q bundle=%q id=%q",
-			f.gotRuntime, f.gotBundle, f.gotID)
+	if f.gotBundle != testBundlePath {
+		t.Errorf("Exec bundle = %q, want %q", f.gotBundle, testBundlePath)
 	}
 	if !strings.Contains(buf.String(), ContainerReportPrefix+"hi") {
 		t.Errorf("output missing container line: %q", buf.String())

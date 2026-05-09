@@ -31,7 +31,7 @@ func readKernelCmdline() (string, error) {
 // crun is Linux-only.
 func defaultContainerDeps() ContainerDeps {
 	return ContainerDeps{
-		Exec: func(_ context.Context, _ io.Writer, _, _, _ string) error {
+		Exec: func(_ context.Context, _ io.Writer, _ string) error {
 			return errors.New("agent: container exec unsupported off Linux")
 		},
 	}

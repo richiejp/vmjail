@@ -688,37 +688,15 @@ func TestHelloIntegrationBootsVMWithContainer(t *testing.T) {
 	}
 }
 
-// copyTree is a tiny os.CopyFS-style helper for the integration test.
-// Resolves symlinks at the root (Nix outputs are symlinks into the
-// store) so the walk descends into the actual directory tree.
+// copyTree wraps os.CopyFS with one extra step: it resolves symlinks
+// at the source root before recursing. Nix outputs are symlinks into
+// /nix/store, and os.CopyFS / os.DirFS won't follow a symlinked root.
 func copyTree(src, dst string) error {
 	resolved, err := filepath.EvalSymlinks(src)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
-		return err
-	}
-	return filepath.Walk(resolved, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(resolved, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		switch {
-		case info.IsDir():
-			return os.MkdirAll(target, 0o755)
-		default:
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(target, data, info.Mode().Perm())
-		}
-	})
+	return os.CopyFS(dst, os.DirFS(resolved))
 }
 
 func TestHelloIntegrationBootsVM(t *testing.T) {

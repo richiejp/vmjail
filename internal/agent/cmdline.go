@@ -34,6 +34,22 @@ func FormatBundleCmdline(path string) string {
 	return fmt.Sprintf("%s=%s", BundleCmdlineKey, path)
 }
 
+// findCmdlineValue scans a kernel cmdline (whitespace-separated
+// `key=value` tokens, mirroring the kernel's /proc/cmdline parser) for
+// the first occurrence of key= and returns its value.
+//
+// ok=false means the key is absent — that's the "feature not requested"
+// signal, not an error. Per-key validation is the caller's job.
+func findCmdlineValue(cmdline, key string) (string, bool) {
+	prefix := key + "="
+	for tok := range strings.FieldsSeq(cmdline) {
+		if v, ok := strings.CutPrefix(tok, prefix); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
 // ParseBundleCmdline scans a kernel cmdline for `daft.bundle=<path>`.
 // Returns (path, ok=true, nil) on a well-formed token, (_, false, err)
 // on malformed input, and ("", false, nil) when the token is absent.
@@ -43,23 +59,19 @@ func FormatBundleCmdline(path string) string {
 // we only enforce the absolute-path invariant here so a typo in the
 // host config doesn't surface as a crun error with no useful context.
 func ParseBundleCmdline(cmdline string) (string, bool, error) {
-	prefix := BundleCmdlineKey + "="
-	for tok := range strings.FieldsSeq(cmdline) {
-		if !strings.HasPrefix(tok, prefix) {
-			continue
-		}
-		val := tok[len(prefix):]
-		if val == "" {
-			return "", false, fmt.Errorf("agent: %s value is empty", BundleCmdlineKey)
-		}
-		if !strings.HasPrefix(val, "/") {
-			return "", false, fmt.Errorf(
-				"agent: %s path %q must be absolute", BundleCmdlineKey, val,
-			)
-		}
-		return val, true, nil
+	val, ok := findCmdlineValue(cmdline, BundleCmdlineKey)
+	if !ok {
+		return "", false, nil
 	}
-	return "", false, nil
+	if val == "" {
+		return "", false, fmt.Errorf("agent: %s value is empty", BundleCmdlineKey)
+	}
+	if !strings.HasPrefix(val, "/") {
+		return "", false, fmt.Errorf(
+			"agent: %s path %q must be absolute", BundleCmdlineKey, val,
+		)
+	}
+	return val, true, nil
 }
 
 // ParseShareCmdline scans a kernel cmdline string for `daft.share=...`
@@ -73,39 +85,30 @@ func ParseBundleCmdline(cmdline string) (string, bool, error) {
 // Both constraints are checked because the agent passes them straight
 // to mount(2) — bogus values would surface as syscall errors with no
 // useful context.
-//
-// The cmdline is whitespace-separated `key=value` tokens, mirroring how
-// the kernel parses /proc/cmdline. Unknown tokens are ignored.
 func ParseShareCmdline(cmdline string) (ShareSpec, bool, error) {
-	prefix := ShareCmdlineKey + "="
-	for tok := range strings.FieldsSeq(cmdline) {
-		if !strings.HasPrefix(tok, prefix) {
-			continue
-		}
-		val := tok[len(prefix):]
-		tag, mp, ok := strings.Cut(val, ":")
-		if !ok {
-			return ShareSpec{}, false, fmt.Errorf(
-				"agent: malformed %s=%q: want <tag>:<mountpoint>",
-				ShareCmdlineKey, val,
-			)
-		}
-		if tag == "" {
-			return ShareSpec{}, false, fmt.Errorf(
-				"agent: %s tag is empty", ShareCmdlineKey,
-			)
-		}
-		if strings.ContainsAny(tag, " \t\n\r") {
-			return ShareSpec{}, false, fmt.Errorf(
-				"agent: %s tag %q contains whitespace", ShareCmdlineKey, tag,
-			)
-		}
-		if !strings.HasPrefix(mp, "/") {
-			return ShareSpec{}, false, fmt.Errorf(
-				"agent: %s mountpoint %q must be absolute", ShareCmdlineKey, mp,
-			)
-		}
-		return ShareSpec{Tag: tag, Mountpoint: mp}, true, nil
+	val, ok := findCmdlineValue(cmdline, ShareCmdlineKey)
+	if !ok {
+		return ShareSpec{}, false, nil
 	}
-	return ShareSpec{}, false, nil
+	tag, mp, ok := strings.Cut(val, ":")
+	if !ok {
+		return ShareSpec{}, false, fmt.Errorf(
+			"agent: malformed %s=%q: want <tag>:<mountpoint>",
+			ShareCmdlineKey, val,
+		)
+	}
+	if tag == "" {
+		return ShareSpec{}, false, fmt.Errorf("agent: %s tag is empty", ShareCmdlineKey)
+	}
+	if strings.ContainsAny(tag, " \t\n\r") {
+		return ShareSpec{}, false, fmt.Errorf(
+			"agent: %s tag %q contains whitespace", ShareCmdlineKey, tag,
+		)
+	}
+	if !strings.HasPrefix(mp, "/") {
+		return ShareSpec{}, false, fmt.Errorf(
+			"agent: %s mountpoint %q must be absolute", ShareCmdlineKey, mp,
+		)
+	}
+	return ShareSpec{Tag: tag, Mountpoint: mp}, true, nil
 }
