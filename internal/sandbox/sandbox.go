@@ -63,7 +63,7 @@ func (c *Config) validate() error {
 // withDefaults returns a copy of c with empty optional fields filled in.
 func (c Config) withDefaults() Config {
 	if c.Memory == "" {
-		c.Memory = "256M"
+		c.Memory = defaultMemory
 	}
 	if c.CPUs == 0 {
 		c.CPUs = 1
@@ -95,6 +95,9 @@ type cloudHypervisorRunner struct{}
 // drives kernel logs and our agent's stdout to the host's controlling
 // terminal; reboot=t/panic=-1 ensures the guest doesn't hang on a panic.
 const kernelCmdline = "console=hvc0 reboot=t panic=-1"
+
+// defaultMemory is the guest RAM size used when Config.Memory is empty.
+const defaultMemory = "256M"
 
 func (cloudHypervisorRunner) run(ctx context.Context, cfg Config) (io.ReadCloser, func(), error) {
 	cmd := exec.CommandContext(

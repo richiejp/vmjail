@@ -126,8 +126,8 @@ func TestHelloRejectsEmptyConfigFields(t *testing.T) {
 
 func TestConfigWithDefaultsFillsMemoryAndCPUs(t *testing.T) {
 	cfg := Config{}.withDefaults()
-	if cfg.Memory != "256M" {
-		t.Errorf("Memory default = %q, want %q", cfg.Memory, "256M")
+	if cfg.Memory != defaultMemory {
+		t.Errorf("Memory default = %q, want %q", cfg.Memory, defaultMemory)
 	}
 	if cfg.CPUs != 1 {
 		t.Errorf("CPUs default = %d, want 1", cfg.CPUs)
@@ -328,6 +328,52 @@ func TestHelloIntegrationBootsVM(t *testing.T) {
 	if !strings.Contains(buf.String(), agent.Banner) {
 		t.Fatalf("console output missing banner %q\n--- console ---\n%s", agent.Banner, buf.String())
 	}
+}
+
+// FuzzConfigFromEnv feeds arbitrary strings to every env var
+// ConfigFromEnv reads. The current parser only does string membership
+// checks plus a single strconv.Atoi, so the seed corpus alone covers
+// every branch — but the fuzz target exists as a guard: anyone who
+// later adds richer parsing here (a memory-size validator, an
+// allowlist, a path canonicaliser) inherits a panic-freedom invariant
+// for free.
+//
+// Run actively with:
+//
+//	go test -run='^$' -fuzz=FuzzConfigFromEnv -fuzztime=30s ./internal/sandbox
+func FuzzConfigFromEnv(f *testing.F) {
+	const ch, k, i = "/ch", "/k", "/i"
+	seeds := [][5]string{
+		{"", "", "", "", ""},                        // all missing
+		{ch, k, i, "", ""},                          // required only
+		{ch, k, i, defaultMemory, "1"},              // happy path
+		{ch, k, i, "1G", "4"},                       // larger sizes
+		{ch, k, i, "", "not-a-number"},              // bad CPUs
+		{ch, k, i, "", "0"},                         // zero CPUs
+		{ch, k, i, "", "-1"},                        // negative CPUs
+		{ch, k, i, "", "999999999999999999"},        // overflow
+		{strings.Repeat("a", 4096), k, i, "m", "1"}, // long values
+	}
+	for _, s := range seeds {
+		f.Add(s[0], s[1], s[2], s[3], s[4])
+	}
+
+	f.Fuzz(func(t *testing.T, ch, kernel, initramfs, memory, cpus string) {
+		// POSIX env vars cannot contain NUL; the kernel rejects such
+		// values at execve time, so they can never reach ConfigFromEnv
+		// in production. Skip rather than letting t.Setenv fail.
+		for _, v := range []string{ch, kernel, initramfs, memory, cpus} {
+			if strings.ContainsRune(v, 0) {
+				t.Skip()
+			}
+		}
+		t.Setenv(EnvCloudHypervisor, ch)
+		t.Setenv(EnvKernel, kernel)
+		t.Setenv(EnvInitramfs, initramfs)
+		t.Setenv(EnvMemory, memory)
+		t.Setenv(EnvCPUs, cpus)
+		_, _ = ConfigFromEnv()
+	})
 }
 
 // FuzzScanForBanner exercises scanForBanner with arbitrary byte
