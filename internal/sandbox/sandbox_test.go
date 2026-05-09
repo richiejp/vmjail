@@ -2,12 +2,97 @@ package sandbox
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
 )
+
+// TestMain doubles the test binary as a "fake VMM" when invoked with the
+// fakeVMMEnv variable set. Parent tests set the env var, exec
+// os.Args[0], and the child prints its scripted lines (separated by `|`)
+// then sleeps until killed. This lets us cover cloudHypervisorRunner
+// (which requires a real binary on disk that accepts cloud-hypervisor's
+// flag set) without needing KVM or a real VMM.
+//
+// The check happens before m.Run, so flag.Parse() never sees the
+// cloud-hypervisor flags our parent passes us.
+const (
+	fakeVMMEnv = "DAFT_TEST_FAKE_VMM_LINES"
+	// devNull is /dev/null. Used as a stand-in for the kernel and
+	// initramfs paths in tests that swap in a fake VMM — the fake
+	// ignores its args, so the paths only need to exist.
+	devNull = "/dev/null"
+)
+
+func TestMain(m *testing.M) {
+	if script := os.Getenv(fakeVMMEnv); script != "" {
+		runFakeVMM(script)
+		return
+	}
+	os.Exit(m.Run())
+}
+
+// runFakeVMM emulates the cloud-hypervisor binary just enough for
+// cloudHypervisorRunner to scan its stdout. Lines are pipe-separated
+// because env vars do not preserve newlines portably.
+//
+// After printing, the fake either exits (when the script ends with
+// the literal token "EXIT") or sleeps until killed by the parent.
+func runFakeVMM(script string) {
+	lines := strings.Split(script, "|")
+	exitAfter := false
+	if len(lines) > 0 && lines[len(lines)-1] == "EXIT" {
+		exitAfter = true
+		lines = lines[:len(lines)-1]
+	}
+	for _, line := range lines {
+		fmt.Println(line)
+	}
+	if exitAfter {
+		return
+	}
+	// Block until the parent kills us. select{} would burn no CPU but
+	// also wouldn't unwind on signals; sleeping in a loop both behaves
+	// well and gives a clean stack trace if anything goes wrong.
+	for {
+		time.Sleep(time.Hour)
+	}
+}
+
+// fakeRunner is a runner that returns a fixed reader and records that
+// stop was called. Used to test helloWith without spawning anything.
+type fakeRunner struct {
+	output     string
+	startErr   error
+	stopCalled bool
+}
+
+func (f *fakeRunner) run(_ context.Context, _ Config) (io.ReadCloser, func(), error) {
+	if f.startErr != nil {
+		return nil, nil, f.startErr
+	}
+	return io.NopCloser(strings.NewReader(f.output)),
+		func() { f.stopCalled = true },
+		nil
+}
+
+// validCfg returns a Config with all required fields populated. The
+// paths point nowhere meaningful — tests that don't actually exec
+// cloud-hypervisor never dereference them.
+func validCfg() Config {
+	return Config{
+		CloudHypervisor: "/nonexistent/cloud-hypervisor",
+		Kernel:          "/nonexistent/bzImage",
+		Initramfs:       "/nonexistent/initrd",
+	}
+}
 
 func TestHelloRejectsEmptyConfigFields(t *testing.T) {
 	tests := []struct {
@@ -41,6 +126,132 @@ func TestHelloRejectsEmptyConfigFields(t *testing.T) {
 				t.Fatalf("error %q should mention %q", err.Error(), tt.wantSub)
 			}
 		})
+	}
+}
+
+func TestConfigWithDefaultsFillsMemoryAndCPUs(t *testing.T) {
+	cfg := Config{}.withDefaults()
+	if cfg.Memory != "256M" {
+		t.Errorf("Memory default = %q, want %q", cfg.Memory, "256M")
+	}
+	if cfg.CPUs != 1 {
+		t.Errorf("CPUs default = %d, want 1", cfg.CPUs)
+	}
+
+	// Explicit values are preserved.
+	cfg = Config{Memory: "1G", CPUs: 4}.withDefaults()
+	if cfg.Memory != "1G" || cfg.CPUs != 4 {
+		t.Errorf("withDefaults overwrote explicit values: %+v", cfg)
+	}
+}
+
+func TestHelloWithFakeRunnerFindsBanner(t *testing.T) {
+	r := &fakeRunner{
+		output: "[    0.001] kernel boot\nrandom log\n" + agent.Banner + "\nlater output\n",
+	}
+	var buf bytes.Buffer
+	err := helloWith(t.Context(), &buf, validCfg(), r)
+	if err != nil {
+		t.Fatalf("helloWith: %v", err)
+	}
+	if !r.stopCalled {
+		t.Error("stop function was not called")
+	}
+	if !strings.Contains(buf.String(), agent.Banner) {
+		t.Errorf("output missing banner: %q", buf.String())
+	}
+	// Output before banner is mirrored; output after banner should not
+	// be — Hello returns the moment it sees the banner.
+	if strings.Contains(buf.String(), "later output") {
+		t.Errorf("output continued past banner: %q", buf.String())
+	}
+}
+
+func TestHelloWithFakeRunnerReportsMissingBanner(t *testing.T) {
+	r := &fakeRunner{output: "no banner here\nor here\n"}
+	var buf bytes.Buffer
+	err := helloWith(t.Context(), &buf, validCfg(), r)
+	if !errors.Is(err, ErrBannerNotSeen) {
+		t.Fatalf("err = %v, want ErrBannerNotSeen", err)
+	}
+	if !r.stopCalled {
+		t.Error("stop function was not called even on banner miss")
+	}
+}
+
+func TestHelloWithFakeRunnerPropagatesStartError(t *testing.T) {
+	startErr := errors.New("synthetic start failure")
+	r := &fakeRunner{startErr: startErr}
+	err := helloWith(t.Context(), io.Discard, validCfg(), r)
+	if !errors.Is(err, startErr) {
+		t.Fatalf("err = %v, want %v", err, startErr)
+	}
+	if r.stopCalled {
+		t.Error("stop must not be called when start fails")
+	}
+}
+
+// errReader is an io.Reader that always returns an error. Lets us test
+// that scanForBanner wraps non-EOF read errors instead of swallowing
+// them as a banner-not-seen condition.
+type errReader struct{ err error }
+
+func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+func TestScanForBannerWrapsReadError(t *testing.T) {
+	want := errors.New("synthetic read failure")
+	err := scanForBanner(io.Discard, errReader{err: want})
+	if !errors.Is(err, want) {
+		t.Fatalf("err = %v, want wrap of %v", err, want)
+	}
+}
+
+// TestCloudHypervisorRunnerViaFakeBinary exercises the real
+// cloudHypervisorRunner by pointing it at this test binary, which TestMain
+// turns into a fake VMM when DAFT_TEST_FAKE_VMM_LINES is set. We verify
+// that:
+//   - Hello succeeds against a "VMM" that prints kernel-style noise then
+//     the banner.
+//   - The stop function actually kills the child (no leaked process).
+func TestCloudHypervisorRunnerViaFakeBinary(t *testing.T) {
+	t.Setenv(fakeVMMEnv, "[    0.001] kernel boot|"+agent.Banner)
+
+	cfg := Config{
+		CloudHypervisor: os.Args[0],
+		Kernel:          devNull,
+		Initramfs:       devNull,
+	}
+
+	var buf bytes.Buffer
+	err := Hello(t.Context(), &buf, cfg)
+	if err != nil {
+		t.Fatalf("Hello against fake VMM: %v\n%s", err, buf.String())
+	}
+	if !strings.Contains(buf.String(), agent.Banner) {
+		t.Fatalf("banner missing from captured output: %q", buf.String())
+	}
+}
+
+// TestCloudHypervisorRunnerStopKillsChild confirms the stop function
+// actually terminates the subprocess. We launch a fake VMM that would
+// sleep forever, run Hello (which sees the banner immediately and
+// returns), and assert the runtime is short — if stop didn't kill the
+// child, the test would hang and time out instead of returning quickly.
+func TestCloudHypervisorRunnerStopKillsChild(t *testing.T) {
+	t.Setenv(fakeVMMEnv, agent.Banner) // no EXIT — child sleeps forever
+
+	cfg := Config{
+		CloudHypervisor: os.Args[0],
+		Kernel:          devNull,
+		Initramfs:       devNull,
+	}
+
+	start := time.Now()
+	if err := Hello(t.Context(), io.Discard, cfg); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("Hello took %v — stop probably did not kill the child", elapsed)
 	}
 }
 
@@ -92,10 +303,12 @@ func TestConfigFromEnvRejectsBadCPUs(t *testing.T) {
 	}
 }
 
-// TestHelloIntegrationBootsVM is a real end-to-end test: build the
+// TestHelloIntegrationBootsVM is the real end-to-end test: build the
 // sandbox-VM stack with `nix build`, set the env vars, run `go test`.
 // Skipped if any required artifact env var is missing or KVM is not
-// available.
+// available. The mock-based tests above cover the orchestration logic
+// regardless; this test exists to catch breakage in the artifact
+// pipeline (kernel config, initramfs layout, cloud-hypervisor flags).
 //
 // Run locally with:
 //
