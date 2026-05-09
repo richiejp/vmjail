@@ -4,6 +4,14 @@
 VERSION := $(shell cat version.txt)
 LDFLAGS := -X github.com/richiejp/darkaifactory/internal/version.Version=$(VERSION)
 
+# Our own Go code lives under cmd/ and internal/. third_party/ holds
+# vendored upstream sources (Linux kernel, Cloud Hypervisor, u-root) that
+# we build from but do not own — exclude them from formatting, linting,
+# testing, and coverage. OUR_GO_PKGS is what every Go-tool target operates
+# on.
+OUR_GO_PKGS := ./internal/... ./cmd/...
+OUR_GO_DIRS := internal cmd
+
 all: check-fmt lint test cover-check
 
 help:
@@ -20,10 +28,10 @@ help:
 ## Formatting ----------------------------------------------------------------
 
 fmt:
-	gofumpt -w .
+	gofumpt -w $(OUR_GO_DIRS)
 
 check-fmt:
-	@unformatted=$$(gofumpt -l .); \
+	@unformatted=$$(gofumpt -l $(OUR_GO_DIRS)); \
 	if [ -n "$$unformatted" ]; then \
 		echo "Unformatted files:"; \
 		echo "$$unformatted"; \
@@ -34,12 +42,12 @@ check-fmt:
 ## Linting -------------------------------------------------------------------
 
 lint:
-	golangci-lint run
+	golangci-lint run $(OUR_GO_PKGS)
 
 ## Testing ------------------------------------------------------------------
 
 test:
-	go test ./...
+	go test $(OUR_GO_PKGS)
 
 ## Coverage ------------------------------------------------------------------
 
@@ -49,7 +57,7 @@ COVER_OUT := coverage.out
 COVER_BASELINE := coverage.txt
 
 cover:
-	@go test -covermode=atomic -coverprofile=$(COVER_OUT) ./... > /dev/null
+	@go test -covermode=atomic -coverprofile=$(COVER_OUT) $(OUR_GO_PKGS) > /dev/null
 	@total=$$(go tool cover -func=$(COVER_OUT) | awk '/^total:/ {print $$3}' | tr -d '%'); \
 	echo "Total coverage: $$total%"; \
 	echo "$$total" > $(COVER_BASELINE); \
@@ -59,7 +67,7 @@ cover:
 # - If coverage.txt is missing, this is a no-op (first run).
 # - If the drop is > 1.0pp, exit non-zero.
 cover-check:
-	@go test -covermode=atomic -coverprofile=$(COVER_OUT) ./... > /dev/null
+	@go test -covermode=atomic -coverprofile=$(COVER_OUT) $(OUR_GO_PKGS) > /dev/null
 	@current=$$(go tool cover -func=$(COVER_OUT) | awk '/^total:/ {print $$3}' | tr -d '%'); \
 	echo "Current total coverage: $$current%"; \
 	if [ ! -f $(COVER_BASELINE) ]; then \

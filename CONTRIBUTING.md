@@ -28,6 +28,27 @@ Project direction lives in [`PLAN.md`](PLAN.md). When scope changes, when a
 milestone lands, when an open question gets answered — update `PLAN.md` in
 the same change. Stale plans actively mislead future contributors (and agents).
 
+## Cloning
+
+Most of the time you only want the Go code; the third-party submodules
+under `third_party/` (Linux kernel, Cloud Hypervisor, u-root) only matter
+when you're building the microVM stack.
+
+```sh
+# Just the Go code (default):
+git clone <url>
+
+# Plus the submodules (needed for Nix builds of the kernel / VMM / userland):
+git clone --recurse-submodules <url>
+# or after the fact:
+git submodule update --init --recursive
+```
+
+The Linux kernel submodule pulls a full stable history (~1.7 GB) by
+default. Pass `--shallow-submodules` to your clone if disk space is at a
+premium — the recorded ref is always a published tag, so the depth-1
+clone will reach it.
+
 ## Code layout
 
 ### No Go files at the repository root
