@@ -206,7 +206,23 @@ Out of Scope:
 - [x] Build output now lands under `bin/` rather than the repo
       root, so a dev `make build` can't be confused with a
       release-grade `nix build .#daft-sandboxd`.
-- [ ] HTTP/2 + mTLS auth: client ↔ orchestrator
+- [x] mTLS identity primitives (`internal/identity`): Ed25519
+      keypair + self-signed leaf cert (10y, ClientAuth+ServerAuth
+      EKU, CN `daft-<role>-<rand>`); atomic Save/Load to
+      `<dir>/cert.pem` + `<dir>/key.pem` with 0o600 perms;
+      `Fingerprint` = SHA-256 of the cert's SPKI, rendered as
+      `sha256:AA:BB:...` (stable across cert rotation while the
+      key is the same); JSON-friendly `Fingerprint` (text
+      marshaller); `PeerStore` is the on-disk TOFU set, atomic
+      JSON file rewrite. Fuzz target: `FuzzParseFingerprint`.
+      Foundation for the orchestrator listener — Slice 1 of the
+      mTLS skeleton; Slice 2 (the listener + Connect-RPC + `daft
+      auth approve` CLI) is next.
+- [ ] HTTP/2 + mTLS auth: client ↔ orchestrator (Slice 2:
+      orchestrator binary, mTLS listener with VerifyPeerCertificate
+      against PeerStore, Connect-RPC `Health.Ping` endpoint, `daft
+      auth list/approve/remove` subcommands, integration test
+      with httptest)
 - [ ] Workspace sync: desync chunks + daft-fuse
 
 ## Architecture
