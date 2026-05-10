@@ -40,9 +40,10 @@ const (
 	// tests; testTagDaftshare is the virtio-fs tag used by share +
 	// container integration tests; testBundlePath is the in-VM
 	// bundle path. Promoted to constants to satisfy goconst.
-	testMountpoint   = "/share"
-	testTagDaftshare = "daftshare"
-	testBundlePath   = "/share/bundle"
+	testMountpoint    = "/share"
+	testTagDaftshare  = "daftshare"
+	testBundlePath    = "/share/bundle"
+	testFakeVirtiofsd = "/nonexistent/virtiofsd"
 )
 
 func TestMain(m *testing.M) {
@@ -106,14 +107,14 @@ func runFakeVMM(script string) {
 // fakeRunner is a runner that returns a fixed reader and records that
 // stop was called. Used to test helloWith without spawning anything.
 type fakeRunner struct {
-	output         string
-	startErr       error
-	stopCalled     bool
-	gotShareSocket string // captured shareSocket arg, for share tests
+	output          string
+	startErr        error
+	stopCalled      bool
+	gotShareSockets []string // captured shareSockets arg, for share tests
 }
 
-func (f *fakeRunner) run(_ context.Context, _ Config, shareSocket string) (io.ReadCloser, func(), error) {
-	f.gotShareSocket = shareSocket
+func (f *fakeRunner) run(_ context.Context, _ Config, shareSockets []string) (io.ReadCloser, func(), error) {
+	f.gotShareSockets = shareSockets
 	if f.startErr != nil {
 		return nil, nil, f.startErr
 	}
@@ -122,30 +123,39 @@ func (f *fakeRunner) run(_ context.Context, _ Config, shareSocket string) (io.Re
 		nil
 }
 
-// fakeShareSidecar is a shareSidecar that returns a canned socket path
+// fakeShareSidecar is a shareSidecar that returns canned socket paths
 // without spawning anything. Used to test the share-orchestration
 // branches of helloWith.
 type fakeShareSidecar struct {
-	socket     string
+	sockets    []string
 	startErr   error
 	stopCalled bool
 }
 
-func (f *fakeShareSidecar) start(_ context.Context, _ Config) (string, func(), error) {
+func (f *fakeShareSidecar) start(_ context.Context, cfg Config) ([]string, func(), error) {
 	if f.startErr != nil {
-		return "", nil, f.startErr
+		return nil, nil, f.startErr
 	}
-	return f.socket, func() { f.stopCalled = true }, nil
+	// If sockets is unset, generate one per share so callers don't
+	// need to keep them in sync with cfg.Shares.
+	socks := f.sockets
+	if socks == nil {
+		socks = make([]string, len(cfg.Shares))
+		for i := range socks {
+			socks[i] = fmt.Sprintf("/tmp/fake-vhost-%d.sock", i)
+		}
+	}
+	return socks, func() { f.stopCalled = true }, nil
 }
 
 // noShareSidecar implements shareSidecar but is never called — passed
 // to helloWith in tests that exercise the no-share path. Tests assert
-// helloWith honoured Config.Share == nil by checking that start was
-// never invoked (panics on call).
+// helloWith honoured len(Config.Shares) == 0 by checking that start
+// was never invoked (panics on call).
 type noShareSidecar struct{}
 
-func (noShareSidecar) start(context.Context, Config) (string, func(), error) {
-	panic("noShareSidecar.start called: helloWith should not start virtiofsd when Share is nil")
+func (noShareSidecar) start(context.Context, Config) ([]string, func(), error) {
+	panic("noShareSidecar.start called: helloWith should not start virtiofsd when Shares is empty")
 }
 
 // validCfg returns a Config with all required fields populated. The
@@ -320,19 +330,17 @@ func TestCloudHypervisorRunnerStopKillsChild(t *testing.T) {
 	}
 }
 
-func TestHelloWithShareStartsSidecarAndPassesSocketToRunner(t *testing.T) {
+func TestHelloWithShareStartsSidecarAndPassesSocketsToRunner(t *testing.T) {
 	dir := t.TempDir()
 
 	cfg := validCfg()
-	cfg.Virtiofsd = "/nonexistent/virtiofsd"
-	cfg.Share = &ShareConfig{
-		HostDir:    dir,
-		Tag:        "workspace",
-		Mountpoint: testMountpoint,
+	cfg.Virtiofsd = testFakeVirtiofsd
+	cfg.Shares = []*ShareConfig{
+		{HostDir: dir, Tag: "workspace", Mountpoint: testMountpoint},
 	}
 
 	r := &fakeRunner{output: agent.Banner + "\n"}
-	sc := &fakeShareSidecar{socket: "/tmp/fake.sock"}
+	sc := &fakeShareSidecar{sockets: []string{"/tmp/fake.sock"}}
 
 	if err := helloWith(t.Context(), io.Discard, cfg, r, sc); err != nil {
 		t.Fatalf("helloWith: %v", err)
@@ -340,16 +348,53 @@ func TestHelloWithShareStartsSidecarAndPassesSocketToRunner(t *testing.T) {
 	if !sc.stopCalled {
 		t.Error("share sidecar stop function was not called")
 	}
-	if r.gotShareSocket != sc.socket {
-		t.Errorf("runner saw shareSocket=%q, want %q", r.gotShareSocket, sc.socket)
+	if len(r.gotShareSockets) != 1 || r.gotShareSockets[0] != sc.sockets[0] {
+		t.Errorf("runner saw shareSockets=%v, want %v", r.gotShareSockets, sc.sockets)
+	}
+}
+
+func TestHelloWithMultipleSharesPassesEverySocket(t *testing.T) {
+	dir1 := t.TempDir()
+	dir2 := t.TempDir()
+	cfg := validCfg()
+	cfg.Virtiofsd = testFakeVirtiofsd
+	cfg.Shares = []*ShareConfig{
+		{HostDir: dir1, Tag: "bundles", Mountpoint: "/bundles"},
+		{HostDir: dir2, Tag: "workspace", Mountpoint: "/workspace"},
+	}
+
+	r := &fakeRunner{output: agent.Banner + "\n"}
+	sc := &fakeShareSidecar{sockets: []string{"/tmp/a.sock", "/tmp/b.sock"}}
+
+	if err := helloWith(t.Context(), io.Discard, cfg, r, sc); err != nil {
+		t.Fatalf("helloWith: %v", err)
+	}
+	if len(r.gotShareSockets) != 2 {
+		t.Fatalf("runner saw %d sockets, want 2", len(r.gotShareSockets))
+	}
+}
+
+func TestHelloRejectsDuplicateShareTag(t *testing.T) {
+	dir := t.TempDir()
+	cfg := validCfg()
+	cfg.Virtiofsd = testFakeVirtiofsd
+	cfg.Shares = []*ShareConfig{
+		{HostDir: dir, Tag: "dup", Mountpoint: "/a"},
+		{HostDir: dir, Tag: "dup", Mountpoint: "/b"},
+	}
+	err := Hello(t.Context(), io.Discard, cfg)
+	if err == nil || !strings.Contains(err.Error(), "duplicate Share.Tag") {
+		t.Fatalf("err = %v, want duplicate-tag error", err)
 	}
 }
 
 func TestHelloWithSharePropagatesSidecarStartError(t *testing.T) {
 	dir := t.TempDir()
 	cfg := validCfg()
-	cfg.Virtiofsd = "/nonexistent/virtiofsd"
-	cfg.Share = &ShareConfig{HostDir: dir, Tag: "ws", Mountpoint: testMountpoint}
+	cfg.Virtiofsd = testFakeVirtiofsd
+	cfg.Shares = []*ShareConfig{
+		{HostDir: dir, Tag: "ws", Mountpoint: testMountpoint},
+	}
 
 	startErr := errors.New("synthetic virtiofsd failure")
 	sc := &fakeShareSidecar{startErr: startErr}
@@ -359,7 +404,7 @@ func TestHelloWithSharePropagatesSidecarStartError(t *testing.T) {
 	if !errors.Is(err, startErr) {
 		t.Fatalf("err = %v, want wrap of %v", err, startErr)
 	}
-	if r.gotShareSocket != "" {
+	if r.gotShareSockets != nil {
 		t.Error("runner must not be called when share sidecar fails")
 	}
 }
@@ -367,7 +412,9 @@ func TestHelloWithSharePropagatesSidecarStartError(t *testing.T) {
 func TestHelloRejectsShareWithoutVirtiofsd(t *testing.T) {
 	dir := t.TempDir()
 	cfg := validCfg()
-	cfg.Share = &ShareConfig{HostDir: dir, Tag: "ws", Mountpoint: testMountpoint}
+	cfg.Shares = []*ShareConfig{
+		{HostDir: dir, Tag: "ws", Mountpoint: testMountpoint},
+	}
 	// No cfg.Virtiofsd set.
 
 	err := Hello(t.Context(), io.Discard, cfg)
@@ -431,7 +478,7 @@ func TestShareConfigValidate(t *testing.T) {
 
 func TestBuildKernelCmdlineIncludesShare(t *testing.T) {
 	cfg := validCfg().withDefaults()
-	cfg.Share = &ShareConfig{Tag: "ws", Mountpoint: testMountpoint}
+	cfg.Shares = []*ShareConfig{{Tag: "ws", Mountpoint: testMountpoint}}
 	got := buildKernelCmdline(cfg)
 	if !strings.Contains(got, agent.ShareCmdlineKey+"=ws:/share") {
 		t.Errorf("cmdline %q missing share spec", got)
@@ -464,7 +511,7 @@ func TestBuildMemoryArgAddsSharedOnForShare(t *testing.T) {
 	if buildMemoryArg(cfg) != "size="+defaultMemory {
 		t.Errorf("no-share memory = %q, want size=%s", buildMemoryArg(cfg), defaultMemory)
 	}
-	cfg.Share = &ShareConfig{Tag: "ws", Mountpoint: testMountpoint}
+	cfg.Shares = []*ShareConfig{{Tag: "ws", Mountpoint: testMountpoint}}
 	if got := buildMemoryArg(cfg); !strings.Contains(got, "shared=on") {
 		t.Errorf("with-share memory = %q, want shared=on", got)
 	}
@@ -481,28 +528,28 @@ func TestVirtiofsdSidecarStartViaFakeBinary(t *testing.T) {
 
 	cfg := Config{
 		Virtiofsd: os.Args[0],
-		Share: &ShareConfig{
+		Shares: []*ShareConfig{{
 			HostDir:    dir,
 			Tag:        "ws",
 			Mountpoint: testMountpoint,
-		},
+		}},
 	}
 
-	socket, stop, err := virtiofsdSidecar{}.start(t.Context(), cfg)
+	sockets, stop, err := virtiofsdSidecar{}.start(t.Context(), cfg)
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	defer stop()
 
-	if socket == "" {
-		t.Fatal("start returned empty socket path")
+	if len(sockets) != 1 {
+		t.Fatalf("got %d sockets, want 1", len(sockets))
 	}
-	info, err := os.Stat(socket)
+	info, err := os.Stat(sockets[0])
 	if err != nil {
 		t.Fatalf("stat socket: %v", err)
 	}
 	if info.Mode()&os.ModeSocket == 0 {
-		t.Fatalf("path %s is not a socket: mode=%v", socket, info.Mode())
+		t.Fatalf("path %s is not a socket: mode=%v", sockets[0], info.Mode())
 	}
 }
 
@@ -512,11 +559,11 @@ func TestVirtiofsdSidecarTimesOutWhenSocketNeverAppears(t *testing.T) {
 
 	cfg := Config{
 		Virtiofsd: os.Args[0],
-		Share: &ShareConfig{
+		Shares: []*ShareConfig{{
 			HostDir:    dir,
 			Tag:        "ws",
 			Mountpoint: testMountpoint,
-		},
+		}},
 	}
 
 	// Tighten the timeout for the test by using a context deadline.
@@ -617,11 +664,11 @@ func TestHelloIntegrationBootsVMWithShare(t *testing.T) {
 		t.Fatalf("write marker file: %v", err)
 	}
 
-	cfg.Share = &ShareConfig{
+	cfg.Shares = []*ShareConfig{{
 		HostDir:    dir,
 		Tag:        testTagDaftshare,
 		Mountpoint: testMountpoint,
-	}
+	}}
 
 	var buf bytes.Buffer
 	err = Hello(t.Context(), &buf, cfg)
@@ -671,11 +718,11 @@ func TestHelloIntegrationBootsVMWithContainer(t *testing.T) {
 		t.Fatalf("copy bundle into share: %v", err)
 	}
 
-	cfg.Share = &ShareConfig{
+	cfg.Shares = []*ShareConfig{{
 		HostDir:    shareDir,
 		Tag:        testTagDaftshare,
-		Mountpoint: "/share",
-	}
+		Mountpoint: testMountpoint,
+	}}
 	cfg.Bundle = testBundlePath
 
 	var buf bytes.Buffer

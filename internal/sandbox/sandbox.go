@@ -41,33 +41,38 @@ type Config struct {
 	Initramfs string
 	// Memory is the guest RAM size, e.g. "256M". Defaults to 256M when
 	// empty so simple smoke tests don't need to think about it. When
-	// Share is set the value is silently upgraded to include
+	// Shares is non-empty the value is silently upgraded to include
 	// shared=on, which virtio-fs requires for guest mappings.
 	Memory string
 	// CPUs is the number of vCPUs to assign. Defaults to 1 when zero.
 	CPUs int
 	// Virtiofsd is the path to the virtiofsd binary. Required when
-	// Share is set, ignored otherwise.
+	// Shares is non-empty, ignored otherwise.
 	Virtiofsd string
-	// Share, when non-zero, exposes a host directory to the guest via
-	// virtio-fs. The agent mounts it at Share.Mountpoint and reads
-	// Share.Mountpoint/agent.ShareMarkerFile.
-	Share *ShareConfig
+	// Shares lists host directories to expose to the guest via
+	// virtio-fs. One virtiofsd is spawned per entry; the agent
+	// mounts each one at its Mountpoint inside the VM.
+	//
+	// Order is meaningful only for the v0 marker-demo: when Bundle
+	// is empty, the agent reads hello.txt from Shares[0].Mountpoint
+	// and reports the contents on the console. With Bundle set,
+	// every share is mount-only.
+	Shares []*ShareConfig
 	// Bundle is the *in-guest* absolute path of an OCI bundle the
-	// agent should crun-run. Usually a sub-path under Share.Mountpoint
-	// so the host can ship the bundle into the VM via the same
-	// virtiofs share. Empty (the default) means no container is run.
+	// agent should crun-run. Usually a sub-path under one of the
+	// Shares' Mountpoint so the host can ship the bundle into the
+	// VM via virtiofs. Empty (the default) means no container is
+	// run.
 	Bundle string
 }
 
-// ShareConfig describes one host→guest virtiofs mount. v0 supports a
-// single share; multi-share is straightforward (slice of these) but
-// out of scope until we have a use case.
+// ShareConfig describes one host→guest virtiofs mount.
 type ShareConfig struct {
 	// HostDir is the absolute path on the sandbox-host that virtiofsd
 	// will export. Must exist and be a directory.
 	HostDir string
 	// Tag is the virtio-fs device tag the guest mounts by name.
+	// Must be unique across the Shares slice.
 	Tag string
 	// Mountpoint is the absolute path inside the guest where the agent
 	// mounts the share. Must start with `/`.
@@ -87,12 +92,19 @@ func (c *Config) validate() error {
 	if c.Initramfs == "" {
 		return fmt.Errorf("sandbox: Initramfs path is required")
 	}
-	if c.Share != nil {
+	if len(c.Shares) > 0 {
 		if c.Virtiofsd == "" {
-			return fmt.Errorf("sandbox: Virtiofsd path is required when Share is set")
+			return fmt.Errorf("sandbox: Virtiofsd path is required when Shares is non-empty")
 		}
-		if err := c.Share.validate(); err != nil {
-			return err
+		seenTag := make(map[string]bool, len(c.Shares))
+		for i, s := range c.Shares {
+			if err := s.validate(); err != nil {
+				return fmt.Errorf("sandbox: Shares[%d]: %w", i, err)
+			}
+			if seenTag[s.Tag] {
+				return fmt.Errorf("sandbox: duplicate Share.Tag %q", s.Tag)
+			}
+			seenTag[s.Tag] = true
 		}
 	}
 	if c.Bundle != "" && !strings.HasPrefix(c.Bundle, "/") {
@@ -146,20 +158,23 @@ var ErrBannerNotSeen = errors.New("sandbox: agent banner not seen on console")
 // can be unit-tested with a fake. Real callers use cloudHypervisorRunner;
 // tests inject a stub that returns a pre-canned stream.
 //
-// shareSocket is the Unix-socket path of the virtiofsd sidecar to wire
-// up via `--fs tag=...,socket=...`, or "" when no share is configured.
-// Threading it as an explicit parameter (rather than smuggling it
-// through Config) keeps Config a description-of-intent and the runner
+// shareSockets carries the Unix-socket paths of every virtiofsd
+// sidecar to wire up via `--fs tag=...,socket=...`, parallel to
+// cfg.Shares. Empty (or nil) when no share is configured. Threading
+// it as an explicit parameter (rather than smuggling it through
+// Config) keeps Config a description-of-intent and the runner
 // stateless.
 type runner interface {
-	run(ctx context.Context, cfg Config, shareSocket string) (io.ReadCloser, func(), error)
+	run(ctx context.Context, cfg Config, shareSockets []string) (io.ReadCloser, func(), error)
 }
 
 // shareSidecar abstracts the virtiofsd subprocess. Lifecycle: start
-// before the VMM (cloud-hypervisor connects to its socket on boot),
-// stop after the VMM exits. Like runner, swappable in tests.
+// before the VMM (cloud-hypervisor connects to its socket(s) on
+// boot), stop after the VMM exits. Returns one socket path per
+// cfg.Shares entry, in the same order. Like runner, swappable in
+// tests.
 type shareSidecar interface {
-	start(ctx context.Context, cfg Config) (socketPath string, stop func(), err error)
+	start(ctx context.Context, cfg Config) (socketPaths []string, stop func(), err error)
 }
 
 // cloudHypervisorRunner runs cloud-hypervisor as a child process and
@@ -186,14 +201,39 @@ const defaultMemory = "256M"
 // host; the generous default leaves room for cold-start.
 const virtiofsdReadyTimeout = 5 * time.Second
 
-// start spawns virtiofsd against cfg.Share, writes its socket into a
-// fresh temp dir, and waits for the socket to appear before returning.
-// The returned stop function tears down the process and removes the
-// temp dir.
-func (virtiofsdSidecar) start(ctx context.Context, cfg Config) (string, func(), error) {
+// start spawns one virtiofsd per cfg.Shares entry, returning a slice
+// of socket paths (parallel to cfg.Shares). The returned stop tears
+// down every spawned process and removes the temp dirs.
+func (virtiofsdSidecar) start(ctx context.Context, cfg Config) ([]string, func(), error) {
+	sockets := make([]string, 0, len(cfg.Shares))
+	stops := make([]func(), 0, len(cfg.Shares))
+
+	stopAll := func() {
+		// Tear down in reverse spawn order, mostly cosmetic.
+		for i := len(stops) - 1; i >= 0; i-- {
+			stops[i]()
+		}
+	}
+
+	for i, share := range cfg.Shares {
+		socket, stop, err := startOneVirtiofsd(ctx, cfg.Virtiofsd, share)
+		if err != nil {
+			stopAll()
+			return nil, nil, fmt.Errorf("sandbox: share %d (%s): %w", i, share.Tag, err)
+		}
+		sockets = append(sockets, socket)
+		stops = append(stops, stop)
+	}
+	return sockets, stopAll, nil
+}
+
+// startOneVirtiofsd spawns a single virtiofsd against share, writes
+// its socket into a fresh temp dir, and waits for the socket to
+// appear before returning. stop tears down the process + temp dir.
+func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig) (string, func(), error) {
 	dir, err := os.MkdirTemp("", "daft-virtiofs-")
 	if err != nil {
-		return "", nil, fmt.Errorf("sandbox: virtiofsd tmpdir: %w", err)
+		return "", nil, fmt.Errorf("tmpdir: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(dir) }
 
@@ -204,9 +244,9 @@ func (virtiofsdSidecar) start(ctx context.Context, cfg Config) (string, func(), 
 	// production hardening (PLAN.md "rootless agent") is layered on
 	// at the orchestration boundary, not inside virtiofsd.
 	cmd := exec.CommandContext(
-		ctx, cfg.Virtiofsd,
+		ctx, binary,
 		"--socket-path", socket,
-		"--shared-dir", cfg.Share.HostDir,
+		"--shared-dir", share.HostDir,
 		"--sandbox=none",
 	)
 	cmd.Stdout = io.Discard
@@ -214,7 +254,7 @@ func (virtiofsdSidecar) start(ctx context.Context, cfg Config) (string, func(), 
 
 	if err := cmd.Start(); err != nil {
 		cleanup()
-		return "", nil, fmt.Errorf("sandbox: spawn virtiofsd: %w", err)
+		return "", nil, fmt.Errorf("spawn virtiofsd: %w", err)
 	}
 
 	stop := func() {
@@ -252,15 +292,16 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 	}
 }
 
-// buildKernelCmdline returns the cmdline string CH boots with. Adds
-// `daft.share=<tag>:<mp>` and `daft.bundle=<path>` tokens as needed so
-// the in-VM agent picks up the mount + container-launch instructions.
+// buildKernelCmdline returns the cmdline string CH boots with. Emits
+// one `daft.share=<tag>:<mp>` token per share plus `daft.bundle=
+// <path>` when Bundle is set, so the in-VM agent picks up the mount
+// + container-launch instructions.
 func buildKernelCmdline(cfg Config) string {
 	parts := []string{kernelCmdlineBase}
-	if cfg.Share != nil {
+	for _, s := range cfg.Shares {
 		parts = append(parts, agent.FormatShareCmdline(agent.ShareSpec{
-			Tag:        cfg.Share.Tag,
-			Mountpoint: cfg.Share.Mountpoint,
+			Tag:        s.Tag,
+			Mountpoint: s.Mountpoint,
 		}))
 	}
 	if cfg.Bundle != "" {
@@ -271,16 +312,22 @@ func buildKernelCmdline(cfg Config) string {
 
 // buildMemoryArg returns the value for `--memory size=...`. virtio-fs
 // requires `shared=on` so the guest's mappings can resolve to host
-// pages; we force it whenever Share is configured so callers don't
-// have to know the detail.
+// pages; we force it whenever any Share is configured so callers
+// don't have to know the detail.
 func buildMemoryArg(cfg Config) string {
-	if cfg.Share == nil {
+	if len(cfg.Shares) == 0 {
 		return "size=" + cfg.Memory
 	}
 	return "size=" + cfg.Memory + ",shared=on"
 }
 
-func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSocket string) (io.ReadCloser, func(), error) {
+// shareSocketArg renders a single virtiofsd socket as cloud-
+// hypervisor's `--fs tag=...,socket=...` argument value.
+func shareSocketArg(tag, socket string) string {
+	return fmt.Sprintf("tag=%s,socket=%s", tag, socket)
+}
+
+func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string) (io.ReadCloser, func(), error) {
 	args := []string{
 		"--kernel", cfg.Kernel,
 		"--initramfs", cfg.Initramfs,
@@ -290,9 +337,8 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSocket st
 		"--cpus", fmt.Sprintf("boot=%d", cfg.CPUs),
 		"--memory", buildMemoryArg(cfg),
 	}
-	if shareSocket != "" {
-		args = append(args, "--fs",
-			fmt.Sprintf("tag=%s,socket=%s", cfg.Share.Tag, shareSocket))
+	for i, sock := range shareSockets {
+		args = append(args, "--fs", shareSocketArg(cfg.Shares[i].Tag, sock))
 	}
 	cmd := exec.CommandContext(ctx, cfg.CloudHypervisor, args...)
 
@@ -347,17 +393,17 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	runCtx, cancel := context.WithTimeout(ctx, HelloTimeout)
 	defer cancel()
 
-	var shareSocket string
-	if cfg.Share != nil {
-		sock, stopShare, err := sc.start(runCtx, cfg)
+	var shareSockets []string
+	if len(cfg.Shares) > 0 {
+		socks, stopShare, err := sc.start(runCtx, cfg)
 		if err != nil {
 			return fmt.Errorf("sandbox: start virtiofsd: %w", err)
 		}
 		defer stopShare()
-		shareSocket = sock
+		shareSockets = socks
 	}
 
-	stdout, stop, err := r.run(runCtx, cfg, shareSocket)
+	stdout, stop, err := r.run(runCtx, cfg, shareSockets)
 	if err != nil {
 		return err
 	}

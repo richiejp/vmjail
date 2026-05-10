@@ -91,11 +91,11 @@ func BenchmarkHelloBootWithShare(b *testing.B) {
 	if err := os.WriteFile(dir+"/"+agent.ShareMarkerFile, []byte("bench"), 0o644); err != nil {
 		b.Fatalf("write marker: %v", err)
 	}
-	cfg.Share = &ShareConfig{
+	cfg.Shares = []*ShareConfig{{
 		HostDir:    dir,
 		Tag:        testTagDaftshare,
 		Mountpoint: testMountpoint,
-	}
+	}}
 
 	for b.Loop() {
 		var buf bytes.Buffer
@@ -129,11 +129,11 @@ func BenchmarkHelloBootWithContainer(b *testing.B) {
 	if err := copyTree(bundleSrc, dir+"/bundle"); err != nil {
 		b.Fatalf("copy bundle: %v", err)
 	}
-	cfg.Share = &ShareConfig{
+	cfg.Shares = []*ShareConfig{{
 		HostDir:    dir,
 		Tag:        testTagDaftshare,
 		Mountpoint: testMountpoint,
-	}
+	}}
 	cfg.Bundle = testBundlePath
 
 	for b.Loop() {

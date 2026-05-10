@@ -74,41 +74,77 @@ func ParseBundleCmdline(cmdline string) (string, bool, error) {
 	return val, true, nil
 }
 
-// ParseShareCmdline scans a kernel cmdline string for `daft.share=...`
-// and returns its parsed form. Returns ok=false when the parameter is
-// absent (not an error — sharing is optional).
+// parseShareSpec validates a single `<tag>:<mountpoint>` value (the
+// part after `daft.share=`) and returns the parsed spec. Shared by
+// ParseShareCmdline (singular, first match) and ParseShareCmdlines
+// (plural, all matches).
 //
 // Validation:
-//   - Tag must be non-empty and ASCII-printable, no whitespace.
+//   - Tag must be non-empty and contain no whitespace.
 //   - Mountpoint must be an absolute path (start with /).
 //
 // Both constraints are checked because the agent passes them straight
 // to mount(2) — bogus values would surface as syscall errors with no
 // useful context.
-func ParseShareCmdline(cmdline string) (ShareSpec, bool, error) {
-	val, ok := findCmdlineValue(cmdline, ShareCmdlineKey)
-	if !ok {
-		return ShareSpec{}, false, nil
-	}
+func parseShareSpec(val string) (ShareSpec, error) {
 	tag, mp, ok := strings.Cut(val, ":")
 	if !ok {
-		return ShareSpec{}, false, fmt.Errorf(
+		return ShareSpec{}, fmt.Errorf(
 			"agent: malformed %s=%q: want <tag>:<mountpoint>",
 			ShareCmdlineKey, val,
 		)
 	}
 	if tag == "" {
-		return ShareSpec{}, false, fmt.Errorf("agent: %s tag is empty", ShareCmdlineKey)
+		return ShareSpec{}, fmt.Errorf("agent: %s tag is empty", ShareCmdlineKey)
 	}
 	if strings.ContainsAny(tag, " \t\n\r") {
-		return ShareSpec{}, false, fmt.Errorf(
+		return ShareSpec{}, fmt.Errorf(
 			"agent: %s tag %q contains whitespace", ShareCmdlineKey, tag,
 		)
 	}
 	if !strings.HasPrefix(mp, "/") {
-		return ShareSpec{}, false, fmt.Errorf(
+		return ShareSpec{}, fmt.Errorf(
 			"agent: %s mountpoint %q must be absolute", ShareCmdlineKey, mp,
 		)
 	}
-	return ShareSpec{Tag: tag, Mountpoint: mp}, true, nil
+	return ShareSpec{Tag: tag, Mountpoint: mp}, nil
+}
+
+// ParseShareCmdline returns the first `daft.share=...` token's parsed
+// form, or ok=false when no such token exists. Use ParseShareCmdlines
+// when multiple shares are possible; this single-result variant is
+// kept for v0 callers that only handle one share.
+func ParseShareCmdline(cmdline string) (ShareSpec, bool, error) {
+	val, ok := findCmdlineValue(cmdline, ShareCmdlineKey)
+	if !ok {
+		return ShareSpec{}, false, nil
+	}
+	spec, err := parseShareSpec(val)
+	if err != nil {
+		return ShareSpec{}, false, err
+	}
+	return spec, true, nil
+}
+
+// ParseShareCmdlines walks every `daft.share=...` token in cmdline
+// and returns the parsed specs in order of appearance. Returns nil
+// when no shares are configured. The first malformed token aborts —
+// we don't silently ignore the others, because a stray malformed
+// share usually means the host wired up the cmdline wrong and
+// continuing past it would mask the bug.
+func ParseShareCmdlines(cmdline string) ([]ShareSpec, error) {
+	prefix := ShareCmdlineKey + "="
+	var specs []ShareSpec
+	for tok := range strings.FieldsSeq(cmdline) {
+		val, ok := strings.CutPrefix(tok, prefix)
+		if !ok {
+			continue
+		}
+		spec, err := parseShareSpec(val)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, spec)
+	}
+	return specs, nil
 }

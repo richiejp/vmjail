@@ -133,6 +133,40 @@ func TestBundleErrorsForUnknownDigest(t *testing.T) {
 	}
 }
 
+func TestBundleAppliesExtraMounts(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/extramounts:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{Entrypoint: []string{testEntrypoint}})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+	bundle, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{
+		ExtraMounts: []BundleMount{
+			{
+				Destination: "/workspace",
+				Type:        "bind",
+				Source:      "/workspace",
+				Options:     []string{"rbind", "rw"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Bundle: %v", err)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+	if !strings.Contains(string(cfg), `"/workspace"`) ||
+		!strings.Contains(string(cfg), `"bind"`) ||
+		!strings.Contains(string(cfg), `"rbind"`) {
+		t.Errorf("expected workspace bind mount in config.json:\n%s", cfg)
+	}
+}
+
 func TestBundleAppliesOverrides(t *testing.T) {
 	host := localRegistry(t)
 	ref := host + "/test/override:v1"

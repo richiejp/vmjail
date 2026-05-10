@@ -32,18 +32,32 @@ type ShareDeps struct {
 	ReadFile func(path string) ([]byte, error)
 }
 
-// ApplyShare mounts the virtio-fs share described by spec, reads
-// ShareMarkerFile from it, and writes a single ShareReportPrefix line
-// to w. Failures are reported the same way (`share: <error>`) so the
-// host can scan one prefix to learn the outcome — sharing failure is
-// not fatal here, the agent keeps running.
-func ApplyShare(spec ShareSpec, deps ShareDeps, w io.Writer) {
+// MountShare mkdirs the mountpoint and mounts the virtio-fs share.
+// Returns the first error encountered; nil on success. Side-effect-
+// free with respect to w — for the v0 marker-demo behaviour use
+// ApplyShare instead.
+func MountShare(spec ShareSpec, deps ShareDeps) error {
 	if err := deps.MkdirAll(spec.Mountpoint, 0o755); err != nil {
-		_, _ = fmt.Fprintf(w, "%s%s\n", ShareReportPrefix, "mkdir: "+err.Error())
-		return
+		return fmt.Errorf("mkdir: %w", err)
 	}
 	if err := deps.Mount(spec.Tag, spec.Mountpoint, "virtiofs"); err != nil {
-		_, _ = fmt.Fprintf(w, "%s%s\n", ShareReportPrefix, "mount: "+err.Error())
+		return fmt.Errorf("mount: %w", err)
+	}
+	return nil
+}
+
+// ApplyShare mounts the virtio-fs share, reads ShareMarkerFile from
+// it, and writes a single ShareReportPrefix line to w. Failures are
+// reported the same way (`share: <error>`) so the host can scan one
+// prefix to learn the outcome — sharing failure is not fatal here,
+// the agent keeps running.
+//
+// Used by the v0 marker-demo path. The run-with-image path uses
+// MountShare instead, since the proof-of-life is the container's
+// stdout, not a marker file.
+func ApplyShare(spec ShareSpec, deps ShareDeps, w io.Writer) {
+	if err := MountShare(spec, deps); err != nil {
+		_, _ = fmt.Fprintf(w, "%s%s\n", ShareReportPrefix, err.Error())
 		return
 	}
 	data, err := deps.ReadFile(filepath.Join(spec.Mountpoint, ShareMarkerFile))

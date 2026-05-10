@@ -155,8 +155,9 @@ func TestImagesRmUnknownTargetErrors(t *testing.T) {
 // to constants/helpers to satisfy goconst (the digest is the same
 // across all four tests).
 const (
-	fixtureDigest = "sha256:abc123"
-	fixtureRef    = "foo:1"
+	fixtureDigest      = "sha256:abc123"
+	fixtureShortDigest = "sha256:abc"
+	fixtureRef         = "foo:1"
 )
 
 func fixtureEntries() []imagestore.Entry {
@@ -178,7 +179,7 @@ func TestResolveTargetByRef(t *testing.T) {
 }
 
 func TestResolveTargetByDigestPrefix(t *testing.T) {
-	got, ok := resolveTarget(fixtureEntries(), "sha256:abc")
+	got, ok := resolveTarget(fixtureEntries(), fixtureShortDigest)
 	if !ok || got != fixtureDigest {
 		t.Errorf("got=%q ok=%v, want digest match by prefix", got, ok)
 	}
@@ -218,7 +219,7 @@ func TestShortDigest(t *testing.T) {
 	const truncated = "sha256:abcdef012345"
 	tests := map[string]string{
 		"":                           "",
-		"sha256:abc":                 "sha256:abc",
+		fixtureShortDigest:           fixtureShortDigest,
 		truncated:                    truncated,
 		truncated + "6789xxxxxxxxxx": truncated,
 	}

@@ -41,6 +41,25 @@ type BundleOptions struct {
 	Cwd string
 	// Hostname, when non-empty, overrides the default ("daft-container").
 	Hostname string
+	// ExtraMounts is appended to the default OCI mounts (proc, dev,
+	// sys). Used by the host orchestrator to bind-mount a writable
+	// workspace from the VM's virtiofs share into the container.
+	//
+	// Each entry is encoded as-is into config.json. Caller is
+	// responsible for picking a Destination that exists in the
+	// container rootfs (or for ensuring crun's mount call creates
+	// it via `nodev,nosuid,…` options when using bind mounts).
+	ExtraMounts []BundleMount
+}
+
+// BundleMount mirrors the subset of the OCI runtime-spec mount type
+// we expose through BundleOptions. Marshalled into the runtime
+// spec's JSON when present.
+type BundleMount struct {
+	Destination string   `json:"destination"`
+	Type        string   `json:"type,omitempty"`
+	Source      string   `json:"source,omitempty"`
+	Options     []string `json:"options,omitempty"`
 }
 
 // Bundle materialises a runnable bundle for digest. Idempotent: if

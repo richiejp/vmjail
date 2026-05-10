@@ -70,7 +70,8 @@ type runtimeNamespace struct {
 
 // buildRuntimeConfig produces a runtime spec for img with overrides
 // from opts applied. The image's Entrypoint+Cmd, Env, and WorkingDir
-// are honoured by default; opts.{Args,Env,Cwd,Hostname} replace each.
+// are honoured by default; opts.{Args,Env,Cwd,Hostname,ExtraMounts}
+// replace / extend each.
 func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 	cfgFile, err := img.ConfigFile()
 	if err != nil {
@@ -78,72 +79,92 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 	}
 	imgCfg := cfgFile.Config
 
-	args := opts.Args
-	if args == nil {
-		args = append(args, imgCfg.Entrypoint...)
-		args = append(args, imgCfg.Cmd...)
-	}
+	args := mergeArgs(opts.Args, imgCfg.Entrypoint, imgCfg.Cmd)
 	if len(args) == 0 {
 		return runtimeSpec{}, fmt.Errorf(
 			"imagestore: image has no entrypoint/cmd; supply BundleOptions.Args",
 		)
 	}
 
-	env := opts.Env
-	if env == nil {
-		env = append(env, imgCfg.Env...)
-	}
-
-	cwd := opts.Cwd
-	if cwd == "" {
-		cwd = imgCfg.WorkingDir
-	}
-	if cwd == "" {
-		cwd = "/"
-	}
-
-	hostname := opts.Hostname
-	if hostname == "" {
-		hostname = "daft-container"
+	mounts := defaultRuntimeMounts()
+	for _, m := range opts.ExtraMounts {
+		mounts = append(mounts, runtimeMount(m))
 	}
 
 	return runtimeSpec{
 		OCIVersion: "1.0.2",
 		Process: runtimeProcess{
-			Terminal: false,
-			User:     runtimeUser{UID: 0, GID: 0},
-			Args:     args,
-			Env:      env,
-			Cwd:      cwd,
-			Capabilities: runtimeCapabilities{
-				Bounding: []string{}, Effective: []string{},
-				Permitted: []string{}, Ambient: []string{},
-			},
+			User:            runtimeUser{UID: 0, GID: 0},
+			Args:            args,
+			Env:             firstNonNil(opts.Env, imgCfg.Env),
+			Cwd:             firstNonEmpty(opts.Cwd, imgCfg.WorkingDir, "/"),
+			Capabilities:    emptyCapabilities(),
 			Rlimits:         []any{},
 			NoNewPrivileges: true,
 		},
 		Root:     runtimeRoot{Path: "rootfs", Readonly: true},
-		Hostname: hostname,
-		Mounts:   defaultRuntimeMounts(),
-		Linux: runtimeLinuxConfig{
-			Namespaces: []runtimeNamespace{
-				{Type: "pid"},
-				{Type: "ipc"},
-				{Type: "uts"},
-				{Type: "mount"},
-				{Type: "network"},
-				{Type: "cgroup"},
-			},
-			MaskedPaths: []string{
-				"/proc/kcore", "/proc/keys", "/proc/latency_stats",
-				"/proc/timer_list", "/proc/sched_debug",
-			},
-			ReadonlyPaths: []string{
-				"/proc/asound", "/proc/bus", "/proc/fs",
-				"/proc/irq", "/proc/sys", "/proc/sysrq-trigger",
-			},
-		},
+		Hostname: firstNonEmpty(opts.Hostname, "", "daft-container"),
+		Mounts:   mounts,
+		Linux:    defaultRuntimeLinuxConfig(),
 	}, nil
+}
+
+// mergeArgs returns override unchanged when non-nil, otherwise
+// concatenates entrypoint+cmd into a fresh slice (matching how the
+// OCI runtime spec composes them).
+func mergeArgs(override, entrypoint, cmd []string) []string {
+	if override != nil {
+		return override
+	}
+	out := make([]string, 0, len(entrypoint)+len(cmd))
+	out = append(out, entrypoint...)
+	out = append(out, cmd...)
+	return out
+}
+
+func firstNonNil[T any](primary []T, fallback []T) []T {
+	if primary != nil {
+		return primary
+	}
+	return fallback
+}
+
+func firstNonEmpty(primary, secondary, fallback string) string {
+	if primary != "" {
+		return primary
+	}
+	if secondary != "" {
+		return secondary
+	}
+	return fallback
+}
+
+func emptyCapabilities() runtimeCapabilities {
+	return runtimeCapabilities{
+		Bounding: []string{}, Effective: []string{},
+		Permitted: []string{}, Ambient: []string{},
+	}
+}
+
+func defaultRuntimeLinuxConfig() runtimeLinuxConfig {
+	return runtimeLinuxConfig{
+		Namespaces: []runtimeNamespace{
+			{Type: "pid"},
+			{Type: "ipc"},
+			{Type: "uts"},
+			{Type: "mount"},
+			{Type: "network"},
+			{Type: "cgroup"},
+		},
+		MaskedPaths: []string{
+			"/proc/kcore", "/proc/keys", "/proc/latency_stats",
+			"/proc/timer_list", "/proc/sched_debug",
+		},
+		ReadonlyPaths: []string{
+			"/proc/asound", "/proc/bus", "/proc/fs",
+			"/proc/irq", "/proc/sys", "/proc/sysrq-trigger",
+		},
+	}
 }
 
 // defaultRuntimeMounts mirrors contrib/hello-bundle/config.json. Kept

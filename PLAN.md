@@ -160,9 +160,24 @@ Out of Scope:
       ≥80% per non-test file (>10 statements) on top of the
       existing 1pp total-drop limit. Catches the case where
       total coverage stays high while one file is dark.
-- [ ] Wire imagestore into `daft-sandboxd run <image-ref> <cmd>`
-      so the bundled hello-container goes away in favour of any
-      pulled image. Workspace mount as a second virtiofs share.
+- [x] `daft-sandboxd run <image-ref> [cmd…]` closes the loop:
+      pulls the image into the local store (LRU under quota),
+      bundles it, locks the bundle for the VM lifetime, shares
+      the bundles dir into the guest via virtiofs, and crun-runs
+      the container. Container stdout+stderr stream back as
+      `container: <…>` lines on the host's terminal. Optional
+      `--workspace ./dir` flag adds a second read-write virtiofs
+      share mounted at `/workspace` inside both the VM and the
+      container — files written by the container persist on the
+      host. Multi-share API throughout: sandbox.Config.Shares is
+      a slice; agent's ParseShareCmdlines walks every daft.share=
+      token; cloud-hypervisor gets one --fs flag per share; one
+      virtiofsd process per share. Marker-read of hello.txt is
+      skipped automatically when Bundle is set, since container
+      output is the proof of life.
+- [x] Build output now lands under `bin/` rather than the repo
+      root, so a dev `make build` can't be confused with a
+      release-grade `nix build .#daft-sandboxd`.
 - [ ] HTTP/2 + mTLS auth: client ↔ orchestrator
 - [ ] Workspace sync: desync chunks + daft-fuse
 

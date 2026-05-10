@@ -74,7 +74,8 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	// all setup applied" signal — share + container are best-effort,
 	// so a failure in either still lets the banner print.
 	cmdline, _ := d.readCmdline()
-	applyShareFromCmdline(w, d, cmdline)
+	bundle, _, _ := ParseBundleCmdline(cmdline)
+	applySharesFromCmdline(w, d, cmdline, bundle != "")
 	runContainerFromCmdline(ctx, w, d, cmdline)
 	if _, err := fmt.Fprintln(w, Banner); err != nil {
 		return fmt.Errorf("agent: write banner: %w", err)
@@ -83,23 +84,33 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	return ctx.Err()
 }
 
-// applyShareFromCmdline parses any daft.share token and runs ApplyShare.
-// All failure paths print a single ShareReportPrefix line so the host
-// can scan one prefix; sharing is optional, and an empty cmdline
-// (e.g. /proc/cmdline missing) is silently skipped.
-func applyShareFromCmdline(w io.Writer, d runDeps, cmdline string) {
+// applySharesFromCmdline parses every daft.share= token and mounts
+// each share. When haveBundle is false (the v0 marker-demo path),
+// the first share is mounted via ApplyShare so its hello.txt marker
+// gets read and reported. When haveBundle is true (the run-with-
+// image path), every share is mount-only — container output is the
+// proof, and reading a non-existent marker would just spam noise.
+//
+// All failure paths print a single ShareReportPrefix line so the
+// host scanner sees one prefix per failure mode.
+func applySharesFromCmdline(w io.Writer, d runDeps, cmdline string, haveBundle bool) {
 	if cmdline == "" {
 		return
 	}
-	spec, ok, err := ParseShareCmdline(cmdline)
+	specs, err := ParseShareCmdlines(cmdline)
 	if err != nil {
 		_, _ = fmt.Fprintf(w, "%s%s\n", ShareReportPrefix, "cmdline: "+err.Error())
 		return
 	}
-	if !ok {
-		return
+	for i, spec := range specs {
+		if i == 0 && !haveBundle {
+			ApplyShare(spec, d.share, w)
+			continue
+		}
+		if err := MountShare(spec, d.share); err != nil {
+			_, _ = fmt.Fprintf(w, "%s%s\n", ShareReportPrefix, err.Error())
+		}
 	}
-	ApplyShare(spec, d.share, w)
 }
 
 // runContainerFromCmdline parses any daft.bundle token and execs crun

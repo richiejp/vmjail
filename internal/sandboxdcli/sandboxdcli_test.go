@@ -95,11 +95,7 @@ func TestRunHelloWithBootSuccess(t *testing.T) {
 			if dir != cacheRoot {
 				t.Errorf("extract called with %q, want %q", dir, cacheRoot)
 			}
-			return bundled.Paths{
-				CloudHypervisor: "/x/cloud-hypervisor",
-				Kernel:          "/x/bzImage",
-				Initramfs:       "/x/initramfs.cpio.gz",
-			}, nil
+			return fakePaths, nil
 		},
 		boot: func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
 			bootCalled = true
@@ -113,9 +109,9 @@ func TestRunHelloWithBootSuccess(t *testing.T) {
 	if !bootCalled {
 		t.Fatal("boot was not invoked")
 	}
-	if bootCfg.CloudHypervisor != "/x/cloud-hypervisor" ||
-		bootCfg.Kernel != "/x/bzImage" ||
-		bootCfg.Initramfs != "/x/initramfs.cpio.gz" {
+	if bootCfg.CloudHypervisor != fakePaths.CloudHypervisor ||
+		bootCfg.Kernel != fakePaths.Kernel ||
+		bootCfg.Initramfs != fakePaths.Initramfs {
 		t.Errorf("boot called with wrong Config: %+v", bootCfg)
 	}
 }

@@ -25,7 +25,7 @@ help:
 	@echo "  bench       - update committed bench.txt baseline"
 	@echo "  bench-check - fail on >2x regressions, warn on >1.1x, vs bench.txt"
 	@echo "  hooks       - install git pre-commit hook into .git/hooks"
-	@echo "  build       - build daft, daft-agent, daft-sandboxd (statically)"
+	@echo "  build       - build daft, daft-agent, daft-sandboxd into ./bin/ (dev only)"
 
 ## Formatting ----------------------------------------------------------------
 
@@ -114,6 +114,8 @@ hooks:
 ## Building ------------------------------------------------------------------
 
 # build: produce all shipped binaries, statically linked (CGO=0).
+# Output lands under bin/ — never the repo root — so there's no
+# confusion between a dev `make build` and a release artefact:
 #   - daft:           host-side client CLI
 #   - daft-agent:     in-VM PID-1 agent
 #   - daft-sandboxd:  sandbox-host single executable. Note: a `make
@@ -121,16 +123,24 @@ hooks:
 #     the real cloud-hypervisor / kernel / initramfs are pulled in
 #     only by the Nix build (`nix build .#daft-sandboxd`). Use Nix
 #     for any release artefact.
+BIN_DIR := bin
+
 build: build-daft build-daft-agent build-daft-sandboxd
 
 build-daft:
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o daft ./cmd/daft
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft ./cmd/daft
 
 build-daft-agent:
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o daft-agent ./cmd/daft-agent
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-agent ./cmd/daft-agent
 
 build-daft-sandboxd:
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o daft-sandboxd ./cmd/daft-sandboxd
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-sandboxd ./cmd/daft-sandboxd
 
 clean:
-	rm -f daft daft-agent daft-sandboxd $(COVER_OUT)
+	rm -rf $(BIN_DIR) $(COVER_OUT)
+	@# Legacy: earlier builds put binaries at the repo root. Clean
+	@# those too in case someone is upgrading from an older Makefile.
+	rm -f daft daft-agent daft-sandboxd

@@ -1,11 +1,19 @@
 # Build output
 /result
 /result-*
+# `make build` writes everything under bin/ — kept out of the repo
+# root so there's no confusion about which binary is "the final one"
+# (the answer: none, dev builds use stub embedded assets; releases
+# come from `nix build`).
+/bin/
+# Stray binaries from accidental `go build` without -o or from
+# pre-Makefile-rework workflows.
 /daft
 /daft-agent
 /daft-sandboxd
 /cmd/daft/daft
 /cmd/daft-agent/daft-agent
+/cmd/daft-hello-container/daft-hello-container
 /cmd/daft-sandboxd/daft-sandboxd
 
 # Coverage artefacts (transient — coverage.txt baseline IS committed)
