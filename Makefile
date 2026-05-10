@@ -1,4 +1,4 @@
-.PHONY: all fmt check-fmt lint test cover cover-check bench bench-check hooks build build-daft build-daft-agent build-daft-sandboxd clean help
+.PHONY: all fmt check-fmt lint test cover cover-check bench bench-check hooks build build-daft build-daft-agent build-daft-sandboxd integration integration-build clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -24,6 +24,7 @@ help:
 	@echo "  cover-check - fail if total coverage drops >1pp vs coverage.txt OR any file is <80%"
 	@echo "  bench       - update committed bench.txt baseline"
 	@echo "  bench-check - fail on >2x regressions, warn on >1.1x, vs bench.txt"
+	@echo "  integration - nix-build artefacts and run KVM-gated end-to-end tests"
 	@echo "  hooks       - install git pre-commit hook into .git/hooks"
 	@echo "  build       - build daft, daft-agent, daft-sandboxd into ./bin/ (dev only)"
 
@@ -102,6 +103,31 @@ bench:
 
 bench-check:
 	@go test $(BENCH_FLAGS) $(OUR_GO_PKGS) | scripts/bench-check.sh $(BENCH_BASELINE)
+
+## Integration tests ---------------------------------------------------------
+#
+# `make integration` runs the KVM-gated end-to-end tests in
+# internal/sandbox/integration_test.go (build tag: linux,integration).
+# They spawn cloud-hypervisor against the Nix-built kernel /
+# initramfs / virtiofsd / OCI bundle artefacts, so we nix-build them
+# first and let the test resolver pick them up via the result-*
+# symlinks at the repo root.
+#
+# Not part of `make all` or the pre-commit hook because each test
+# boots a real VM (~310 ms) and requires /dev/kvm. Run on demand
+# from a Linux+KVM workstation or in a CI job that has KVM available.
+
+integration-build:
+	@echo "[integration] nix-building artefacts..."
+	@nix build -L .#cloud-hypervisor -o result-ch
+	@nix build -L .#kernel -o result-kernel
+	@nix build -L .#virtiofsd -o result-virtiofsd
+	@nix build -L .#initramfs -o result-initramfs
+	@nix build -L .#hello-bundle -o result-bundle
+
+integration: integration-build
+	@echo "[integration] running KVM-gated tests..."
+	@go test -tags=integration -count=1 ./internal/sandbox/
 
 ## Git hooks -----------------------------------------------------------------
 

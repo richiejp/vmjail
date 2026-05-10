@@ -36,12 +36,12 @@ const (
 	// initramfs paths in tests that swap in a fake VMM — the fake
 	// ignores its args, so the paths only need to exist.
 	devNull = "/dev/null"
-	// testMountpoint is the in-VM share mountpoint reused across share
-	// tests; testTagDaftshare is the virtio-fs tag used by share +
-	// container integration tests; testBundlePath is the in-VM
-	// bundle path. Promoted to constants to satisfy goconst.
+	// testMountpoint is the in-VM share mountpoint reused across
+	// share tests; testBundlePath is the in-VM bundle path.
+	// testTagDaftshare lives in integration_test.go because only
+	// the tagged integration tests use it (the non-tagged unit
+	// tests pick their own tag names per-test).
 	testMountpoint    = "/share"
-	testTagDaftshare  = "daftshare"
 	testBundlePath    = "/share/bundle"
 	testFakeVirtiofsd = "/nonexistent/virtiofsd"
 )
@@ -624,146 +624,9 @@ func TestConfigFromEnvRejectsBadCPUs(t *testing.T) {
 	}
 }
 
-// TestHelloIntegrationBootsVM is the real end-to-end test: build the
-// sandbox-VM stack with `nix build`, set the env vars, run `go test`.
-// Skipped if any required artifact env var is missing or KVM is not
-// available. The mock-based tests above cover the orchestration logic
-// regardless; this test exists to catch breakage in the artifact
-// pipeline (kernel config, initramfs layout, cloud-hypervisor flags).
-//
-// Run locally with:
-//
-//	DAFT_CLOUD_HYPERVISOR=$(nix build --print-out-paths .#cloud-hypervisor)/bin/cloud-hypervisor \
-//	DAFT_KERNEL=$(nix build --print-out-paths .#kernel)/bzImage \
-//	DAFT_INITRAMFS=$(nix build --print-out-paths .#initramfs) \
-//	  go test -run TestHelloIntegrationBootsVM ./internal/sandbox
-//
-// TestHelloIntegrationBootsVMWithShare is the e2e proof of file
-// sharing: the host writes a marker file, the agent in the VM mounts
-// virtio-fs, reads it, and reports the contents on the console.
-//
-// Skipped unless artifact env vars + DAFT_VIRTIOFSD + /dev/kvm are
-// available. See TestHelloIntegrationBootsVM for the no-share variant.
-func TestHelloIntegrationBootsVMWithShare(t *testing.T) {
-	cfg, err := ConfigFromEnv()
-	if err != nil {
-		t.Skipf("artifact env vars not set; skipping: %v", err)
-	}
-	if cfg.Virtiofsd == "" {
-		t.Skipf("%s not set; skipping share integration test", EnvVirtiofsd)
-	}
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		t.Skipf("/dev/kvm not available; skipping: %v", err)
-	}
-
-	// Marker file the agent will read inside the VM and echo to the
-	// console via ShareReportPrefix.
-	dir := t.TempDir()
-	const payload = "share-payload-from-integration-test"
-	if err := os.WriteFile(filepath.Join(dir, agent.ShareMarkerFile), []byte(payload), 0o644); err != nil {
-		t.Fatalf("write marker file: %v", err)
-	}
-
-	cfg.Shares = []*ShareConfig{{
-		HostDir:    dir,
-		Tag:        testTagDaftshare,
-		Mountpoint: testMountpoint,
-	}}
-
-	var buf bytes.Buffer
-	err = Hello(t.Context(), &buf, cfg)
-	if err != nil {
-		t.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
-	}
-	if !strings.Contains(buf.String(), agent.Banner) {
-		t.Fatalf("banner missing from output:\n%s", buf.String())
-	}
-	wantLine := agent.ShareReportPrefix + payload
-	if !strings.Contains(buf.String(), wantLine) {
-		t.Fatalf("share line %q missing; full console output:\n%s", wantLine, buf.String())
-	}
-}
-
-// TestHelloIntegrationBootsVMWithContainer is the e2e proof of the
-// container slice: the host shares a bundle dir over virtiofs, sets
-// daft.bundle=/share on the cmdline, the agent mounts the share and
-// execs crun, and the host scanner sees the container's stdout
-// (forwarded with ContainerReportPrefix) before the agent banner.
-//
-// Skipped unless artifact env vars + DAFT_VIRTIOFSD + DAFT_BUNDLE +
-// /dev/kvm are all available.
-func TestHelloIntegrationBootsVMWithContainer(t *testing.T) {
-	cfg, err := ConfigFromEnv()
-	if err != nil {
-		t.Skipf("artifact env vars not set; skipping: %v", err)
-	}
-	if cfg.Virtiofsd == "" {
-		t.Skipf("%s not set; skipping", EnvVirtiofsd)
-	}
-	bundleSrc := os.Getenv(EnvBundle)
-	if bundleSrc == "" {
-		t.Skipf("%s not set; skipping", EnvBundle)
-	}
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		t.Skipf("/dev/kvm not available; skipping: %v", err)
-	}
-
-	// virtiofsd needs the share dir on a real filesystem with a path
-	// it can read; t.TempDir() qualifies. We populate it by copying
-	// the Nix-built bundle (which is read-only in the store) under
-	// share/bundle so the in-VM agent runs crun against /share/bundle.
-	shareDir := t.TempDir()
-	bundleInShare := filepath.Join(shareDir, "bundle")
-	if err := copyTree(bundleSrc, bundleInShare); err != nil {
-		t.Fatalf("copy bundle into share: %v", err)
-	}
-
-	cfg.Shares = []*ShareConfig{{
-		HostDir:    shareDir,
-		Tag:        testTagDaftshare,
-		Mountpoint: testMountpoint,
-	}}
-	cfg.Bundle = testBundlePath
-
-	var buf bytes.Buffer
-	if err := Hello(t.Context(), &buf, cfg); err != nil {
-		t.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
-	}
-	wantLine := agent.ContainerReportPrefix + agent.ContainerBanner
-	if !strings.Contains(buf.String(), wantLine) {
-		t.Fatalf("container line %q missing; full console:\n%s", wantLine, buf.String())
-	}
-}
-
-// copyTree wraps os.CopyFS with one extra step: it resolves symlinks
-// at the source root before recursing. Nix outputs are symlinks into
-// /nix/store, and os.CopyFS / os.DirFS won't follow a symlinked root.
-func copyTree(src, dst string) error {
-	resolved, err := filepath.EvalSymlinks(src)
-	if err != nil {
-		return err
-	}
-	return os.CopyFS(dst, os.DirFS(resolved))
-}
-
-func TestHelloIntegrationBootsVM(t *testing.T) {
-	cfg, err := ConfigFromEnv()
-	if err != nil {
-		t.Skipf("artifact env vars not set; skipping VM boot test: %v", err)
-	}
-	if _, err := os.Stat("/dev/kvm"); err != nil {
-		t.Skipf("/dev/kvm not available; skipping: %v", err)
-	}
-
-	var buf bytes.Buffer
-	err = Hello(t.Context(), &buf, cfg)
-	if err != nil {
-		t.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
-	}
-	if !strings.Contains(buf.String(), agent.Banner) {
-		t.Fatalf("console output missing banner %q\n--- console ---\n%s", agent.Banner, buf.String())
-	}
-}
+// Integration tests + benchmarks live under the `integration` build
+// tag in integration_test.go (Linux + KVM + Nix-built artefacts).
+// Run them via `make integration`.
 
 // FuzzConfigFromEnv feeds arbitrary strings to every env var
 // ConfigFromEnv reads. The current parser only does string membership
