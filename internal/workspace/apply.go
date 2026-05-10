@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -54,15 +55,26 @@ func ApplyManifest(
 	if dest == "" {
 		return errors.New("workspace: empty dest")
 	}
+	// lastDir caches the parent directory for the most recent file
+	// entry: BuildManifest sorts entries lex, so files in the same
+	// directory arrive consecutively. Skipping the redundant
+	// MkdirAll calls is significant on large flat trees.
+	state := &applyState{}
 	for _, e := range m.GetEntries() {
 		if !SanitisePath(e.GetPath()) {
 			return fmt.Errorf("workspace: rejected entry path %q", e.GetPath())
 		}
-		if err := applyEntry(ctx, client, store, dest, e, opts); err != nil {
+		if err := applyEntry(ctx, client, store, dest, e, opts, state); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// applyState carries per-apply scratch (e.g. the last MkdirAll'd
+// directory) so we don't re-issue duplicate filesystem ops.
+type applyState struct {
+	lastDir string
 }
 
 func applyEntry(
@@ -72,6 +84,7 @@ func applyEntry(
 	dest string,
 	e *workspacev1.FileEntry,
 	opts ApplyOptions,
+	state *applyState,
 ) error {
 	target := filepath.Join(dest, filepath.FromSlash(e.GetPath()))
 	switch e.GetKind() {
@@ -79,8 +92,9 @@ func applyEntry(
 		if err := os.MkdirAll(target, applyMode(e)); err != nil {
 			return fmt.Errorf("workspace: mkdir %s: %w", e.GetPath(), err)
 		}
+		state.lastDir = target
 	case workspacev1.EntryKind_ENTRY_KIND_FILE:
-		if err := writeFileEntry(ctx, client, store, target, e); err != nil {
+		if err := writeFileEntry(ctx, client, store, target, e, state); err != nil {
 			return err
 		}
 	case workspacev1.EntryKind_ENTRY_KIND_SYMLINK:
@@ -118,9 +132,14 @@ func writeFileEntry(
 	store *cas.Store,
 	target string,
 	e *workspacev1.FileEntry,
+	state *applyState,
 ) error {
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-		return fmt.Errorf("workspace: mkdir parent of %s: %w", e.GetPath(), err)
+	parent := filepath.Dir(target)
+	if parent != state.lastDir {
+		if err := os.MkdirAll(parent, 0o700); err != nil {
+			return fmt.Errorf("workspace: mkdir parent of %s: %w", e.GetPath(), err)
+		}
+		state.lastDir = parent
 	}
 	if err := ensureChunksLocal(ctx, client, store, e.GetChunks()); err != nil {
 		return err
@@ -233,10 +252,9 @@ func applyMode(e *workspacev1.FileEntry) os.FileMode {
 	return mode
 }
 
-// restoreMtime is a tiny wrapper around os.Chtimes that takes a
-// Unix-nanos timestamp from the manifest. Both atime and mtime are
-// set to the same value — the manifest doesn't record atime.
+// restoreMtime sets both atime and mtime from a Unix-nanos
+// timestamp; the manifest doesn't record atime separately.
 func restoreMtime(path string, unixNano int64) error {
-	t := osChtimesTime(unixNano)
+	t := time.Unix(0, unixNano)
 	return os.Chtimes(path, t, t)
 }

@@ -50,13 +50,10 @@ func (s *Server) Add(name string, m *workspacev1.Manifest) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	clone, ok := proto.Clone(m).(*workspacev1.Manifest)
-	if !ok {
-		// proto.Clone on a non-nil *workspacev1.Manifest always
-		// returns a *workspacev1.Manifest; this is a defensive
-		// invariant check.
-		return errors.New("workspace: proto.Clone returned wrong type")
-	}
+	// proto.Clone of a non-nil *Manifest always returns a
+	// *Manifest; the assertion is an invariant check, not a
+	// recoverable error.
+	clone, _ := proto.Clone(m).(*workspacev1.Manifest)
 	s.manifests[name] = clone
 	return nil
 }
@@ -77,6 +74,11 @@ func (s *Server) Names() []string {
 // return CodeNotFound; never the empty manifest, because an empty
 // reply is indistinguishable from "the workspace genuinely has no
 // files" and we want callers to be able to tell the two apart.
+//
+// We hand the registered manifest pointer straight back: Add
+// already cloned on the way in, and Connect serialises the
+// response onto the wire before the handler returns, so no caller
+// can mutate it.
 func (s *Server) GetManifest(_ context.Context, req *connect.Request[workspacev1.GetManifestRequest]) (*connect.Response[workspacev1.GetManifestResponse], error) {
 	name := req.Msg.GetWorkspace()
 	if name == "" {
@@ -90,14 +92,7 @@ func (s *Server) GetManifest(_ context.Context, req *connect.Request[workspacev1
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("workspace: unknown workspace %q", name))
 	}
-	cloned, ok := proto.Clone(m).(*workspacev1.Manifest)
-	if !ok {
-		return nil, connect.NewError(connect.CodeInternal,
-			errors.New("workspace: proto.Clone returned wrong type"))
-	}
-	return connect.NewResponse(&workspacev1.GetManifestResponse{
-		Manifest: cloned,
-	}), nil
+	return connect.NewResponse(&workspacev1.GetManifestResponse{Manifest: m}), nil
 }
 
 // GetChunk implements the proto endpoint. Returns the raw

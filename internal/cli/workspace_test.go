@@ -62,8 +62,8 @@ func TestWorkspaceServeAndPullRoundTrip(t *testing.T) {
 	serverDir, clientDir := approveBoth(t)
 
 	src := t.TempDir()
-	mustWriteFileCLI(t, filepath.Join(src, "alpha.txt"), []byte("alpha\n"))
-	mustWriteFileCLI(t, filepath.Join(src, "blob.bin"),
+	mustWriteFile(t, filepath.Join(src, "alpha.txt"), []byte("alpha\n"))
+	mustWriteFile(t, filepath.Join(src, "blob.bin"),
 		bytes.Repeat([]byte("Z"), 4096))
 
 	addr := freeAddr(t)
@@ -287,7 +287,7 @@ func TestWorkspaceServeFailsForCorruptIdentity(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	src := t.TempDir()
-	mustWriteFileCLI(t, filepath.Join(src, "x"), []byte("x"))
+	mustWriteFile(t, filepath.Join(src, "x"), []byte("x"))
 	_, _, err := runDaft(t, workspaceCmdName, serveSubName,
 		"--workspace=ws="+src, configDirArg, dir,
 		"--addr=127.0.0.1:0")
@@ -302,7 +302,7 @@ func TestWorkspaceServeFailsForCorruptPeers(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	src := t.TempDir()
-	mustWriteFileCLI(t, filepath.Join(src, "x"), []byte("x"))
+	mustWriteFile(t, filepath.Join(src, "x"), []byte("x"))
 	_, _, err := runDaft(t, workspaceCmdName, serveSubName,
 		"--workspace=ws="+src, configDirArg, dir,
 		"--addr=127.0.0.1:0")
@@ -314,7 +314,7 @@ func TestWorkspaceServeFailsForCorruptPeers(t *testing.T) {
 func TestWorkspaceServeFailsForBadAddr(t *testing.T) {
 	dir := t.TempDir()
 	src := t.TempDir()
-	mustWriteFileCLI(t, filepath.Join(src, "x"), []byte("x"))
+	mustWriteFile(t, filepath.Join(src, "x"), []byte("x"))
 	_, _, err := runDaft(t, workspaceCmdName, serveSubName,
 		"--workspace=ws="+src, configDirArg, dir,
 		"--addr=not-an-addr")
@@ -360,7 +360,7 @@ func (b *syncBuf) String() string {
 // other tests in this package.
 var _ = identity.RoleClient
 
-func mustWriteFileCLI(t *testing.T, path string, data []byte) {
+func mustWriteFile(t *testing.T, path string, data []byte) {
 	t.Helper()
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)

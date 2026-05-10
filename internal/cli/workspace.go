@@ -64,10 +64,9 @@ func parseWorkspaceFlag(s string) (name, path string, err error) {
 // every `daft workspace` subcommand needs. Hoisted out so serve
 // and pull share one setup path.
 type clientCtx struct {
-	id      *identity.Identity
-	peers   *identity.PeerStore
-	store   *cas.Store
-	casPath string
+	id    *identity.Identity
+	peers *identity.PeerStore
+	store *cas.Store
 }
 
 func openClientCtx(configDirOverride, casDirOverride string) (*clientCtx, error) {
@@ -91,7 +90,16 @@ func openClientCtx(configDirOverride, casDirOverride string) (*clientCtx, error)
 	if err != nil {
 		return nil, err
 	}
-	return &clientCtx{id: id, peers: peers, store: store, casPath: casPath}, nil
+	return &clientCtx{id: id, peers: peers, store: store}, nil
+}
+
+// bindClientDirFlags adds the shared --config-dir / --cas-dir flag
+// pair to cmd, both targets default to "" (XDG-aware fallback).
+func bindClientDirFlags(cmd *cobra.Command, configDir, casDir *string) {
+	cmd.Flags().StringVar(configDir, configDirFlag, "",
+		"override the daft client config dir (default: $XDG_CONFIG_HOME/daft/client)")
+	cmd.Flags().StringVar(casDir, "cas-dir", "",
+		"override the local CAS chunk-store dir (default: <config-dir>/cas)")
 }
 
 func newWorkspaceServeCmd() *cobra.Command {
@@ -118,10 +126,7 @@ func newWorkspaceServeCmd() *cobra.Command {
 		"workspace to expose, in name=path form (e.g. dev=./repo)")
 	cmd.Flags().StringVar(&addr, "addr", "0.0.0.0:9443",
 		"TCP listen address (host:port)")
-	cmd.Flags().StringVar(&configDir, configDirFlag, "",
-		"override the daft client config dir (default: $XDG_CONFIG_HOME/daft/client)")
-	cmd.Flags().StringVar(&casDir, "cas-dir", "",
-		"override the CAS chunk-store dir (default: <config-dir>/cas)")
+	bindClientDirFlags(cmd, &configDir, &casDir)
 	return cmd
 }
 
@@ -157,7 +162,7 @@ func runWorkspaceServe(
 			"daft workspace: fingerprint %s\n"+
 			"daft workspace: cas %s (%d entries)\n",
 		name, srcPath, srv.Addr(), cc.id.Fingerprint(),
-		cc.casPath, len(manifest.GetEntries())); err != nil {
+		cc.store.Root(), len(manifest.GetEntries())); err != nil {
 		return err
 	}
 	return runUntilCancel(ctx, srv)
@@ -228,10 +233,7 @@ func newWorkspacePullCmd() *cobra.Command {
 		"server address (host:port)")
 	cmd.Flags().StringVar(&workspaceName, "workspace", "",
 		"workspace name to fetch")
-	cmd.Flags().StringVar(&configDir, configDirFlag, "",
-		"override the daft client config dir (default: $XDG_CONFIG_HOME/daft/client)")
-	cmd.Flags().StringVar(&casDir, "cas-dir", "",
-		"override the local CAS chunk-store dir (default: <config-dir>/cas)")
+	bindClientDirFlags(cmd, &configDir, &casDir)
 	cmd.Flags().BoolVar(&preserveTime, "preserve-mtime", false,
 		"restore file modification times from the manifest")
 	cmd.Flags().DurationVar(&timeout, "timeout", 60*time.Second,
