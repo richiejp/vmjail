@@ -256,6 +256,43 @@ Client CLI:
   - Agent runs `crun run --bundle /bundle …`; tmpfs-backed overlayfs in the VM for container writes to rootfs
 - Consequences: VM image carries no registry client, no auth code, no image cache; layer cache shared across jobs; VM can run with zero network egress
 
+### Container image distribution
+
+- **Orchestrator hosts the registry.** `daft-orchestrator` embeds
+  `github.com/google/go-containerregistry/pkg/registry` as another
+  HTTP/2 handler alongside the Connect-RPC endpoints. Pure Go,
+  ~500 lines, already a transitive dep via crane — fits the "every
+  shipped binary is statically linked and self-contained" ethos
+  without pulling in `distribution/distribution` or shelling out
+  to zot.
+- **Auth reuses the orchestrator's CA.** The orchestrator already
+  issues short-lived mTLS certs to clients and sandbox-hosts (see
+  "I/O and protocols"); the registry handler authenticates the
+  same certs and maps the cert subject → namespace. No second
+  authn scheme, no Hub account, no per-host registry credentials.
+- **User flow with a Dockerfile**:
+  1. `docker build -t orchestrator.example.com/<user>/myimage .`
+  2. `docker push orchestrator.example.com/<user>/myimage`
+     (mTLS cert handed to `docker login` once, scoped to the user).
+  3. `daft sandbox run --image orchestrator…/myimage cmd` —
+     sandbox-host pulls by digest from the same registry.
+- **Cleanup policies (two stores, two policies):**
+  - Layer cache (`/var/lib/daft/images/sha256:.../`): the only
+    bandwidth-saver. LRU under a configurable byte budget,
+    plus `daft images prune --older-than 7d`.
+  - Bundle cache (`/var/lib/daft/bundles/<digest>/rootfs/`):
+    derived state, umoci can rebuild from layers in seconds.
+    Refcount via per-VM lockfiles (cgroup-lifecycle hooked) so
+    a running VM's bundle is never GC'd; otherwise GC at job
+    end or on a short TTL.
+  - Orchestrator-side registry storage gets the same byte-budget
+    policy plus an explicit `daft image rm <ref>` for the user.
+- **Local-only escape hatch.** For developers without an
+  orchestrator handy, `daft sandbox run --image-tar img.tar`
+  ingests `docker save` / `docker buildx --output type=oci` tarballs
+  directly via `crane.Load`. Same pipeline downstream of the load —
+  no "registry only" assumption at the bundle layer.
+
 ### Privilege model — rootless agent, unprivileged containers
 
 - **Goal**: after boot, no daemon runs as real root inside the VM. Forces attackers into a kernel exploit (or a VM escape) for any privilege gain
