@@ -18,11 +18,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
 	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // HelloTimeout caps how long we wait for the in-VM agent to print its
@@ -426,31 +428,73 @@ func Hello(ctx context.Context, w io.Writer, cfg Config) error {
 // can swap in fakes. Production code calls Hello, which threads the
 // real cloudHypervisorRunner / virtiofsdSidecar.
 func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareSidecar) error {
+	ctx, span := trace.Start(ctx, "sandbox.Hello",
+		trace.WithAttributes(
+			trace.KV{Key: "kernel", Value: cfg.Kernel},
+			trace.KV{Key: "shares", Value: strconv.Itoa(len(cfg.Shares))},
+			trace.KV{Key: "bundle", Value: cfg.Bundle},
+		))
+	defer span.End()
+
 	if err := cfg.validate(); err != nil {
-		return err
+		return trace.RecordError(ctx, err)
 	}
 	cfg = cfg.withDefaults()
 
 	runCtx, cancel := context.WithTimeout(ctx, HelloTimeout)
 	defer cancel()
 
-	var shareSockets []string
-	if len(cfg.Shares) > 0 {
-		socks, stopShare, err := sc.start(runCtx, cfg)
-		if err != nil {
-			return fmt.Errorf("sandbox: start virtiofsd: %w", err)
-		}
-		defer stopShare()
-		shareSockets = socks
-	}
-
-	stdout, stop, err := r.run(runCtx, cfg, shareSockets)
+	shareSockets, stopShare, err := startShares(runCtx, cfg, sc)
 	if err != nil {
-		return err
+		return trace.RecordError(ctx, err)
+	}
+	defer stopShare()
+
+	stdout, stop, err := runVMM(runCtx, cfg, shareSockets, r)
+	if err != nil {
+		return trace.RecordError(ctx, err)
 	}
 	defer stop()
 
-	return scanForBanner(w, stdout)
+	bannerCtx, bannerSpan := trace.Start(runCtx, "sandbox.scan_for_banner")
+	defer bannerSpan.End()
+	if err := scanForBanner(w, stdout); err != nil {
+		return trace.RecordError(bannerCtx, err)
+	}
+	return nil
+}
+
+// startShares spawns virtiofsd for every share in cfg. Returns a
+// no-op stopShare and empty sockets when cfg has no shares so the
+// caller can defer stopShare unconditionally. Wrapped in its own
+// span so the cold-boot trace breaks down virtiofsd-spawn time
+// separately from VMM-spawn time.
+func startShares(ctx context.Context, cfg Config, sc shareSidecar) (sockets []string, stop func(), err error) {
+	if len(cfg.Shares) == 0 {
+		return nil, func() {}, nil
+	}
+	ctx, span := trace.Start(ctx, "sandbox.start_virtiofsd",
+		trace.WithAttributes(trace.KV{Key: "shares", Value: strconv.Itoa(len(cfg.Shares))}))
+	defer span.End()
+	sockets, stop, err = sc.start(ctx, cfg)
+	if err != nil {
+		return nil, func() {}, trace.RecordError(ctx,
+			fmt.Errorf("sandbox: start virtiofsd: %w", err))
+	}
+	return sockets, stop, nil
+}
+
+// runVMM spawns the configured VMM (Cloud Hypervisor today) and
+// returns its stdout pipe. Wrapped in its own span so the trace
+// distinguishes "VMM spawn" from "wait for guest banner".
+func runVMM(ctx context.Context, cfg Config, shareSockets []string, r runner) (stdout io.ReadCloser, stop func(), err error) {
+	ctx, span := trace.Start(ctx, "sandbox.run_cloud_hypervisor")
+	defer span.End()
+	stdout, stop, err = r.run(ctx, cfg, shareSockets)
+	if err != nil {
+		return nil, nil, trace.RecordError(ctx, err)
+	}
+	return stdout, stop, nil
 }
 
 // scanForBanner mirrors r line-by-line to w and returns nil the moment

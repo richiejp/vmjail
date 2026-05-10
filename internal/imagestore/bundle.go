@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 
 	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // ErrUnknownImage is returned by Bundle when the requested digest is
@@ -69,6 +70,10 @@ type BundleMount struct {
 // the bundle directory exists with config.json and rootfs/, it is
 // reused. The image must already be in the layer cache (Pull first).
 func (s *Store) Bundle(ctx context.Context, digest string, opts BundleOptions) (*Bundle, error) {
+	ctx, span := trace.Start(ctx, "imagestore.Bundle",
+		trace.WithAttributes(trace.KV{Key: "digest", Value: digest}))
+	defer span.End()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -78,12 +83,13 @@ func (s *Store) Bundle(ctx context.Context, digest string, opts BundleOptions) (
 
 	if isAssembled(configPath, rootfs) {
 		s.touchEntry(digest)
+		span.AddEvent("cached")
 		return &Bundle{Digest: digest, Path: bundlePath}, nil
 	}
 
 	img, err := s.loadLayoutImage(digest)
 	if err != nil {
-		return nil, err
+		return nil, trace.RecordError(ctx, err)
 	}
 
 	// #nosec G301 — 0755 is intentional. The bundle dir is read by
@@ -92,19 +98,19 @@ func (s *Store) Bundle(ctx context.Context, digest string, opts BundleOptions) (
 	// guest. World-execute lets crun's uid traverse this path
 	// regardless of which user owns it.
 	if err := os.MkdirAll(rootfs, 0o755); err != nil {
-		return nil, fmt.Errorf("imagestore: mkdir rootfs: %w", err)
+		return nil, trace.RecordError(ctx, fmt.Errorf("imagestore: mkdir rootfs: %w", err))
 	}
 
 	if err := unpackRootfs(img, rootfs); err != nil {
-		return nil, err
+		return nil, trace.RecordError(ctx, err)
 	}
 
 	cfg, err := buildRuntimeConfig(img, opts)
 	if err != nil {
-		return nil, err
+		return nil, trace.RecordError(ctx, err)
 	}
 	if err := writeJSON(configPath, cfg); err != nil {
-		return nil, err
+		return nil, trace.RecordError(ctx, err)
 	}
 
 	s.touchEntry(digest)

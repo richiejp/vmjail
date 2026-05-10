@@ -290,7 +290,18 @@ Out of Scope:
       shape (root + apply + per-chunk client/server pairs all share
       one trace_id). Component identifiers consolidated into
       `internal/component/names.go` so producer/consumer can't
-      drift. **Remaining slices**:
+      drift.
+      **Sandbox path also instrumented**: `daft-sandboxd run`
+      opens a root span; `imagestore.Pull` (attrs: ref, digest,
+      size_bytes), `imagestore.Bundle` (attrs: digest, with
+      "cached" event when reusing), and `sandbox.Hello` (attrs:
+      kernel, shares, bundle) are spans. Hello fans out into
+      `sandbox.start_virtiofsd`, `sandbox.run_cloud_hypervisor`,
+      and `sandbox.scan_for_banner` so the cold-boot 310 ms
+      breakdown surfaces in the trace. KVM-gated integration
+      tests get a Tracer + LogOnFailure via the new `traceCtx(tb)`
+      helper, so failed boots dump the per-stage timing breakdown
+      automatically. **Remaining slices**:
       - Slice 2: orchestrator-side reaper for trace-id sets that
         haven't seen a span in a while (catch crashed producers
         whose buffer never made it across the wire).

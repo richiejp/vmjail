@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strconv"
 
 	"github.com/spf13/cobra"
 
 	"github.com/richiejp/darkaifactory/internal/bundled"
+	"github.com/richiejp/darkaifactory/internal/component"
 	"github.com/richiejp/darkaifactory/internal/imagestore"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // In-VM mountpoints used by the run command. Stable so the bundle
@@ -76,14 +79,25 @@ func defaultRunDeps() runDeps {
 }
 
 func runRun(ctx context.Context, w io.Writer, ref string, args []string, workspace string, deps runDeps) error {
+	if trace.TracerFromContext(ctx) == nil {
+		ctx = trace.ContextWithTracer(ctx, trace.New(component.Sandboxd))
+	}
+	ctx, span := trace.Start(ctx, "daft-sandboxd.run",
+		trace.WithAttributes(
+			trace.KV{Key: "ref", Value: ref},
+			trace.KV{Key: "args", Value: strconv.Itoa(len(args))},
+			trace.KV{Key: "workspace", Value: workspace},
+		))
+	defer span.End()
+
 	store, err := deps.openStore()
 	if err != nil {
-		return err
+		return trace.RecordError(ctx, err)
 	}
 
 	img, err := store.Pull(ctx, ref)
 	if err != nil {
-		return fmt.Errorf("daft-sandboxd: pull %s: %w", ref, err)
+		return trace.RecordError(ctx, fmt.Errorf("daft-sandboxd: pull %s: %w", ref, err))
 	}
 
 	bundleOpts := imagestore.BundleOptions{}
@@ -101,22 +115,22 @@ func runRun(ctx context.Context, w io.Writer, ref string, args []string, workspa
 
 	bundle, err := store.Bundle(ctx, img.Digest, bundleOpts)
 	if err != nil {
-		return fmt.Errorf("daft-sandboxd: bundle %s: %w", img.Digest, err)
+		return trace.RecordError(ctx, fmt.Errorf("daft-sandboxd: bundle %s: %w", img.Digest, err))
 	}
 
 	unlock, err := store.Lock(img.Digest)
 	if err != nil {
-		return fmt.Errorf("daft-sandboxd: lock bundle: %w", err)
+		return trace.RecordError(ctx, fmt.Errorf("daft-sandboxd: lock bundle: %w", err))
 	}
 	defer unlock()
 
 	cacheDir, err := deps.cacheDir()
 	if err != nil {
-		return err
+		return trace.RecordError(ctx, err)
 	}
 	paths, err := deps.extract(cacheDir)
 	if err != nil {
-		return fmt.Errorf("daft-sandboxd: extract bundled artifacts: %w", err)
+		return trace.RecordError(ctx, fmt.Errorf("daft-sandboxd: extract bundled artifacts: %w", err))
 	}
 
 	cfg := sandbox.Config{
@@ -134,7 +148,8 @@ func runRun(ctx context.Context, w io.Writer, ref string, args []string, workspa
 	if workspace != "" {
 		abs, err := filepath.Abs(workspace)
 		if err != nil {
-			return fmt.Errorf("daft-sandboxd: resolve --workspace %q: %w", workspace, err)
+			return trace.RecordError(ctx,
+				fmt.Errorf("daft-sandboxd: resolve --workspace %q: %w", workspace, err))
 		}
 		cfg.Shares = append(cfg.Shares, &sandbox.ShareConfig{
 			HostDir:    abs,
@@ -143,5 +158,5 @@ func runRun(ctx context.Context, w io.Writer, ref string, args []string, workspa
 		})
 	}
 
-	return deps.boot(ctx, w, cfg)
+	return trace.RecordError(ctx, deps.boot(ctx, w, cfg))
 }

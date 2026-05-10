@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -14,6 +15,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // remoteKeychain authenticates pulls. DefaultKeychain reads
@@ -82,28 +85,34 @@ func (s *Store) Pull(ctx context.Context, ref string) (*Image, error) {
 // pullWith is Pull parameterised on the puller; production calls Pull,
 // tests inject fakes.
 func (s *Store) pullWith(ctx context.Context, ref string, p puller) (*Image, error) {
+	ctx, span := trace.Start(ctx, "imagestore.Pull",
+		trace.WithAttributes(trace.KV{Key: "ref", Value: ref}))
+	defer span.End()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	img, parsedRef, err := p.resolve(ctx, ref)
 	if err != nil {
-		return nil, err
+		return nil, trace.RecordError(ctx, err)
 	}
 
 	digest, err := img.Digest()
 	if err != nil {
-		return nil, fmt.Errorf("imagestore: digest: %w", err)
+		return nil, trace.RecordError(ctx, fmt.Errorf("imagestore: digest: %w", err))
 	}
 	digestStr := digest.String()
+	span.SetAttribute("digest", digestStr)
 
 	size, err := imageSize(img)
 	if err != nil {
-		return nil, err
+		return nil, trace.RecordError(ctx, err)
 	}
+	span.SetAttribute("size_bytes", strconv.FormatInt(size, 10))
 
 	meta, err := s.loadMeta()
 	if err != nil {
-		return nil, err
+		return nil, trace.RecordError(ctx, err)
 	}
 	entries := s.applyLocks(meta.Entries)
 
@@ -116,19 +125,19 @@ func (s *Store) pullWith(ctx context.Context, ref string, p puller) (*Image, err
 
 	plan, err := Allocate(entries, allocSize, s.Quota)
 	if err != nil {
-		return nil, err
+		return nil, trace.RecordError(ctx, err)
 	}
 
 	for _, d := range plan.Evict {
 		if err := s.removeOnDisk(d); err != nil {
-			return nil, fmt.Errorf("imagestore: evict %s: %w", d, err)
+			return nil, trace.RecordError(ctx, fmt.Errorf("imagestore: evict %s: %w", d, err))
 		}
 		meta.Entries = removeEntry(meta.Entries, d)
 	}
 
 	layoutPath := filepath.Join(s.Root, imagesDir)
 	if err := saveImage(layoutPath, img, parsedRef); err != nil {
-		return nil, err
+		return nil, trace.RecordError(ctx, err)
 	}
 
 	now := s.nowFn()
@@ -139,7 +148,7 @@ func (s *Store) pullWith(ctx context.Context, ref string, p puller) (*Image, err
 		LastUsed: now,
 	})
 	if err := s.saveMeta(meta); err != nil {
-		return nil, err
+		return nil, trace.RecordError(ctx, err)
 	}
 
 	return &Image{

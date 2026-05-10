@@ -124,7 +124,7 @@ func TestHelloIntegrationBootsVM(t *testing.T) {
 	cfg := resolveArtifacts(t)
 
 	var buf bytes.Buffer
-	err := Hello(t.Context(), &buf, cfg)
+	err := Hello(traceCtx(t), &buf, cfg)
 	if err != nil {
 		t.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
 	}
@@ -152,7 +152,7 @@ func TestHelloIntegrationBootsVMWithShare(t *testing.T) {
 	}}
 
 	var buf bytes.Buffer
-	if err := Hello(t.Context(), &buf, cfg); err != nil {
+	if err := Hello(traceCtx(t), &buf, cfg); err != nil {
 		t.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
 	}
 	if !strings.Contains(buf.String(), agent.Banner) {
@@ -187,7 +187,7 @@ func TestHelloIntegrationBootsVMWithContainer(t *testing.T) {
 	cfg.Bundle = testBundlePath
 
 	var buf bytes.Buffer
-	if err := Hello(t.Context(), &buf, cfg); err != nil {
+	if err := Hello(traceCtx(t), &buf, cfg); err != nil {
 		t.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
 	}
 	wantLine := agent.ContainerReportPrefix + agent.ContainerBanner
@@ -232,7 +232,7 @@ func TestHelloIntegrationBootsVMWithImagestoreBundle(t *testing.T) {
 	cfg.Bundle = filepath.Join("/bundles", filepath.Base(bundle.Path))
 
 	var buf bytes.Buffer
-	if err := Hello(t.Context(), &buf, cfg); err != nil {
+	if err := Hello(traceCtx(t), &buf, cfg); err != nil {
 		t.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
 	}
 	wantLine := agent.ContainerReportPrefix + agent.ContainerBanner
