@@ -105,14 +105,13 @@ func serveCommand() *cobra.Command {
 			if err := srv.Listen(); err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			if _, err := fmt.Fprintf(out, "daft-orchestrator: listening on %s\n", srv.Addr()); err != nil {
-				return err
-			}
-			if _, err := fmt.Fprintf(out, "daft-orchestrator: fingerprint %s\n", id.Fingerprint()); err != nil {
-				return err
-			}
-			if _, err := fmt.Fprintf(out, "daft-orchestrator: peers in %s\n", peers.Path()); err != nil {
+			banner := fmt.Sprintf(
+				"daft-orchestrator: listening on %s\n"+
+					"daft-orchestrator: fingerprint %s\n"+
+					"daft-orchestrator: peers in %s\n",
+				srv.Addr(), id.Fingerprint(), peers.Path(),
+			)
+			if _, err := io.WriteString(cmd.OutOrStdout(), banner); err != nil {
 				return err
 			}
 			return runServer(ctx, srv)

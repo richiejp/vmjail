@@ -251,7 +251,29 @@ Out of Scope:
       unapproved-server / unapproved-client / corrupt-identity /
       corrupt-peer-store branches end-to-end via an in-process
       orchestrator.
-- [ ] Workspace sync: desync chunks + daft-fuse
+- [/] Workspace sync: chunked, content-addressed snapshots
+      flowing user-host → orchestrator → sandbox-host → VM, with
+      lazy fetch via daft-fuse under virtiofsd. **Slice 1 landed**:
+      proto data model (`proto/workspace/v1/workspace.proto`:
+      Manifest / FileEntry / ChunkRef + WorkspaceService stubs);
+      `internal/cas` content-addressed chunk store (sha256 +
+      zstd, two-level fan-out, verifying-reader catches digest
+      mismatch on read); `internal/workspace` BuildManifest walks
+      a tree, chunks files (FixedSizeChunker for now; FastCDC
+      swap-in next), records dirs/symlinks. Fuzz target on
+      digest validation and path sanitisation.
+      **Remaining slices**:
+      - Slice 2: WorkspaceService Connect-RPC handler + auth via
+        the existing PeerStore; `daft workspace push <dir>` /
+        `daft workspace pull <dir>` to drive it.
+      - Slice 3: FastCDC chunker behind the same Chunker
+        interface (replace FixedSizeChunker).
+      - Slice 4: `daft-fuse` (go-fuse v2) — a FUSE FS the
+        sandbox-host mounts, that virtiofsd then re-exports into
+        the VM. Reads resolve via the local CAS, fetching missing
+        chunks from the user-host over HTTP/2. Policy hook for
+        freeze-on-suspicious-IO lives here.
+      - Slice 5: write overlay + `daft pull` diff workflow.
 
 ## Architecture
 

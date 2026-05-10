@@ -1,0 +1,101 @@
+// Workspace sync data model. A Manifest is a content-addressed
+// snapshot of a directory tree: each regular file decomposes into
+// an ordered list of chunks, each addressed by its sha256 digest.
+// Symlinks and directories carry their own entries so a remote
+// peer can reconstruct the full tree without re-walking.
+//
+// The wire protocol over which manifests + chunks travel is defined
+// in WorkspaceService below; the on-disk store layout is owned by
+// internal/cas.
+syntax = "proto3";
+
+package daft.workspace.v1;
+
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1";
+
+// EntryKind classifies a manifest FileEntry. We only ever sync
+// regular files, directories, and symlinks; sockets, FIFOs, and
+// device nodes are rejected up-front by the manifest builder.
+enum EntryKind {
+  ENTRY_KIND_UNSPECIFIED = 0;
+  ENTRY_KIND_FILE = 1;
+  ENTRY_KIND_DIR = 2;
+  ENTRY_KIND_SYMLINK = 3;
+}
+
+// ChunkRef points at one chunk in the content-addressed store.
+// `digest` is the lowercase hex sha256 of the chunk's *uncompressed*
+// payload — the digest is stable across compression algorithm
+// changes so a peer can re-encode chunks without invalidating
+// manifests. `size` is the uncompressed length, useful both for
+// read-side preallocation and for sanity-checking transfers.
+message ChunkRef {
+  string digest = 1;
+  uint64 size = 2;
+}
+
+// FileEntry is one node in the manifest tree. `path` is always
+// forward-slash separated and relative to the manifest root, with
+// no leading slash and no `..` segments — the builder rejects
+// anything else. `mode` carries the Unix permission bits;
+// `kind`-specific fields populate as needed.
+message FileEntry {
+  string path = 1;
+  EntryKind kind = 2;
+  uint32 mode = 3;
+  // For ENTRY_KIND_FILE: ordered list of chunk refs that
+  // concatenate (uncompressed) into the file's contents.
+  repeated ChunkRef chunks = 4;
+  // For ENTRY_KIND_FILE: full uncompressed file size. Redundant
+  // with sum(chunks.size) but useful for fast manifest validation.
+  uint64 size = 5;
+  // For ENTRY_KIND_SYMLINK: target as the kernel returned it
+  // (verbatim — relative or absolute, may dangle).
+  string symlink_target = 6;
+  // Modification time as Unix nanoseconds. Best-effort metadata;
+  // the manifest's correctness comes from chunk digests, not this.
+  int64 mtime_unix_nano = 7;
+}
+
+// Manifest is the top-level snapshot. Entries are sorted by `path`
+// so two manifests of the same tree are byte-identical regardless
+// of filesystem walk order, which makes them themselves
+// content-hashable downstream.
+message Manifest {
+  // Manifest format version. Bump on incompatible field semantics.
+  uint32 version = 1;
+  // Sorted entries (lex order on `path`).
+  repeated FileEntry entries = 2;
+}
+
+// WorkspaceService is the wire transport for manifests + chunks.
+// Slice 1 lands the proto only; the handler is added once the
+// transport is needed (orchestrator-side and host-side).
+service WorkspaceService {
+  // GetManifest returns the manifest for a workspace by name. The
+  // server is the source of truth for what's in the workspace.
+  rpc GetManifest(GetManifestRequest) returns (GetManifestResponse);
+  // GetChunk fetches a single chunk's compressed payload. Server
+  // validates the digest before sending so a corrupt store can't
+  // silently poison clients.
+  rpc GetChunk(GetChunkRequest) returns (GetChunkResponse);
+}
+
+message GetManifestRequest {
+  string workspace = 1;
+}
+
+message GetManifestResponse {
+  Manifest manifest = 1;
+}
+
+message GetChunkRequest {
+  string digest = 1;
+}
+
+message GetChunkResponse {
+  // Compressed (zstd) bytes. Client decompresses and verifies the
+  // sha256 of the *uncompressed* result against the requested
+  // digest — never trust the server's framing.
+  bytes compressed = 1;
+}

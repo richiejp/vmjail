@@ -74,14 +74,9 @@ func newAuthShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			out := cmd.OutOrStdout()
-			if _, err := fmt.Fprintf(out, "fingerprint: %s\n", id.Fingerprint()); err != nil {
-				return err
-			}
-			if _, err := fmt.Fprintf(out, "config-dir:  %s\n", dir); err != nil {
-				return err
-			}
-			return nil
+			_, err = fmt.Fprintf(cmd.OutOrStdout(),
+				"fingerprint: %s\nconfig-dir:  %s\n", id.Fingerprint(), dir)
+			return err
 		},
 	}
 }

@@ -240,6 +240,23 @@ func TestDefaultRunDeps(t *testing.T) {
 	}
 }
 
+// TestDefaultOpenStoreClosureExecutes drives the openStore closure
+// inside defaultRunDeps. It will fail (no DAFT_STORE_DIR is set in
+// tests, the default cache dir may not exist), but invoking it
+// covers the closure body. We don't care about the result, only
+// that the closure runs without panicking.
+func TestDefaultOpenStoreClosureExecutes(t *testing.T) {
+	t.Setenv("DAFT_STORE_DIR", t.TempDir())
+	deps := defaultRunDeps()
+	store, err := deps.openStore()
+	if err != nil {
+		t.Fatalf("openStore: %v", err)
+	}
+	if store == nil {
+		t.Fatal("openStore returned nil store")
+	}
+}
+
 // TestRunPropagatesLockError covers the lock-failure branch of
 // runRun (post-bundle, pre-boot).
 func TestRunPropagatesLockError(t *testing.T) {
