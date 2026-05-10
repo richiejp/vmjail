@@ -14,9 +14,14 @@ import (
 	"net/http"
 	"time"
 
+	"connectrpc.com/connect"
+
+	"github.com/richiejp/darkaifactory/internal/component"
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
+	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/mtls"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // Config holds everything the server needs to start up. Identity is
@@ -33,13 +38,20 @@ type Config struct {
 	// ReadHeaderTimeout caps how long the server waits for a client
 	// to send request headers. Belt-and-braces against slow-loris.
 	ReadHeaderTimeout time.Duration
+
+	// Tracer collects both inbound spans (via TraceService) and the
+	// orchestrator's own server-side spans (via the Connect server
+	// interceptor). New constructs one if Tracer is nil.
+	Tracer *trace.Tracer
 }
 
 // Server is the orchestrator's mTLS-gated control-plane listener.
 // It's a thin wrapper around mtls.Server that registers the
-// orchestrator's Connect-RPC handlers (currently just Health.Ping).
+// orchestrator's Connect-RPC handlers (currently Health.Ping and
+// TraceService.ReportSpans) plus a /debug/traces dump endpoint.
 type Server struct {
-	inner *mtls.Server
+	inner  *mtls.Server
+	tracer *trace.Tracer
 }
 
 // New builds a Server with the provided config. Returns an error if
@@ -53,9 +65,28 @@ func New(cfg Config) (*Server, error) {
 		return nil, errors.New("orchestrator: nil peer store")
 	}
 
+	tracer := cfg.Tracer
+	if tracer == nil {
+		tracer = trace.New(component.Orchestrator)
+	}
+
 	mux := http.NewServeMux()
-	healthPath, healthHandler := healthv1connect.NewHealthServiceHandler(NewHealthHandler())
+	interceptor := connect.WithInterceptors(tracer.ServerInterceptor())
+	healthPath, healthHandler := healthv1connect.NewHealthServiceHandler(
+		NewHealthHandler(), interceptor,
+	)
 	mux.Handle(healthPath, healthHandler)
+
+	traceHandler, err := NewTraceHandler(tracer)
+	if err != nil {
+		return nil, err
+	}
+	tracePath, traceConnectHandler := tracev1connect.NewTraceServiceHandler(
+		traceHandler, interceptor,
+	)
+	mux.Handle(tracePath, traceConnectHandler)
+
+	mux.Handle("/debug/traces", debugTracesHandler(tracer))
 
 	inner, err := mtls.New(mtls.Config{
 		Identity:          cfg.Identity,
@@ -67,8 +98,13 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{inner: inner}, nil
+	return &Server{inner: inner, tracer: tracer}, nil
 }
+
+// Tracer returns the orchestrator's Tracer. Callers can use it to
+// emit additional spans (e.g. from background workers) or to read
+// the buffer directly for tests.
+func (s *Server) Tracer() *trace.Tracer { return s.tracer }
 
 // Listen / Addr / Serve / Shutdown are passthroughs to the inner
 // mtls.Server. Kept on the wrapper so callers don't need to know

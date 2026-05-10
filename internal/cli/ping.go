@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	healthv1 "github.com/richiejp/darkaifactory/internal/genpb/health/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // pingCmdName is the verb users invoke. Surfaced as a constant so
@@ -60,40 +62,53 @@ func newPingCmd() *cobra.Command {
 
 // runPing is the testable core of `daft ping`. Split out so tests
 // can call it with a fake stdout and an httptest-driven address.
-func runPing(ctx context.Context, stdout interface {
-	Write(p []byte) (int, error)
-}, addr, message, configDirOverride string,
-) error {
+//
+// A Tracer can be attached to ctx via trace.ContextWithTracer; tests
+// use this to inspect spans without shipping them. When no tracer is
+// on ctx, runPing creates a local one and ships its buffer to the
+// orchestrator on success.
+func runPing(ctx context.Context, stdout io.Writer, addr, message, configDirOverride string) error {
+	tracer, owned := tracerForCommand(ctx)
+	ctx, span := tracer.Start(
+		ctx, "daft.ping",
+		trace.WithAttributes(trace.KV{Key: "rpc.addr", Value: addr}),
+	)
+	defer span.End()
+
 	dir, err := resolveClientDir(configDirOverride)
 	if err != nil {
-		return err
+		return trace.RecordError(ctx, err)
 	}
 	id, err := loadOrGenerateClient(dir)
 	if err != nil {
-		return err
+		return trace.RecordError(ctx, err)
 	}
 	peers, err := openClientPeerStore(dir)
 	if err != nil {
-		return err
+		return trace.RecordError(ctx, err)
 	}
 	tlsCfg, err := identity.ClientTLSConfig(id, peers, "")
 	if err != nil {
-		return err
+		return trace.RecordError(ctx, err)
 	}
 
-	httpc := &http.Client{
-		Transport: &http2.Transport{
-			TLSClientConfig: tlsCfg,
-		},
-	}
-	client := healthv1connect.NewHealthServiceClient(httpc, "https://"+addr)
+	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
+	interceptor := connect.WithInterceptors(tracer.ClientInterceptor())
+	client := healthv1connect.NewHealthServiceClient(
+		httpc, "https://"+addr, interceptor,
+	)
 
 	resp, err := client.Ping(ctx, connect.NewRequest(&healthv1.PingRequest{
 		Message: message,
 	}))
 	if err != nil {
-		return fmt.Errorf("daft ping: %w", err)
+		return trace.RecordError(ctx, fmt.Errorf("daft ping: %w", err))
 	}
-	_, err = fmt.Fprintf(stdout, "pong: %s\n", resp.Msg.GetMessage())
-	return err
+	if _, err := fmt.Fprintf(stdout, "pong: %s\n", resp.Msg.GetMessage()); err != nil {
+		return trace.RecordError(ctx, err)
+	}
+	if owned {
+		shipTraces(ctx, tracer, httpc, addr, "daft ping")
+	}
+	return nil
 }

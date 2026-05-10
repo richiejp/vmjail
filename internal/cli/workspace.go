@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,6 +23,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/mtls"
+	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspace"
 )
 
@@ -135,6 +137,8 @@ func runWorkspaceServe(
 	stdout io.Writer,
 	workspaceArg, addr, configDirOverride, casDirOverride string,
 ) error {
+	tracer, _ := tracerForCommand(ctx)
+	ctx = trace.ContextWithTracer(ctx, tracer)
 	if workspaceArg == "" {
 		return errors.New("daft workspace serve: --workspace is required")
 	}
@@ -150,7 +154,7 @@ func runWorkspaceServe(
 	if err != nil {
 		return err
 	}
-	srv, err := buildWorkspaceListener(name, addr, cc, manifest)
+	srv, err := buildWorkspaceListener(name, addr, cc, manifest, tracer)
 	if err != nil {
 		return err
 	}
@@ -169,9 +173,12 @@ func runWorkspaceServe(
 }
 
 // buildWorkspaceListener wires a workspace.Server (registered with
-// name → manifest) into an mTLS HTTP/2 listener.
+// name → manifest) into an mTLS HTTP/2 listener. The tracer's
+// ServerInterceptor is wrapped around the WorkspaceService handler
+// so every inbound GetManifest / GetChunk gets a server-side span,
+// linked to the client's trace via the wire-propagated headers.
 func buildWorkspaceListener(
-	name, addr string, cc *clientCtx, manifest *workspacev1.Manifest,
+	name, addr string, cc *clientCtx, manifest *workspacev1.Manifest, tracer *trace.Tracer,
 ) (*mtls.Server, error) {
 	wsServer, err := workspace.NewServer(cc.store)
 	if err != nil {
@@ -181,7 +188,8 @@ func buildWorkspaceListener(
 		return nil, err
 	}
 	mux := http.NewServeMux()
-	path, handler := workspacev1connect.NewWorkspaceServiceHandler(wsServer)
+	path, handler := workspacev1connect.NewWorkspaceServiceHandler(wsServer,
+		connect.WithInterceptors(tracer.ServerInterceptor()))
 	mux.Handle(path, handler)
 	return mtls.New(mtls.Config{
 		Identity: cc.id, Peers: cc.peers, Addr: addr, Handler: mux,
@@ -247,37 +255,54 @@ func runWorkspacePull(
 	from, workspaceName, dest, configDirOverride, casDirOverride string,
 	preserveTime bool,
 ) error {
+	tracer, owned := tracerForCommand(ctx)
+	ctx = trace.ContextWithTracer(ctx, tracer)
+	ctx, span := tracer.Start(ctx, "daft.workspace.pull",
+		trace.WithAttributes(
+			trace.KV{Key: "from", Value: from},
+			trace.KV{Key: "workspace", Value: workspaceName},
+			trace.KV{Key: "dest", Value: dest},
+			trace.KV{Key: "preserve_mtime", Value: strconv.FormatBool(preserveTime)},
+		))
+	defer span.End()
+
 	if from == "" {
-		return errors.New("daft workspace pull: --from is required")
+		return trace.RecordError(ctx, errors.New("daft workspace pull: --from is required"))
 	}
 	if workspaceName == "" {
-		return errors.New("daft workspace pull: --workspace is required")
+		return trace.RecordError(ctx, errors.New("daft workspace pull: --workspace is required"))
 	}
 	cc, err := openClientCtx(configDirOverride, casDirOverride)
 	if err != nil {
-		return err
+		return trace.RecordError(ctx, err)
 	}
 	tlsCfg, err := identity.ClientTLSConfig(cc.id, cc.peers, "")
 	if err != nil {
-		return err
+		return trace.RecordError(ctx, err)
 	}
 	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
-	client := workspacev1connect.NewWorkspaceServiceClient(httpc, "https://"+from)
+	interceptor := connect.WithInterceptors(tracer.ClientInterceptor())
+	client := workspacev1connect.NewWorkspaceServiceClient(httpc, "https://"+from, interceptor)
 
 	resp, err := client.GetManifest(ctx,
 		connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: workspaceName}))
 	if err != nil {
-		return fmt.Errorf("daft workspace pull: GetManifest: %w", err)
+		return trace.RecordError(ctx, fmt.Errorf("daft workspace pull: GetManifest: %w", err))
 	}
 	manifest := resp.Msg.GetManifest()
 	if err := os.MkdirAll(dest, 0o700); err != nil {
-		return fmt.Errorf("daft workspace pull: mkdir dest: %w", err)
+		return trace.RecordError(ctx, fmt.Errorf("daft workspace pull: mkdir dest: %w", err))
 	}
 	if err := workspace.ApplyManifest(ctx, client, cc.store, manifest, dest,
 		workspace.ApplyOptions{PreserveModTime: preserveTime}); err != nil {
-		return err
+		return trace.RecordError(ctx, err)
 	}
-	_, err = fmt.Fprintf(stdout, "daft workspace: pulled %q to %s (%d entries)\n",
-		workspaceName, dest, len(manifest.GetEntries()))
-	return err
+	if _, err := fmt.Fprintf(stdout, "daft workspace: pulled %q to %s (%d entries)\n",
+		workspaceName, dest, len(manifest.GetEntries())); err != nil {
+		return trace.RecordError(ctx, err)
+	}
+	if owned {
+		shipTraces(ctx, tracer, httpc, from, "daft workspace pull")
+	}
+	return nil
 }

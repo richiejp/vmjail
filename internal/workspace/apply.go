@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"connectrpc.com/connect"
@@ -15,6 +16,7 @@ import (
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // ApplyOptions tunes how a manifest is materialised on disk.
@@ -55,6 +57,12 @@ func ApplyManifest(
 	if dest == "" {
 		return errors.New("workspace: empty dest")
 	}
+	ctx, span := trace.Start(ctx, "workspace.ApplyManifest",
+		trace.WithAttributes(
+			trace.KV{Key: "dest", Value: dest},
+			trace.KV{Key: "entries", Value: strconv.Itoa(len(m.GetEntries()))},
+		))
+	defer span.End()
 	// lastDir caches the parent directory for the most recent file
 	// entry: BuildManifest sorts entries lex, so files in the same
 	// directory arrive consecutively. Skipping the redundant
@@ -62,10 +70,11 @@ func ApplyManifest(
 	state := &applyState{}
 	for _, e := range m.GetEntries() {
 		if !SanitisePath(e.GetPath()) {
-			return fmt.Errorf("workspace: rejected entry path %q", e.GetPath())
+			return trace.RecordError(ctx,
+				fmt.Errorf("workspace: rejected entry path %q", e.GetPath()))
 		}
 		if err := applyEntry(ctx, client, store, dest, e, opts, state); err != nil {
-			return err
+			return trace.RecordError(ctx, err)
 		}
 	}
 	return nil

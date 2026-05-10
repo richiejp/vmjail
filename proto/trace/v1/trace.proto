@@ -1,0 +1,94 @@
+// Cross-component tracing for daft. Spans accumulate in each
+// component's in-memory ring buffer and are shipped to the
+// orchestrator via TraceService.ReportSpans, where they're merged
+// into a single buffer per trace_id.
+//
+// Unlike OpenTelemetry, abandoned spans (component crashed before
+// End()) are first-class: the producer's reaper marks them with
+// STATUS_ABANDONED before exporting, and the orchestrator surfaces
+// them so a user can see partial traces from a dead component.
+//
+// trace_id is 16 bytes hex (32 chars); span_id and parent_span_id
+// are 8 bytes hex (16 chars). Empty parent_span_id means a root
+// span.
+syntax = "proto3";
+
+package daft.trace.v1;
+
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/trace/v1;tracev1";
+
+// SpanKind disambiguates client/server pairs sharing one trace_id
+// across an RPC boundary, matching the OTel convention so a future
+// proxy-exporter doesn't need to translate.
+enum SpanKind {
+  SPAN_KIND_UNSPECIFIED = 0;
+  SPAN_KIND_INTERNAL = 1;
+  SPAN_KIND_CLIENT = 2;
+  SPAN_KIND_SERVER = 3;
+}
+
+// SpanStatus carries the outcome of the span. STATUS_ABANDONED is
+// our extension: the producer's reaper sets it when End() never
+// arrived within the span's deadline, so the consumer can tell a
+// crashed component from a normal failure.
+enum SpanStatus {
+  SPAN_STATUS_UNSET = 0;
+  SPAN_STATUS_OK = 1;
+  SPAN_STATUS_ERROR = 2;
+  SPAN_STATUS_ABANDONED = 3;
+}
+
+// KeyValue is a span attribute. We only carry strings on the wire —
+// numeric and boolean attrs are stringified at producer-side, which
+// keeps the schema and the buffer cheap. Re-introduce typed values
+// only when a consumer needs them.
+message KeyValue {
+  string key = 1;
+  string value = 2;
+}
+
+// SpanEvent is a timestamped occurrence inside a span (logs,
+// errors, lifecycle markers). Produced via Span.AddEvent /
+// RecordError on the producer side.
+message SpanEvent {
+  string name = 1;
+  int64 time_unix_nano = 2;
+  repeated KeyValue attributes = 3;
+}
+
+// Span is one unit of work. trace_id groups all spans in one logical
+// operation; (trace_id, span_id) uniquely identifies a span within
+// a trace; parent_span_id chains spans into a tree.
+//
+// component identifies the producer ("daft", "daft-orchestrator",
+// "daft-sandboxd", "daft-agent") so a single shared buffer at the
+// orchestrator can attribute spans without inferring from the mTLS
+// peer cert.
+message Span {
+  string trace_id = 1;
+  string span_id = 2;
+  string parent_span_id = 3;
+  string name = 4;
+  SpanKind kind = 5;
+  SpanStatus status = 6;
+  string status_message = 7;
+  int64 start_unix_nano = 8;
+  int64 end_unix_nano = 9;
+  repeated KeyValue attributes = 10;
+  repeated SpanEvent events = 11;
+  string component = 12;
+}
+
+// TraceService is the orchestrator-side ingest surface. Producers
+// batch spans and ship them via ReportSpans; the response is
+// intentionally empty so a future streaming variant can be
+// introduced without a wire-incompatible change.
+service TraceService {
+  rpc ReportSpans(ReportSpansRequest) returns (ReportSpansResponse) {}
+}
+
+message ReportSpansRequest {
+  repeated Span spans = 1;
+}
+
+message ReportSpansResponse {}

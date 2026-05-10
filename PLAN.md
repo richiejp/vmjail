@@ -251,6 +251,55 @@ Out of Scope:
       unapproved-server / unapproved-client / corrupt-identity /
       corrupt-peer-store branches end-to-end via an in-process
       orchestrator.
+- [/] Tracing: daft-native cross-component tracing. **Slice 1
+      landed**: `internal/trace` package with Span / Tracer / ring
+      buffer / Connect interceptors / abandoned-span reaper. Errors
+      attach to the active span via `trace.RecordError(ctx, err)` /
+      `trace.Errorf(ctx, fmt, args...)` (Ayup's `terror` pattern,
+      ours speaks our own span library instead of OTel). Wire format
+      `proto/trace/v1/trace.proto` defines Span +
+      `TraceService.ReportSpans`. `daft ping` wraps its RPC in a
+      span, propagates trace context via the `Daft-Trace-Id` /
+      `Daft-Parent-Span-Id` headers, and ships the local buffer to
+      the orchestrator on success. The orchestrator side has a
+      TraceService handler ingesting into a central Tracer plus a
+      `/debug/traces` HTTP endpoint that renders text or JSON
+      (Accept-driven). Test integration: `trace.LogOnFailure(t, tr)`
+      registers a Cleanup that dumps the snapshot via `t.Logf` on
+      failure — open spans are abandoned first so a hung span
+      surfaces in the dump. Tests can plant a Tracer on the context
+      via `trace.ContextWithTracer` so they inspect spans without
+      needing the orchestrator running. Reaper / abandonment
+      semantic: spans not Ended within their deadline are emitted
+      with `STATUS_ABANDONED` rather than silently lost; same for
+      spans still active at `Tracer.Shutdown`.
+      **Slice 3 landed**: `daft workspace pull` and `daft workspace
+      serve` are fully instrumented. Pull wraps the request in a
+      `daft.workspace.pull` root span (attrs: from / workspace /
+      dest / preserve_mtime); the trace ClientInterceptor
+      auto-spans every Connect call so each `GetManifest` and
+      per-chunk `GetChunk` becomes a child span linked across the
+      wire to the serve-side ServerInterceptor's matching span.
+      `workspace.ApplyManifest` is now a span on its own (attrs:
+      entries=N, dest), so per-chunk fetches sit underneath it in
+      the tree. `trace.Start(ctx, name, opts...)` is a free function
+      that locates a Tracer via `TracerFromContext` or falls back to
+      the active span's tracer — library code uses it without
+      caring how the caller wired the tracer up. End-to-end test
+      `TestWorkspacePullTraceShape` asserts the resulting span tree
+      shape (root + apply + per-chunk client/server pairs all share
+      one trace_id). Component identifiers consolidated into
+      `internal/component/names.go` so producer/consumer can't
+      drift. **Remaining slices**:
+      - Slice 2: orchestrator-side reaper for trace-id sets that
+        haven't seen a span in a while (catch crashed producers
+        whose buffer never made it across the wire).
+      - Slice 4: in-VM agent → sandbox-host trace channel over
+        vsock once vsock plumbing exists.
+      - Slice 5 (optional): an OTel proxy-exporter as a separate
+        component, translating our wire format to OTLP for users
+        who want their existing observability stack to consume
+        daft traces.
 - [/] Workspace sync: chunked, content-addressed snapshots
       flowing user-host → orchestrator → sandbox-host → VM, with
       lazy fetch via daft-fuse under virtiofsd. **Slice 1 landed**:
@@ -362,6 +411,44 @@ Client CLI:
   - Policy/audit/freeze decisions live here; trip → `EAGAIN` + QMP `stop` the VM
 - Writes: default local-only overlay, surfaced as a diff and pulled explicitly via `daft pull` (matches "user controls when data moves")
 - Manifest semantics: snapshot at attach time; updates require an explicit re-sync (live invalidation deferred)
+
+### Tracing
+
+- **Custom format, orchestrator-as-collector.** Producers (every
+  daft binary) keep an in-memory ring buffer of finished spans;
+  shipped to the orchestrator via Connect-RPC `TraceService.
+  ReportSpans`. Wire format is daft-native (`proto/trace/v1`); a
+  separate proxy-exporter component can later translate to OTLP
+  for users who already run OTel collectors. We don't depend on
+  third-party components (cloud-hypervisor, virtiofsd, crun, the
+  in-VM agent) implementing OTel because most don't.
+- **Abandoned-span first-class.** Unlike OTel which silently
+  drops spans whose End never arrives, daft marks them
+  `STATUS_ABANDONED` and ships them anyway: a deadline reaper on
+  the producer catches in-process leaks; `Tracer.Shutdown` sweeps
+  any still-open spans on graceful exit; orchestrator side gets
+  to see partial traces from a crashed component (subject to the
+  buffer making it across before the crash).
+- **Trace context on the wire.** `Daft-Trace-Id` (32 hex chars)
+  and `Daft-Parent-Span-Id` (16 hex chars) headers set by the
+  Connect client interceptor; server interceptor reads them,
+  validates, opens a child span. Malformed values are ignored —
+  the server starts a fresh trace rather than parent off
+  attacker-controlled IDs. We use our own header names instead of
+  W3C `traceparent` to keep a clean translation seam in the
+  future proxy-exporter rather than colliding with other
+  instrumentation in the same request.
+- **Errors are events on spans.** Following Ayup's `terror`
+  pattern, `trace.RecordError(ctx, err)` and `trace.Errorf(ctx,
+  format, args...)` attach the error as a span event and (if not
+  already set) mark the span `STATUS_ERROR`. Cleanup-path
+  errors continue to use `internal/oops` — the two are
+  complementary.
+- **Debugging surface.** Orchestrator's `/debug/traces` renders
+  the central buffer as text (default) or JSON (`Accept:
+  application/json`). Tests use `trace.LogOnFailure(t, tracer)`
+  to register a `Cleanup` that dumps via `t.Logf` on failure;
+  works with no orchestrator running.
 
 ### MicroVM stack
 
