@@ -1,4 +1,4 @@
-.PHONY: all fmt check-fmt lint test cover cover-check bench bench-check hooks build build-daft build-daft-agent build-daft-sandboxd integration integration-build clean help
+.PHONY: all fmt check-fmt lint test cover cover-check bench bench-check hooks build build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator integration integration-build proto clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -146,7 +146,7 @@ hooks:
 #     for any release artefact.
 BIN_DIR := bin
 
-build: build-daft build-daft-agent build-daft-sandboxd
+build: build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator
 
 build-daft:
 	@mkdir -p $(BIN_DIR)
@@ -159,6 +159,22 @@ build-daft-agent:
 build-daft-sandboxd:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-sandboxd ./cmd/daft-sandboxd
+
+build-daft-orchestrator:
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-orchestrator ./cmd/daft-orchestrator
+
+## Codegen -------------------------------------------------------------------
+
+# proto: regenerate Go code from .proto files. Run this whenever a
+# .proto under proto/ changes; the generated code under internal/genpb
+# is committed so a normal build never needs buf or the codegen
+# plugins. Plugins are pinned via tools/tools.go and invoked through
+# `go run` so versions track go.mod. `buf` itself comes from the Nix
+# dev shell.
+proto:
+	@command -v buf >/dev/null || { echo "buf not on PATH; enter the Nix dev shell"; exit 1; }
+	buf generate
 
 clean:
 	rm -rf $(BIN_DIR) $(COVER_OUT)

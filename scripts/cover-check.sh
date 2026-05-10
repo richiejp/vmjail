@@ -36,8 +36,22 @@ if [ $# -ne 2 ]; then
 	exit 2
 fi
 
-profile="$1"
+profile_in="$1"
 baseline="$2"
+
+# Filter generated code out of the profile. Auto-generated *.pb.go /
+# *.connect.go (via the proto/buf pipeline) is not authored by us and
+# would otherwise drag both the total and per-file gates with 0%-
+# covered code we don't intend to test. Match by path component so
+# the rule keeps applying as the gen tree grows.
+#
+# The default exclusion list covers our generated code under
+# internal/genpb/. Override via SKIP_PATHS="pat1|pat2|..." (POSIX
+# ERE; matched against the full file path with `grep -E`).
+SKIP_PATHS="${SKIP_PATHS:-internal/genpb/}"
+profile=$(mktemp)
+trap 'rm -f "$profile"' EXIT
+grep -Ev "$SKIP_PATHS" "$profile_in" > "$profile" || true
 
 # Per-file minimum coverage as a percentage.
 PER_FILE_MIN="${PER_FILE_MIN:-80.0}"

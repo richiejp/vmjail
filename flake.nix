@@ -32,6 +32,13 @@
             gocyclo
             goconst
             scc
+
+            # Protobuf / Connect-RPC codegen. The codegen plugins
+            # (protoc-gen-go, protoc-gen-connect-go) are pinned via
+            # tools/tools.go and invoked through `go run`, so only
+            # buf itself needs to be in the dev shell. `make proto`
+            # is the entry point.
+            buf
           ];
 
           shellHook = ''
@@ -80,7 +87,7 @@
             pname = name;
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-RcyBA2ZRgKpwo+Fl1SZDez7a/s8QlAVDu485os9vRPw=";
+            vendorHash = "sha256-DciCS29EnIergLDX20B88/3LKMajc0X2GCkH0Mk1vUI=";
             env.CGO_ENABLED = if cgoEnabled then "1" else "0";
             ldflags = [
               "-s" "-w"
@@ -109,6 +116,18 @@
             subPackage = "cmd/daft-agent";
             description = "darkaifactory in-VM sandbox agent";
             platforms = pkgs.lib.platforms.linux;
+          };
+
+          # daft-orchestrator is the central control-plane binary:
+          # mTLS-authenticated Connect-RPC over HTTP/2, with TOFU
+          # peer approvals managed via internal/identity. v0 ships
+          # a single Health.Ping endpoint to prove the trust path
+          # works end-to-end; the registry handler, port forwarder,
+          # and terminal stream join the same listener later.
+          daft-orchestrator = mkDaftBinary {
+            name = "daft-orchestrator";
+            subPackage = "cmd/daft-orchestrator";
+            description = "darkaifactory orchestrator control-plane";
           };
 
           # daft-hello-container is the workload binary in the v0
@@ -143,7 +162,7 @@
             pname = "daft-sandboxd";
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-RcyBA2ZRgKpwo+Fl1SZDez7a/s8QlAVDu485os9vRPw=";
+            vendorHash = "sha256-DciCS29EnIergLDX20B88/3LKMajc0X2GCkH0Mk1vUI=";
             env.CGO_ENABLED = "0";
 
             # Stage the real artifacts into internal/bundled/assets/

@@ -215,14 +215,33 @@ Out of Scope:
       key is the same); JSON-friendly `Fingerprint` (text
       marshaller); `PeerStore` is the on-disk TOFU set, atomic
       JSON file rewrite. Fuzz target: `FuzzParseFingerprint`.
-      Foundation for the orchestrator listener — Slice 1 of the
-      mTLS skeleton; Slice 2 (the listener + Connect-RPC + `daft
-      auth approve` CLI) is next.
-- [ ] HTTP/2 + mTLS auth: client ↔ orchestrator (Slice 2:
-      orchestrator binary, mTLS listener with VerifyPeerCertificate
-      against PeerStore, Connect-RPC `Health.Ping` endpoint, `daft
-      auth list/approve/remove` subcommands, integration test
-      with httptest)
+      `identity.ServerTLSConfig` / `identity.ClientTLSConfig`
+      build matched mTLS templates whose `VerifyPeerCertificate`
+      and `VerifyConnection` look up the peer's leaf-cert SPKI
+      fingerprint in the local `PeerStore`; session resumption is
+      disabled so every handshake re-runs the trust check (gosec
+      G123). Slice 1 of the mTLS skeleton.
+- [x] Connect-RPC over mTLS — orchestrator skeleton. Proto
+      pipeline lands: `proto/health/v1/health.proto`, `buf.yaml`,
+      `buf.gen.yaml`, codegen plugins (`protoc-gen-go`,
+      `protoc-gen-connect-go`) pinned via Go 1.24+'s `tool`
+      directive in `go.mod`, `make proto` regenerates code under
+      `internal/genpb/`, `buf` itself ships in the Nix dev shell.
+      `internal/orchestrator` exposes a `Health.Ping` Connect-RPC
+      endpoint over HTTP/2 + mTLS, with `VerifyPeerCertificate`
+      gating connections via `PeerStore`. New
+      `cmd/daft-orchestrator` binary serves it: subcommands
+      `version` and `serve --addr H:P --config-dir DIR`,
+      auto-generates an Ed25519 identity on first run under
+      `$XDG_CONFIG_HOME/daft/orchestrator/`. Integration tests
+      (`internal/orchestrator/server_test.go`) cover the
+      approved/unapproved/unknown-server matrix. Slice 2 of the
+      mTLS skeleton; client-side `daft auth approve` lands next.
+- [ ] Slice 3: client-side mTLS — `daft auth list/approve/remove`
+      subcommands on the existing `daft` CLI, persisting to
+      `$XDG_CONFIG_HOME/daft/client/peers.json`; a `daft ping
+      <orchestrator>` smoke test that uses the approved identity
+      to call `Health.Ping`.
 - [ ] Workspace sync: desync chunks + daft-fuse
 
 ## Architecture

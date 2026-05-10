@@ -1,0 +1,22 @@
+// HealthService is the orchestrator's liveness probe — the smallest
+// useful Connect-RPC endpoint, just enough to exercise the mTLS
+// trust path end-to-end. Future readiness/build-info endpoints will
+// land on this same service before we split it.
+syntax = "proto3";
+
+package daft.health.v1;
+
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/health/v1;healthv1";
+
+service HealthService {
+  // Ping echoes back the request message — a round-trip indicator.
+  rpc Ping(PingRequest) returns (PingResponse) {}
+}
+
+message PingRequest {
+  string message = 1;
+}
+
+message PingResponse {
+  string message = 1;
+}

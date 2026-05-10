@@ -1,0 +1,15 @@
+version: v2
+inputs:
+  - directory: proto
+plugins:
+  # Both plugins are pinned via go.mod's tool directive; `go tool`
+  # picks the version recorded there so a plain checkout always
+  # generates the same code.
+  - local: ['go', 'tool', 'protoc-gen-go']
+    out: internal/genpb
+    opt:
+      - paths=source_relative
+  - local: ['go', 'tool', 'protoc-gen-connect-go']
+    out: internal/genpb
+    opt:
+      - paths=source_relative

@@ -3,9 +3,12 @@ module github.com/richiejp/darkaifactory
 go 1.25.0
 
 require (
+	connectrpc.com/connect v1.19.2
 	github.com/google/go-containerregistry v0.21.5
 	github.com/spf13/cobra v1.10.2
 	github.com/xeipuuv/gojsonschema v1.2.0
+	golang.org/x/net v0.54.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -23,6 +26,12 @@ require (
 	github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f // indirect
 	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
+	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
+)
+
+tool (
+	connectrpc.com/connect/cmd/protoc-gen-connect-go
+	google.golang.org/protobuf/cmd/protoc-gen-go
 )
