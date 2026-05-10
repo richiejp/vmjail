@@ -50,6 +50,16 @@ func TestResolveConfigDirHonoursOverride(t *testing.T) {
 	}
 }
 
+// TestResolveConfigDirPropagatesUserConfigDirError forces
+// os.UserConfigDir to fail.
+func TestResolveConfigDirPropagatesUserConfigDirError(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if _, err := resolveConfigDir(""); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestResolveConfigDirFallsBackToUserConfig(t *testing.T) {
 	got, err := resolveConfigDir("")
 	if err != nil {

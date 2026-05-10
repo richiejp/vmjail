@@ -341,6 +341,24 @@ func TestBuildManifestPropagatesOpenError(t *testing.T) {
 	}
 }
 
+// TestBuildManifestRejectsFIFO uses syscall.Mkfifo (no privileges
+// required) to plant a FIFO and verify buildEntry's
+// unsupported-kind branch fires.
+func TestBuildManifestRejectsFIFO(t *testing.T) {
+	if runtime.GOOS == osWindows {
+		t.Skip("FIFO not supported on Windows")
+	}
+	root := t.TempDir()
+	fifoPath := filepath.Join(root, "pipe")
+	if err := syscall.Mkfifo(fifoPath, 0o600); err != nil {
+		t.Skipf("Mkfifo: %v", err)
+	}
+	_, err := BuildManifest(root, mustOpenStore(t), BuildOptions{})
+	if !errors.Is(err, ErrUnsupportedFileType) {
+		t.Errorf("err = %v, want ErrUnsupportedFileType", err)
+	}
+}
+
 func TestBuildManifestRejectsSocket(t *testing.T) {
 	if runtime.GOOS == osWindows {
 		t.Skip("Unix sockets not supported on Windows")

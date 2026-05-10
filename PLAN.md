@@ -262,10 +262,18 @@ Out of Scope:
       a tree, chunks files (FixedSizeChunker for now; FastCDC
       swap-in next), records dirs/symlinks. Fuzz target on
       digest validation and path sanitisation.
+      **Slice 2 landed**: `WorkspaceService` Connect-RPC handler
+      (`internal/workspace.Server`) backed by the CAS plus an
+      in-memory name → manifest registry; `ApplyManifest`
+      reconstructs a tree at a destination path, fetching missing
+      chunks lazily from the server, atomic .tmp+Rename per file.
+      Reusable mTLS listener extracted to `internal/mtls.Server`
+      so the orchestrator and the laptop's chunk server share one
+      implementation. New CLI: `daft workspace serve --workspace
+      name=path --addr ...` exposes a workspace; `daft workspace
+      pull --from addr --workspace name <dest>` reconstructs it.
+      End-to-end test runs serve+pull in one process.
       **Remaining slices**:
-      - Slice 2: WorkspaceService Connect-RPC handler + auth via
-        the existing PeerStore; `daft workspace push <dir>` /
-        `daft workspace pull <dir>` to drive it.
       - Slice 3: FastCDC chunker behind the same Chunker
         interface (replace FixedSizeChunker).
       - Slice 4: `daft-fuse` (go-fuse v2) — a FUSE FS the

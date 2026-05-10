@@ -82,6 +82,58 @@ func TestRemoveIsIdempotentForUnknownDigest(t *testing.T) {
 	}
 }
 
+// TestRemovePropagatesLoadMetaError corrupts meta.json so the
+// post-isLocked loadMeta call fails.
+func TestRemovePropagatesLoadMetaError(t *testing.T) {
+	store, _ := New(t.TempDir(), 1<<30)
+	if err := os.WriteFile(filepath.Join(store.Root, "meta.json"),
+		[]byte("not json"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := store.Remove("sha256:0000000000000000000000000000000000000000000000000000000000000000"); err == nil {
+		t.Fatal("expected loadMeta error")
+	}
+}
+
+// TestPrunePropagatesLoadMetaError covers Prune's loadMeta error
+// branch.
+func TestPrunePropagatesLoadMetaError(t *testing.T) {
+	store, _ := New(t.TempDir(), 1<<30)
+	if err := os.WriteFile(filepath.Join(store.Root, "meta.json"),
+		[]byte("not json"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := store.Prune(time.Second); err == nil {
+		t.Fatal("expected Prune loadMeta error")
+	}
+}
+
+// TestUsagePropagatesLoadMetaError covers Usage's loadMeta error
+// branch.
+func TestUsagePropagatesLoadMetaError(t *testing.T) {
+	store, _ := New(t.TempDir(), 1<<30)
+	if err := os.WriteFile(filepath.Join(store.Root, "meta.json"),
+		[]byte("not json"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := store.Usage(); err == nil {
+		t.Fatal("expected Usage loadMeta error")
+	}
+}
+
+// TestListPropagatesLoadMetaError covers List's loadMeta error
+// branch.
+func TestListPropagatesLoadMetaError(t *testing.T) {
+	store, _ := New(t.TempDir(), 1<<30)
+	if err := os.WriteFile(filepath.Join(store.Root, "meta.json"),
+		[]byte("not json"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := store.List(); err == nil {
+		t.Fatal("expected List loadMeta error")
+	}
+}
+
 func TestRemoveErrorsWhenLocked(t *testing.T) {
 	host := localRegistry(t)
 	store, _ := New(t.TempDir(), 1<<30)

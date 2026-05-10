@@ -11,6 +11,7 @@
 package cas
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -205,6 +206,75 @@ func (s *Store) Get(digest string) (io.ReadCloser, error) {
 		hasher: sha256.New(),
 		want:   digest,
 	}, nil
+}
+
+// GetCompressed returns the raw zstd-compressed payload for digest.
+// Designed for forwarding chunks over the wire: the receiver does
+// the decompression + sha256 verification, so the server burns no
+// CPU per byte and the network sees compressed traffic.
+func (s *Store) GetCompressed(digest string) ([]byte, error) {
+	path, err := s.pathFor(digest)
+	if err != nil {
+		return nil, err
+	}
+	// #nosec G304 — path is built from a validated digest and the
+	// store's own root.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("cas: read %s: %w", digest, err)
+	}
+	return data, nil
+}
+
+// PutCompressed installs already-compressed bytes under the asserted
+// digest. The function decompresses + sha256s the payload to verify
+// the digest matches before committing, so a peer can never plant a
+// chunk under a digest it doesn't actually hash to.
+func (s *Store) PutCompressed(digest string, compressed []byte) error {
+	if err := validateDigest(digest); err != nil {
+		return err
+	}
+	dec, err := zstd.NewReader(bytes.NewReader(compressed))
+	if err != nil {
+		return fmt.Errorf("cas: zstd reader: %w", err)
+	}
+	defer dec.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, dec); err != nil {
+		return fmt.Errorf("cas: decompress for verify: %w", err)
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+	if got != digest {
+		return fmt.Errorf("%w: claimed %s, got %s", ErrCorrupt, digest, got)
+	}
+
+	dst, err := s.pathFor(digest)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), dirPerm); err != nil {
+		return fmt.Errorf("cas: mkdir %s: %w", filepath.Dir(dst), err)
+	}
+	tmp, err := os.CreateTemp(s.root, "putc-*.tmp")
+	if err != nil {
+		return fmt.Errorf("cas: create tmp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		oops.Skip("cas: remove leftover tmp",
+			os.Remove(tmpPath), fs.ErrNotExist)
+	}()
+	if _, err := tmp.Write(compressed); err != nil {
+		oops.Skip("cas: close after write error", tmp.Close(), os.ErrClosed)
+		return fmt.Errorf("cas: write tmp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("cas: close tmp: %w", err)
+	}
+	if err := os.Rename(tmpPath, dst); err != nil {
+		return fmt.Errorf("cas: rename: %w", err)
+	}
+	return nil
 }
 
 // Delete removes a chunk. Missing chunks are not an error —

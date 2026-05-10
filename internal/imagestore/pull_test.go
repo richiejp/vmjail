@@ -362,6 +362,15 @@ func TestImageSizePropagatesLayerSizeError(t *testing.T) {
 	}
 }
 
+// TestRemotePullerResolveRejectsMalformedRef covers the parse-error
+// branch of remotePuller.resolve.
+func TestRemotePullerResolveRejectsMalformedRef(t *testing.T) {
+	_, _, err := remotePuller{}.resolve(context.Background(), "::not a ref::")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+}
+
 type fakePuller struct {
 	img v1.Image
 	ref name.Reference

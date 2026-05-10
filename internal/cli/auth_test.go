@@ -225,6 +225,18 @@ func TestAuthSubcommandsPropagatePeerStoreError(t *testing.T) {
 	}
 }
 
+// TestResolveClientDirPropagatesUserConfigDirError forces
+// os.UserConfigDir to fail by pointing every env var it consults
+// at empty strings. On Unix this triggers the "neither $XDG_CONFIG_HOME
+// nor $HOME is defined" error path.
+func TestResolveClientDirPropagatesUserConfigDirError(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if _, err := resolveClientDir(""); err == nil {
+		t.Fatal("expected error when no config dir is resolvable")
+	}
+}
+
 // TestRootRejectsMissingConfigDirOnAuth is a regression test:
 // passing --config-dir="" should fall through to the UserConfigDir
 // path, not crash.
