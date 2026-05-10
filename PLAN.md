@@ -333,6 +333,18 @@ Out of Scope:
       name=path --addr ...` exposes a workspace; `daft workspace
       pull --from addr --workspace name <dest>` reconstructs it.
       End-to-end test runs serve+pull in one process.
+      **Slice 2.5 landed (cross-host pull)**: `daft-sandboxd run`
+      gained `--workspace-from <addr>` + `--workspace-name <name>`
+      flags. On startup it dials the user-host's `daft workspace
+      serve` over mTLS (with a fresh sandbox-host identity bootstrapped
+      under `$XDG_CONFIG_HOME/daft/sandboxd`), pulls the manifest +
+      chunks via `workspace.ApplyManifest` into a tmpdir, and
+      virtiofs-mounts that tmpdir at `/workspace` inside the VM —
+      the user's code lands inside the sandbox without leaving the
+      sandbox-host filesystem first. Pre-fetch (not lazy fetch via
+      FUSE) is the v0 model: a future `daft-fuse` slice will move
+      this to lazy-on-read so multi-GB workspaces don't need to
+      materialise on disk before the VM boots.
       **Remaining slices**:
       - Slice 3: FastCDC chunker behind the same Chunker
         interface (replace FixedSizeChunker).
@@ -341,7 +353,8 @@ Out of Scope:
         the VM. Reads resolve via the local CAS, fetching missing
         chunks from the user-host over HTTP/2. Policy hook for
         freeze-on-suspicious-IO lives here.
-      - Slice 5: write overlay + `daft pull` diff workflow.
+      - Slice 5: write overlay + `daft pull` diff workflow (the
+        user-host pulling sandbox-side modifications back).
 
 ## Architecture
 

@@ -1,0 +1,74 @@
+package sandboxdcli
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// TestPullWorkspaceFromConfigDirError forces resolveSandboxdDir to
+// fail by clearing both HOME and XDG_CONFIG_HOME.
+func TestPullWorkspaceFromConfigDirError(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if _, _, err := pullWorkspaceFrom(context.Background(), pullWorkspaceOpts{
+		addr: testFakeAddr, name: "ws",
+	}); err == nil {
+		t.Fatal("expected error when config dir is unresolvable")
+	}
+}
+
+// TestPullWorkspaceFromCorruptIdentity plants garbage cert files so
+// loadOrGenerateSandboxd fails — covering the identity-load error
+// branch.
+func TestPullWorkspaceFromCorruptIdentity(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "cert.pem"), []byte("garbage"), 0o600); err != nil {
+		t.Fatalf("WriteFile cert: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "key.pem"), []byte("garbage"), 0o600); err != nil {
+		t.Fatalf("WriteFile key: %v", err)
+	}
+	if _, _, err := pullWorkspaceFrom(context.Background(), pullWorkspaceOpts{
+		addr: testFakeAddr, name: "ws", configDir: dir,
+	}); err == nil {
+		t.Fatal("expected error for corrupt identity")
+	}
+}
+
+// TestPullWorkspaceFromCorruptPeerStore plants corrupt peers.json
+// so openSandboxdPeerStore fails after identity loads.
+func TestPullWorkspaceFromCorruptPeerStore(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := loadOrGenerateSandboxd(dir); err != nil {
+		t.Fatalf("loadOrGenerate: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, peersFilename), []byte("not json"), 0o600); err != nil {
+		t.Fatalf("WriteFile peers: %v", err)
+	}
+	if _, _, err := pullWorkspaceFrom(context.Background(), pullWorkspaceOpts{
+		addr: testFakeAddr, name: "ws", configDir: dir,
+	}); err == nil {
+		t.Fatal("expected error for corrupt peer store")
+	}
+}
+
+// TestPullWorkspaceFromUnreachable fails inside GetManifest because
+// nothing's listening at testFakeAddr. Covers the "happy path up to
+// the wire" branch.
+func TestPullWorkspaceFromUnreachable(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel so the dial doesn't loop
+	_, _, err := pullWorkspaceFrom(ctx, pullWorkspaceOpts{
+		addr: testFakeAddr, name: "ws", configDir: dir,
+	})
+	if err == nil {
+		t.Fatal("expected dial error against unreachable addr")
+	}
+	if !strings.Contains(err.Error(), "GetManifest") {
+		t.Errorf("error = %v, want it to mention GetManifest", err)
+	}
+}

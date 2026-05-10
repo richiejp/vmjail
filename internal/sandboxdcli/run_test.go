@@ -104,14 +104,14 @@ func TestRunWiresBundleShareAndBundlePath(t *testing.T) {
 	digest := testDigest
 	bundlePath := "/var/lib/daft-sandboxd-images/bundles/sha256_abc"
 	store := &fakeStore{
-		pulledImage: &imagestore.Image{Ref: "img:1", Digest: digest, Size: 1024},
+		pulledImage: &imagestore.Image{Ref: testImageRef, Digest: digest, Size: 1024},
 		bundle:      &imagestore.Bundle{Digest: digest, Path: bundlePath},
 	}
 
 	deps := runDepsForTest(store)
 	bootCfgs := captureBootCfg(&deps)
 
-	if err := runRun(context.Background(), io.Discard, "img:1", nil, "", deps); err != nil {
+	if err := runRun(context.Background(), io.Discard, runOptions{ref: testImageRef}, deps); err != nil {
 		t.Fatalf("runRun: %v", err)
 	}
 
@@ -135,14 +135,14 @@ func TestRunAddsWorkspaceShareAndMount(t *testing.T) {
 	wsDir := t.TempDir()
 	digest := testDigest
 	store := &fakeStore{
-		pulledImage: &imagestore.Image{Ref: "img:1", Digest: digest},
+		pulledImage: &imagestore.Image{Ref: testImageRef, Digest: digest},
 		bundle:      &imagestore.Bundle{Digest: digest, Path: testBundleDir},
 	}
 
 	deps := runDepsForTest(store)
 	bootCfgs := captureBootCfg(&deps)
 
-	if err := runRun(context.Background(), io.Discard, "img:1", nil, wsDir, deps); err != nil {
+	if err := runRun(context.Background(), io.Discard, runOptions{ref: testImageRef, workspace: wsDir}, deps); err != nil {
 		t.Fatalf("runRun: %v", err)
 	}
 	cfg := *bootCfgs
@@ -167,7 +167,7 @@ func TestRunAddsWorkspaceShareAndMount(t *testing.T) {
 func TestRunPropagatesPullError(t *testing.T) {
 	want := errors.New("synthetic pull failure")
 	store := &fakeStore{pullErr: want}
-	if err := runRun(context.Background(), io.Discard, "img:1", nil, "", runDepsForTest(store)); !errors.Is(err, want) {
+	if err := runRun(context.Background(), io.Discard, runOptions{ref: testImageRef}, runDepsForTest(store)); !errors.Is(err, want) {
 		t.Fatalf("err = %v, want wrap of %v", err, want)
 	}
 }
@@ -178,7 +178,7 @@ func TestRunPropagatesBundleError(t *testing.T) {
 		pulledImage: &imagestore.Image{Digest: testDigest},
 		bundleErr:   want,
 	}
-	if err := runRun(context.Background(), io.Discard, "img:1", nil, "", runDepsForTest(store)); !errors.Is(err, want) {
+	if err := runRun(context.Background(), io.Discard, runOptions{ref: testImageRef}, runDepsForTest(store)); !errors.Is(err, want) {
 		t.Fatalf("err = %v, want wrap of %v", err, want)
 	}
 }
@@ -193,7 +193,7 @@ func TestRunPropagatesCacheDirError(t *testing.T) {
 	}
 	deps := runDepsForTest(store)
 	deps.cacheDir = func() (string, error) { return "", want }
-	if err := runRun(context.Background(), io.Discard, "img:1", nil, "", deps); !errors.Is(err, want) {
+	if err := runRun(context.Background(), io.Discard, runOptions{ref: testImageRef}, deps); !errors.Is(err, want) {
 		t.Fatalf("err = %v, want wrap of %v", err, want)
 	}
 }
@@ -207,7 +207,7 @@ func TestRunPropagatesExtractError(t *testing.T) {
 	}
 	deps := runDepsForTest(store)
 	deps.extract = func(string) (bundled.Paths, error) { return bundled.Paths{}, want }
-	if err := runRun(context.Background(), io.Discard, "img:1", nil, "", deps); !errors.Is(err, want) {
+	if err := runRun(context.Background(), io.Discard, runOptions{ref: testImageRef}, deps); !errors.Is(err, want) {
 		t.Fatalf("err = %v, want wrap of %v", err, want)
 	}
 }
@@ -223,7 +223,7 @@ func TestRunPropagatesBootError(t *testing.T) {
 	deps.boot = func(_ context.Context, _ io.Writer, _ sandbox.Config) error {
 		return want
 	}
-	if err := runRun(context.Background(), io.Discard, "img:1", nil, "", deps); !errors.Is(err, want) {
+	if err := runRun(context.Background(), io.Discard, runOptions{ref: testImageRef}, deps); !errors.Is(err, want) {
 		t.Fatalf("err = %v, want wrap of %v", err, want)
 	}
 }
@@ -266,7 +266,7 @@ func TestRunPropagatesLockError(t *testing.T) {
 		bundle:      &imagestore.Bundle{Digest: testDigest, Path: testBundleDir},
 		lockErr:     want,
 	}
-	if err := runRun(context.Background(), io.Discard, "img:1", nil, "", runDepsForTest(store)); !errors.Is(err, want) {
+	if err := runRun(context.Background(), io.Discard, runOptions{ref: testImageRef}, runDepsForTest(store)); !errors.Is(err, want) {
 		t.Fatalf("err = %v, want wrap of %v", err, want)
 	}
 }
@@ -282,7 +282,7 @@ func TestRunResolveWorkspaceAbsoluteOnRelativeInput(t *testing.T) {
 	bootCfgs := captureBootCfg(&deps)
 
 	// "." is a relative workspace; runRun should rewrite it to abs.
-	if err := runRun(context.Background(), io.Discard, "img:1", nil, ".", deps); err != nil {
+	if err := runRun(context.Background(), io.Discard, runOptions{ref: testImageRef, workspace: "."}, deps); err != nil {
 		t.Fatalf("runRun: %v", err)
 	}
 	cfg := *bootCfgs
@@ -300,8 +300,8 @@ func TestRunPassesArgsToBundleOptions(t *testing.T) {
 		bundle:      &imagestore.Bundle{Digest: testDigest, Path: testBundleDir},
 	}
 	deps := runDepsForTest(store)
-	if err := runRun(context.Background(), io.Discard, "img:1",
-		[]string{"sh", "-c", "echo hi"}, "", deps); err != nil {
+	if err := runRun(context.Background(), io.Discard,
+		runOptions{ref: testImageRef, cmdArgs: []string{"sh", "-c", "echo hi"}}, deps); err != nil {
 		t.Fatalf("runRun: %v", err)
 	}
 	if got := store.bundleOptsArg.Args; len(got) != 3 || got[0] != "sh" {
