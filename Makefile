@@ -1,4 +1,4 @@
-.PHONY: all fmt check-fmt lint test cover cover-check bench bench-check hooks build build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator integration integration-build proto clean help
+.PHONY: all check verify fmt check-fmt lint test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator integration integration-build proto clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -12,21 +12,42 @@ LDFLAGS := -X github.com/richiejp/darkaifactory/internal/version.Version=$(VERSI
 OUR_GO_PKGS := ./internal/... ./cmd/...
 OUR_GO_DIRS := internal cmd
 
-all: check-fmt lint test cover-check
+# Default target follows the GNU convention: `make all` builds the
+# project and runs the fast checks. Pre-commit and CI use `make
+# verify`, which adds integration + benchmarks + a 1s fuzz sweep.
+all: build check
+
+# check is the fast pre-flight: fmt, lint, unit tests, coverage gate.
+# Reproducer corpora under testdata/fuzz/ are replayed automatically
+# by `go test`, so any committed crash surfaces here too.
+check: check-fmt lint test cover-check
+
+# verify is the full gate set used by the pre-commit hook. Active
+# fuzzing runs with a tight 1s/target budget — enough to catch a
+# crash that's deterministic from the seed corpus, not enough to
+# delay commits significantly. Manual / nightly fuzzing uses
+# `make fuzz` (default 30s/target).
+verify: check integration bench-check
+	@FUZZ_TIME=1s scripts/fuzz.sh
 
 help:
 	@echo "Targets:"
+	@echo "  all         - build the project + run the fast check gates (default)"
+	@echo "  check       - fmt + lint + unit tests + coverage gate (fast pre-flight)"
+	@echo "  verify      - check + integration + bench + 1s fuzz sweep (pre-commit gate)"
 	@echo "  fmt         - format Go code with gofumpt"
 	@echo "  check-fmt   - fail if anything is unformatted"
 	@echo "  lint        - run golangci-lint"
 	@echo "  test        - go test ./..."
 	@echo "  cover       - update committed coverage.txt baseline"
-	@echo "  cover-check - fail if total coverage drops >1pp vs coverage.txt OR any file is <80%"
+	@echo "  cover-check - fail if total coverage drops vs coverage.txt OR any file is <80%"
 	@echo "  bench       - update committed bench.txt baseline"
 	@echo "  bench-check - fail on >2x regressions, warn on >1.1x, vs bench.txt"
+	@echo "  fuzz        - run every FuzzXxx target (FUZZ_TIME, default 30s, per target)"
 	@echo "  integration - nix-build artefacts and run KVM-gated end-to-end tests"
+	@echo "  proto       - regenerate Go code from proto/*.proto"
 	@echo "  hooks       - install git pre-commit hook into .git/hooks"
-	@echo "  build       - build daft, daft-agent, daft-sandboxd into ./bin/ (dev only)"
+	@echo "  build       - build daft, daft-agent, daft-sandboxd, daft-orchestrator into ./bin/ (dev only)"
 
 ## Formatting ----------------------------------------------------------------
 
@@ -98,6 +119,17 @@ bench:
 
 bench-check:
 	@go test $(BENCH_FLAGS) $(OUR_GO_PKGS) | scripts/bench-check.sh $(BENCH_BASELINE)
+
+## Fuzzing -------------------------------------------------------------------
+#
+# fuzz: run every FuzzXxx target across our packages for FUZZ_TIME
+# each (default 30s; pre-commit overrides to 1s via the verify
+# recipe). Reproducers Go writes under testdata/fuzz/FuzzXxx/<id>
+# are automatically replayed by `go test` thereafter, so a one-off
+# crash becomes a permanent regression test once the file is
+# committed.
+fuzz:
+	@scripts/fuzz.sh
 
 ## Integration tests ---------------------------------------------------------
 #

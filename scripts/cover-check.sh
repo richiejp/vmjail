@@ -53,14 +53,11 @@ profile=$(mktemp)
 trap 'rm -f "$profile"' EXIT
 grep -Ev "$SKIP_PATHS" "$profile_in" > "$profile" || true
 
-# Per-file minimum coverage as a percentage.
+# Per-file minimum coverage as a percentage. Every file in the
+# profile is gated — there is no statements-count exemption. Even
+# a 1-statement file in package main has to be covered (e.g. via a
+# main_test.go that drives main() through a swappable os.Exit).
 PER_FILE_MIN="${PER_FILE_MIN:-80.0}"
-
-# How many statements a file must have before it's gated. Tiny files
-# (a few statements of glue) are too easy to swing across the gate
-# from one missed line; we only enforce on files large enough that
-# 80% is a meaningful number.
-PER_FILE_MIN_STMTS="${PER_FILE_MIN_STMTS:-10}"
 
 # Compute total coverage: sum statements weighted by hit, divide by
 # total statements. Skips the "mode:" header line.
@@ -76,15 +73,18 @@ read -r current total_stmts < <(awk '
 _=$total_stmts
 
 # --update mode: write the new baseline, but ratchet upward only.
-# Editing coverage.txt by hand is the documented escape hatch when a
-# real reduction (e.g. deletion of heavily-tested code) is intended.
+# There is no escape hatch — even when a deletion lowers the
+# percentage, the answer is to add coverage elsewhere in the same
+# change so the baseline holds or rises. See CONTRIBUTING.md
+# "Verification monotonically increases."
 if [ "$mode" = update ]; then
 	if [ -f "$baseline" ]; then
 		old=$(tr -d '[:space:]' < "$baseline")
 		if awk -v c="$current" -v o="$old" 'BEGIN { exit (c < o ? 0 : 1) }'; then
 			echo "REFUSE: current $current% < existing baseline $old%."
-			echo "If this is intentional (you deleted heavily-tested code),"
-			echo "edit $baseline by hand and explain the drop in the commit message."
+			echo "Coverage only ever rises in this project. Add tests in"
+			echo "the same change to bring the total back to or above $old%."
+			echo "Do NOT lower $baseline by hand."
 			exit 1
 		fi
 	fi
@@ -119,7 +119,7 @@ fail=$total_status
 while IFS= read -r line; do
 	echo "$line"
 	[ "${line#FAIL}" != "$line" ] && fail=1
-done < <(awk -v min="$PER_FILE_MIN" -v minstmts="$PER_FILE_MIN_STMTS" '
+done < <(awk -v min="$PER_FILE_MIN" '
 	NR == 1 { next }
 	{
 		# field 1: file:start.col,end.col
@@ -135,10 +135,6 @@ done < <(awk -v min="$PER_FILE_MIN" -v minstmts="$PER_FILE_MIN_STMTS" '
 			t = total[f]
 			cv = covered[f]
 			pct = (t > 0 ? 100.0 * cv / t : 100.0)
-			if (t < minstmts) {
-				printf "SKIP  %5.1f%% (%3d stmts)  %s\n", pct, t, f
-				continue
-			}
 			if (pct < min) {
 				printf "FAIL  %5.1f%% (%3d stmts)  %s\n", pct, t, f
 			} else {

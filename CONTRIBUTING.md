@@ -53,6 +53,16 @@ fail/warn thresholds tighten), the per-file 80% floor (only rises),
 and the lint config in `.golangci.yml` (linters only get added).
 `make cover` and `make bench` refuse to write a worse baseline.
 
+**There is no exemption for deletions.** Removing heavily-tested
+code mechanically lowers the coverage percentage; that is not a
+reason to lower `coverage.txt`. The required move is to add
+coverage elsewhere in the same change so the new baseline is at
+or above the old one. If you cannot find any untested code worth
+testing, the codebase doesn't need this deletion. Do not edit
+`coverage.txt` by hand to a smaller number — `cover-check`
+refuses, and the policy is the same whether the tooling is
+strict enough to enforce it or not.
+
 ### Go doesn't enforce this for you
 
 The Go language is permissive about silently-discarded errors,
@@ -77,7 +87,8 @@ You can. State your reasoning in the commit message, in the PR, or
 in `PLAN.md`'s open questions section. Edit the rules in the same
 commit that changes the behaviour. What you cannot do is bypass the
 rules quietly — `--no-verify`, `//nolint` without a justifying
-comment, lowering a baseline without explaining why, etc.
+comment, etc. The coverage baseline is non-negotiable: it only ever
+rises (see [Verification monotonically increases](#verification-monotonically-increases)).
 
 ## Workflow
 
@@ -93,12 +104,24 @@ you needed to commit earlier.
 
 ### Use the git hooks
 
-Run `make hooks` once per clone. The pre-commit hook checks formatting,
-linting, tests, coverage regression, the benchmark gate, and the
-KVM-gated integration suite. **`--no-verify` is never OK.** If a
-gate is wrong for your change, fix the gate and explain why in the
-same commit. Bypassing it re-creates the failure modes the gate was
-added to prevent.
+Run `make hooks` once per clone. The pre-commit hook delegates to
+`make verify`, which runs every gate this project has:
+
+- `make check` — fmt + lint + unit tests + coverage gate. The unit
+  test step also replays every committed fuzz reproducer
+  (`testdata/fuzz/FuzzXxx/<id>` corpora) automatically — that's
+  Go's built-in behaviour for `go test`.
+- `make integration` — KVM-gated end-to-end VM boot tests.
+- `make bench-check` — benchmark regression gate (>2× fails,
+  >1.1× warns) against `bench.txt`.
+- `FUZZ_TIME=1s scripts/fuzz.sh` — a tight active-fuzz sweep
+  across every `FuzzXxx` target. Enough to catch deterministic
+  crashes from the seed corpus; manual / nightly fuzzing uses
+  `make fuzz` (default 30s/target).
+
+**`--no-verify` is never OK.** If a gate is wrong for your change,
+fix the gate and explain why in the same commit. Bypassing it
+re-creates the failure modes the gate was added to prevent.
 
 ### Keep `PLAN.md` current
 
@@ -216,12 +239,16 @@ coverage is hard:
   branch can't be exercised by any test, it probably can't be
   reached in production either.
 
-The only legitimate reason to lower `coverage.txt` is genuinely
-deleting heavily-tested code (the percentage drops because total
-statements dropped). In that case bypass the monotonicity check
-explicitly — `cover-check` won't, but you can edit
-`coverage.txt` by hand and document the drop in the commit
-message. Reviewers will be looking for the deleted code.
+**There is no escape hatch.** `coverage.txt` only ever rises.
+Even if you delete heavily-tested code — the case where the
+percentage mechanically drops because total statements drops —
+the answer is to add coverage elsewhere in the same change so
+the new baseline is at or above the old one. Do not edit
+`coverage.txt` by hand to lower it; do not "just this once"
+relax the gate. Verification monotonically increases. If your
+deletion is correct, the rest of the codebase will still
+contain enough untested branches to write tests against;
+write them.
 
 Coverage is the price of merge — pay it on the way in, not by
 relaxing the gate.

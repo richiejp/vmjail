@@ -6,14 +6,24 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/richiejp/darkaifactory/internal/sandboxdcli"
 )
 
+var osExit = os.Exit
+
 func main() {
-	if err := sandboxdcli.Execute(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "daft-sandboxd:", err)
-		os.Exit(1)
+	osExit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	if err := sandboxdcli.Execute(args, stdout, stderr); err != nil {
+		if _, werr := fmt.Fprintln(stderr, "daft-sandboxd:", err); werr != nil {
+			return 2
+		}
+		return 1
 	}
+	return 0
 }

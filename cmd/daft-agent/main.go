@@ -14,6 +14,17 @@ import (
 	"github.com/richiejp/darkaifactory/internal/agent"
 )
 
+// osExit and agentMain are package-level indirection points so
+// main_test.go can verify wiring without forking a subprocess and
+// without actually running the agent's PID-1 lifecycle (which
+// requires a microVM environment). Both are plain function values
+// (no closure body) so there are no extra statements to cover.
+var (
+	osExit    = os.Exit
+	agentMain = agent.Main
+)
+
 func main() {
-	os.Exit(agent.Main(context.Background(), os.Stdout, os.Stderr, syscall.SIGINT, syscall.SIGTERM))
+	osExit(agentMain(context.Background(), os.Stdout, os.Stderr,
+		syscall.SIGINT, syscall.SIGTERM))
 }

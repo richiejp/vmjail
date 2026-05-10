@@ -20,28 +20,33 @@ the same change.
 - `version.txt` — single source of truth for the version number. Bumping it
   bumps the Nix package version and the `daft version` output.
 - `flake.nix` / `.envrc` — Nix dev shell + direnv. `direnv allow` to enter.
-- `Makefile` — common dev targets: `make fmt lint test cover hooks`.
+- `Makefile` — common dev targets. `make help` lists them all.
 - `scripts/hooks/` — git hooks installed by `make hooks`.
 
 ## Quick commands
 
 ```sh
-make fmt          # format Go code
-make lint         # golangci-lint
-make test         # go test ./...
-make cover        # update coverage.txt baseline
-make bench        # update bench.txt baseline (run with DAFT_* env vars
-                  # set to also include BenchmarkHelloBoot)
-make bench-check  # fail >2x regressions, warn >1.1x, vs bench.txt
+make all          # default: build the project + run check
+make check        # fmt + lint + unit tests + coverage gate (fast)
+make verify       # check + integration + bench-check + 1s fuzz sweep
+                  # (= what the pre-commit hook runs)
+make fuzz         # active fuzz every FuzzXxx target (FUZZ_TIME=30s default)
+make integration  # KVM-gated end-to-end VM boot tests
+make proto        # regenerate Go code from proto/*.proto
+make cover        # update coverage.txt baseline (refuses to lower)
+make bench        # update bench.txt baseline
 make hooks        # install pre-commit hook into .git/hooks
 ```
 
 ## Things that bite
 
-- The pre-commit hook fails the commit if total Go test coverage drops by more
-  than 1.0 percentage point vs `coverage.txt`. If you legitimately need a
-  bigger drop (e.g. you deleted a heavily-tested package), update `coverage.txt`
-  in the same commit and explain it in the message.
+- The pre-commit hook fails the commit if total Go test coverage drops below
+  the committed `coverage.txt` baseline (no tolerance) or if any single
+  non-test file falls under 80%. **Coverage only ever rises** — even when
+  deleting heavily-tested code. If your deletion lowers the percentage,
+  add tests elsewhere in the same change so the baseline rises (or at
+  worst stays put). Do not lower `coverage.txt` by hand. See
+  CONTRIBUTING.md "Verification monotonically increases."
 - The pre-commit hook also fails if any benchmark in `bench.txt` regresses by
   more than 2.00× (>100% slower); a >1.10× regression only warns. The point is
   to catch order-of-magnitude bugs, not micro-optimisations. Update `bench.txt`

@@ -2,9 +2,11 @@
 #
 # darkaifactory pre-commit hook.
 #
-# Runs format check, lint, tests, coverage gate, benchmark gate, and
-# the KVM-gated integration suite before allowing a commit. Install
-# with `make hooks`.
+# Delegates to `make verify`, which is the single source of truth for
+# what gates a commit: fmt + lint + unit tests + coverage + KVM-gated
+# integration + benchmark regression + a 1s/target fuzz sweep. Each of
+# those is its own Makefile target, so anyone who wants to debug a
+# specific failure can run that target on its own.
 #
 # Do NOT bypass this with `git commit --no-verify`. The gates exist
 # because previous slips made it through review; bypassing them
@@ -18,27 +20,6 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-echo "[pre-commit] gofumpt check..."
-make --no-print-directory check-fmt
-
-echo "[pre-commit] golangci-lint..."
-make --no-print-directory lint
-
-# cover-check runs the full test suite under -coverprofile, so we don't
-# also need a separate `make test` — that would double-run every test.
-echo "[pre-commit] go test + coverage regression check (limit: 1.00pp drop)..."
-make --no-print-directory cover-check
-
-echo "[pre-commit] benchmark regression check (fail >2.00x, warn >1.10x)..."
-make --no-print-directory bench-check
-
-# Integration tests need /dev/kvm, the Nix toolchain, and the
-# artefacts they build. Linux+KVM is a hard prerequisite for this
-# project — there is no useful work in this codebase that doesn't
-# need it, so any developer who can write sandbox code already has
-# the prerequisites. CI environments without KVM are useless here
-# and have no business gating commits.
-echo "[pre-commit] KVM-gated integration tests..."
-make --no-print-directory integration
+make --no-print-directory verify
 
 echo "[pre-commit] OK"

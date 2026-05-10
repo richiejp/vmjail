@@ -7,14 +7,24 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/richiejp/darkaifactory/internal/orchestratorcli"
 )
 
+var osExit = os.Exit
+
 func main() {
-	if err := orchestratorcli.Execute(os.Args[1:], os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "daft-orchestrator:", err)
-		os.Exit(1)
+	osExit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func run(args []string, stdout, stderr io.Writer) int {
+	if err := orchestratorcli.Execute(args, stdout, stderr); err != nil {
+		if _, werr := fmt.Fprintln(stderr, "daft-orchestrator:", err); werr != nil {
+			return 2
+		}
+		return 1
 	}
+	return 0
 }

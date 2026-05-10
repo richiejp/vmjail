@@ -9,12 +9,24 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
 )
 
+var (
+	osExit           = os.Exit
+	stdout io.Writer = os.Stdout
+)
+
 func main() {
-	fmt.Println(agent.ContainerBanner)
-	os.Exit(0)
+	osExit(run(stdout))
+}
+
+func run(out io.Writer) int {
+	if _, err := fmt.Fprintln(out, agent.ContainerBanner); err != nil {
+		return 1
+	}
+	return 0
 }
