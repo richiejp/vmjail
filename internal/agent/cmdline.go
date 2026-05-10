@@ -58,7 +58,7 @@ func findCmdlineValue(cmdline, key string) (string, bool) {
 // as `--bundle <path>`, so any further validation is crun's problem;
 // we only enforce the absolute-path invariant here so a typo in the
 // host config doesn't surface as a crun error with no useful context.
-func ParseBundleCmdline(cmdline string) (string, bool, error) {
+func ParseBundleCmdline(cmdline string) (path string, ok bool, err error) {
 	val, ok := findCmdlineValue(cmdline, BundleCmdlineKey)
 	if !ok {
 		return "", false, nil

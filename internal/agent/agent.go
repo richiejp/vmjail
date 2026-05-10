@@ -18,6 +18,8 @@ import (
 	"io"
 	"os"
 	"os/signal"
+
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // Banner is the line Run prints on start-up. The sandbox package matches
@@ -99,7 +101,7 @@ func applySharesFromCmdline(w io.Writer, d runDeps, cmdline string, haveBundle b
 	}
 	specs, err := ParseShareCmdlines(cmdline)
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "%s%s\n", ShareReportPrefix, "cmdline: "+err.Error())
+		writeReport(w, ShareReportPrefix, "cmdline: "+err.Error())
 		return
 	}
 	for i, spec := range specs {
@@ -108,7 +110,7 @@ func applySharesFromCmdline(w io.Writer, d runDeps, cmdline string, haveBundle b
 			continue
 		}
 		if err := MountShare(spec, d.share); err != nil {
-			_, _ = fmt.Fprintf(w, "%s%s\n", ShareReportPrefix, err.Error())
+			writeReport(w, ShareReportPrefix, err.Error())
 		}
 	}
 }
@@ -123,7 +125,7 @@ func runContainerFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdlin
 	}
 	bundle, ok, err := ParseBundleCmdline(cmdline)
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "%s%s\n", ContainerReportPrefix, "cmdline: "+err.Error())
+		writeReport(w, ContainerReportPrefix, "cmdline: "+err.Error())
 		return
 	}
 	if !ok {
@@ -146,6 +148,7 @@ func Main(parent context.Context, stdout, stderr io.Writer, signals ...os.Signal
 	if err == nil || errors.Is(err, context.Canceled) {
 		return 0
 	}
-	_, _ = fmt.Fprintln(stderr, "daft-agent:", err)
+	_, werr := fmt.Fprintln(stderr, "daft-agent:", err)
+	oops.Must("agent: write Main error", werr)
 	return 1
 }

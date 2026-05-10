@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -204,6 +205,78 @@ func TestUsageEmptyStore(t *testing.T) {
 func TestStoreNewRejectsEmptyRoot(t *testing.T) {
 	if _, err := New("", 0); err == nil {
 		t.Fatal("expected error for empty root")
+	}
+}
+
+// TestWriteJSONFailsWhenDirIsAFile covers writeJSON's WriteFile
+// error path: passing a path whose parent isn't a directory makes
+// the .tmp file write fail with ENOTDIR.
+func TestWriteJSONFailsWhenDirIsAFile(t *testing.T) {
+	parent := t.TempDir()
+	blocker := filepath.Join(parent, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := writeJSON(filepath.Join(blocker, "child.json"), struct{}{}); err == nil {
+		t.Fatal("expected writeJSON error when parent is a file")
+	}
+}
+
+// TestWriteJSONFailsWhenTargetIsDir covers writeJSON's Rename
+// error path: WriteFile of the .tmp succeeds, then Rename to the
+// final path fails because that path is a non-empty directory.
+func TestWriteJSONFailsWhenTargetIsDir(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "occupied")
+	// Pre-create target as a non-empty directory so Rename over it fails.
+	// #nosec G301 — test-only.
+	if err := os.MkdirAll(filepath.Join(target, "child"), 0o755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := writeJSON(target, struct{}{}); err == nil {
+		t.Fatal("expected writeJSON error when target is a non-empty dir")
+	}
+}
+
+// TestLockFailsWhenLocksDirIsAFile covers the MkdirAll error path
+// in Lock by pre-placing a regular file at the locks/ path so the
+// `os.MkdirAll(locks/...)` call fails with ENOTDIR.
+func TestLockFailsWhenLocksDirIsAFile(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root, 1<<30)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// New created locks/ as a directory; replace it with a regular
+	// file so MkdirAll inside Lock can't resolve a parent.
+	locksPath := filepath.Join(root, locksDir)
+	if err := os.RemoveAll(locksPath); err != nil {
+		t.Fatalf("rm locks dir: %v", err)
+	}
+	if err := os.WriteFile(locksPath, []byte("blocker"), 0o600); err != nil {
+		t.Fatalf("create blocker: %v", err)
+	}
+	if _, err := store.Lock("sha256:any"); err == nil {
+		t.Fatal("expected Lock to fail when locks/ is a regular file")
+	}
+}
+
+// TestLockFailsWhenLockfilePathIsADir covers the OpenFile error
+// path in Lock by pre-placing a directory at the lockfile path.
+func TestLockFailsWhenLockfilePathIsADir(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root, 1<<30)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	digest := "sha256:abc"
+	// Put a directory where the lockfile would go.
+	// #nosec G301 — test-only.
+	if err := os.MkdirAll(store.lockPath(digest), 0o755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := store.Lock(digest); err == nil {
+		t.Fatal("expected Lock to fail when lockfile path is a directory")
 	}
 }
 

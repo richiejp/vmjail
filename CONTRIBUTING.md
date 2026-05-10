@@ -4,6 +4,81 @@ Thanks for working on this project. These rules apply to humans and AI agents
 alike. They exist because they were learned the hard way — please respect
 them, and if you have a good reason to break one, say so in the commit message.
 
+## Project ethos
+
+This project is **not** managed like a typical software project. The
+defaults are different. Read this before opening a PR.
+
+### Correctness, security, and performance over shipping speed
+
+The thing being built is a sandbox for fully-automated AI coding
+agents. The agents will be untrusted. Bugs in the harness become CVEs;
+performance regressions become wall-clock penalties on every job;
+incorrect feature semantics become silent data leaks. None of these are
+acceptable to "iterate on later."
+
+The trade-off goes one way: when in doubt, slow down and get it right.
+A delayed feature is recoverable; a shipped feature with the wrong
+guarantees is not.
+
+### Fail fast, fail loud
+
+Errors get handled, not swallowed. Invariants get asserted, not
+hoped for. Tests fail with a clear `t.Fatalf`, not a quiet `t.Skip`.
+A broken environment fails the build, not the next user. Anything
+that defers a problem to "later" is a future bug report waiting to
+happen.
+
+### Reduce scope, never correctness
+
+If a feature is too big, cut it in half and ship the half that's
+correct. Do not ship a feature with weakened guarantees, optional
+validation, or a "we'll harden it later" note. The half-feature
+will be the load-bearing one in production by the time anyone gets
+back to it. Either the guarantee is real or the feature isn't
+shipped.
+
+### Verification monotonically increases
+
+Coverage goes up, never down. Lint rules get tighter, never looser.
+Gates added, not removed. If a gate is wrong for your change, fix
+the gate and explain why in the same commit — but the resulting
+gate must still be at least as strict overall as what it replaced.
+The codebase's verification surface is a ratchet: every commit
+either holds it or tightens it.
+
+This applies to the `coverage.txt` baseline (only rises), the
+`bench.txt` baseline (per-bench numbers can move; the gate's
+fail/warn thresholds tighten), the per-file 80% floor (only rises),
+and the lint config in `.golangci.yml` (linters only get added).
+`make cover` and `make bench` refuse to write a worse baseline.
+
+### Go doesn't enforce this for you
+
+The Go language is permissive about silently-discarded errors,
+zero-value-as-default for missing fields, nil-receiver method calls,
+and integer overflow. This project compensates by:
+
+- Treating every error return as load-bearing. `_ = f()` for an
+  error-returning call is a code smell, allowed only with a
+  one-line comment explaining why the error is genuinely
+  uninteresting (e.g. `defer f.Close()` after a successful read).
+- Asserting invariants at the package boundary and in public
+  constructors. A struct with required fields validates them on
+  construction, not on first use.
+- Running `golangci-lint` with `errcheck`, `gosec`, `nilerr`,
+  `bodyclose`, and friends enabled — see `.golangci.yml`. The
+  static-analysis surface is treated the same as the test
+  surface: monotonically tightening.
+
+### How to disagree with the rules
+
+You can. State your reasoning in the commit message, in the PR, or
+in `PLAN.md`'s open questions section. Edit the rules in the same
+commit that changes the behaviour. What you cannot do is bypass the
+rules quietly — `--no-verify`, `//nolint` without a justifying
+comment, lowering a baseline without explaining why, etc.
+
 ## Workflow
 
 ### Commit early and often
@@ -103,22 +178,27 @@ otherwise the resolver looks for the `result-*` symlinks that
 skipping integration tests is exactly the kind of "green CI,
 broken merge" failure mode this gate exists to prevent.
 
-### Coverage regression check
+### Coverage regression check (monotonic)
 
 The pre-commit hook (via `make cover-check` and
-`scripts/cover-check.sh`) enforces two gates. Both must pass:
+`scripts/cover-check.sh`) enforces three gates. All three must pass:
 
-1. **Total coverage** stays within 1.0pp of the committed
-   `coverage.txt` baseline. Catches "we drifted lower" overall.
-2. **Per-file coverage** is at least 80% for every non-test source
-   file with more than 10 statements. Catches the case where one
-   file is dark while the rest of the codebase masks it — high
-   total coverage isn't a substitute for "every meaningful file is
-   exercised."
+1. **Total coverage ≥ committed `coverage.txt` baseline.** No
+   tolerance for drops. The previous "within 1.0pp" allowance was
+   too forgiving — measurement noise is real, but at this codebase
+   size each percentage point is dozens of statements, and "I'll
+   add the test in the next commit" never lands.
+2. **Per-file coverage ≥ 80%** for every non-test source file
+   with more than 10 statements. Catches the case where one file
+   is dark while the rest of the codebase masks it.
+3. **The baseline only ever rises.** `make cover` refuses to
+   write a value lower than the current `coverage.txt`. Verification
+   surface is monotonic: there is no path through the tooling that
+   silently weakens it.
 
 If `cover-check` fails, the answer is **never** to lower the
-baseline or weaken the per-file threshold to make the bar fit. Add
-the missing tests. Real options when coverage is hard:
+baseline or weaken the per-file threshold. Real options when
+coverage is hard:
 
 - **Mock harder.** Inject the I/O surface so the function under
   test isn't asking for the network / filesystem / a privileged
@@ -136,9 +216,12 @@ the missing tests. Real options when coverage is hard:
   branch can't be exercised by any test, it probably can't be
   reached in production either.
 
-Only update `coverage.txt` when you've genuinely deleted
-heavily-tested code (so the new total *can* be higher than the
-old one would predict). Explain the bump in the commit message.
+The only legitimate reason to lower `coverage.txt` is genuinely
+deleting heavily-tested code (the percentage drops because total
+statements dropped). In that case bypass the monotonicity check
+explicitly — `cover-check` won't, but you can edit
+`coverage.txt` by hand and document the drop in the commit
+message. Reviewers will be looking for the deleted code.
 
 Coverage is the price of merge — pay it on the way in, not by
 relaxing the gate.
@@ -233,6 +316,56 @@ func process(nodes []Node) {
 
 For invariants in hot loops where panics are too expensive, hide them behind
 a build tag or debug flag — but the default position is "assert it."
+
+### Handle every error
+
+Every error return is load-bearing. The default position is "the
+caller cares about it" — return it up the stack with `%w` wrapping
+or handle it locally with a recovery action.
+
+The only sanctioned way to discard an error is the
+`_, _ = f()` / `_ = f.Close()` pattern, and only when:
+
+- the failure is genuinely uninteresting (e.g. closing a file
+  after a successful read; you can't recover from a Close error
+  and the data is already on disk), AND
+- a comment on the same or preceding line explains why.
+
+`golangci-lint` runs `errcheck` over our code, so unjustified
+discards fail the lint gate. Do not work around `errcheck` with
+silent `_, _ =` if the error genuinely matters — return it,
+log it, panic on it, but don't pretend it doesn't exist.
+
+For functions that return `(value, error)`, prefer the early
+return:
+
+```go
+v, err := f()
+if err != nil {
+    return fmt.Errorf("f: %w", err)
+}
+// ... use v
+```
+
+Avoid the trap of "this can't fail in practice" — if Go's type
+system thinks it can fail, treat it as if it can. The one time
+it does in production, the unhandled path is the one that bites.
+
+### Static analysis is not optional
+
+`.golangci.yml` enables a deliberately strict set of linters
+beyond the Go default. Read it before opening a PR; the gate is
+not negotiable.
+
+Adding a `//nolint:<linter>` requires a comment on the same line
+or above explaining why the linter is wrong for this specific
+case. Reviewers will push back on `//nolint` without
+justification.
+
+The lint surface itself is monotonic: linters get added, never
+removed. If a linter produces too many false positives to be
+useful, configure it tighter or scope it to specific paths in
+`.golangci.yml` — but don't disable it wholesale.
 
 ## Pull request expectations
 

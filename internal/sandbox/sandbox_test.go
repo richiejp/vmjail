@@ -132,7 +132,7 @@ type fakeShareSidecar struct {
 	stopCalled bool
 }
 
-func (f *fakeShareSidecar) start(_ context.Context, cfg Config) ([]string, func(), error) {
+func (f *fakeShareSidecar) start(_ context.Context, cfg Config) (sockets []string, stop func(), err error) {
 	if f.startErr != nil {
 		return nil, nil, f.startErr
 	}
@@ -154,7 +154,7 @@ func (f *fakeShareSidecar) start(_ context.Context, cfg Config) ([]string, func(
 // was never invoked (panics on call).
 type noShareSidecar struct{}
 
-func (noShareSidecar) start(context.Context, Config) ([]string, func(), error) {
+func (noShareSidecar) start(context.Context, Config) (sockets []string, stop func(), err error) {
 	panic("noShareSidecar.start called: helloWith should not start virtiofsd when Shares is empty")
 }
 
@@ -485,6 +485,14 @@ func TestBuildKernelCmdlineIncludesShare(t *testing.T) {
 	}
 	if !strings.Contains(got, "console=hvc0") {
 		t.Errorf("cmdline %q lost the base cmdline", got)
+	}
+}
+
+func TestShareSocketArgFormat(t *testing.T) {
+	got := shareSocketArg("workspace", "/tmp/vhost.sock")
+	want := "tag=workspace,socket=/tmp/vhost.sock"
+	if got != want {
+		t.Errorf("shareSocketArg = %q, want %q", got, want)
 	}
 }
 

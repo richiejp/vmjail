@@ -57,13 +57,13 @@ func MountShare(spec ShareSpec, deps ShareDeps) error {
 // stdout, not a marker file.
 func ApplyShare(spec ShareSpec, deps ShareDeps, w io.Writer) {
 	if err := MountShare(spec, deps); err != nil {
-		_, _ = fmt.Fprintf(w, "%s%s\n", ShareReportPrefix, err.Error())
+		writeReport(w, ShareReportPrefix, err.Error())
 		return
 	}
 	data, err := deps.ReadFile(filepath.Join(spec.Mountpoint, ShareMarkerFile))
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "%s%s\n", ShareReportPrefix, "read: "+err.Error())
+		writeReport(w, ShareReportPrefix, "read: "+err.Error())
 		return
 	}
-	_, _ = fmt.Fprintf(w, "%s%s\n", ShareReportPrefix, strings.TrimRight(string(data), "\r\n"))
+	writeReport(w, ShareReportPrefix, strings.TrimRight(string(data), "\r\n"))
 }

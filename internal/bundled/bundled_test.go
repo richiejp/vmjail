@@ -113,6 +113,7 @@ func TestExtractRewritesOnSizeChange(t *testing.T) {
 	if _, err := extractTo(dir, newer, newer, newer, newer); err != nil {
 		t.Fatalf("second extractTo: %v", err)
 	}
+	// #nosec G304 — test-only; dir is t.TempDir().
 	got, err := os.ReadFile(filepath.Join(dir, "cloud-hypervisor"))
 	if err != nil {
 		t.Fatalf("read: %v", err)
@@ -147,6 +148,7 @@ func TestExtractWriteError(t *testing.T) {
 	dir := t.TempDir()
 	// Pre-create a directory at the path where cloud-hypervisor would
 	// be written — os.WriteFile then can't replace it.
+	// #nosec G301 — test-only; dir is t.TempDir().
 	if err := os.MkdirAll(filepath.Join(dir, "cloud-hypervisor"), 0o755); err != nil {
 		t.Fatalf("pre-create dir: %v", err)
 	}
@@ -154,6 +156,18 @@ func TestExtractWriteError(t *testing.T) {
 	_, err := extractTo(dir, bytesAtSize, bytesAtSize, bytesAtSize, bytesAtSize)
 	if err == nil {
 		t.Fatal("expected error when artifact path is a directory")
+	}
+}
+
+func TestExtractWrapperPropagatesStubsError(t *testing.T) {
+	// The exported Extract wraps extractTo with the package-level
+	// embedded byte slices. In a plain `go test` build those slices
+	// are 0-byte stubs, so the call should return ErrNotBundled
+	// without touching disk. Covers the otherwise-uncovered Extract
+	// public surface.
+	_, err := Extract(t.TempDir())
+	if !errors.Is(err, ErrNotBundled) {
+		t.Fatalf("Extract on stub binary = %v, want ErrNotBundled", err)
 	}
 }
 

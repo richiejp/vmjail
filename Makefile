@@ -61,19 +61,14 @@ COVER_BASELINE := coverage.txt
 
 cover:
 	@go test -covermode=atomic -coverprofile=$(COVER_OUT) $(OUR_GO_PKGS) > /dev/null
-	@total=$$(go tool cover -func=$(COVER_OUT) | awk '/^total:/ {print $$3}' | tr -d '%'); \
-	echo "Total coverage: $$total%"; \
-	echo "$$total" > $(COVER_BASELINE); \
-	echo "Updated baseline $(COVER_BASELINE)"
+	@scripts/cover-check.sh --update $(COVER_OUT) $(COVER_BASELINE)
+	@rm -f $(COVER_OUT)
 
-# cover-check: two gates, both must pass.
-#   1. Total coverage stays within 1.0pp of the committed baseline
-#      (coverage.txt). Catches "we drifted lower" overall.
-#   2. Every individual non-test source file (with > 10 statements)
-#      is at or above 80% coverage. Catches "one file is dark while
-#      the rest of the codebase masks it." Threshold can be tuned via
-#      $$PER_FILE_MIN.
-# scripts/cover-check.sh owns the comparison logic.
+# cover-check: three gates (see CONTRIBUTING.md and scripts/cover-check.sh).
+#   1. Total coverage >= committed baseline (no drop tolerance).
+#   2. Per-file coverage >= 80% for every non-test source file with
+#      more than 10 statements.
+#   3. (--update mode) baseline only ever rises.
 cover-check:
 	@go test -covermode=atomic -coverprofile=$(COVER_OUT) $(OUR_GO_PKGS) > /dev/null
 	@scripts/cover-check.sh $(COVER_OUT) $(COVER_BASELINE)

@@ -71,6 +71,7 @@ func TestBundleUnpacksAndWritesConfig(t *testing.T) {
 	}
 
 	helloPath := filepath.Join(bundle.Path, "rootfs", "hello")
+	// #nosec G304 — test-only; helloPath is built from t.TempDir().
 	got, err := os.ReadFile(helloPath)
 	if err != nil {
 		t.Fatalf("read rootfs/hello: %v", err)
@@ -211,6 +212,7 @@ func TestWriteTarEntryHandlesHardlink(t *testing.T) {
 	if err := writeTarEntry(nil, link, target); err != nil {
 		t.Fatalf("hardlink: %v", err)
 	}
+	// #nosec G304 — test-only.
 	got, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("read linked: %v", err)
@@ -251,6 +253,7 @@ func TestWriteTarEntryRegularFile(t *testing.T) {
 	if err := writeTarEntry(tr, read, target); err != nil {
 		t.Fatalf("writeTarEntry: %v", err)
 	}
+	// #nosec G304 — test-only.
 	got, err := os.ReadFile(target)
 	if err != nil {
 		t.Fatalf("read target: %v", err)
@@ -327,8 +330,167 @@ func TestWriteTarEntryHandlesSymlinkAndDir(t *testing.T) {
 	}
 }
 
-func newTarHeader(name string, mode int64) (*tar.Header, error) {
-	return &tar.Header{Name: name, Mode: mode}, nil
+func newTarHeader(entryName string, mode int64) (*tar.Header, error) {
+	return &tar.Header{Name: entryName, Mode: mode}, nil
+}
+
+// TestBundleHonoursWorkingDirAndEnvFromImage covers the path where
+// BundleOptions are zero and the image's own WorkingDir + Env
+// flow through to the generated config.json.
+func TestBundleHonoursWorkingDirAndEnvFromImage(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/honour-imgcfg:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{
+		Entrypoint: []string{testEntrypoint},
+		Env:        []string{"IMGENV=set"},
+		WorkingDir: "/work",
+	})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+	bundle, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{})
+	if err != nil {
+		t.Fatalf("Bundle: %v", err)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+	if !strings.Contains(string(cfg), `"IMGENV=set"`) {
+		t.Errorf("env not propagated: %s", cfg)
+	}
+	if !strings.Contains(string(cfg), `"/work"`) {
+		t.Errorf("working dir not propagated: %s", cfg)
+	}
+}
+
+// TestBundleErrorsWhenImageHasNoEntrypoint covers the
+// buildRuntimeConfig "image has no entrypoint/cmd" failure path.
+// pull a layer-only image (no Config.Entrypoint), then Bundle
+// without overriding Args.
+func TestBundleErrorsWhenImageHasNoEntrypoint(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/no-entrypoint:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	// No mutate.Config call → no Entrypoint or Cmd.
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, err := store.Pull(context.Background(), ref)
+	if err != nil {
+		t.Fatalf("Pull: %v", err)
+	}
+	_, err = store.Bundle(context.Background(), pulled.Digest, BundleOptions{})
+	if err == nil {
+		t.Fatal("expected error when image has no entrypoint and no Args override")
+	}
+	if !strings.Contains(err.Error(), "entrypoint") {
+		t.Errorf("err = %v, want mention of entrypoint", err)
+	}
+}
+
+// errReader is an io.Reader that always returns the configured
+// error. Used to drive untarTo's read-error path.
+type errReader struct{ err error }
+
+func (e *errReader) Read([]byte) (int, error) { return 0, e.err }
+
+// TestWriteTarEntryRejectsCopyError covers the io.Copy failure
+// branch by hand-crafting a tar block whose header claims more
+// bytes than the stream contains. Bypasses tar.Writer (which
+// refuses to close on short writes) by writing the raw header
+// bytes directly.
+func TestWriteTarEntryRejectsCopyError(t *testing.T) {
+	dst := t.TempDir()
+
+	// Smallest valid tar header for "x" with size=100 — the body
+	// follows but we'll truncate before writing it. We use a
+	// real tar.Writer to produce the header, then truncate the
+	// resulting buffer to just-the-header so the body read fails.
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	hdr := &tar.Header{Typeflag: tar.TypeReg, Name: "x", Mode: 0o644, Size: 100}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	// Don't close tw — that would force a body. Instead truncate
+	// to header-only (512 bytes is the tar block size).
+	truncated := bytes.NewReader(buf.Bytes()[:512])
+
+	tr := tar.NewReader(truncated)
+	read, err := tr.Next()
+	if err != nil {
+		t.Fatalf("tar.Next: %v", err)
+	}
+	target := filepath.Join(dst, "outfile")
+	if err := writeTarEntry(tr, read, target); err == nil {
+		t.Fatal("expected error when tar body is short")
+	}
+}
+
+func TestUntarToWrapsReadError(t *testing.T) {
+	want := errors.New("synthetic read failure")
+	if err := untarTo(&errReader{err: want}, t.TempDir()); err == nil {
+		t.Fatal("expected error from untarTo when reader fails")
+	}
+}
+
+// TestWriteTarEntrySymlinkOverwritesExistingTarget covers the
+// `_ = os.Remove(target)` path in TypeSymlink — when a previous
+// entry put a regular file at the target path, the symlink entry
+// should still succeed by replacing it.
+func TestWriteTarEntrySymlinkOverwritesExistingTarget(t *testing.T) {
+	dst := t.TempDir()
+	target := filepath.Join(dst, "linkpath")
+	if err := os.WriteFile(target, []byte("preexisting"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	link := &tar.Header{Typeflag: tar.TypeSymlink, Linkname: "elsewhere"}
+	if err := writeTarEntry(nil, link, target); err != nil {
+		t.Fatalf("symlink overwrite: %v", err)
+	}
+	got, err := os.Readlink(target)
+	if err != nil || got != "elsewhere" {
+		t.Errorf("symlink target = %q (err %v), want elsewhere", got, err)
+	}
+}
+
+// TestWriteTarEntryRegularMkdirPathExercised covers the
+// MkdirAll-of-parent branch of TypeReg by writing a deeply-nested
+// path whose parent directories don't exist yet.
+func TestWriteTarEntryRegularMkdirPathExercised(t *testing.T) {
+	dst := t.TempDir()
+	body := []byte("nested-payload")
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	hdr := &tar.Header{
+		Typeflag: tar.TypeReg, Name: "ignored",
+		Mode: 0o644, Size: int64(len(body)),
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	_ = tw.Close()
+
+	tr := tar.NewReader(&buf)
+	read, _ := tr.Next()
+	target := filepath.Join(dst, "deep", "nested", "file")
+	if err := writeTarEntry(tr, read, target); err != nil {
+		t.Fatalf("nested write: %v", err)
+	}
+	// #nosec G304 — test-only.
+	if got, _ := os.ReadFile(target); !bytes.Equal(got, body) {
+		t.Errorf("nested file content mismatch: %q vs %q", got, body)
+	}
 }
 
 // TestSafeJoinNormalisesTraversal confirms that tar entries containing

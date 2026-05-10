@@ -79,6 +79,9 @@ func extractTo(dir string, ch, kernel, initramfs, virtiofsd []byte) (Paths, erro
 		len(initramfs) < minBundledSize || len(virtiofsd) < minBundledSize {
 		return Paths{}, ErrNotBundled
 	}
+	// #nosec G301 — the cache dir lives under $XDG_CACHE_HOME and
+	// gets read by daft-sandboxd subprocesses; 0755 lets the
+	// per-VM unprivileged users traverse it.
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Paths{}, fmt.Errorf("bundled: mkdir cache: %w", err)
 	}

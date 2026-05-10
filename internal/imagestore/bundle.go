@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
+
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // ErrUnknownImage is returned by Bundle when the requested digest is
@@ -83,6 +86,11 @@ func (s *Store) Bundle(ctx context.Context, digest string, opts BundleOptions) (
 		return nil, err
 	}
 
+	// #nosec G301 — 0755 is intentional. The bundle dir is read by
+	// virtiofsd (running as the daft-sandboxd user) and the VM's
+	// kernel mount, which may use a different uid inside the
+	// guest. World-execute lets crun's uid traverse this path
+	// regardless of which user owns it.
 	if err := os.MkdirAll(rootfs, 0o755); err != nil {
 		return nil, fmt.Errorf("imagestore: mkdir rootfs: %w", err)
 	}
@@ -133,7 +141,14 @@ func (s *Store) touchEntry(digest string) {
 	for i := range meta.Entries {
 		if meta.Entries[i].Digest == digest {
 			meta.Entries[i].LastUsed = s.nowFn()
-			_ = s.saveMeta(meta)
+			// touchEntry is best-effort: a save failure here just
+			// means LRU accuracy degrades by one entry. But "best
+			// effort" doesn't mean "silent" — we still log the
+			// error via oops, and any unexpected I/O failure
+			// (permission, EROFS, etc.) will exit the process,
+			// which is the correct response: the cache is in an
+			// inconsistent state.
+			oops.Must("imagestore: touch entry", s.saveMeta(meta))
 			return
 		}
 	}
@@ -156,7 +171,14 @@ func isAssembled(configPath, rootfs string) bool {
 // applied per the OCI image spec.
 func unpackRootfs(img v1.Image, dst string) error {
 	stream := mutate.Extract(img)
-	defer func() { _ = stream.Close() }()
+	defer func() {
+		// stream wraps the layer extractor; Close after a successful
+		// untar should be a no-op. An error here means the
+		// underlying tar reader was already drained funny — log
+		// and continue, since untarTo has already returned.
+		oops.Skip("imagestore: close mutate.Extract stream",
+			stream.Close(), io.EOF, os.ErrClosed)
+	}()
 	return untarTo(stream, dst)
 }
 
@@ -167,7 +189,7 @@ func untarTo(r io.Reader, dst string) error {
 	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
@@ -200,27 +222,45 @@ func writeTarEntry(tr *tar.Reader, hdr *tar.Header, target string) error {
 	case tar.TypeDir:
 		return os.MkdirAll(target, hdr.FileInfo().Mode().Perm())
 	case tar.TypeReg:
+		// #nosec G301 — same justification as the rootfs MkdirAll
+		// above: 0755 lets crun's container uid traverse the path
+		// regardless of who owns the bundle dir.
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
+		// #nosec G304 — `target` came through safeJoin which
+		// guarantees it sits under the bundle dir. Tar entries are
+		// the literal point of this function.
 		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, hdr.FileInfo().Mode().Perm())
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(f, tr); err != nil {
-			_ = f.Close()
-			return err
+		if _, copyErr := io.Copy(f, tr); copyErr != nil {
+			// Close on a partially-written file is informational —
+			// the io.Copy error is what the caller needs. We still
+			// surface a Close error if it happens for an unexpected
+			// reason (e.g. ENOSPC on flush) via oops.Must, since a
+			// silent half-written file is exactly the kind of bug
+			// this policy exists to prevent.
+			oops.Skip("bundle: close partial file", f.Close(),
+				os.ErrClosed)
+			return copyErr
 		}
 		return f.Close()
 	case tar.TypeSymlink:
-		_ = os.Remove(target)
+		// Remove may legitimately fail with ENOENT (no prior entry
+		// to replace). Anything else — permission denied, EROFS,
+		// EIO — is a real problem we can't recover from.
+		oops.Skip("bundle: remove pre-existing symlink target",
+			os.Remove(target), fs.ErrNotExist)
 		return os.Symlink(hdr.Linkname, target)
 	case tar.TypeLink:
 		linkSource, err := safeJoin(filepath.Dir(target), hdr.Linkname)
 		if err != nil {
 			return err
 		}
-		_ = os.Remove(target)
+		oops.Skip("bundle: remove pre-existing hardlink target",
+			os.Remove(target), fs.ErrNotExist)
 		return os.Link(linkSource, target)
 	default:
 		// Devices, fifos, etc. are skipped — the rootfs runs

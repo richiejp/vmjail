@@ -118,7 +118,9 @@ func newImagesRmCmd() *cobra.Command {
 				if err := store.Remove(digest); err != nil {
 					return err
 				}
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", digest)
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", digest); err != nil {
+					return fmt.Errorf("daft-sandboxd: write rm result: %w", err)
+				}
 			}
 			return nil
 		},
@@ -148,11 +150,13 @@ func newImagesPruneCmd() *cobra.Command {
 				return err
 			}
 			for _, d := range pruned {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Pruned %s\n", d)
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Pruned %s\n", d); err != nil {
+					return fmt.Errorf("daft-sandboxd: write prune result: %w", err)
+				}
 			}
-			_, _ = fmt.Fprintf(cmd.OutOrStdout(),
+			_, err = fmt.Fprintf(cmd.OutOrStdout(),
 				"Pruned %d image(s)\n", len(pruned))
-			return nil
+			return err
 		},
 	}
 	cmd.Flags().DurationVar(&olderThan, "older-than", 0,

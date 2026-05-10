@@ -167,6 +167,27 @@ Out of Scope:
       `t.Fatalf`. Linux+KVM is a hard commit prerequisite — CI
       without KVM is useless for this project and doesn't gate
       commits.
+- [x] Project ethos codified in CONTRIBUTING.md: correctness +
+      security + perf > shipping speed; reduce scope, never
+      correctness; verification monotonically increases. Coverage
+      baseline only ever rises (cover-check.sh refuses to write
+      a lower value); strict ≥-baseline gate (no 1pp tolerance).
+      `--no-verify` is never OK.
+- [x] Static analysis tightened: `errcheck` (was already on),
+      `errorlint`, `nilerr`, `nilnil`, `bodyclose`, `contextcheck`,
+      `gosec`, `gocritic`, `prealloc`, `copyloopvar`, `dupword`,
+      `misspell`, plus the existing complexity ceilings. Lint
+      surface is itself monotonic — see `.golangci.yml`.
+- [x] Zero error discards in production code. `internal/oops`
+      provides `Log` (write to sink, exit if sink fails), `Skip`
+      (allowlist of expected errors; everything else is `Must`),
+      `Must` (log + exit). Every `_ = f()` and `_, _ = f()` in
+      production has been replaced by either a propagated error,
+      a logged-and-continued case via `oops.Log`, or a known-benign
+      skip via `oops.Skip` with an explicit allowlist. The agent's
+      console-write helper exits the process if the kernel console
+      is gone. Cleanup paths surface unexpected `EPERM`/`EROFS`/
+      `EIO` etc. instead of walking past them.
 - [x] `daft-sandboxd run <image-ref> [cmd…]` closes the loop:
       pulls the image into the local store (LRU under quota),
       bundles it, locks the bundle for the VM lifetime, shares

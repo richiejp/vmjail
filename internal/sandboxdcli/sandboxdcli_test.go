@@ -116,6 +116,23 @@ func TestRunHelloWithBootSuccess(t *testing.T) {
 	}
 }
 
+// TestUserCacheDirReturnsXDGPath confirms userCacheDir falls back
+// through os.UserCacheDir; we just assert it returns a non-empty
+// path that ends with our subdir name (the exact base depends on
+// the environment).
+func TestUserCacheDirReturnsXDGPath(t *testing.T) {
+	got, err := userCacheDir()
+	if err != nil {
+		t.Fatalf("userCacheDir: %v", err)
+	}
+	if got == "" {
+		t.Fatal("userCacheDir returned empty path")
+	}
+	if !strings.HasSuffix(got, cacheSubdir) {
+		t.Errorf("userCacheDir = %q, want suffix %q", got, cacheSubdir)
+	}
+}
+
 func TestExtractWrapperReturnsErrNotBundledOnStubs(t *testing.T) {
 	// In `go test`, the embedded slices in internal/bundled are
 	// stubs, so the public Extract should report ErrNotBundled.

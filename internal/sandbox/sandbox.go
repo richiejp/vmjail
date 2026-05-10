@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,6 +22,7 @@ import (
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // HelloTimeout caps how long we wait for the in-VM agent to print its
@@ -204,8 +206,8 @@ const virtiofsdReadyTimeout = 5 * time.Second
 // start spawns one virtiofsd per cfg.Shares entry, returning a slice
 // of socket paths (parallel to cfg.Shares). The returned stop tears
 // down every spawned process and removes the temp dirs.
-func (virtiofsdSidecar) start(ctx context.Context, cfg Config) ([]string, func(), error) {
-	sockets := make([]string, 0, len(cfg.Shares))
+func (virtiofsdSidecar) start(ctx context.Context, cfg Config) (sockets []string, stop func(), err error) {
+	sockets = make([]string, 0, len(cfg.Shares))
 	stops := make([]func(), 0, len(cfg.Shares))
 
 	stopAll := func() {
@@ -216,13 +218,13 @@ func (virtiofsdSidecar) start(ctx context.Context, cfg Config) ([]string, func()
 	}
 
 	for i, share := range cfg.Shares {
-		socket, stop, err := startOneVirtiofsd(ctx, cfg.Virtiofsd, share)
-		if err != nil {
+		sock, oneStop, oneErr := startOneVirtiofsd(ctx, cfg.Virtiofsd, share)
+		if oneErr != nil {
 			stopAll()
-			return nil, nil, fmt.Errorf("sandbox: share %d (%s): %w", i, share.Tag, err)
+			return nil, nil, fmt.Errorf("sandbox: share %d (%s): %w", i, share.Tag, oneErr)
 		}
-		sockets = append(sockets, socket)
-		stops = append(stops, stop)
+		sockets = append(sockets, sock)
+		stops = append(stops, oneStop)
 	}
 	return sockets, stopAll, nil
 }
@@ -230,19 +232,29 @@ func (virtiofsdSidecar) start(ctx context.Context, cfg Config) ([]string, func()
 // startOneVirtiofsd spawns a single virtiofsd against share, writes
 // its socket into a fresh temp dir, and waits for the socket to
 // appear before returning. stop tears down the process + temp dir.
-func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig) (string, func(), error) {
+func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig) (socket string, stop func(), err error) {
 	dir, err := os.MkdirTemp("", "daft-virtiofs-")
 	if err != nil {
 		return "", nil, fmt.Errorf("tmpdir: %w", err)
 	}
-	cleanup := func() { _ = os.RemoveAll(dir) }
+	cleanup := func() {
+		// dir is a fresh os.MkdirTemp result, so a RemoveAll failure
+		// is unexpected — log it via oops which exits on real
+		// errors, swallows fs.ErrNotExist.
+		oops.Skip("sandbox: remove virtiofsd tmpdir",
+			os.RemoveAll(dir), fs.ErrNotExist)
+	}
 
-	socket := filepath.Join(dir, "vhost.sock")
+	socket = filepath.Join(dir, "vhost.sock")
 
 	// --sandbox=none keeps virtiofsd from trying to chroot/setuid; we
 	// run it as the same user that owns the share dir, so the
 	// production hardening (PLAN.md "rootless agent") is layered on
 	// at the orchestration boundary, not inside virtiofsd.
+	//
+	// #nosec G204 — `binary` is cfg.Virtiofsd, an absolute path
+	// passed by the host operator who's already trusted to spawn
+	// the VMM. There's no untrusted user input on the argv here.
 	cmd := exec.CommandContext(
 		ctx, binary,
 		"--socket-path", socket,
@@ -257,11 +269,23 @@ func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig) (
 		return "", nil, fmt.Errorf("spawn virtiofsd: %w", err)
 	}
 
-	stop := func() {
+	stop = func() {
+		// Best-effort teardown. Kill on an already-exited process
+		// returns os.ErrProcessDone — fine, race between us and the
+		// VM. Anything else (e.g. EPERM) is a real problem we can't
+		// recover from, so let oops.Skip exit on it.
 		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+			oops.Skip("kill virtiofsd", cmd.Process.Kill(), os.ErrProcessDone)
 		}
-		_ = cmd.Wait()
+		// Wait returns *exec.ExitError after we Kill'd the process —
+		// that's expected and informational. Other error types
+		// (e.g. ECHILD, runtime broken) signal a real problem.
+		if waitErr := cmd.Wait(); waitErr != nil {
+			var exitErr *exec.ExitError
+			if !errors.As(waitErr, &exitErr) {
+				oops.Must("wait virtiofsd", waitErr)
+			}
+		}
 		cleanup()
 	}
 
@@ -328,7 +352,11 @@ func shareSocketArg(tag, socket string) string {
 }
 
 func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string) (io.ReadCloser, func(), error) {
-	args := []string{
+	// 14 = the always-present base args; +2 per share for the --fs
+	// pair. Pre-sized so the inner loop's appends don't realloc.
+	args := make([]string, 0, 14+2*len(shareSockets))
+	args = append(
+		args,
 		"--kernel", cfg.Kernel,
 		"--initramfs", cfg.Initramfs,
 		"--cmdline", buildKernelCmdline(cfg),
@@ -336,10 +364,14 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 		"--serial", "off",
 		"--cpus", fmt.Sprintf("boot=%d", cfg.CPUs),
 		"--memory", buildMemoryArg(cfg),
-	}
+	)
 	for i, sock := range shareSockets {
 		args = append(args, "--fs", shareSocketArg(cfg.Shares[i].Tag, sock))
 	}
+	// #nosec G204 — cfg.CloudHypervisor is the operator-supplied
+	// VMM path; argv elements are derived from validated Config
+	// fields (Kernel/Initramfs/Memory) plus our own emitted
+	// cmdline. No untrusted user input.
 	cmd := exec.CommandContext(ctx, cfg.CloudHypervisor, args...)
 
 	// Cloud Hypervisor sends both kernel logs and our agent's banner
@@ -358,13 +390,22 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 
 	stop := func() {
 		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
+			oops.Skip("kill cloud-hypervisor", cmd.Process.Kill(), os.ErrProcessDone)
 		}
 		// Drain stdout before Wait so the kernel buffer doesn't keep
 		// the writer parked. Either Wait or this drain may have already
-		// raced past EOF; both are fine.
-		_, _ = io.Copy(io.Discard, stdout)
-		_ = cmd.Wait()
+		// raced past EOF — io.Copy returns nil on EOF, and a closed
+		// pipe surfaces as os.ErrClosed which is fine here.
+		if _, copyErr := io.Copy(io.Discard, stdout); copyErr != nil {
+			oops.Skip("drain cloud-hypervisor stdout", copyErr,
+				io.EOF, os.ErrClosed)
+		}
+		if waitErr := cmd.Wait(); waitErr != nil {
+			var exitErr *exec.ExitError
+			if !errors.As(waitErr, &exitErr) {
+				oops.Must("wait cloud-hypervisor", waitErr)
+			}
+		}
 	}
 	return stdout, stop, nil
 }
@@ -425,7 +466,12 @@ func scanForBanner(w io.Writer, r io.Reader) error {
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		_, _ = fmt.Fprintln(w, line)
+		if _, werr := fmt.Fprintln(w, line); werr != nil {
+			// The caller's writer closed (e.g. user Ctrl-C'd).
+			// Returning the wrapped error stops the scan and
+			// surfaces the failure up the stack.
+			return fmt.Errorf("sandbox: mirror console: %w", werr)
+		}
 		if strings.Contains(line, agent.Banner) {
 			return nil
 		}

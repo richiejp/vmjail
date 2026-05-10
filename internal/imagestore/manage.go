@@ -3,10 +3,13 @@ package imagestore
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // ErrLocked is returned by Remove when the image's bundle is held by
@@ -92,16 +95,40 @@ func (s *Store) Lock(digest string) (func(), error) {
 	defer s.mu.Unlock()
 
 	path := s.lockPath(digest)
+	// #nosec G301 — locks/ traversal must be open to the per-VM
+	// unprivileged users that the agent will eventually drop into.
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("imagestore: mkdir locks: %w", err)
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+	// #nosec G304 — `path` is built from s.lockPath(digest); the
+	// digest comes from our own meta.json, never user input.
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("imagestore: create lock: %w", err)
 	}
-	_, _ = fmt.Fprintf(f, "%d\n", os.Getpid())
-	_ = f.Close()
-	unlock := func() { _ = os.Remove(path) }
+	if _, err := fmt.Fprintf(f, "%d\n", os.Getpid()); err != nil {
+		// Roll back: close the half-written file and remove it.
+		// Close after a write error often returns the same error;
+		// Remove of a file we just created shouldn't fail. Log
+		// either via oops so we don't lose unexpected failures.
+		oops.Skip("imagestore: close partial lockfile", f.Close(),
+			os.ErrClosed)
+		oops.Skip("imagestore: remove partial lockfile",
+			os.Remove(path), fs.ErrNotExist)
+		return nil, fmt.Errorf("imagestore: write lock pid: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		oops.Skip("imagestore: remove unclosed lockfile",
+			os.Remove(path), fs.ErrNotExist)
+		return nil, fmt.Errorf("imagestore: close lock: %w", err)
+	}
+	unlock := func() {
+		// The lockfile is per-process and per-digest. A successful
+		// unlock removes it; ENOENT is fine (another agent cleared
+		// it, or we crashed between Lock and unlock). Anything
+		// else — permission, EROFS, EIO — is a real problem.
+		oops.Skip("imagestore: unlock", os.Remove(path), fs.ErrNotExist)
+	}
 	return unlock, nil
 }
 

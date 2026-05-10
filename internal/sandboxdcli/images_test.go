@@ -107,6 +107,14 @@ func TestStoreQuotaParsesEnv(t *testing.T) {
 	}
 }
 
+func TestOpenStoreRejectsBadQuota(t *testing.T) {
+	t.Setenv(EnvStoreDir, t.TempDir())
+	t.Setenv(EnvStoreQuota, "not-a-number")
+	if _, err := openStore(); err == nil {
+		t.Fatal("openStore should reject malformed DAFT_STORE_QUOTA")
+	}
+}
+
 func TestStoreRootHonoursEnv(t *testing.T) {
 	t.Setenv(EnvStoreDir, "/tmp/forced/store")
 	got, err := storeRoot()

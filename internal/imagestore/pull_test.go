@@ -278,6 +278,90 @@ func TestPullPropagatesPullerError(t *testing.T) {
 	}
 }
 
+// errLayer is a v1.Layer whose Size returns the configured error.
+// Used to drive imageSize's "layer size" error path.
+type errLayer struct {
+	v1.Layer
+	err error
+}
+
+func (e *errLayer) Size() (int64, error) { return 0, e.err }
+
+// errLayersImage wraps a v1.Image and substitutes the layers list
+// with one that returns an error from Size().
+type errLayersImage struct {
+	v1.Image
+	err error
+}
+
+func (e *errLayersImage) Layers() ([]v1.Layer, error) {
+	base, baseErr := e.Image.Layers()
+	if baseErr != nil {
+		return nil, baseErr
+	}
+	out := make([]v1.Layer, len(base))
+	for i, l := range base {
+		out[i] = &errLayer{Layer: l, err: e.err}
+	}
+	return out, nil
+}
+
+// TestSaveImageErrorsWhenLayoutCannotBeCreated covers saveImage's
+// init-layout error path: pass a layoutPath whose parent is a
+// regular file so layout.Write fails on the bootstrap.
+func TestSaveImageErrorsWhenLayoutCannotBeCreated(t *testing.T) {
+	parent := t.TempDir()
+	blocker := filepath.Join(parent, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	img, err := random.Image(64, 1)
+	if err != nil {
+		t.Fatalf("random.Image: %v", err)
+	}
+	ref, err := name.ParseReference("fake.local/test:v1")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if err := saveImage(filepath.Join(blocker, "layout"), img, ref); err == nil {
+		t.Fatal("expected saveImage to error when layout dir parent is a file")
+	}
+}
+
+// TestRemoveOnDiskRemovesBundleDir covers the happy path of
+// removeOnDisk: a bundle directory exists, RemoveAll succeeds.
+func TestRemoveOnDiskRemovesBundleDir(t *testing.T) {
+	store, err := New(t.TempDir(), 1<<30)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	digest := "sha256:abcd"
+	bundleDir := filepath.Join(store.Root, bundlesDir, digestPathFragment(digest))
+	// #nosec G301 — test-only.
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatalf("seed bundle dir: %v", err)
+	}
+	if err := store.removeOnDisk(digest); err != nil {
+		t.Fatalf("removeOnDisk: %v", err)
+	}
+	if _, err := os.Stat(bundleDir); !os.IsNotExist(err) {
+		t.Errorf("bundle dir still exists after removeOnDisk: err=%v", err)
+	}
+}
+
+// TestImageSizePropagatesLayerSizeError covers the layer-Size
+// error branch of imageSize.
+func TestImageSizePropagatesLayerSizeError(t *testing.T) {
+	img, err := random.Image(1024, 1)
+	if err != nil {
+		t.Fatalf("random.Image: %v", err)
+	}
+	want := errors.New("synthetic Size failure")
+	if _, err := imageSize(&errLayersImage{Image: img, err: want}); !errors.Is(err, want) {
+		t.Fatalf("imageSize: %v, want wrap of %v", err, want)
+	}
+}
+
 type fakePuller struct {
 	img v1.Image
 	ref name.Reference

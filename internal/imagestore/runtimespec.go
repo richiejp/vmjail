@@ -122,7 +122,7 @@ func mergeArgs(override, entrypoint, cmd []string) []string {
 	return out
 }
 
-func firstNonNil[T any](primary []T, fallback []T) []T {
+func firstNonNil[T any](primary, fallback []T) []T {
 	if primary != nil {
 		return primary
 	}

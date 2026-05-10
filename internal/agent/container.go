@@ -40,7 +40,7 @@ type ContainerDeps struct {
 // share failure. The error is reported on w (`container: exec: …`).
 func RunContainer(ctx context.Context, w io.Writer, deps ContainerDeps, bundle string) {
 	if err := deps.Exec(ctx, w, bundle); err != nil {
-		_, _ = fmt.Fprintf(w, "%s%s\n", ContainerReportPrefix, "exec: "+err.Error())
+		writeReport(w, ContainerReportPrefix, "exec: "+err.Error())
 	}
 }
 
@@ -57,7 +57,7 @@ func prefixCopy(w io.Writer, r io.Reader, prefix string) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 4*1024), 256*1024)
 	for scanner.Scan() {
-		_, _ = fmt.Fprintf(w, "%s%s\n", prefix, scanner.Text())
+		writeReport(w, prefix, scanner.Text())
 	}
 }
 
@@ -73,6 +73,11 @@ func prefixCopy(w io.Writer, r io.Reader, prefix string) {
 // from inside a privileged process, but the VM is the security
 // boundary anyway.
 func execContainerLinux(ctx context.Context, w io.Writer, bundle string) error {
+	// #nosec G204 — execing the container runtime IS the agent's
+	// job. ContainerRuntime is a package var the host orchestrator
+	// could only swap by code change; bundle comes from the kernel
+	// cmdline our own host code wrote. There is no untrusted input
+	// here that gosec would help with.
 	cmd := exec.CommandContext(ctx, ContainerRuntime,
 		"run", "--no-pivot", "--bundle", bundle, ContainerID)
 	out, err := cmd.StdoutPipe()

@@ -60,7 +60,7 @@ func TestCompletionGeneratesScript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("daft completion bash: unexpected error: %v", err)
 	}
-	if len(stdout) == 0 {
+	if stdout == "" {
 		t.Fatal("daft completion bash produced no output")
 	}
 }

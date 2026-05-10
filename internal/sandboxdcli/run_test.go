@@ -183,6 +183,51 @@ func TestRunPropagatesBundleError(t *testing.T) {
 	}
 }
 
+// TestRunPropagatesCacheDirError covers the cacheDir branch of
+// runRun (post-bundle, post-lock).
+func TestRunPropagatesCacheDirError(t *testing.T) {
+	want := errors.New("synthetic cacheDir failure")
+	store := &fakeStore{
+		pulledImage: &imagestore.Image{Digest: testDigest},
+		bundle:      &imagestore.Bundle{Digest: testDigest, Path: testBundleDir},
+	}
+	deps := runDepsForTest(store)
+	deps.cacheDir = func() (string, error) { return "", want }
+	if err := runRun(context.Background(), io.Discard, "img:1", nil, "", deps); !errors.Is(err, want) {
+		t.Fatalf("err = %v, want wrap of %v", err, want)
+	}
+}
+
+// TestRunPropagatesExtractError covers the extract branch.
+func TestRunPropagatesExtractError(t *testing.T) {
+	want := errors.New("synthetic extract failure")
+	store := &fakeStore{
+		pulledImage: &imagestore.Image{Digest: testDigest},
+		bundle:      &imagestore.Bundle{Digest: testDigest, Path: testBundleDir},
+	}
+	deps := runDepsForTest(store)
+	deps.extract = func(string) (bundled.Paths, error) { return bundled.Paths{}, want }
+	if err := runRun(context.Background(), io.Discard, "img:1", nil, "", deps); !errors.Is(err, want) {
+		t.Fatalf("err = %v, want wrap of %v", err, want)
+	}
+}
+
+// TestRunPropagatesBootError covers the boot-failure branch.
+func TestRunPropagatesBootError(t *testing.T) {
+	want := errors.New("synthetic boot failure")
+	store := &fakeStore{
+		pulledImage: &imagestore.Image{Digest: testDigest},
+		bundle:      &imagestore.Bundle{Digest: testDigest, Path: testBundleDir},
+	}
+	deps := runDepsForTest(store)
+	deps.boot = func(_ context.Context, _ io.Writer, _ sandbox.Config) error {
+		return want
+	}
+	if err := runRun(context.Background(), io.Discard, "img:1", nil, "", deps); !errors.Is(err, want) {
+		t.Fatalf("err = %v, want wrap of %v", err, want)
+	}
+}
+
 // TestDefaultRunDeps confirms the production deps wiring at least
 // constructs without panic. We only call defaultRunDeps to populate
 // the function pointers; we don't invoke the bound implementations

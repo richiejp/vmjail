@@ -43,6 +43,9 @@ func New(root string, quota int64) (*Store, error) {
 		return nil, fmt.Errorf("imagestore: root is required")
 	}
 	for _, sub := range []string{imagesDir, bundlesDir, locksDir} {
+		// #nosec G301 — store subdirs (images, bundles, locks) are
+		// traversed by the daft-sandboxd subprocesses including
+		// virtiofsd which may run as a different uid.
 		if err := os.MkdirAll(filepath.Join(root, sub), 0o755); err != nil {
 			return nil, fmt.Errorf("imagestore: mkdir %s: %w", sub, err)
 		}

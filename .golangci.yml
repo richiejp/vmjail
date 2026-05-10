@@ -1,13 +1,45 @@
 version: "2"
 
+# Linter selection is intentionally strict. Adding linters here is
+# encouraged; removing them requires justification per
+# CONTRIBUTING.md "Verification monotonically increases" — the
+# static-analysis surface is treated the same way as the test
+# coverage baseline.
+
 linters:
   enable:
+    # Built-in / always-on hygiene:
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+
+    # Project-specific complexity ceilings:
     - gocyclo
     - gocognit
-    - dupl
     - funlen
     - maintidx
+    - dupl
     - goconst
+
+    # The Go-doesn't-enforce-this-for-you set:
+    # See CONTRIBUTING.md "Go doesn't enforce this for you" —
+    # these compensate for the language's permissive defaults.
+    - errcheck       # every error return is handled
+    - errorlint      # %w not %v for error wrapping
+    - nilerr         # return non-nil err after checking nil
+    - nilnil         # don't return (nil, nil)
+    - bodyclose      # close HTTP response bodies
+    - contextcheck   # propagate context.Context, don't drop it
+    - rowserrcheck   # check sql.Rows.Err
+    - sqlclosecheck  # close sql.Rows / sql.Stmt
+    - gosec          # security-focused checks
+    - gocritic       # large bag of diagnostics
+    - copyloopvar    # loop var capture
+    - prealloc       # slice preallocation in loops
+    - dupword        # accidental "the the"
+    - misspell       # misspellings in comments + strings
+
   settings:
     gocyclo:
       min-complexity: 100
@@ -23,3 +55,43 @@ linters:
     goconst:
       min-len: 3
       min-occurrences: 3
+    errcheck:
+      # Discard with `_ =` is allowed only with a nearby comment;
+      # errcheck doesn't enforce the comment but does enforce that
+      # callers can't silently drop errors with a bare call.
+      check-type-assertions: true
+      check-blank: false
+    gosec:
+      # Some gosec rules are noisy or context-dependent. The set
+      # below is what bites in this codebase. Add to the exclude
+      # list only with a one-line justification.
+      excludes:
+        # G104 is errcheck under a different name; we already enable
+        # errcheck, so skip the gosec dup.
+        - G104
+        # G306 (file perms 0644 not strict enough) — config.json
+        # and meta.json are intentionally world-readable.
+        - G306
+    gocritic:
+      # gocritic's "experimental" diagnostics include some that
+      # over-flag patterns Go code commonly uses. Pin to the stable
+      # tag set + a couple of opinionated extras.
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+      disabled-checks:
+        # ifElseChain over a switch is a stylistic preference; we
+        # use both depending on the local readability.
+        - ifElseChain
+        # whyNoLint requires a justification on every nolint
+        # directive; that's what reviewers enforce by hand —
+        # auto-flagging it on every nolint line is too noisy.
+        - whyNoLint
+        # hugeParam fires at 80 bytes which is below the size of
+        # our Config and BundleOptions structs. Passing those by
+        # value is the intentional immutability contract for
+        # interface methods like runner.run / shareSidecar.start;
+        # converting to pointers would lose that. Disable wholesale
+        # rather than annotating every interface method.
+        - hugeParam
