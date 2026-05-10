@@ -46,6 +46,8 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newPullCmd())
 	root.AddCommand(newImagesCmd())
 	root.AddCommand(newRunCmd())
+	root.AddCommand(newAuthCmd())
+	root.AddCommand(newWorkspaceCmd())
 	return root
 }
 

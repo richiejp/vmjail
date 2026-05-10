@@ -72,6 +72,9 @@ func newRunCmd() *cobra.Command {
 		"workspace name to fetch from --workspace-from")
 	cmd.Flags().StringVar(&opts.configDir, "config-dir", "",
 		"override the daft-sandboxd config dir (default: $XDG_CONFIG_HOME/daft/sandboxd)")
+	cmd.Flags().BoolVar(&opts.keepWorkspace, "keep-workspace", false,
+		"after the VM exits, leave the workspace tmpdir on disk and print its path "+
+			"so `daft-sandboxd workspace serve --path=<dir>` can expose it for pull-back")
 	return cmd
 }
 
@@ -84,6 +87,7 @@ type runOptions struct {
 	workspaceFrom string
 	workspaceName string
 	configDir     string
+	keepWorkspace bool
 }
 
 // runDeps bundles the moving parts of `run` so unit tests can swap
@@ -242,6 +246,11 @@ func (o runOptions) validate() error {
 // pullWorkspaceFrom; for --workspace it's the path the user gave
 // us; otherwise the empty string with a no-op cleanup (the boot
 // config simply omits the share).
+//
+// When opts.keepWorkspace is set the tmpdir is preserved past the
+// run — the cleanup becomes a no-op that prints the path to stdout
+// so the operator knows where to point a follow-up
+// `daft-sandboxd workspace serve` for pull-back.
 func resolveWorkspaceDir(ctx context.Context, opts runOptions, deps runDeps) (dir string, cleanup func(), err error) {
 	if opts.workspaceFrom == "" {
 		return opts.workspace, func() {}, nil
@@ -251,6 +260,16 @@ func resolveWorkspaceDir(ctx context.Context, opts runOptions, deps runDeps) (di
 	})
 	if err != nil {
 		return "", nil, fmt.Errorf("daft-sandboxd: pull workspace: %w", err)
+	}
+	if opts.keepWorkspace {
+		realCleanup := cleanup
+		cleanup = func() {
+			fmt.Fprintf(os.Stderr,
+				"daft-sandboxd: workspace kept at %s\n"+
+					"daft-sandboxd: serve back with `daft-sandboxd workspace serve --path=%s --workspace=<name> --addr=...`\n",
+				dir, dir)
+			_ = realCleanup // intentionally not invoked: --keep-workspace's whole point
+		}
 	}
 	return dir, cleanup, nil
 }

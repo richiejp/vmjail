@@ -345,6 +345,15 @@ Out of Scope:
       FUSE) is the v0 model: a future `daft-fuse` slice will move
       this to lazy-on-read so multi-GB workspaces don't need to
       materialise on disk before the VM boots.
+      **Slice 2.6 landed (pull-back)**: `daft-sandboxd run
+      --keep-workspace` skips the post-VM tmpdir cleanup and prints
+      its path; new `daft-sandboxd workspace serve --path=<dir>
+      --workspace=<name>` exposes that dir back over mTLS so the
+      user-host can `daft workspace pull` modifications back. New
+      `daft-sandboxd auth show/list/approve/remove` mirror the daft
+      client's auth subcommands, scoped to the sandboxd config dir,
+      so the operator can manage the cross-host TOFU peer set on
+      both ends without editing peers.json by hand.
       **Remaining slices**:
       - Slice 3: FastCDC chunker behind the same Chunker
         interface (replace FixedSizeChunker).

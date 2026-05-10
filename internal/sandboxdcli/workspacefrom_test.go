@@ -133,6 +133,33 @@ func TestRunCmdRunsViaCobra(t *testing.T) {
 	}
 }
 
+// TestRunKeepWorkspaceSkipsCleanup proves the --keep-workspace
+// branch in resolveWorkspaceDir replaces cleanup with a print-only
+// no-op so the tmpdir survives the run.
+func TestRunKeepWorkspaceSkipsCleanup(t *testing.T) {
+	tmpdir := t.TempDir()
+	cleanupCalled := false
+	store := &fakeStore{
+		pulledImage: &imagestore.Image{Ref: testImageRef, Digest: testDigest},
+		bundle:      &imagestore.Bundle{Digest: testDigest, Path: testBundleDir},
+	}
+	deps := runDepsForTest(store)
+	deps.pullWorkspaceFrom = func(_ context.Context, _ pullWorkspaceOpts) (string, func(), error) {
+		return tmpdir, func() { cleanupCalled = true }, nil
+	}
+	if err := runRun(context.Background(), io.Discard, runOptions{
+		ref:           testImageRef,
+		workspaceFrom: testFakeUserHost,
+		workspaceName: "ws",
+		keepWorkspace: true,
+	}, deps); err != nil {
+		t.Fatalf("runRun: %v", err)
+	}
+	if cleanupCalled {
+		t.Error("cleanup should NOT be invoked under --keep-workspace")
+	}
+}
+
 func TestRunWorkspaceFromPropagatesPullError(t *testing.T) {
 	deps := runDepsForTest(&fakeStore{})
 	wantErr := errors.New("synthetic pull failure")
