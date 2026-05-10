@@ -2,10 +2,15 @@
 #
 # darkaifactory pre-commit hook.
 #
-# Runs format check, lint, tests, and a coverage regression check before
-# allowing a commit. Install with `make hooks`.
+# Runs format check, lint, tests, coverage gate, benchmark gate, and
+# the KVM-gated integration suite before allowing a commit. Install
+# with `make hooks`.
 #
-# Skip with `git commit --no-verify` (discouraged — only when you know why).
+# Do NOT bypass this with `git commit --no-verify`. The gates exist
+# because previous slips made it through review; bypassing them
+# re-creates the failure modes they were added to prevent. If a gate
+# is wrong for your change, fix the gate (and document why) — don't
+# ship around it.
 
 set -euo pipefail
 
@@ -33,9 +38,6 @@ make --no-print-directory bench-check
 # need it, so any developer who can write sandbox code already has
 # the prerequisites. CI environments without KVM are useless here
 # and have no business gating commits.
-#
-# Use --no-verify only for genuine doc-only commits where you can
-# defend the choice in code review.
 echo "[pre-commit] KVM-gated integration tests..."
 make --no-print-directory integration
 

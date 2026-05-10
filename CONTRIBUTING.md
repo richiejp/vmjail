@@ -19,8 +19,11 @@ you needed to commit earlier.
 ### Use the git hooks
 
 Run `make hooks` once per clone. The pre-commit hook checks formatting,
-linting, tests, and coverage regression. If a commit is blocked, fix the
-underlying issue rather than bypassing the hook with `--no-verify`.
+linting, tests, coverage regression, the benchmark gate, and the
+KVM-gated integration suite. **`--no-verify` is never OK.** If a
+gate is wrong for your change, fix the gate and explain why in the
+same commit. Bypassing it re-creates the failure modes the gate was
+added to prevent.
 
 ### Keep `PLAN.md` current
 
@@ -91,8 +94,8 @@ who can write sandbox code already has the prerequisites. CI
 environments without KVM are useless for this project and don't
 gate commits. There are no skips: missing artefact → `t.Fatalf`,
 missing `/dev/kvm` → `t.Fatalf`, broken Nix → the make target
-fails. Use `--no-verify` only for genuine doc-only commits where
-you can defend the choice in review.
+fails. And as above, `--no-verify` is never OK — if the gate is
+wrong for your change, fix the gate.
 
 Artefact resolution is automatic: env vars (`DAFT_*`) override,
 otherwise the resolver looks for the `result-*` symlinks that

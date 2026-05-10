@@ -1,19 +1,16 @@
 //go:build linux && integration
 
 // Integration tests + benchmarks live behind the `integration` build
-// tag because they require:
-//   - Linux (KVM is Linux-only)
-//   - /dev/kvm (the only legitimate skip — some hosts/CI lack it)
-//   - All sandbox-host artefacts on disk: cloud-hypervisor, the
-//     guest kernel, the initramfs, virtiofsd, and a Nix-built OCI
-//     bundle for the container test.
+// tag. They require Linux + /dev/kvm + all sandbox-host artefacts on
+// disk (cloud-hypervisor, guest kernel, initramfs, virtiofsd, and
+// the Nix-built OCI bundle). None of these are optional: if any are
+// missing, the resolver t.Fatalfs. There are no skips. Linux+KVM
+// is a hard prerequisite for this codebase — CI environments
+// without KVM are useless and don't gate commits.
 //
 // Run them via `make integration`, which builds the artefacts via
-// Nix and points the resolver at `./result-*` symlinks. Plain
-// `go test ./...` and `go test -tags=integration ./internal/sandbox`
-// without the symlinks will NOT silently pass — the resolver fails
-// loudly, because "missing artefacts" is a build setup bug, not a
-// dev convenience.
+// Nix and points the resolver at `./result-*` symlinks at the repo
+// root.
 
 package sandbox
 
