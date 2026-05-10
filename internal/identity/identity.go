@@ -220,3 +220,27 @@ func Load(dir string) (*Identity, error) {
 func (id *Identity) Fingerprint() Fingerprint {
 	return FingerprintCert(id.Cert)
 }
+
+// LoadOrGenerate is the first-run-friendly identity bootstrap:
+// load if dir already has cert+key, generate a fresh identity for
+// role and persist it if the dir is empty. Anything other than a
+// missing-file error is fatal — corrupt PEM, perm errors, etc.
+// must never silently regenerate, because regenerating means every
+// peer that already approved this fingerprint stops trusting us.
+func LoadOrGenerate(dir string, role Role) (*Identity, error) {
+	id, err := Load(dir)
+	if err == nil {
+		return id, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("identity: load: %w", err)
+	}
+	fresh, err := Generate(role)
+	if err != nil {
+		return nil, fmt.Errorf("identity: generate: %w", err)
+	}
+	if err := Save(dir, fresh); err != nil {
+		return nil, fmt.Errorf("identity: save: %w", err)
+	}
+	return fresh, nil
+}

@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
@@ -165,23 +164,8 @@ func resolveConfigDir(override string) (string, error) {
 	return filepath.Join(base, configSubdir), nil
 }
 
-// loadOrGenerate is the "first-run friendly" identity bootstrap:
-// load if the dir already has cert+key, generate fresh ones if it
-// doesn't. Anything else (corrupt PEM, perm error) is fatal.
+// loadOrGenerate is a thin wrapper around identity.LoadOrGenerate
+// fixing the role to RoleOrchestrator.
 func loadOrGenerate(dir string) (*identity.Identity, error) {
-	id, err := identity.Load(dir)
-	if err == nil {
-		return id, nil
-	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		return nil, fmt.Errorf("orchestrator: load identity: %w", err)
-	}
-	fresh, err := identity.Generate(identity.RoleOrchestrator)
-	if err != nil {
-		return nil, fmt.Errorf("orchestrator: generate identity: %w", err)
-	}
-	if err := identity.Save(dir, fresh); err != nil {
-		return nil, fmt.Errorf("orchestrator: save identity: %w", err)
-	}
-	return fresh, nil
+	return identity.LoadOrGenerate(dir, identity.RoleOrchestrator)
 }

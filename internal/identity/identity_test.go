@@ -306,6 +306,51 @@ func TestLoadRejectsKeyMismatchedToCert(t *testing.T) {
 	}
 }
 
+func TestLoadOrGenerateFirstRunPersists(t *testing.T) {
+	dir := t.TempDir()
+	id1, err := LoadOrGenerate(dir, RoleClient)
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	id2, err := LoadOrGenerate(dir, RoleClient)
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+	if id1.Fingerprint() != id2.Fingerprint() {
+		t.Error("fingerprint changed across calls — second call regenerated")
+	}
+}
+
+func TestLoadOrGeneratePropagatesCorruptCert(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, certFilename), []byte("garbage"), 0o600); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, keyFilename), []byte("garbage"), 0o600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+	if _, err := LoadOrGenerate(dir, RoleClient); err == nil {
+		t.Fatal("expected error for corrupt identity")
+	}
+}
+
+func TestLoadOrGenerateRejectsBadRole(t *testing.T) {
+	if _, err := LoadOrGenerate(t.TempDir(), "zalgo"); err == nil {
+		t.Fatal("expected error for unknown role")
+	}
+}
+
+func TestLoadOrGeneratePropagatesSaveError(t *testing.T) {
+	parent := t.TempDir()
+	blocker := filepath.Join(parent, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if _, err := LoadOrGenerate(filepath.Join(blocker, "child"), RoleClient); err == nil {
+		t.Fatal("expected save failure when dir parent is a file")
+	}
+}
+
 // Patch a non-Ed25519 cert into the directory so the
 // "cert.PublicKey is not ed25519" branch fires.
 func TestLoadRejectsCertWithRSAPublicKey(t *testing.T) {

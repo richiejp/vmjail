@@ -237,11 +237,20 @@ Out of Scope:
       (`internal/orchestrator/server_test.go`) cover the
       approved/unapproved/unknown-server matrix. Slice 2 of the
       mTLS skeleton; client-side `daft auth approve` lands next.
-- [ ] Slice 3: client-side mTLS — `daft auth list/approve/remove`
-      subcommands on the existing `daft` CLI, persisting to
-      `$XDG_CONFIG_HOME/daft/client/peers.json`; a `daft ping
-      <orchestrator>` smoke test that uses the approved identity
-      to call `Health.Ping`.
+- [x] Slice 3: client-side mTLS. `daft auth show/list/approve/remove`
+      subcommands manage the local TOFU peer set under
+      `$XDG_CONFIG_HOME/daft/client/`; first run autogenerates an
+      Ed25519 client identity (cert.pem + key.pem, 0o600) the same
+      way the orchestrator does. `daft ping <addr> --message=X
+      --timeout=...` rounds-trips a Health.Ping over HTTP/2 + mTLS
+      to verify both sides of the trust loop in one command.
+      Identity bootstrap is now a single shared function
+      (`identity.LoadOrGenerate`) used by both daft and
+      daft-orchestrator, so the trust state machine has one
+      implementation to audit. Tests cover approved /
+      unapproved-server / unapproved-client / corrupt-identity /
+      corrupt-peer-store branches end-to-end via an in-process
+      orchestrator.
 - [ ] Workspace sync: desync chunks + daft-fuse
 
 ## Architecture
