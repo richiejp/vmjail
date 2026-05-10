@@ -43,6 +43,8 @@ func NewRootCmd() *cobra.Command {
 	}
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newHelloCmd())
+	root.AddCommand(newPullCmd())
+	root.AddCommand(newImagesCmd())
 	return root
 }
 

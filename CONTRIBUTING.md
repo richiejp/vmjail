@@ -76,11 +76,43 @@ and edge cases (empty input, zero, max int, unicode, etc).
 
 ### Coverage regression check
 
-The pre-commit hook compares total Go test coverage against `coverage.txt`
-and refuses commits that drop coverage by more than 1.0 percentage point. If
-you have a legitimate reason to drop coverage (e.g. you removed a heavily-
-tested package), update `coverage.txt` (`make cover`) in the same commit and
-explain why in the commit message.
+The pre-commit hook (via `make cover-check` and
+`scripts/cover-check.sh`) enforces two gates. Both must pass:
+
+1. **Total coverage** stays within 1.0pp of the committed
+   `coverage.txt` baseline. Catches "we drifted lower" overall.
+2. **Per-file coverage** is at least 80% for every non-test source
+   file with more than 10 statements. Catches the case where one
+   file is dark while the rest of the codebase masks it — high
+   total coverage isn't a substitute for "every meaningful file is
+   exercised."
+
+If `cover-check` fails, the answer is **never** to lower the
+baseline or weaken the per-file threshold to make the bar fit. Add
+the missing tests. Real options when coverage is hard:
+
+- **Mock harder.** Inject the I/O surface so the function under
+  test isn't asking for the network / filesystem / a privileged
+  syscall. The pattern in `internal/sandbox` (the `runner` and
+  `shareSidecar` interfaces) and `internal/imagestore` (the
+  `puller` interface, plus go-containerregistry's
+  `pkg/registry` as an in-process httptest server) covers most of
+  the cases we've hit so far.
+- **Provide real fixtures.** When mocking would amount to
+  re-implementing the dependency, build the real thing as a test
+  fixture: a dummy OCI image pushed into a localhost registry, a
+  fake-binary self-exec via `TestMain`, a synthetic tar stream
+  fed straight into the unpacker.
+- **Remove dead branches.** Coverage is a forcing function: if a
+  branch can't be exercised by any test, it probably can't be
+  reached in production either.
+
+Only update `coverage.txt` when you've genuinely deleted
+heavily-tested code (so the new total *can* be higher than the
+old one would predict). Explain the bump in the commit message.
+
+Coverage is the price of merge — pay it on the way in, not by
+relaxing the gate.
 
 ### Fuzz where you can
 

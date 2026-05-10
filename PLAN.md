@@ -137,6 +137,32 @@ Out of Scope:
         delivered through the share, so the rootfs is a sub-dir of a
         virtiofs mount rather than its own mountpoint. Acceptable
         for v0 — the VM is the security boundary, not the container.
+- [x] OCI image pull on the sandbox-host: new `internal/imagestore`
+      package wraps go-containerregistry. `Store.Pull` resolves a
+      ref, sums layer sizes, allocates against a quota (default
+      `imagestore.DefaultQuota` = 50 GiB), evicts LRU images when a
+      pull would overflow, and refuses up-front if a single image
+      is larger than the entire quota. `Store.Bundle` flattens
+      cached layers into a runnable OCI bundle (config.json built
+      from the image's Entrypoint/Cmd/Env/Cwd plus our default
+      mount/namespace template). Bundle directories are
+      refcount-locked so a running VM's bundle can't be evicted.
+      `daft-sandboxd` gains `pull`, `images ls`, `images rm`,
+      `images prune --older-than DUR`. Quota and store root via
+      `DAFT_STORE_QUOTA` (accepts K/M/G/T suffix) and
+      `DAFT_STORE_DIR`. Tests use go-containerregistry's
+      in-process registry handler so pull/bundle paths exercise
+      the real crane code without a network. Fuzz target:
+      `FuzzParseBytes`. Coverage held at 90% baseline via real
+      registry fixtures + targeted error-path tests (write-error,
+      malformed meta.json, locked-bundle eviction refusal).
+- [x] Per-file coverage gate: `scripts/cover-check.sh` enforces
+      ≥80% per non-test file (>10 statements) on top of the
+      existing 1pp total-drop limit. Catches the case where
+      total coverage stays high while one file is dark.
+- [ ] Wire imagestore into `daft-sandboxd run <image-ref> <cmd>`
+      so the bundled hello-container goes away in favour of any
+      pulled image. Workspace mount as a second virtiofs share.
 - [ ] HTTP/2 + mTLS auth: client ↔ orchestrator
 - [ ] Workspace sync: desync chunks + daft-fuse
 

@@ -1,10 +1,28 @@
 module github.com/richiejp/darkaifactory
 
-go 1.25
-
-require github.com/spf13/cobra v1.10.1
+go 1.25.0
 
 require (
+	github.com/google/go-containerregistry v0.21.5
+	github.com/spf13/cobra v1.10.2
+	github.com/xeipuuv/gojsonschema v1.2.0
+)
+
+require (
+	github.com/containerd/stargz-snapshotter/estargz v0.18.2 // indirect
+	github.com/docker/cli v29.4.0+incompatible // indirect
+	github.com/docker/docker-credential-helpers v0.9.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
+	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/mitchellh/go-homedir v1.1.0 // indirect
+	github.com/opencontainers/go-digest v1.0.0 // indirect
+	github.com/opencontainers/image-spec v1.1.1 // indirect
+	github.com/sirupsen/logrus v1.9.4 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/vbatts/tar-split v0.12.2 // indirect
+	github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f // indirect
+	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.43.0 // indirect
+	gotest.tools/v3 v3.5.2 // indirect
 )

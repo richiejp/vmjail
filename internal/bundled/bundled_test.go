@@ -122,6 +122,41 @@ func TestExtractRewritesOnSizeChange(t *testing.T) {
 	}
 }
 
+// TestExtractMkdirError covers the error path of os.MkdirAll inside
+// extractTo. We point dir at a path whose parent is a regular file,
+// which makes MkdirAll fail with ENOTDIR.
+func TestExtractMkdirError(t *testing.T) {
+	parent := t.TempDir()
+	blocker := filepath.Join(parent, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed blocker file: %v", err)
+	}
+
+	bytesAtSize := bytes.Repeat([]byte("X"), minBundledSize)
+	_, err := extractTo(filepath.Join(blocker, "cache"),
+		bytesAtSize, bytesAtSize, bytesAtSize, bytesAtSize)
+	if err == nil {
+		t.Fatal("expected error when parent is a regular file")
+	}
+}
+
+// TestExtractWriteError covers the error path of writeIfChanged when
+// the target path is a directory rather than a file (so the OpenFile
+// inside os.WriteFile fails).
+func TestExtractWriteError(t *testing.T) {
+	dir := t.TempDir()
+	// Pre-create a directory at the path where cloud-hypervisor would
+	// be written — os.WriteFile then can't replace it.
+	if err := os.MkdirAll(filepath.Join(dir, "cloud-hypervisor"), 0o755); err != nil {
+		t.Fatalf("pre-create dir: %v", err)
+	}
+	bytesAtSize := bytes.Repeat([]byte("X"), minBundledSize)
+	_, err := extractTo(dir, bytesAtSize, bytesAtSize, bytesAtSize, bytesAtSize)
+	if err == nil {
+		t.Fatal("expected error when artifact path is a directory")
+	}
+}
+
 func TestIsBundledReflectsBuildState(t *testing.T) {
 	// In `go test` runs (no Nix preBuild), the embedded slices are
 	// stubs, so IsBundled should be false. The Nix-built binary
