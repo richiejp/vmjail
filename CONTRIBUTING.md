@@ -77,31 +77,28 @@ and edge cases (empty input, zero, max int, unicode, etc).
 ### Integration tests on every commit
 
 The pre-commit hook runs the KVM-gated integration tests in
-`internal/sandbox/integration_test.go` (build tag: `linux,integration`)
-on every commit, via `make integration`. They:
+`internal/sandbox/integration_test.go` (build tag:
+`linux,integration`) on every commit, via `make integration`. They:
 
 - nix-build the artefacts (`cloud-hypervisor`, `kernel`, `virtiofsd`,
   `initramfs`, `hello-bundle`),
 - spawn real VMs via Cloud Hypervisor against `/dev/kvm`,
 - and assert the full pull → bundle → boot → run pipeline.
 
-Why on commit and not nightly? Because the sandbox can't run without
-KVM on Linux, so any developer who can write sandbox code already
-has the prerequisites. There is no "I can't run integration tests
-locally" excuse for someone editing this codebase — if you can't
-run them, you can't run the thing.
+**Linux + KVM is a hard prerequisite for committing.** There is no
+useful work in this codebase that doesn't need it, so any developer
+who can write sandbox code already has the prerequisites. CI
+environments without KVM are useless for this project and don't
+gate commits. There are no skips: missing artefact → `t.Fatalf`,
+missing `/dev/kvm` → `t.Fatalf`, broken Nix → the make target
+fails. Use `--no-verify` only for genuine doc-only commits where
+you can defend the choice in review.
 
-The hook self-skips only when `/dev/kvm` is genuinely missing or
-`nix` isn't on PATH (e.g. typo-fix from a Mac). Use those skips on
-the rare doc-only commit; for code changes, commit from a host
-that has both, full stop.
-
-Artefact resolution in tests is automatic: env vars (`DAFT_*`)
-override, otherwise the resolver looks for the `result-*` symlinks
-that `make integration-build` creates at the repo root. A missing
-artefact is a `t.Fatalf`, never a `t.Skip` — silently skipping
-integration tests is exactly the kind of "green CI, broken merge"
-failure mode this gate exists to prevent.
+Artefact resolution is automatic: env vars (`DAFT_*`) override,
+otherwise the resolver looks for the `result-*` symlinks that
+`make integration-build` creates at the repo root. Silently
+skipping integration tests is exactly the kind of "green CI,
+broken merge" failure mode this gate exists to prevent.
 
 ### Coverage regression check
 

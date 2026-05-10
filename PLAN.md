@@ -162,12 +162,11 @@ Out of Scope:
       total coverage stays high while one file is dark.
 - [x] KVM-gated integration tests run on every commit. Behind
       a `linux,integration` build tag with auto-resolution from
-      `result-*` symlinks (env-var override available); missing
-      artefacts are a `t.Fatalf`, not a `t.Skip`. Pre-commit
-      hook calls `make integration` which nix-builds the
-      artefacts and runs `go test -tags=integration`. Self-
-      skips only when `/dev/kvm` or `nix` is genuinely
-      unavailable.
+      `result-*` symlinks (env-var override available). No skips:
+      missing artefact → `t.Fatalf`, missing `/dev/kvm` →
+      `t.Fatalf`. Linux+KVM is a hard commit prerequisite — CI
+      without KVM is useless for this project and doesn't gate
+      commits.
 - [x] `daft-sandboxd run <image-ref> [cmd…]` closes the loop:
       pulls the image into the local store (LRU under quota),
       bundles it, locks the bundle for the VM lifetime, shares

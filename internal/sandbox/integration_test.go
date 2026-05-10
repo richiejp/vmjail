@@ -36,12 +36,11 @@ const testTagDaftshare = "daftshare"
 // resolveArtifacts builds a sandbox.Config from a) DAFT_* env vars
 // when set, falling back to b) ./result-* symlinks at the repo
 // root (the default Nix output convention). It is intentionally
-// strict — the sandbox can't run without these artefacts on a
-// Linux+KVM host, so a missing one is a fatal test failure, never
-// a skip.
-//
-// Only `/dev/kvm` missing remains a legitimate skip (some CI hosts
-// lack it).
+// strict: every prerequisite for running the sandbox — the
+// artefacts AND `/dev/kvm` — must be present, otherwise the test
+// fails loudly. There are no legitimate skips. If you can't run
+// these tests, you can't run the thing the tests are testing, and
+// you have no business merging changes to it.
 func resolveArtifacts(t testing.TB) Config {
 	t.Helper()
 
@@ -59,7 +58,11 @@ func resolveArtifacts(t testing.TB) Config {
 	}
 
 	if _, err := os.Stat("/dev/kvm"); err != nil {
-		t.Skipf("/dev/kvm not available; skipping: %v", err)
+		t.Fatalf(
+			"sandbox integration: /dev/kvm unavailable (%v). Linux+KVM is "+
+				"a hard prerequisite for this project; develop on a host that "+
+				"can actually run a sandbox.", err,
+		)
 	}
 	return cfg
 }

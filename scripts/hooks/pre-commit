@@ -27,22 +27,16 @@ make --no-print-directory cover-check
 echo "[pre-commit] benchmark regression check (fail >2.00x, warn >1.10x)..."
 make --no-print-directory bench-check
 
-# Integration tests need /dev/kvm, the Nix toolchain, and the artefacts
-# they build. A dev workstation that can run the sandbox at all has all
-# three. CI environments without /dev/kvm should run pre-commit on a
-# machine that does — same logic as "you can't develop the sandbox
-# without /dev/kvm". Skip with --no-verify only when intentionally
-# committing on a non-sandbox host (e.g. doc-only changes from a Mac).
+# Integration tests need /dev/kvm, the Nix toolchain, and the
+# artefacts they build. Linux+KVM is a hard prerequisite for this
+# project — there is no useful work in this codebase that doesn't
+# need it, so any developer who can write sandbox code already has
+# the prerequisites. CI environments without KVM are useless here
+# and have no business gating commits.
+#
+# Use --no-verify only for genuine doc-only commits where you can
+# defend the choice in code review.
 echo "[pre-commit] KVM-gated integration tests..."
-if [ ! -e /dev/kvm ]; then
-	echo "  /dev/kvm missing — skipping integration tests."
-	echo "  (This is the only legitimate skip; if you're on a sandbox"
-	echo "  host, fix KVM access before committing sandbox changes.)"
-elif ! command -v nix >/dev/null 2>&1; then
-	echo "  nix missing — skipping integration tests. Install nix or"
-	echo "  commit from a host with the dev shell available."
-else
-	make --no-print-directory integration
-fi
+make --no-print-directory integration
 
 echo "[pre-commit] OK"
