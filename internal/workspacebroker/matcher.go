@@ -66,6 +66,7 @@ type Matcher struct {
 	mu        sync.Mutex
 	serves    map[ServeKey]chan<- *PendingAttach
 	sandboxes map[string]*sandboxSub
+	sessions  *SessionBroker
 }
 
 type sandboxSub struct {
@@ -73,13 +74,19 @@ type sandboxSub struct {
 	notif chan<- *PendingAttach
 }
 
-// New returns an empty Matcher.
+// New returns an empty Matcher with a fresh SessionBroker.
 func New() *Matcher {
 	return &Matcher{
 		serves:    map[ServeKey]chan<- *PendingAttach{},
 		sandboxes: map[string]*sandboxSub{},
+		sessions:  NewSessionBroker(),
 	}
 }
+
+// Sessions returns the matcher's SessionBroker. The orchestrator's
+// Relay handler uses it to Pair the two halves of a brokered
+// session; tests use it to inspect reservations.
+func (m *Matcher) Sessions() *SessionBroker { return m.sessions }
 
 // SubscribeServe registers a serve and returns a function the
 // caller must invoke on stream teardown to release the slot. The
@@ -175,6 +182,14 @@ func (m *Matcher) RequestAttach(caller identity.Fingerprint, serveKey ServeKey, 
 	}
 	if !sandOK {
 		return "", fmt.Errorf("%w: sandbox_id=%q", ErrNoSandbox, sandboxID)
+	}
+
+	// Reserve the session in the broker before notifying either
+	// peer — otherwise a peer that reacts very fast to its
+	// PendingAttach could call Relay before Reserve has run, and
+	// see ErrNoSession.
+	if err := m.sessions.Reserve(sessionID, caller, sandSub.owner); err != nil {
+		return "", fmt.Errorf("workspacebroker: reserve session: %w", err)
 	}
 
 	serveEv := &PendingAttach{

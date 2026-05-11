@@ -156,12 +156,79 @@ func (h *BrokerHandler) RequestAttach(
 // brokered session. The orchestrator never sees plaintext — the
 // payloads inside the splice are end-to-end mTLS between client
 // and sandbox-host.
+//
+// Both peers must dial Relay independently after RequestAttach
+// has minted a session_id and notified them. The first message on
+// each side must be a RelayHello carrying that session_id; all
+// subsequent messages are Data frames that the orchestrator copies
+// to the partner's stream.
 func (h *BrokerHandler) Relay(
-	_ context.Context,
-	_ *connect.BidiStream[workspacebrokerv1.RelayMessage, workspacebrokerv1.RelayMessage],
+	ctx context.Context,
+	stream *connect.BidiStream[workspacebrokerv1.RelayMessage, workspacebrokerv1.RelayMessage],
 ) error {
-	return connect.NewError(connect.CodeUnimplemented,
-		errors.New("orchestrator: Relay not yet implemented"))
+	fp, ok := PeerFingerprintFromRequestHeader(stream.RequestHeader())
+	if !ok {
+		return connect.NewError(connect.CodeUnauthenticated,
+			errors.New("orchestrator: no mTLS peer identity"))
+	}
+	first, err := stream.Receive()
+	if err != nil {
+		return err
+	}
+	hello := first.GetHello()
+	if hello == nil {
+		return connect.NewError(connect.CodeInvalidArgument,
+			errors.New("orchestrator: first relay message must be Hello"))
+	}
+	sessionID := hello.GetSessionId()
+	if sessionID == "" {
+		return connect.NewError(connect.CodeInvalidArgument,
+			errors.New("orchestrator: empty session_id"))
+	}
+
+	adapter := &connectRelayAdapter{stream: stream}
+	pairing, err := h.matcher.Sessions().Pair(ctx, sessionID, fp, adapter)
+	if err != nil {
+		return mapSessionErr(err)
+	}
+	defer pairing.Close()
+
+	return workspacebroker.Splice(ctx, adapter, pairing.Partner, pairing.Done)
+}
+
+// connectRelayAdapter wraps the generated Connect bidi stream as a
+// workspacebroker.DataStream. RecvData ignores Hello frames (a
+// well-behaved peer only sends Hello as the first message, which
+// is consumed by the Relay handler before splicing starts; an
+// extra Hello mid-stream is treated as an empty Data frame for
+// robustness).
+type connectRelayAdapter struct {
+	stream *connect.BidiStream[workspacebrokerv1.RelayMessage, workspacebrokerv1.RelayMessage]
+}
+
+func (a *connectRelayAdapter) RecvData() ([]byte, error) {
+	msg, err := a.stream.Receive()
+	if err != nil {
+		return nil, err
+	}
+	return msg.GetData(), nil
+}
+
+func (a *connectRelayAdapter) SendData(data []byte) error {
+	return a.stream.Send(&workspacebrokerv1.RelayMessage{
+		Body: &workspacebrokerv1.RelayMessage_Data{Data: data},
+	})
+}
+
+func mapSessionErr(err error) error {
+	switch {
+	case errors.Is(err, workspacebroker.ErrNoSession):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	case errors.Is(err, workspacebroker.ErrWrongPeer):
+		return connect.NewError(connect.CodePermissionDenied, err)
+	default:
+		return connect.NewError(connect.CodeInternal, err)
+	}
 }
 
 // pumpAttachEvents forwards PendingAttach values from notif to

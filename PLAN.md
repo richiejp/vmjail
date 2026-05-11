@@ -517,12 +517,29 @@ Out of Scope:
         message; orchestrator splices the two streams. Inner
         traffic is opaque (end-to-end mTLS).
 
-      *Scope-cut for the first commit (Slice 3.5a).* Proto +
-      orchestrator-side `BrokerService` handler skeleton with
-      the matching logic (Register/RequestAttach pairing) but
-      **no actual byte relay yet**. Tests pin the matching
-      state machine with mock streams. Follow-up commits:
-      - 3.5b: `Relay` byte-splice with backpressure.
+      *Scope-cut for the first commit (Slice 3.5a) — landed.*
+      Proto + orchestrator-side `BrokerService` handler skeleton
+      with the matching logic (Register/RequestAttach pairing)
+      but no actual byte relay yet. Tests pin the matching state
+      machine with mock streams.
+
+      *Slice 3.5b — landed.* `Relay` byte-splice. New
+      `SessionBroker` in `internal/workspacebroker` rendezvouses
+      two halves of a session_id (Reserve at RequestAttach time,
+      Pair at Relay-handler time). `Splice` is a transport-neutral
+      bidirectional copy with a shared `Done` channel so either
+      side returning unblocks the partner's blocked Receive.
+      Connect bidi stream is adapted to the `DataStream` interface
+      via `connectRelayAdapter`. Reservations have a 30-second
+      TTL (lazy-swept on Reserve/Pair) and same-identity
+      sessions (alice→alice) are allowed — session_id is the
+      bearer credential, outer mTLS already authenticated each
+      half. Error codes: ErrNoSession→FailedPrecondition,
+      ErrWrongPeer→PermissionDenied. End-to-end test pumps
+      payloads in both directions through the splice and verifies
+      clean shutdown propagation.
+
+      *Remaining 3.5 commits.*
       - 3.5c: Migrate `daft workspace serve` and
         `daft-sandboxd run --workspace-from` to use the
         broker. Keep `--workspace-direct <addr>` as the

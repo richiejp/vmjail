@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -437,23 +438,171 @@ func TestMapMatcherErr(t *testing.T) {
 	}
 }
 
-// TestBrokerRelayUnimplemented pins the 3.5a stub behaviour —
-// when 3.5b lands this test will need updating.
-func TestBrokerRelayUnimplemented(t *testing.T) {
+// TestBrokerRelayHappyPath runs the full Slice 3.5b round trip:
+// both peers register, the client RequestAttaches to mint a
+// session, both dial Relay with the session_id, and an opaque
+// byte payload sent by one peer is received by the other (with
+// the orchestrator splicing the two streams).
+func TestBrokerRelayHappyPath(t *testing.T) {
 	h := newBrokerHarness(t)
-	stream := h.cliBroker.Relay(context.Background())
+	serveEvCh, sandEvCh := registerBoth(t, h, testWorkspace, testSandboxID)
+
+	resp, err := h.cliBroker.RequestAttach(context.Background(), connect.NewRequest(
+		&workspacebrokerv1.RequestAttachRequest{
+			ServeFingerprint: h.cliID.Fingerprint().String(),
+			Workspace:        testWorkspace,
+			SandboxId:        testSandboxID,
+		},
+	))
+	if err != nil {
+		t.Fatalf("RequestAttach: %v", err)
+	}
+	sid := resp.Msg.GetSessionId()
+	// Drain the PendingAttach events so the subscribers don't leak.
+	_ = recvChan(t, serveEvCh)
+	_ = recvChan(t, sandEvCh)
+
+	cliStream := openRelay(t, h.cliBroker, sid)
+	sbStream := openRelay(t, h.sbBroker, sid)
+
+	payload := []byte("hello-from-client")
+	if err := cliStream.Send(&workspacebrokerv1.RelayMessage{
+		Body: &workspacebrokerv1.RelayMessage_Data{Data: payload},
+	}); err != nil {
+		t.Fatalf("client Send: %v", err)
+	}
+	got, err := sbStream.Receive()
+	if err != nil {
+		t.Fatalf("sandbox Receive: %v", err)
+	}
+	if !bytes.Equal(got.GetData(), payload) {
+		t.Errorf("sandbox got %q, want %q", got.GetData(), payload)
+	}
+
+	reply := []byte("ack-from-sandbox")
+	if err := sbStream.Send(&workspacebrokerv1.RelayMessage{
+		Body: &workspacebrokerv1.RelayMessage_Data{Data: reply},
+	}); err != nil {
+		t.Fatalf("sandbox Send: %v", err)
+	}
+	got2, err := cliStream.Receive()
+	if err != nil {
+		t.Fatalf("client Receive: %v", err)
+	}
+	if !bytes.Equal(got2.GetData(), reply) {
+		t.Errorf("client got %q, want %q", got2.GetData(), reply)
+	}
+
+	// Closing the client's request side should propagate to the
+	// sandbox via the shared Done channel — the splice goroutine
+	// returns, the handler returns, the sandbox's stream sees an
+	// error/EOF on next Receive.
+	_ = cliStream.CloseRequest()
+	_ = cliStream.CloseResponse()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := sbStream.Receive(); err != nil {
+			break
+		}
+	}
+	_ = sbStream.CloseRequest()
+	_ = sbStream.CloseResponse()
+}
+
+// openRelay dials the bidi Relay endpoint with a Hello frame for
+// sid, returning the live stream. Used by relay tests below.
+func openRelay(t *testing.T, c workspacebrokerv1connect.BrokerServiceClient, sid string) *connect.BidiStreamForClient[workspacebrokerv1.RelayMessage, workspacebrokerv1.RelayMessage] {
+	t.Helper()
+	stream := c.Relay(context.Background())
 	if err := stream.Send(&workspacebrokerv1.RelayMessage{
 		Body: &workspacebrokerv1.RelayMessage_Hello{
-			Hello: &workspacebrokerv1.RelayHello{SessionId: "x"},
+			Hello: &workspacebrokerv1.RelayHello{SessionId: sid},
 		},
 	}); err != nil {
-		t.Logf("Send err (expected, may differ by transport): %v", err)
+		t.Fatalf("Hello Send: %v", err)
+	}
+	return stream
+}
+
+// TestBrokerRelayUnknownSession: dialing Relay with a session_id
+// that was never reserved (or has expired) gets FailedPrecondition.
+func TestBrokerRelayUnknownSession(t *testing.T) {
+	h := newBrokerHarness(t)
+	stream := openRelay(t, h.cliBroker, "no-such-session")
+	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
+	if _, err := stream.Receive(); err == nil {
+		t.Error("expected error")
+	} else if got := connect.CodeOf(err); got != connect.CodeFailedPrecondition {
+		t.Errorf("code = %s, want FailedPrecondition", got)
+	}
+}
+
+// TestBrokerRelayWrongPeer: a Reserve'd session is between peers
+// A and B; if peer C dials Relay with the session_id, the
+// orchestrator returns PermissionDenied.
+func TestBrokerRelayWrongPeer(t *testing.T) {
+	h := newBrokerHarness(t)
+	// Reserve directly to avoid registering subscribers.
+	sid := "test-session-id-xyz"
+	if err := h.server.Matcher().Sessions().Reserve(sid, h.sbID.Fingerprint(), h.sbID.Fingerprint()); err != nil {
+		t.Fatalf("Reserve: %v", err)
+	}
+	// cliID isn't one of the expected peers.
+	stream := openRelay(t, h.cliBroker, sid)
+	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
+	if _, err := stream.Receive(); err == nil {
+		t.Error("expected error")
+	} else if got := connect.CodeOf(err); got != connect.CodePermissionDenied {
+		t.Errorf("code = %s, want PermissionDenied", got)
+	}
+}
+
+// TestBrokerRelayFirstMessageMustBeHello: sending a Data frame
+// before a Hello fails fast with InvalidArgument.
+func TestBrokerRelayFirstMessageMustBeHello(t *testing.T) {
+	h := newBrokerHarness(t)
+	stream := h.cliBroker.Relay(context.Background())
+	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
+	if err := stream.Send(&workspacebrokerv1.RelayMessage{
+		Body: &workspacebrokerv1.RelayMessage_Data{Data: []byte("early")},
+	}); err != nil {
+		t.Logf("Send err (may differ by transport): %v", err)
 	}
 	if _, err := stream.Receive(); err == nil {
-		t.Error("expected error from Relay stub")
-	} else if got := connect.CodeOf(err); got != connect.CodeUnimplemented {
-		t.Errorf("code = %s, want Unimplemented", got)
+		t.Error("expected error")
+	} else if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
+		t.Errorf("code = %s, want InvalidArgument", got)
 	}
-	_ = stream.CloseRequest()
-	_ = stream.CloseResponse()
+}
+
+// TestBrokerRelayEmptySessionID: Hello with empty session_id
+// fails with InvalidArgument.
+func TestBrokerRelayEmptySessionID(t *testing.T) {
+	h := newBrokerHarness(t)
+	stream := openRelay(t, h.cliBroker, "")
+	defer func() { _ = stream.CloseRequest(); _ = stream.CloseResponse() }()
+	if _, err := stream.Receive(); err == nil {
+		t.Error("expected error")
+	} else if got := connect.CodeOf(err); got != connect.CodeInvalidArgument {
+		t.Errorf("code = %s, want InvalidArgument", got)
+	}
+}
+
+// TestMapSessionErr pins the mapping from internal session-broker
+// errors to Connect status codes.
+func TestMapSessionErr(t *testing.T) {
+	cases := []struct {
+		in   error
+		want connect.Code
+	}{
+		{workspacebroker.ErrNoSession, connect.CodeFailedPrecondition},
+		{workspacebroker.ErrWrongPeer, connect.CodePermissionDenied},
+		{errors.New("something else"), connect.CodeInternal},
+	}
+	for _, tc := range cases {
+		got := connect.CodeOf(mapSessionErr(tc.in))
+		if got != tc.want {
+			t.Errorf("mapSessionErr(%v) → %s, want %s", tc.in, got, tc.want)
+		}
+	}
 }
