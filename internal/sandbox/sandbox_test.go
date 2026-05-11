@@ -336,7 +336,7 @@ func TestHelloWithShareStartsSidecarAndPassesSocketsToRunner(t *testing.T) {
 	cfg := validCfg()
 	cfg.Virtiofsd = testFakeVirtiofsd
 	cfg.Shares = []*ShareConfig{
-		{HostDir: dir, Tag: "workspace", Mountpoint: testMountpoint},
+		{HostDir: dir, Tag: testTagWorkspace, Mountpoint: testMountpoint},
 	}
 
 	r := &fakeRunner{output: agent.Banner + "\n"}

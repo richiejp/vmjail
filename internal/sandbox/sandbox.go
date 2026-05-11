@@ -353,10 +353,20 @@ func shareSocketArg(tag, socket string) string {
 	return fmt.Sprintf("tag=%s,socket=%s", tag, socket)
 }
 
-func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string) (io.ReadCloser, func(), error) {
-	// 14 = the always-present base args; +2 per share for the --fs
-	// pair. Pre-sized so the inner loop's appends don't realloc.
-	args := make([]string, 0, 14+2*len(shareSockets))
+// buildCloudHypervisorArgs returns the argv cloudHypervisorRunner
+// passes to the cloud-hypervisor binary. Pure function so the
+// argv shape (especially the variadic --fs) is unit-testable
+// without spawning a real VMM.
+//
+// Cloud Hypervisor's --fs flag is variadic: one --fs followed by
+// N "tag=...,socket=..." tokens. Repeating the flag (--fs A --fs
+// B) is rejected by clap with "cannot be used multiple times" —
+// a real regression that landed before this test caught it.
+func buildCloudHypervisorArgs(cfg Config, shareSockets []string) []string {
+	// 14 = the always-present base args; +1 for the --fs flag
+	// (when shares > 0) +N for the socket tokens. Pre-sized so the
+	// inner loop's appends don't realloc.
+	args := make([]string, 0, 14+1+len(shareSockets))
 	args = append(
 		args,
 		"--kernel", cfg.Kernel,
@@ -367,9 +377,17 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 		"--cpus", fmt.Sprintf("boot=%d", cfg.CPUs),
 		"--memory", buildMemoryArg(cfg),
 	)
-	for i, sock := range shareSockets {
-		args = append(args, "--fs", shareSocketArg(cfg.Shares[i].Tag, sock))
+	if len(shareSockets) > 0 {
+		args = append(args, "--fs")
+		for i, sock := range shareSockets {
+			args = append(args, shareSocketArg(cfg.Shares[i].Tag, sock))
+		}
 	}
+	return args
+}
+
+func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string) (io.ReadCloser, func(), error) {
+	args := buildCloudHypervisorArgs(cfg, shareSockets)
 	// #nosec G204 — cfg.CloudHypervisor is the operator-supplied
 	// VMM path; argv elements are derived from validated Config
 	// fields (Kernel/Initramfs/Memory) plus our own emitted

@@ -44,7 +44,7 @@ help:
 	@echo "  bench       - update committed bench.txt baseline"
 	@echo "  bench-check - fail on >2x regressions, warn on >1.1x, vs bench.txt"
 	@echo "  fuzz        - run every FuzzXxx target (FUZZ_TIME, default 30s, per target)"
-	@echo "  integration - nix-build artefacts and run KVM-gated end-to-end tests"
+	@echo "  integration - nix-build artefacts and run e2e tests (real VM boot)"
 	@echo "  proto       - regenerate Go code from proto/*.proto"
 	@echo "  hooks       - install git pre-commit hook into .git/hooks"
 	@echo "  build       - build daft, daft-agent, daft-sandboxd, daft-orchestrator into ./bin/ (dev only)"
@@ -131,21 +131,22 @@ bench-check:
 fuzz:
 	@scripts/fuzz.sh
 
-## Integration tests ---------------------------------------------------------
+## E2E tests -----------------------------------------------------------------
 #
-# `make integration` runs the KVM-gated end-to-end tests in
+# `make integration` runs the e2e tests in
 # internal/sandbox/integration_test.go (build tag: linux,integration).
-# They spawn cloud-hypervisor against the Nix-built kernel /
-# initramfs / virtiofsd / OCI bundle artefacts, so we nix-build them
-# first and let the test resolver pick them up via the result-*
-# symlinks at the repo root.
+# The target name is historical; by the unit/integration/e2e
+# taxonomy in CONTRIBUTING.md these are e2e because they boot a
+# real cloud-hypervisor against the Nix-built kernel / initramfs /
+# virtiofsd / OCI bundle artefacts. We nix-build them first and
+# let the test resolver pick them up via the result-* symlinks at
+# the repo root.
 #
-# Not part of `make all` or the pre-commit hook because each test
-# boots a real VM (~310 ms) and requires /dev/kvm. Run on demand
-# from a Linux+KVM workstation or in a CI job that has KVM available.
+# Linux + KVM is required, not optional. The pre-commit hook runs
+# this on every commit — there is no graceful degradation.
 
 integration-build:
-	@echo "[integration] nix-building artefacts..."
+	@echo "[e2e] nix-building artefacts..."
 	@nix build -L .#cloud-hypervisor -o result-ch
 	@nix build -L .#kernel -o result-kernel
 	@nix build -L .#virtiofsd -o result-virtiofsd
@@ -153,7 +154,7 @@ integration-build:
 	@nix build -L .#hello-bundle -o result-bundle
 
 integration: integration-build
-	@echo "[integration] running KVM-gated tests..."
+	@echo "[e2e] booting real VMs against /dev/kvm..."
 	@go test -tags=integration -count=1 ./internal/sandbox/
 
 ## Git hooks -----------------------------------------------------------------

@@ -357,6 +357,20 @@ Out of Scope:
       client's auth subcommands, scoped to the sandboxd config dir,
       so the operator can manage the cross-host TOFU peer set on
       both ends without editing peers.json by hand.
+      **Slice 2.7 landed (e2e + multi-share fix)**: real-VM
+      round-trip test `TestWorkspaceRoundTripE2E` boots Cloud
+      Hypervisor against `/dev/kvm`, runs a real container that
+      reads `/workspace/in.txt` and writes `/workspace/out.txt`
+      through a rw virtiofs share, then pulls the modified
+      workspace back as the user-host. The test caught a real
+      regression: `cloudHypervisorRunner.run` had been emitting
+      `--fs A --fs B` for multi-share configs but clap rejects
+      that — Cloud Hypervisor expects the variadic form
+      (`--fs A B`). Production multi-share (e.g. `daft-sandboxd
+      run --workspace`) had never been exercised on a real VM
+      before this slice. The fix is in `buildCloudHypervisorArgs`,
+      now a pure function with focused unit tests covering the
+      0/1/N share cases so the regression can't reappear silently.
       **Remaining slices**:
       - Slice 3: FastCDC chunker behind the same Chunker
         interface (replace FixedSizeChunker).

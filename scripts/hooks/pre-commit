@@ -3,10 +3,10 @@
 # darkaifactory pre-commit hook.
 #
 # Delegates to `make verify`, which is the single source of truth for
-# what gates a commit: fmt + lint + unit tests + coverage + KVM-gated
-# integration + benchmark regression + a 1s/target fuzz sweep. Each of
-# those is its own Makefile target, so anyone who wants to debug a
-# specific failure can run that target on its own.
+# what gates a commit: fmt + lint + unit tests + coverage + e2e (real
+# VM boot against /dev/kvm) + benchmark regression + a 1s/target fuzz
+# sweep. Each of those is its own Makefile target, so anyone who wants
+# to debug a specific failure can run that target on its own.
 #
 # Do NOT bypass this with `git commit --no-verify`. The gates exist
 # because previous slips made it through review; bypassing them

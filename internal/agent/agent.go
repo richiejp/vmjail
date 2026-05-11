@@ -38,6 +38,18 @@ const ContainerBanner = "hello world from container"
 // ShareReportPrefix.
 const ContainerReportPrefix = "container: "
 
+// Workspace round-trip in-VM helper paths and marker. The
+// daft-hello-container binary uses these to read input the user-host
+// pushed in and write output the host can later pull back — that's
+// what the workspace-round-trip e2e test asserts on. Lives here
+// rather than in the cmd/ binary so both producer and consumer
+// import the same source of truth.
+const (
+	WorkspaceInPath  = "/workspace/in.txt"
+	WorkspaceOutPath = "/workspace/out.txt"
+	WorkspaceSuffix  = " (modified-in-sandbox)"
+)
+
 // BundleCmdlineKey names the kernel cmdline parameter that asks the
 // agent to crun-run an OCI bundle from the given absolute path inside
 // the guest. Format: `daft.bundle=<absolute-path>`. The path is
