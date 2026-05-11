@@ -5,6 +5,8 @@ go 1.25.0
 require (
 	connectrpc.com/connect v1.19.2
 	github.com/google/go-containerregistry v0.21.5
+	github.com/klauspost/compress v1.18.5
+	github.com/mdlayher/vsock v1.2.1
 	github.com/spf13/cobra v1.10.2
 	github.com/xeipuuv/gojsonschema v1.2.0
 	golang.org/x/net v0.54.0
@@ -16,7 +18,7 @@ require (
 	github.com/docker/cli v29.4.0+incompatible // indirect
 	github.com/docker/docker-credential-helpers v0.9.3 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/mdlayher/socket v0.4.1 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect

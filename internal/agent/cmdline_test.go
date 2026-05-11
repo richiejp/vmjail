@@ -15,12 +15,12 @@ func TestParseShareCmdline(t *testing.T) {
 		errSubstr string
 	}{
 		{
-			name:    "absent",
+			name:    testAbsent,
 			cmdline: "console=hvc0 reboot=t panic=-1",
 			wantOK:  false,
 		},
 		{
-			name:    "happy path",
+			name:    testHappyPath,
 			cmdline: "console=hvc0 daft.share=workspace:/share",
 			want:    ShareSpec{Tag: testTag, Mountpoint: testMountpoint},
 			wantOK:  true,
@@ -92,6 +92,19 @@ func TestFormatShareCmdlineRoundTrips(t *testing.T) {
 	}
 }
 
+// testCmdlineShareOnly is the canonical "the host wired up a share
+// but nothing else" cmdline used as the absent-feature negative
+// case across the parser tests.
+const testCmdlineShareOnly = "console=hvc0 daft.share=ws:/share"
+
+// testHappyPath is the standard subtest label for the
+// well-formed-input case. Lifted to a const for goconst.
+const testHappyPath = "happy path"
+
+// testAbsent is the standard subtest label for the
+// feature-not-requested negative case.
+const testAbsent = "absent"
+
 func TestParseBundleCmdline(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -102,12 +115,12 @@ func TestParseBundleCmdline(t *testing.T) {
 		errSubstr string
 	}{
 		{
-			name:    "absent",
-			cmdline: "console=hvc0 daft.share=ws:/share",
+			name:    testAbsent,
+			cmdline: testCmdlineShareOnly,
 			wantOK:  false,
 		},
 		{
-			name:    "happy path",
+			name:    testHappyPath,
 			cmdline: "console=hvc0 daft.bundle=/share/bundle reboot=t",
 			want:    testBundlePath,
 			wantOK:  true,
@@ -147,6 +160,62 @@ func TestParseBundleCmdline(t *testing.T) {
 				t.Fatalf("path = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseVsockTracePortCmdline(t *testing.T) {
+	tests := []struct {
+		name      string
+		cmdline   string
+		want      uint32
+		wantOK    bool
+		wantErr   bool
+		errSubstr string
+	}{
+		{name: testAbsent, cmdline: testCmdlineShareOnly, wantOK: false},
+		{name: testHappyPath, cmdline: "console=hvc0 daft.vsock.trace_port=8000", want: 8000, wantOK: true},
+		{name: "empty value", cmdline: "daft.vsock.trace_port=", wantErr: true, errSubstr: "value is empty"},
+		{name: "non-numeric", cmdline: "daft.vsock.trace_port=hello", wantErr: true, errSubstr: "invalid syntax"},
+		{name: "zero", cmdline: "daft.vsock.trace_port=0", wantErr: true, errSubstr: "non-zero"},
+		{
+			name:      "overflow",
+			cmdline:   "daft.vsock.trace_port=99999999999",
+			wantErr:   true,
+			errSubstr: "value out of range",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok, err := ParseVsockTracePortCmdline(tt.cmdline)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("want error containing %q, got nil", tt.errSubstr)
+				}
+				if !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Fatalf("err = %v, want substring %q", err, tt.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if ok != tt.wantOK {
+				t.Errorf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if ok && got != tt.want {
+				t.Errorf("port = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatVsockTracePortCmdlineRoundTrips(t *testing.T) {
+	for _, port := range []uint32{1, 1024, 8000, 65535, 1 << 20} {
+		s := FormatVsockTracePortCmdline(port)
+		got, ok, err := ParseVsockTracePortCmdline(s)
+		if err != nil || !ok || got != port {
+			t.Errorf("round-trip of %d via %q: got=%d ok=%v err=%v", port, s, got, ok, err)
+		}
 	}
 }
 

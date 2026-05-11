@@ -252,7 +252,7 @@ Out of Scope:
       unapproved-server / unapproved-client / corrupt-identity /
       corrupt-peer-store branches end-to-end via an in-process
       orchestrator.
-- [/] Tracing: daft-native cross-component tracing. **Slice 1
+- [x] Tracing: daft-native cross-component tracing. **Slice 1
       landed**: `internal/trace` package with Span / Tracer / ring
       buffer / Connect interceptors / abandoned-span reaper. Errors
       attach to the active span via `trace.RecordError(ctx, err)` /
@@ -315,13 +315,30 @@ Out of Scope:
       generator; an integration test ships an orphan child span
       via real ReportSpans, waits past the configured quiet
       window, and asserts the marker appears in /debug/traces.
-      **Remaining slices**:
-      - Slice 4: in-VM agent → sandbox-host trace channel over
-        vsock once vsock plumbing exists.
-      - Slice 5 (optional): an OTel proxy-exporter as a separate
-        component, translating our wire format to OTLP for users
-        who want their existing observability stack to consume
-        daft traces.
+      **Slice 4 landed**: vsock channel from the in-VM agent to
+      the sandbox-host. `sandbox.Config.Vsock` selects a Cloud
+      Hypervisor hybrid-vsock device (`--vsock cid=N,socket=PATH`);
+      a `daft.vsock.trace_port=N` kernel cmdline token tells the
+      agent which AF_VSOCK port to dial. Wire protocol is
+      transport-agnostic length-prefixed `ReportSpansRequest`
+      proto, implemented as `trace.StreamExporter` (producer side,
+      one fresh conn per Flush) and `trace.StreamReceiver`
+      (accept loop). The agent wires a Tracer with a vsock
+      StreamExporter, emits an `agent.boot` span around the
+      share+container setup, and Flushes *before* printing the
+      banner so the host-side scan-for-banner doesn't race the
+      VM teardown against the final write. Sandbox-host runs the
+      StreamReceiver as a goroutine bounded by Hello's defer
+      stop(); spans ingest into the Tracer reachable from ctx.
+      Unit tests cover both halves over a UDS pair + net.Pipe;
+      `TestHelloIntegrationShipsAgentSpansOverVsock` boots a real
+      VM and asserts the `agent.boot` span lands in the host
+      Tracer via real AF_VSOCK → CH hybrid-vsock → UDS proxy.
+      **Slice 5 (optional)**: an OTel proxy-exporter as a separate
+      component, translating our wire format to OTLP for users
+      who want their existing observability stack to consume
+      daft traces. Deferred — not load-bearing for daft's own
+      operations.
 - [/] Workspace sync: chunked, content-addressed snapshots
       flowing user-host → orchestrator → sandbox-host → VM, with
       lazy fetch via daft-fuse under virtiofsd. **Slice 1 landed**:

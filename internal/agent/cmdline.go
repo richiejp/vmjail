@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -32,6 +33,39 @@ func FormatShareCmdline(s ShareSpec) string {
 // cloud-hypervisor.
 func FormatBundleCmdline(path string) string {
 	return fmt.Sprintf("%s=%s", BundleCmdlineKey, path)
+}
+
+// VsockTracePortCmdlineKey names the kernel cmdline parameter that
+// tells the agent which AF_VSOCK port to dial on the host (CID 2)
+// when shipping its span buffer. Format: `daft.vsock.trace_port=N`.
+const VsockTracePortCmdlineKey = "daft.vsock.trace_port"
+
+// FormatVsockTracePortCmdline renders a port to the wire form. Used
+// by the host to add `daft.vsock.trace_port=N` to the cmdline.
+func FormatVsockTracePortCmdline(port uint32) string {
+	return fmt.Sprintf("%s=%d", VsockTracePortCmdlineKey, port)
+}
+
+// ParseVsockTracePortCmdline returns the parsed trace port plus
+// ok=true when the token is present. Absent token → ("",false,nil)
+// is the "feature not requested" path. Malformed value (non-numeric,
+// out of range) is an error so a typo on the host surfaces.
+func ParseVsockTracePortCmdline(cmdline string) (port uint32, ok bool, err error) {
+	val, ok := findCmdlineValue(cmdline, VsockTracePortCmdlineKey)
+	if !ok {
+		return 0, false, nil
+	}
+	if val == "" {
+		return 0, false, fmt.Errorf("agent: %s value is empty", VsockTracePortCmdlineKey)
+	}
+	n, perr := strconv.ParseUint(val, 10, 32)
+	if perr != nil {
+		return 0, false, fmt.Errorf("agent: %s=%q: %w", VsockTracePortCmdlineKey, val, perr)
+	}
+	if n == 0 {
+		return 0, false, fmt.Errorf("agent: %s must be non-zero", VsockTracePortCmdlineKey)
+	}
+	return uint32(n), true, nil
 }
 
 // findCmdlineValue scans a kernel cmdline (whitespace-separated

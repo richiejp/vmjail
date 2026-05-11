@@ -68,6 +68,32 @@ type Config struct {
 	// VM via virtiofs. Empty (the default) means no container is
 	// run.
 	Bundle string
+
+	// Vsock, when non-nil, exposes a Cloud Hypervisor hybrid-vsock
+	// device to the guest so the in-VM agent can stream data back
+	// to the sandbox-host without going through the serial console.
+	// Currently used for trace span shipping; future channels (LSP
+	// stdio, container exec, control RPC) will reuse the same UDS.
+	Vsock *VsockConfig
+}
+
+// VsockConfig describes a Cloud Hypervisor hybrid-vsock device.
+// The guest sees it as a normal virtio-vsock; the host side is a
+// Unix-domain socket the VMM proxies through. Per-port host
+// listeners bind to <HostSocket>_<port> (firecracker-style hybrid
+// vsock). Reused: the same UDS path serves every guest→host port.
+type VsockConfig struct {
+	// HostSocket is the absolute UDS path Cloud Hypervisor opens.
+	// Per-port listeners append _<port> to it (e.g. /tmp/v.sock_8000).
+	HostSocket string
+	// GuestCID is the AF_VSOCK context ID assigned to the guest.
+	// Must be ≥ 3 (0/1/2 are reserved by the AF_VSOCK ABI).
+	GuestCID uint32
+	// TracePort, if non-zero, instructs the in-VM agent (via the
+	// kernel cmdline) to ship its span buffer to this AF_VSOCK
+	// port on the host. The sandbox-host arranges a listener at
+	// <HostSocket>_<TracePort> before booting the VM.
+	TracePort uint32
 }
 
 // ShareConfig describes one host→guest virtiofs mount.
@@ -113,6 +139,26 @@ func (c *Config) validate() error {
 	}
 	if c.Bundle != "" && !strings.HasPrefix(c.Bundle, "/") {
 		return fmt.Errorf("sandbox: Bundle %q must be an absolute in-guest path", c.Bundle)
+	}
+	if c.Vsock != nil {
+		if err := c.Vsock.validate(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validate enforces the AF_VSOCK ABI's CID rules and our own path
+// hygiene before the VMM is spawned.
+func (v *VsockConfig) validate() error {
+	if v.HostSocket == "" {
+		return fmt.Errorf("sandbox: Vsock.HostSocket is required")
+	}
+	if !filepath.IsAbs(v.HostSocket) {
+		return fmt.Errorf("sandbox: Vsock.HostSocket %q must be absolute", v.HostSocket)
+	}
+	if v.GuestCID < 3 {
+		return fmt.Errorf("sandbox: Vsock.GuestCID %d must be >= 3 (0/1/2 reserved)", v.GuestCID)
 	}
 	return nil
 }
@@ -333,6 +379,9 @@ func buildKernelCmdline(cfg Config) string {
 	if cfg.Bundle != "" {
 		parts = append(parts, agent.FormatBundleCmdline(cfg.Bundle))
 	}
+	if cfg.Vsock != nil && cfg.Vsock.TracePort != 0 {
+		parts = append(parts, agent.FormatVsockTracePortCmdline(cfg.Vsock.TracePort))
+	}
 	return strings.Join(parts, " ")
 }
 
@@ -382,6 +431,10 @@ func buildCloudHypervisorArgs(cfg Config, shareSockets []string) []string {
 		for i, sock := range shareSockets {
 			args = append(args, shareSocketArg(cfg.Shares[i].Tag, sock))
 		}
+	}
+	if cfg.Vsock != nil {
+		args = append(args, "--vsock",
+			fmt.Sprintf("cid=%d,socket=%s", cfg.Vsock.GuestCID, cfg.Vsock.HostSocket))
 	}
 	return args
 }
@@ -467,6 +520,12 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 		return trace.RecordError(ctx, err)
 	}
 	defer stopShare()
+
+	stopVsock, err := startVsockTraceReceiver(ctx, cfg)
+	if err != nil {
+		return trace.RecordError(ctx, err)
+	}
+	defer stopVsock()
 
 	stdout, stop, err := runVMM(runCtx, cfg, shareSockets, r)
 	if err != nil {

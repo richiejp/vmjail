@@ -19,6 +19,13 @@
 # Coverage artefacts (transient — coverage.txt baseline IS committed)
 /coverage.out
 
+# Go module vendor directory. We deliberately do NOT vendor — the
+# Nix build uses buildGoModule with vendorHash, which fetches deps
+# independently. Local `go mod vendor` runs (e.g. after `go get`)
+# produce a vendor/ directory; keeping it untracked stops it from
+# polluting the repo and from racing the vendorHash-driven build.
+/vendor/
+
 # Direnv / Nix
 /.direnv/
 /.envrc.local
