@@ -20,9 +20,11 @@ import (
 	"github.com/richiejp/darkaifactory/internal/component"
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/mtls"
 	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/darkaifactory/internal/workspacebroker"
 )
 
 // Config holds everything the server needs to start up. Identity is
@@ -51,22 +53,34 @@ type Config struct {
 	// injects a synthetic marker so the gap is visible. New
 	// constructs a default reaper if this is nil.
 	Reaper *trace.IngressReaper
+
+	// Matcher pairs `daft workspace serve` peers with sandbox-host
+	// peers. New constructs a default matcher if this is nil.
+	// Tests pass a pre-populated matcher to inspect state.
+	Matcher *workspacebroker.Matcher
 }
 
 // Server is the orchestrator's mTLS-gated control-plane listener.
 // It's a thin wrapper around mtls.Server that registers the
-// orchestrator's Connect-RPC handlers (currently Health.Ping and
-// TraceService.ReportSpans) plus a /debug/traces dump endpoint.
+// orchestrator's Connect-RPC handlers (Health.Ping,
+// TraceService.ReportSpans, BrokerService) plus a /debug/traces
+// dump endpoint.
 type Server struct {
-	inner  *mtls.Server
-	tracer *trace.Tracer
-	reaper *trace.IngressReaper
+	inner         *mtls.Server
+	tracer        *trace.Tracer
+	reaper        *trace.IngressReaper
+	matcher       *workspacebroker.Matcher
+	brokerHandler *BrokerHandler
 
 	reaperStart  sync.Once
 	reaperStop   sync.Once
 	reaperCancel context.CancelFunc
 	reaperDone   chan struct{}
 }
+
+// Matcher returns the orchestrator's workspace-broker matcher.
+// Exposed for tests that want to assert matcher state directly.
+func (s *Server) Matcher() *workspacebroker.Matcher { return s.matcher }
 
 // New builds a Server with the provided config. Returns an error if
 // Config.Identity or Config.Peers is missing or if the TLS template
@@ -102,21 +116,53 @@ func New(cfg Config) (*Server, error) {
 
 	mux.Handle("/debug/traces", debugTracesHandler(tracer))
 
+	matcher := cfg.Matcher
+	if matcher == nil {
+		matcher = workspacebroker.New()
+	}
+	// We need the inner *mtls.Server to ask it for its bound
+	// Addr() lazily — the listener doesn't bind until Listen().
+	// resolveRelay closes over a *Server slot that gets filled
+	// in below once mtls.New returns.
+	var brokerServerSlot struct{ s *mtls.Server }
+	brokerHandler, err := NewBrokerHandler(matcher, func() string {
+		if brokerServerSlot.s == nil {
+			return ""
+		}
+		return brokerServerSlot.s.Addr()
+	})
+	if err != nil {
+		return nil, err
+	}
+	brokerPath, brokerConnectHandler := workspacebrokerv1connect.NewBrokerServiceHandler(
+		brokerHandler, interceptor,
+	)
+	mux.Handle(brokerPath, brokerConnectHandler)
+
+	handler := withPeerMiddleware(mux)
+
 	inner, err := mtls.New(mtls.Config{
 		Identity:          cfg.Identity,
 		Peers:             cfg.Peers,
 		Addr:              cfg.Addr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
 	})
 	if err != nil {
 		return nil, err
 	}
+	brokerServerSlot.s = inner
 	reaper := cfg.Reaper
 	if reaper == nil {
 		reaper = trace.NewIngressReaper(tracer, component.Orchestrator)
 	}
-	return &Server{inner: inner, tracer: tracer, reaper: reaper}, nil
+	return &Server{
+		inner:         inner,
+		tracer:        tracer,
+		reaper:        reaper,
+		matcher:       matcher,
+		brokerHandler: brokerHandler,
+	}, nil
 }
 
 // Tracer returns the orchestrator's Tracer. Callers can use it to
