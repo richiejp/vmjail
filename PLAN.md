@@ -112,11 +112,9 @@ Out of Scope:
       unit tests cover the orchestration;
       `BenchmarkHelloBootWithShare` and `TestHelloIntegrationBootsVMWithShare`
       cover the e2e path (real VM, real virtiofsd).
-      - **TODO (hardening)**: virtiofsd is currently dynamic-linked
-        (glibc) — the only non-static binary in the daft-sandboxd
-        bundle. Static-musl build hits unresolved libc symbols in
-        nixpkgs' libcap_ng-static; revisit when nixpkgs ships a
-        complete static build, or contribute the fix.
+      - **Hardening**: virtiofsd is built static-musl against
+        `pkgsStatic.libcap_ng` + `pkgsStatic.libseccomp`. Every
+        binary in the daft-sandboxd bundle is now self-contained.
 - [x] Container in the VM (v0): crun vendored at third_party/crun
       v1.9.2, built static-musl, bundled into the initramfs at
       `/bin/crun`. A new in-repo binary `daft-hello-container` plus
@@ -684,12 +682,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
   hook (faster iteration, but the user trusts the policy engine to
   catch exfil)? PLAN.md currently assumes the explicit model — revisit
   when we have a real workload.
-- **virtiofsd static-musl**: nixpkgs' `pkgsStatic.libcap_ng` is missing
-  libc symbol references at archive-link time, so virtiofsd is the
-  only dynamic-linked binary in the daft-sandboxd bundle. Acceptable
-  for now (matches what nixpkgs ships), but breaks the
-  "no-dependency-on-host-libc" property on glibc-less hosts. Fix
-  upstream or work around with a custom link recipe.
+- **virtiofsd static-musl**: ~~missing libc symbol references~~ Done.
+  Switched to `pkgsStatic.rustPlatform.buildRustPackage` with
+  `LIBCAPNG_LINK_TYPE=static` + `pkgsStatic.libcap_ng`. virtiofsd is
+  now `statically linked` like every other daft-sandboxd binary.
 - **Boot-time gap**: measured ~310 ms vs the 150–250 ms target. Worth
   the kernel-config diet before snapshot-restore lands?
 

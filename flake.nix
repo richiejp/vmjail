@@ -349,12 +349,14 @@
           # cloud-hypervisor to back `--fs tag=...,socket=...` shares;
           # the in-VM kernel mounts the share via virtiofs.
           #
-          # Dynamic-linked (glibc) at the moment because nixpkgs'
-          # static libcap_ng is missing libc symbol references at
-          # archive-link time. This is the only non-static binary in
-          # the daft-sandboxd bundle — see PLAN.md TODO. The dynamic
-          # build matches what nixpkgs ships upstream.
-          virtiofsd = pkgs.rustPlatform.buildRustPackage {
+          # Statically linked against musl via pkgsStatic. The
+          # capng/libseccomp Rust bindings read $LIBCAPNG_LINK_TYPE /
+          # $LIBSECCOMP_LINK_TYPE — we set them to "static" and feed
+          # the static .a paths so rustc embeds the archives rather
+          # than the shared libs. The result is a fully self-contained
+          # binary that drops into the daft-sandboxd bundle alongside
+          # cloud-hypervisor and crun.
+          virtiofsd = pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "virtiofsd";
             version = "1.9.0";
 
@@ -365,13 +367,10 @@
             };
 
             nativeBuildInputs = [ pkgs.pkg-config ];
-            buildInputs = with pkgs; [ libseccomp libcap_ng ];
+            buildInputs = with pkgs.pkgsStatic; [ libseccomp libcap_ng ];
 
-            # libcap-ng's Rust binding looks at $LIBCAPNG_LINK_TYPE to
-            # decide static vs dynamic. We want dynamic to match the
-            # libcap_ng we build against.
-            env.LIBCAPNG_LINK_TYPE = "dylib";
-            env.LIBCAPNG_LIB_PATH = "${pkgs.libcap_ng}/lib";
+            env.LIBCAPNG_LINK_TYPE = "static";
+            env.LIBCAPNG_LIB_PATH = "${pkgs.pkgsStatic.libcap_ng}/lib";
 
             doCheck = false;
 
