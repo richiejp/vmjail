@@ -688,6 +688,26 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
   now `statically linked` like every other daft-sandboxd binary.
 - **Boot-time gap**: measured ~310 ms vs the 150–250 ms target. Worth
   the kernel-config diet before snapshot-restore lands?
+- **Multi-container-per-VM mode (user-selected isolation)**: current
+  design is one container per VM, with the VM boundary doing all the
+  isolation work. On consumer hardware with a single passthrough GPU
+  this means at most one GPU-using sandbox at a time, and every task
+  pays full VM boot + model-load-into-VRAM cost. Proposed knob: let
+  the user opt a sandbox into "shared" mode where the in-VM agent
+  runs N crun containers sharing the kernel, GPU driver, VRAM cache,
+  and (optionally) workspace. Container-to-container isolation falls
+  back to namespaces + seccomp + cgroups + eBPF-LSM — kernel
+  exploits and LPE bugs reach sibling containers and their data.
+  The VM boundary still protects the host. Default stays "strict"
+  (VM-per-task); user explicitly chooses "shared" per sandbox when
+  they trust the workloads with each other. Implementation: extend
+  `daft-agent` to manage N crun children with independent runtime
+  specs; extend the workspace share with per-container subpaths;
+  extend the sandbox-host CLI with an isolation flag. Open
+  sub-questions: do siblings see each other's `/workspace`, or do
+  we mount per-container subdirs? How does GPU scheduling work
+  *inside* the VM — first-come-first-served on the driver, or do
+  we expose a queue?
 
 ## How to update this plan
 
