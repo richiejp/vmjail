@@ -539,8 +539,24 @@ Out of Scope:
       payloads in both directions through the splice and verifies
       clean shutdown propagation.
 
+      *Slice 3.5c-1 — landed.* Transport-neutral RelayConn
+      (DataStream as net.Conn) and OneConnListener (single-conn
+      net.Listener for http.Server.Serve over a dialed connection)
+      in `internal/workspacebroker`. Deadlines are no-ops in v1.
+
+      *Slice 3.5c-2 — landed.* `internal/brokerclient` package
+      wrapping the user/sandbox-host side of the broker:
+      outer-mTLS HTTP/2 to the orchestrator, RegisterServe /
+      RegisterSandbox with blocking-until-Ready, Attach
+      (RequestAttach wrapper), DialRelay returning a net.Conn
+      over the byte-spliced channel. End-to-end test runs a full
+      TLS 1.3 handshake plus echo through the orchestrator's
+      Relay to pin that the spliced channel behaves like a
+      net.Conn well enough for crypto/tls (and by extension
+      HTTP/2) to ride over it.
+
       *Remaining 3.5 commits.*
-      - 3.5c: Migrate `daft workspace serve` and
+      - 3.5c-3: Migrate `daft workspace serve` and
         `daft-sandboxd run --workspace-from` to use the
         broker. Keep `--workspace-direct <addr>` as the
         existing LAN-mode fallback (rename the current flag).

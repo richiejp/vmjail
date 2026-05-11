@@ -303,6 +303,31 @@ func TestNewSessionIDFormat(t *testing.T) {
 	}
 }
 
+// TestMatcherSessionsIsLive verifies that Sessions() returns the
+// embedded broker that RequestAttach has been reserving against —
+// not a fresh instance — so that the orchestrator's Relay handler
+// observes the reservations RequestAttach creates.
+func TestMatcherSessionsIsLive(t *testing.T) {
+	m := New()
+	s := m.Sessions()
+	if s == nil {
+		t.Fatal("Sessions() nil")
+	}
+	if m.Sessions() != s {
+		t.Error("Sessions() not stable across calls")
+	}
+	alice := fp(1)
+	key := ServeKey{Identity: alice, Workspace: testWorkspaceName}
+	_, _ = m.SubscribeServe(key, make(chan *PendingAttach, 1))
+	_, _ = m.SubscribeSandbox("sb", alice, make(chan *PendingAttach, 1))
+	if _, err := m.RequestAttach(alice, key, "sb"); err != nil {
+		t.Fatalf("RequestAttach: %v", err)
+	}
+	if got := m.Sessions().Count(); got != 1 {
+		t.Errorf("Sessions().Count() = %d, want 1", got)
+	}
+}
+
 // recv pulls one event off ch or fails the test if nothing
 // arrives quickly.
 func recv(t *testing.T, ch <-chan *PendingAttach) *PendingAttach {
