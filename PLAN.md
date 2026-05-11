@@ -414,13 +414,224 @@ Out of Scope:
       read/put error propagation, `FuzzFastCDCCut` (84k execs/s in
       pre-commit, no panics observed).
       **Remaining slices**:
-      - Slice 4: `daft-fuse` (go-fuse v2) — a FUSE FS the
-        sandbox-host mounts, that virtiofsd then re-exports into
-        the VM. Reads resolve via the local CAS, fetching missing
-        chunks from the user-host over HTTP/2. Policy hook for
-        freeze-on-suspicious-IO lives here.
+      - Slice 3.5: orchestrator-brokered workspace transport.
+        See "Slice 3.5 design" below.
+      - Slice 4: `daft-fuse` (go-fuse v2). See "Slice 4 design"
+        below.
       - Slice 5: write overlay + `daft pull` diff workflow (the
         user-host pulling sandbox-side modifications back).
+
+      **Slice 3.5 design (orchestrator workspace broker + relay)**
+      — *plan-only as of 2026-05-11.*
+
+      *Why this slice exists.* Slice 2.5 ships a working but
+      naive transport: sandbox-host dials the user-host's
+      `daft workspace serve` on a static `host:port`. That
+      fails the moment the user-host is a laptop behind NAT
+      (the common case). Production needs the orchestrator on
+      the discovery path — it's the only entity that knows
+      about both peers — and, for v1, on the data path as a
+      byte-relay. Direct dial stays available as an opt-in for
+      LAN/dev setups; it doesn't gate Slice 4.
+
+      *Conceptual direction.* The user-host is the chunk
+      **server** (source of truth); the sandbox-host's
+      daft-fuse is the chunk **client**. Connection direction
+      depends on transport mode:
+      - **Direct (LAN/opt-in):** client (user-host) dials
+        sandbox-host. Once mTLS is up, RPC roles invert —
+        user-host serves `WorkspaceService` on the connection
+        it just opened, sandbox-host calls into it.
+      - **Relay (v1 default):** both endpoints have a
+        persistent outbound control channel to the
+        orchestrator. Orchestrator splices their byte streams
+        on demand. mTLS is end-to-end between client and
+        sandbox-host; the orchestrator forwards opaque
+        encrypted bytes and never sees plaintext workspace
+        data. (Same property the project ethos requires:
+        orchestrator authenticates but does not store
+        workspace state.)
+
+      *Handshake (client-initiated).* The user explicitly
+      pushes data — matches the "user controls when data
+      moves" principle and avoids silent-wait failure modes.
+      Flow:
+      1. User runs `daft workspace serve --workspace name=path
+         --orchestrator <addr>`. Client opens persistent
+         outbound mTLS to orchestrator; sends
+         `BrokerService.RegisterServe(workspace_name=...)`;
+         keeps the stream open. Orchestrator notes
+         `(identity=client-fingerprint, workspace=name)` →
+         "available".
+      2. User runs `daft workspace attach --sandbox <sb-id>
+         --workspace <name>`. Client sends
+         `BrokerService.RequestAttach(sandbox=<sb-id>,
+         workspace=<name>)`. Orchestrator generates a session
+         token, validates ACLs, replies with
+         `{relay_endpoint, session_id}` to the client AND
+         pushes a `PendingAttach{session_id, peer=client-fp,
+         workspace=name}` event down the sandbox-host's open
+         control stream.
+      3. Both endpoints open a `BrokerService.Relay` bidi
+         stream to the orchestrator, presenting `session_id`.
+         Orchestrator splices them at the byte level.
+      4. Inside the spliced byte channel, client and
+         sandbox-host run their own mTLS handshake end-to-end
+         (using their existing daft identities; orchestrator
+         is not a CA for this).
+      5. Inside that inner mTLS, the user-host serves
+         `WorkspaceService` Connect-RPC; sandbox-host calls
+         `GetManifest` / `GetChunk` as needed.
+      6. Sandbox-host's daft-fuse uses the inner Connect-RPC
+         client for chunk fetches (Slice 4).
+
+      *Why HTTP/2 server on a dialed connection.* The
+      user-host has no inbound port. For both relay and
+      direct modes, the user-host needs to *serve* HTTP/2 on a
+      connection it itself opened. Standard HTTP/2 and
+      Connect-RPC support this — the protocol is symmetric
+      once the TLS handshake completes; only the dialing
+      convention treats one side as "client". Go's
+      `http.Server.Serve(net.Listener)` over an already-mTLS
+      `net.Conn` (wrapped in a one-conn listener) is the
+      idiom.
+
+      *Wire surface — orchestrator broker.* New proto
+      `proto/workspacebroker/v1/broker.proto`:
+      - `BrokerService.RegisterServe(stream) → stream` —
+        client opens with `RegisterServeRequest{workspace}`;
+        orchestrator returns a stream that pushes
+        `PendingAttach{session_id, peer_fp}` events as they
+        arrive.
+      - `BrokerService.RegisterSandbox(stream) → stream` —
+        sandbox-host's persistent control channel. Same
+        pattern as `RegisterServe` but for sandbox-side
+        notifications.
+      - `BrokerService.RequestAttach(req) → resp` — unary,
+        client-initiated. Validates that both peers are
+        registered, mints session_id, notifies the sandbox via
+        its open stream, returns `{relay_endpoint, session_id}`
+        to the caller.
+      - `BrokerService.Relay(stream bytes) → stream bytes` —
+        both peers open this with `session_id` in the first
+        message; orchestrator splices the two streams. Inner
+        traffic is opaque (end-to-end mTLS).
+
+      *Scope-cut for the first commit (Slice 3.5a).* Proto +
+      orchestrator-side `BrokerService` handler skeleton with
+      the matching logic (Register/RequestAttach pairing) but
+      **no actual byte relay yet**. Tests pin the matching
+      state machine with mock streams. Follow-up commits:
+      - 3.5b: `Relay` byte-splice with backpressure.
+      - 3.5c: Migrate `daft workspace serve` and
+        `daft-sandboxd run --workspace-from` to use the
+        broker. Keep `--workspace-direct <addr>` as the
+        existing LAN-mode fallback (rename the current flag).
+      - 3.5d: `daft workspace attach` subcommand on the
+        client.
+
+      *Direct-dial mode (kept, not default).* The existing
+      Slice 2.5 path (`--workspace-from <host:port>`) becomes
+      `--workspace-direct <host:port>` with a deprecation
+      warning. Useful for the dev loop where both ends are on
+      `localhost`; gated behind a flag because it depends on
+      reachability assumptions that don't hold in production.
+
+      *Open sub-questions to resolve during 3.5b/3.5c.*
+      - Connection reuse: should `daft workspace serve` hold
+        one orchestrator connection forever, or reconnect on
+        every workspace attach? Decision pending profiling —
+        default "one persistent connection, exponential
+        reconnect backoff on drop".
+      - ACL model: who can attach a workspace to which
+        sandbox? v1: sandbox owner == workspace owner == same
+        identity. Cross-identity attach is out of scope; it
+        invites a whole permissions UX problem.
+      - Bandwidth accounting: the orchestrator's uplink is
+        v1's only bottleneck. Worth an attribute on relay
+        spans (`bytes_relayed`, `peak_concurrent_streams`)
+        so the operator sees when to enable direct-dial.
+
+      **Slice 4 design (daft-fuse)** — *unchanged from the
+      previous design block, except the chunk-fetch transport
+      now runs inside the Slice 3.5 relay rather than dialing
+      a user-host port directly.*
+
+      *Goal.* Replace the Slice 2.5 pre-fetch model with
+      lazy-on-read so multi-GiB workspaces don't materialise
+      on disk before the VM boots. Establishes the seam for
+      freeze-on-suspicious-IO (enforcement is a follow-up).
+
+      *Mount layout.* daft-fuse → virtiofsd → VM. Sandbox-host
+      mounts daft-fuse at
+      `/run/daft/sandboxd/<sandbox-id>/workspace`; virtiofsd's
+      `--shared-dir` points there; VM gets a virtiofs share
+      at `/workspace`. No virtiofsd fork.
+
+      *Library.* `github.com/hanwen/go-fuse/v2`, NodeFS API.
+      Pure Go.
+
+      *Backing model.* Manifest fetched once at attach time
+      via `WorkspaceService.GetManifest` (over the Slice 3.5
+      tunnel). In-memory inode tree from `FileEntry`. Reads
+      resolve chunk-by-chunk via the chunk-ref list.
+
+      *Read path.* On `Read(inode, offset, size)`:
+      1. Walk `[]ChunkRef`, identify the chunk(s) covering
+         `[offset, offset+size)`.
+      2. For each chunk: `cas.Store.Get(digest)`. Hit →
+         serve. Miss → call `WorkspaceService.GetChunk` over
+         the tunnel, write into CAS, serve.
+      3. `singleflight.Group` keyed on digest so concurrent
+         readers of the same chunk share one fetch.
+      4. 3 retries with exponential backoff on transient
+         remote errors; permanent error → `EIO` to VM and
+         record span with `STATUS_ERROR`.
+
+      *CAS integration.* Reuse existing
+      `internal/cas.Store`. daft-fuse refcounts chunks for
+      the mount lifetime (same pattern as image-bundle
+      refcounts) so LRU eviction can't yank live chunks.
+
+      *Policy hook (interface lands now, enforcement later).*
+      `daftfuse.Policy.OnRead(*ReadEvent) Decision` with
+      `Allow | Deny | Freeze`. Default `AllowAll`. `Deny` →
+      `EACCES`. `Freeze` → `EAGAIN` + signal an external
+      freeze handler (the QMP `stop` wiring is a separate
+      commit).
+
+      *Integration with daft-sandboxd.* New flag
+      `daft-sandboxd run --workspace-attach <name>` (lazy mode,
+      uses the broker tunnel from 3.5) mutually exclusive
+      with `--workspace-from <name>` (pre-fetch mode, also
+      via broker but eager) and `--workspace-direct <addr>`
+      (LAN fallback).
+
+      *Tests.*
+      - Unit: synthetic manifest + mock chunk-fetcher.
+      - Integration: real mount via `fusermount`, real CAS,
+        in-process broker + serve fixture.
+      - E2E: full mount → virtiofsd → VM → container reads
+        file → assert content. `BenchmarkLazyWorkspaceCold`
+        vs `BenchmarkPrefetchWorkspaceCold` baseline.
+
+      *First-commit scope (Slice 4a).* Read-only daft-fuse
+      library with mock-fetcher unit tests + a single
+      `fusermount`-driven integration test. No daft-sandboxd
+      integration yet; that lands in Slice 4b.
+
+      *Out of scope for Slice 4.*
+      - QMP freeze enforcement (Slice 4c or its own slice).
+      - Prefetch/readahead heuristics. v0 is pure lazy.
+      - Write overlay (Slice 5).
+      - Manifest live-invalidation.
+
+      *Open sub-questions.*
+      - FUSE `allow_other` for virtiofsd's per-sandbox uid.
+        Likely needed; resolve when wiring up sandboxd.
+      - Bundle `fusermount` setuid binary into
+        daft-sandboxd's Nix closure (decision: yes, to stay
+        self-contained per project ethos).
 
 ## Architecture
 
