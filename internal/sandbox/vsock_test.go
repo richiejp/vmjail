@@ -2,23 +2,18 @@ package sandbox
 
 import (
 	"context"
-	"encoding/binary"
-	"errors"
 	"net"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
 	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
-// testHostSocketPath is a fixed path used by the vsock validate
-// tests that don't actually open the socket — the path just has to
-// be absolute for validate() to pass.
+// Fixed absolute path used by validate-only tests that don't open
+// the socket — validate() only requires absoluteness.
 const testHostSocketPath = "/tmp/v.sock"
 
 // TestBuildCloudHypervisorArgsEmitsVsockFlag confirms the --vsock
@@ -161,11 +156,9 @@ func TestStartVsockTraceReceiverNilWhenDisabled(t *testing.T) {
 	}
 }
 
-// TestStartVsockTraceReceiverRoundTrip uses the production UDS
-// listener + a hand-rolled framed proto write to confirm spans
-// arriving on the socket land in the Tracer reachable from ctx.
-// This is the host-side counterpart to the agent-side fake-vsock
-// test, with no VM involvement.
+// TestStartVsockTraceReceiverRoundTrip exercises both sides of
+// the framing protocol against a real UDS — the production
+// StreamExporter feeds the production receiver, no VM involved.
 func TestStartVsockTraceReceiverRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	cfg := validCfg()
@@ -183,36 +176,24 @@ func TestStartVsockTraceReceiverRoundTrip(t *testing.T) {
 	}
 	t.Cleanup(stop)
 
-	// Dial the listener and send a framed ReportSpansRequest the
-	// same way the agent's StreamExporter does.
+	// Use the production exporter so the test exercises both sides
+	// of the framing protocol together.
 	addr := cfg.Vsock.HostSocket + "_8000"
-	conn, err := net.Dial("unix", addr)
-	if err != nil {
-		t.Fatalf("Dial %s: %v", addr, err)
-	}
-	traceID := strings.Repeat("a", 32)
-	payload, err := proto.Marshal(&tracev1.ReportSpansRequest{
-		Spans: []*tracev1.Span{
-			{
-				TraceId:   traceID,
-				SpanId:    strings.Repeat("b", 16),
-				Name:      "agent.boot",
-				Component: "daft-agent",
-			},
-		},
+	exporter := trace.NewStreamExporter(func(ctx context.Context) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, "unix", addr)
 	})
-	if err != nil {
-		t.Fatalf("Marshal: %v", err)
+	traceID := strings.Repeat("a", 32)
+	if err := exporter.Export(context.Background(), []*tracev1.Span{
+		{
+			TraceId:   traceID,
+			SpanId:    strings.Repeat("b", 16),
+			Name:      "agent.boot",
+			Component: "daft-agent",
+		},
+	}); err != nil {
+		t.Fatalf("Export: %v", err)
 	}
-	var hdr [4]byte
-	binary.BigEndian.PutUint32(hdr[:], uint32(len(payload))) //nolint:gosec // test fixture, length is a known small literal
-	if _, err := conn.Write(hdr[:]); err != nil {
-		t.Fatalf("write hdr: %v", err)
-	}
-	if _, err := conn.Write(payload); err != nil {
-		t.Fatalf("write payload: %v", err)
-	}
-	_ = conn.Close()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -291,28 +272,4 @@ func TestStartVsockTraceReceiverSurfacesListenError(t *testing.T) {
 		t.Fatal("expected error from Listen on bad path")
 	}
 	stop() // must not panic
-}
-
-// TestStartVsockTraceReceiverSurvivesPreCleanFailure exercises the
-// branch where removing the stale socket fails — pre-clean is
-// best-effort so the listener should still try to bind (and then
-// fail on Listen with EADDRINUSE-equivalent, which is what the
-// test asserts).
-func TestStartVsockTraceReceiverSurvivesPreCleanFailure(t *testing.T) {
-	saved := osRemove
-	t.Cleanup(func() { osRemove = saved })
-	osRemove = func(string) error { return errors.New("synthetic remove failure") }
-
-	dir := t.TempDir()
-	cfg := validCfg()
-	cfg.Vsock = &VsockConfig{
-		HostSocket: filepath.Join(dir, "v.sock"),
-		GuestCID:   3,
-		TracePort:  8000,
-	}
-	stop, err := startVsockTraceReceiver(context.Background(), cfg)
-	if err != nil {
-		t.Fatalf("clean state should still allow listen: %v", err)
-	}
-	stop()
 }

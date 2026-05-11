@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"google.golang.org/protobuf/proto"
 
@@ -27,6 +28,13 @@ const streamMaxMessage = 4 * 1024 * 1024
 // in the static-musl agent binary just to send one message per
 // Flush. Binary framing keeps the agent under 2 MiB.
 const streamLenPrefix = 4
+
+// streamReadTimeoutForTest caps how long the receiver waits for
+// one framed batch on a connection. A parked producer (crashed
+// mid-handshake, open but never writing) must not be able to pin
+// a receiver goroutine indefinitely. Variable rather than constant
+// so the parked-connection test can shrink it to keep CI fast.
+var streamReadTimeoutForTest = 30 * time.Second
 
 // StreamExporter is an Exporter that, on each Export call, opens a
 // fresh net.Conn via Dial, writes a single length-prefixed
@@ -160,22 +168,21 @@ func (r *StreamReceiver) isStopped() bool {
 
 func (r *StreamReceiver) handle(conn net.Conn) {
 	defer func() { _ = conn.Close() }()
-	spans, err := readFramedBatch(conn)
+	_ = conn.SetReadDeadline(time.Now().Add(streamReadTimeoutForTest))
+	spans, err := ReadFramedBatch(conn)
 	if err != nil {
-		// Drop the connection silently — a misbehaving (or
-		// crashed-mid-write) producer must not be able to take
-		// the receiver down or fill logs. Tests cover the
-		// happy path; framing errors are visible at the dropped
-		// span count.
+		// A misbehaving or crashed-mid-write producer must not take
+		// the receiver down or fill logs.
 		return
 	}
 	r.tracer.IngestProto(spans)
 }
 
-// readFramedBatch reads one length prefix + payload from r and
-// returns the decoded spans. Exposed for tests; production callers
-// should use StreamReceiver.
-func readFramedBatch(r io.Reader) ([]*tracev1.Span, error) {
+// ReadFramedBatch reads one length prefix + payload from r and
+// returns the decoded spans. Production callers use StreamReceiver;
+// this is the seam tests and out-of-tree consumers reach for when
+// they only need the framing.
+func ReadFramedBatch(r io.Reader) ([]*tracev1.Span, error) {
 	var hdr [streamLenPrefix]byte
 	if _, err := io.ReadFull(r, hdr[:]); err != nil {
 		return nil, fmt.Errorf("trace: read length prefix: %w", err)

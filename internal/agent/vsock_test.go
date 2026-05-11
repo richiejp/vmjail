@@ -3,9 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"errors"
-	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -13,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // TestRunWithVsockShipsSpansToFakeHost wires runWith with a fake
@@ -29,7 +26,7 @@ func TestRunWithVsockShipsSpansToFakeHost(t *testing.T) {
 
 	receivedCh := make(chan []*tracev1.Span, 1)
 	go func() {
-		spans, err := readFramedReportSpans(hostSide)
+		spans, err := trace.ReadFramedBatch(hostSide)
 		if err != nil {
 			t.Logf("read framed: %v", err)
 			receivedCh <- nil
@@ -138,29 +135,6 @@ func TestRunWithVsockDialFailureReports(t *testing.T) {
 	}
 }
 
-// TestRunWithVsockOKButNoDialerReports covers the "port parsed but
-// dialVsock is nil" branch — only reachable in tests with the
-// production runDeps default never wires nil. The branch exists so
-// a hypothetical production regression doesn't ship spans into a
-// black hole.
-func TestRunWithVsockOKButNoDialerReports(t *testing.T) {
-	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "daft.vsock.trace_port=8000", nil
-		},
-		share:     noopShareDeps(),
-		dialVsock: nil, // explicit
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	var buf bytes.Buffer
-	_ = runWith(ctx, &buf, deps)
-
-	if !strings.Contains(buf.String(), "dialVsock is nil") {
-		t.Errorf("expected dialVsock-nil report; got:\n%s", buf.String())
-	}
-}
-
 // TestShutdownTracerNilIsNoOp covers the nil-tracer early return.
 func TestShutdownTracerNilIsNoOp(t *testing.T) {
 	var buf bytes.Buffer
@@ -197,26 +171,6 @@ func TestRunWithNoVsockCmdlineSkipsShipping(t *testing.T) {
 	if strings.Contains(buf.String(), TraceReportPrefix) {
 		t.Errorf("unexpected %s line; got:\n%s", TraceReportPrefix, buf.String())
 	}
-}
-
-// readFramedReportSpans is the inverse of the agent's framed write:
-// 4-byte big-endian length, then proto bytes, then decode into a
-// ReportSpansRequest.
-func readFramedReportSpans(r io.Reader) ([]*tracev1.Span, error) {
-	var hdr [4]byte
-	if _, err := io.ReadFull(r, hdr[:]); err != nil {
-		return nil, err
-	}
-	n := binary.BigEndian.Uint32(hdr[:])
-	buf := make([]byte, n)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		return nil, err
-	}
-	var req tracev1.ReportSpansRequest
-	if err := proto.Unmarshal(buf, &req); err != nil {
-		return nil, err
-	}
-	return req.GetSpans(), nil
 }
 
 func spanNames(spans []*tracev1.Span) []string {

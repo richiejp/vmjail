@@ -25,24 +25,16 @@ var vsockDialer = func(port uint32) (net.Conn, error) {
 }
 
 // DialHostVsock dials the host on (VMADDR_CID_HOST, port) and
-// returns the connection. Used by the in-VM agent to ship spans
-// to the sandbox-host via Cloud Hypervisor's hybrid-vsock proxy
-// (which forwards the connection to <HostSocket>_<port> on the
-// host's filesystem).
-//
-// ctx's deadline (if any) is enforced after dialing by setting
-// the conn's read+write deadlines; vsock.Dial itself doesn't
-// accept a ctx.
+// returns the connection. ctx's deadline (if any) is propagated to
+// the returned conn via SetDeadline so subsequent Read/Write honor
+// it; vsock.Dial itself doesn't accept a ctx.
 func DialHostVsock(ctx context.Context, port uint32) (net.Conn, error) {
 	conn, err := vsockDialer(port)
 	if err != nil {
 		return nil, fmt.Errorf("agent: vsock dial cid=%d port=%d: %w", vmaddrCIDHost, port, err)
 	}
 	if deadline, ok := ctx.Deadline(); ok {
-		if err := conn.SetDeadline(deadline); err != nil {
-			_ = conn.Close()
-			return nil, fmt.Errorf("agent: SetDeadline: %w", err)
-		}
+		_ = conn.SetDeadline(deadline)
 	}
 	return conn, nil
 }

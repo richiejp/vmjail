@@ -97,18 +97,7 @@ type runDeps struct {
 }
 
 func runWith(ctx context.Context, w io.Writer, d runDeps) error {
-	// Order matters: share + container lines go out *before* the
-	// banner so the host can observe their results in the lines
-	// preceding the banner. Banner appearance is the "agent is up,
-	// all setup applied" signal — share + container are best-effort,
-	// so a failure in either still lets the banner print.
 	cmdline, _ := d.readCmdline()
-
-	// Tracer wiring is also best-effort: if the host configured a
-	// daft.vsock.trace_port, we attach a StreamExporter; otherwise
-	// spans accumulate in the local ring buffer and get dropped at
-	// exit. Either way, code in this function can call trace.Start
-	// without conditionals.
 	tracer, ctx := startTracer(ctx, w, d, cmdline)
 
 	ctx, bootSpan := trace.Start(ctx, "agent.boot",
@@ -116,13 +105,12 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	bundle, _, _ := ParseBundleCmdline(cmdline)
 	applySharesFromCmdline(w, d, cmdline, bundle != "")
 	runContainerFromCmdline(ctx, w, d, cmdline)
-
-	// Order: end the boot span, Flush spans, *then* print the
-	// banner. The host's banner-scan is what tells the VMM
-	// supervisor "boot is complete, safe to tear down". If we
-	// Flushed *after* the banner the host would race the agent's
-	// last vsock write against the VM shutdown.
 	bootSpan.End()
+
+	// Flush spans *before* the banner: the host's banner-scan is
+	// what tells the VMM supervisor "tear down safe", so flushing
+	// afterwards would race the agent's last vsock write against
+	// VM shutdown.
 	shutdownTracer(ctx, tracer, w)
 
 	if _, err := fmt.Fprintln(w, Banner); err != nil {
@@ -140,38 +128,27 @@ const tracerShutdownTimeout = 2 * time.Second
 
 // startTracer returns a Tracer (with a vsock StreamExporter wired up
 // when daft.vsock.trace_port is set on the cmdline) and the ctx
-// augmented with that tracer. Failures parsing the port are reported
-// on the console via TraceReportPrefix and downgraded to "no
-// exporter" — span shipping is best-effort, same as share/container.
+// augmented with that tracer. Cmdline parse errors are reported
+// on the console; span shipping is best-effort.
 func startTracer(ctx context.Context, w io.Writer, d runDeps, cmdline string) (*trace.Tracer, context.Context) {
 	tr := trace.New(component.Agent)
 	port, ok, err := ParseVsockTracePortCmdline(cmdline)
 	switch {
 	case err != nil:
 		writeReport(w, TraceReportPrefix, "cmdline: "+err.Error())
-	case ok && d.dialVsock != nil:
+	case ok:
 		dial := d.dialVsock
 		tr.SetExporter(trace.NewStreamExporter(func(ctx context.Context) (net.Conn, error) {
 			return dial(ctx, port)
 		}))
-	case ok:
-		// Port parsed but no dialer wired — only reachable in test
-		// runs where runDeps.dialVsock was deliberately left nil.
-		// Surface it so a missing-dial-from-production regression
-		// can't pass silently.
-		writeReport(w, TraceReportPrefix, fmt.Sprintf("port %d parsed but dialVsock is nil", port))
 	}
 	return tr, trace.ContextWithTracer(ctx, tr)
 }
 
-// shutdownTracer Flushes the tracer's buffer with a bounded timeout
-// and reports a single TraceReportPrefix line on any error so the
-// host scanner sees the failure mode without the rest of the boot
-// path being affected. We derive the Flush deadline via
-// context.WithoutCancel + WithTimeout so the cancellation chain
-// from a SIGTERM-triggered Main doesn't cut Flush short before the
-// host has the data — the bounded timeout is the only thing
-// limiting this Flush.
+// shutdownTracer Flushes the tracer with a bounded timeout. The
+// parent's cancellation is detached (via WithoutCancel) so a
+// SIGTERM-driven Main can't cut Flush short before the host has
+// received the spans.
 func shutdownTracer(parent context.Context, tr *trace.Tracer, w io.Writer) {
 	if tr == nil {
 		return

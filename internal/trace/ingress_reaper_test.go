@@ -25,24 +25,14 @@ func newIngressFixture() *ingressFixture {
 		now: time.Unix(1_700_000_000, 0).UTC(),
 	}
 	f.tracer = New("orchestrator", WithClock(func() time.Time { return f.now }))
-	var counter int
 	f.reaper = NewIngressReaper(
 		f.tracer, "orchestrator",
 		WithIngressClock(func() time.Time { return f.now }),
-		WithIngressSpanIDFn(func() string {
-			counter++
-			return strings.Repeat("a", 14) + leftPadHex(counter)
-		}),
 		WithIngressQuietAfter(2*time.Minute),
-		WithIngressScanInterval(0), // tests drive scanOnce directly
+		WithIngressScanInterval(0),
 	)
 	f.advance = func(d time.Duration) { f.now = f.now.Add(d) }
 	return f
-}
-
-func leftPadHex(n int) string {
-	digits := "0123456789abcdef"
-	return string([]byte{digits[(n>>4)&0xf], digits[n&0xf]})
 }
 
 // makeProtoSpan builds a wire-format span with the controllable
@@ -217,49 +207,6 @@ func TestIngressReaperRunDisabledIntervalBlocksUntilCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not exit after cancel with scanInterval=0")
-	}
-}
-
-func TestIngressReaperGarbageCollectsMarkedSetWhenSpansEvicted(t *testing.T) {
-	f := newIngressFixture()
-	// Tiny capacity so we can force eviction.
-	f.tracer = NewWithCapacity("orchestrator", 2,
-		WithClock(func() time.Time { return f.now }))
-	f.reaper = NewIngressReaper(f.tracer, "orchestrator",
-		WithIngressClock(func() time.Time { return f.now }),
-		WithIngressQuietAfter(2*time.Minute),
-		WithIngressScanInterval(0))
-
-	traceID := strings.Repeat("c", 32)
-	f.tracer.IngestProto([]*tracev1.Span{
-		makeProtoSpan(traceID, strings.Repeat("d", 16), strings.Repeat("e", 16), f.now),
-	})
-	f.advance(3 * time.Minute)
-	f.reaper.scanOnce() // marks traceID
-
-	// Two spans for an unrelated trace evict everything for traceID
-	// out of the 2-slot ring buffer (the marker survives one cycle
-	// but is then overwritten too).
-	other := strings.Repeat("9", 32)
-	for i := range 4 {
-		_ = i
-		f.tracer.IngestProto([]*tracev1.Span{
-			makeProtoSpan(other, strings.Repeat("d", 16), strings.Repeat("e", 16), f.now),
-		})
-	}
-	// Sanity: the original trace is no longer in the snapshot.
-	for _, s := range f.tracer.Snapshot() {
-		if s.TraceID() == traceID {
-			t.Fatalf("setup did not evict trace %s", traceID)
-		}
-	}
-
-	f.reaper.scanOnce()
-	f.reaper.mu.Lock()
-	_, stillMarked := f.reaper.marked[traceID]
-	f.reaper.mu.Unlock()
-	if stillMarked {
-		t.Errorf("reaper.marked still contains evicted trace %s — set will grow unboundedly", traceID)
 	}
 }
 

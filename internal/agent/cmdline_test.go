@@ -92,18 +92,11 @@ func TestFormatShareCmdlineRoundTrips(t *testing.T) {
 	}
 }
 
-// testCmdlineShareOnly is the canonical "the host wired up a share
-// but nothing else" cmdline used as the absent-feature negative
-// case across the parser tests.
-const testCmdlineShareOnly = "console=hvc0 daft.share=ws:/share"
-
-// testHappyPath is the standard subtest label for the
-// well-formed-input case. Lifted to a const for goconst.
-const testHappyPath = "happy path"
-
-// testAbsent is the standard subtest label for the
-// feature-not-requested negative case.
-const testAbsent = "absent"
+const (
+	testCmdlineShareOnly = "console=hvc0 daft.share=ws:/share"
+	testHappyPath        = "happy path"
+	testAbsent           = "absent"
+)
 
 func TestParseBundleCmdline(t *testing.T) {
 	tests := []struct {

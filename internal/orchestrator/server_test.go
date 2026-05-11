@@ -17,9 +17,6 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
-// testListenAddr is the "any free port on loopback" we use for all
-// orchestrator tests. Defined once because golangci-lint's goconst
-// catches the repetition otherwise.
 const testListenAddr = "127.0.0.1:0"
 
 // testPair builds a server + client identity, peer-stores that

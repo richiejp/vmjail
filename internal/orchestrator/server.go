@@ -62,7 +62,8 @@ type Server struct {
 	tracer *trace.Tracer
 	reaper *trace.IngressReaper
 
-	reaperMu     sync.Mutex
+	reaperStart  sync.Once
+	reaperStop   sync.Once
 	reaperCancel context.CancelFunc
 	reaperDone   chan struct{}
 }
@@ -123,58 +124,43 @@ func New(cfg Config) (*Server, error) {
 // the buffer directly for tests.
 func (s *Server) Tracer() *trace.Tracer { return s.tracer }
 
-// Listen and Addr are passthroughs to the inner mtls.Server.
 func (s *Server) Listen() error { return s.inner.Listen() }
 func (s *Server) Addr() string  { return s.inner.Addr() }
 
-// Serve starts the ingress reaper goroutine and then blocks on the
-// inner HTTP server. The reaper runs alongside Serve and is stopped
-// by Shutdown, so the typical pattern (Serve in one goroutine,
-// Shutdown from the signal handler) keeps the reaper bounded to
-// the server's lifetime without callers having to wire context.
+// Serve starts the ingress reaper and blocks on the inner HTTP
+// server. Reaper lifetime is the Serve→Shutdown window.
 func (s *Server) Serve() error {
 	s.startReaper()
 	return s.inner.Serve()
 }
 
-// Shutdown stops the reaper first, then asks the inner server to
-// drain. Stopping the reaper before HTTP shutdown means we don't
-// race a final scan against a server that's about to lose its
-// span sources.
+// Shutdown stops the reaper before draining the HTTP server so a
+// final scan can't race a teardown that's about to lose its span
+// sources.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.stopReaper()
 	return s.inner.Shutdown(ctx)
 }
 
 func (s *Server) startReaper() {
-	s.reaperMu.Lock()
-	defer s.reaperMu.Unlock()
-	if s.reaperCancel != nil {
-		return
-	}
-	// The reaper's lifetime is the Serve->Shutdown window, which is
-	// intentionally independent of any request context — so a fresh
-	// Background-rooted ctx is what we want, not the caller's.
-	ctx, cancel := context.WithCancel(context.Background()) //nolint:contextcheck // reaper lifetime is Serve→Shutdown, not request-scoped
-
-	s.reaperCancel = cancel
-	s.reaperDone = make(chan struct{})
-	go func() {
-		defer close(s.reaperDone)
-		s.reaper.Run(ctx)
-	}()
+	s.reaperStart.Do(func() {
+		// Reaper lifetime is Serve→Shutdown, not request-scoped.
+		ctx, cancel := context.WithCancel(context.Background()) //nolint:contextcheck // see above
+		s.reaperCancel = cancel
+		s.reaperDone = make(chan struct{})
+		go func() {
+			defer close(s.reaperDone)
+			s.reaper.Run(ctx)
+		}()
+	})
 }
 
 func (s *Server) stopReaper() {
-	s.reaperMu.Lock()
-	cancel := s.reaperCancel
-	done := s.reaperDone
-	s.reaperCancel = nil
-	s.reaperDone = nil
-	s.reaperMu.Unlock()
-	if cancel == nil {
-		return
-	}
-	cancel()
-	<-done
+	s.reaperStop.Do(func() {
+		if s.reaperCancel == nil {
+			return
+		}
+		s.reaperCancel()
+		<-s.reaperDone
+	})
 }

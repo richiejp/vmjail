@@ -107,7 +107,7 @@ func TestStreamExporterDialError(t *testing.T) {
 func TestReadFramedBatchRejectsOversize(t *testing.T) {
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], streamMaxMessage+1)
-	_, err := readFramedBatch(bytesReader(hdr[:]))
+	_, err := ReadFramedBatch(bytesReader(hdr[:]))
 	if err == nil {
 		t.Fatal("expected oversize rejection")
 	}
@@ -122,7 +122,7 @@ func TestReadFramedBatchRejectsOversize(t *testing.T) {
 func TestReadFramedBatchZeroLength(t *testing.T) {
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], 0)
-	spans, err := readFramedBatch(bytesReader(hdr[:]))
+	spans, err := ReadFramedBatch(bytesReader(hdr[:]))
 	if err != nil {
 		t.Errorf("zero-length frame: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestReadFramedBatchTruncated(t *testing.T) {
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], 100)
 	r := bytesReader(append(hdr[:], 1, 2, 3)) // 3 bytes < promised 100
-	_, err := readFramedBatch(r)
+	_, err := ReadFramedBatch(r)
 	if err == nil {
 		t.Fatal("expected truncation error")
 	}
@@ -150,7 +150,7 @@ func TestReadFramedBatchBadProto(t *testing.T) {
 	var hdr [4]byte
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(garbage))) //nolint:gosec // test fixture, length is a known small literal
 	r := bytesReader(append(hdr[:], garbage...))
-	_, err := readFramedBatch(r)
+	_, err := ReadFramedBatch(r)
 	if err == nil {
 		t.Fatal("expected unmarshal error")
 	}
@@ -232,6 +232,47 @@ func TestStreamExporterRejectsOversizePayload(t *testing.T) {
 	err := exporter.Export(context.Background(), spans)
 	if err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Errorf("err = %v, want oversize rejection", err)
+	}
+}
+
+// TestStreamReceiverDropsParkedConnection confirms that a producer
+// who opens a connection and never writes doesn't pin a receiver
+// goroutine indefinitely. The handle path must apply a read
+// deadline so SetReadDeadline-bound producers get reaped within
+// streamReadTimeout — we shrink the constant via a brief override
+// to keep the test fast.
+func TestStreamReceiverDropsParkedConnection(t *testing.T) {
+	sock := filepath.Join(t.TempDir(), "trace.sock")
+	listener, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	recv := NewStreamReceiver(listener, New("sink"))
+	go func() { _ = recv.Run(context.Background()) }()
+	t.Cleanup(func() { _ = recv.Close() })
+
+	// Override the read deadline so the test doesn't wait 30 s.
+	savedTimeout := streamReadTimeoutForTest
+	streamReadTimeoutForTest = 100 * time.Millisecond
+	t.Cleanup(func() { streamReadTimeoutForTest = savedTimeout })
+
+	parked, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { _ = parked.Close() })
+
+	// Wait until the receiver closes the conn (it sets a read
+	// deadline and EOFs once it fires); Read returns io.EOF.
+	buf := make([]byte, 1)
+	if err := parked.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline on producer side: %v", err)
+	}
+	_, err = parked.Read(buf)
+	if err == nil {
+		t.Fatal("parked connection still open after read deadline")
 	}
 }
 
