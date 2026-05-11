@@ -152,13 +152,16 @@ func (h *BrokerHandler) RequestAttach(
 	}), nil
 }
 
-// Relay returns Unimplemented until Slice 3.5b lands.
+// Relay carries the byte-splice between the two peers of a
+// brokered session. The orchestrator never sees plaintext — the
+// payloads inside the splice are end-to-end mTLS between client
+// and sandbox-host.
 func (h *BrokerHandler) Relay(
 	_ context.Context,
 	_ *connect.BidiStream[workspacebrokerv1.RelayMessage, workspacebrokerv1.RelayMessage],
 ) error {
 	return connect.NewError(connect.CodeUnimplemented,
-		errors.New("orchestrator: Relay not implemented in Slice 3.5a"))
+		errors.New("orchestrator: Relay not yet implemented"))
 }
 
 // pumpAttachEvents forwards PendingAttach values from notif to

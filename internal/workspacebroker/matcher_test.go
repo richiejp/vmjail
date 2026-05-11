@@ -1,7 +1,6 @@
 package workspacebroker
 
 import (
-	"crypto/sha256"
 	"errors"
 	"strings"
 	"testing"
@@ -316,6 +315,3 @@ func recv(t *testing.T, ch <-chan *PendingAttach) *PendingAttach {
 		return nil
 	}
 }
-
-// avoid unused-import warnings if test list is reduced
-var _ = sha256.Sum256

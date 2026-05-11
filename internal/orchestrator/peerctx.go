@@ -57,8 +57,7 @@ func PeerFingerprintFromRequestHeader(h http.Header) (identity.Fingerprint, bool
 func withPeerMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Del(peerFingerprintHeader)
-		if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-			fp := identity.FingerprintCert(r.TLS.PeerCertificates[0])
+		if fp, ok := identity.PeerFingerprintFromTLS(r.TLS); ok {
 			r.Header.Set(peerFingerprintHeader, fp.String())
 		}
 		h.ServeHTTP(w, r)

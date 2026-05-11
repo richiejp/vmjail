@@ -1,8 +1,9 @@
 // Package orchestrator hosts the central daft control-plane: it
 // authenticates clients and sandbox-hosts via mTLS (with TOFU peer
 // approvals from internal/identity) and serves Connect-RPC endpoints
-// over HTTP/2. Currently exposes only Health.Ping; the registry
-// handler, port forwarder, and terminal stream land here next.
+// over HTTP/2 — currently Health.Ping, TraceService.ReportSpans,
+// the workspace BrokerService (matcher only; relay lands later),
+// and a /debug/traces dump endpoint.
 //
 // The actual mTLS HTTP/2 listener lives in internal/mtls — this
 // package is just the orchestrator-specific service surface.
@@ -66,11 +67,10 @@ type Config struct {
 // TraceService.ReportSpans, BrokerService) plus a /debug/traces
 // dump endpoint.
 type Server struct {
-	inner         *mtls.Server
-	tracer        *trace.Tracer
-	reaper        *trace.IngressReaper
-	matcher       *workspacebroker.Matcher
-	brokerHandler *BrokerHandler
+	inner   *mtls.Server
+	tracer  *trace.Tracer
+	reaper  *trace.IngressReaper
+	matcher *workspacebroker.Matcher
 
 	reaperStart  sync.Once
 	reaperStop   sync.Once
@@ -120,16 +120,16 @@ func New(cfg Config) (*Server, error) {
 	if matcher == nil {
 		matcher = workspacebroker.New()
 	}
-	// We need the inner *mtls.Server to ask it for its bound
-	// Addr() lazily — the listener doesn't bind until Listen().
-	// resolveRelay closes over a *Server slot that gets filled
-	// in below once mtls.New returns.
-	var brokerServerSlot struct{ s *mtls.Server }
+	// The broker handler needs the orchestrator's bound address
+	// to return as the relay endpoint, but the listener doesn't
+	// bind until Listen(). Close over a late-bound *mtls.Server
+	// that gets filled in once mtls.New returns below.
+	var inner *mtls.Server
 	brokerHandler, err := NewBrokerHandler(matcher, func() string {
-		if brokerServerSlot.s == nil {
+		if inner == nil {
 			return ""
 		}
-		return brokerServerSlot.s.Addr()
+		return inner.Addr()
 	})
 	if err != nil {
 		return nil, err
@@ -141,7 +141,7 @@ func New(cfg Config) (*Server, error) {
 
 	handler := withPeerMiddleware(mux)
 
-	inner, err := mtls.New(mtls.Config{
+	inner, err = mtls.New(mtls.Config{
 		Identity:          cfg.Identity,
 		Peers:             cfg.Peers,
 		Addr:              cfg.Addr,
@@ -151,17 +151,15 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	brokerServerSlot.s = inner
 	reaper := cfg.Reaper
 	if reaper == nil {
 		reaper = trace.NewIngressReaper(tracer, component.Orchestrator)
 	}
 	return &Server{
-		inner:         inner,
-		tracer:        tracer,
-		reaper:        reaper,
-		matcher:       matcher,
-		brokerHandler: brokerHandler,
+		inner:   inner,
+		tracer:  tracer,
+		reaper:  reaper,
+		matcher: matcher,
 	}, nil
 }
 

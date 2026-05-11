@@ -2,6 +2,8 @@ package identity
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -20,6 +22,25 @@ func TestFingerprintCertHashesSPKI(t *testing.T) {
 	}
 	if id.Fingerprint() != want {
 		t.Errorf("Identity.Fingerprint mismatch")
+	}
+}
+
+func TestPeerFingerprintFromTLS(t *testing.T) {
+	if _, ok := PeerFingerprintFromTLS(nil); ok {
+		t.Error("nil state: ok=true, want false")
+	}
+	if _, ok := PeerFingerprintFromTLS(&tls.ConnectionState{}); ok {
+		t.Error("empty PeerCertificates: ok=true, want false")
+	}
+	id, err := Generate(RoleClient)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	state := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{id.Cert}}
+	got, ok := PeerFingerprintFromTLS(state)
+	if !ok || got != id.Fingerprint() {
+		t.Errorf("PeerFingerprintFromTLS = (%s, %v), want (%s, true)",
+			got, ok, id.Fingerprint())
 	}
 }
 

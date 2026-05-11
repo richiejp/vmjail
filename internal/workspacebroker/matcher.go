@@ -1,15 +1,15 @@
 // Package workspacebroker is the orchestrator-side matcher that
 // pairs a user-host's `daft workspace serve` with a sandbox-host
-// waiting to consume a workspace. Slice 3.5a (this package) is
-// the pure state machine: subscribe a serve, subscribe a sandbox,
-// RequestAttach pairs them and notifies both. The byte-relay
-// splice (RelayService) lands in Slice 3.5b.
+// waiting to consume a workspace: subscribe a serve, subscribe a
+// sandbox, RequestAttach pairs them and notifies both with a
+// session_id that both peers can present on a subsequent Relay
+// byte-splice (handled by the orchestrator's BrokerService Relay
+// RPC, not this package).
 //
-// The matcher is transport-agnostic — it speaks in `ServeKey`,
-// `SandboxKey`, and `chan<- *PendingAttach`. The Connect-RPC
-// handler in internal/orchestrator wires the matcher to the
-// generated proto types and supplies peer identity from the
-// mTLS context.
+// The matcher is transport-agnostic — it speaks in ServeKey,
+// sandbox_id, and chan<- *PendingAttach. The Connect-RPC handler
+// in internal/orchestrator wires it to the generated proto types
+// and supplies peer identity from the mTLS connection.
 //
 // See PLAN.md "Slice 3.5 design" for the architectural rationale.
 package workspacebroker

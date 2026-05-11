@@ -5,6 +5,7 @@ package identity
 
 import (
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
@@ -21,6 +22,17 @@ type Fingerprint [sha256.Size]byte
 // ErrInvalidFingerprint is the sentinel returned by ParseFingerprint
 // for any malformed input.
 var ErrInvalidFingerprint = errors.New("identity: invalid fingerprint")
+
+// PeerFingerprintFromTLS extracts the leaf-cert SPKI fingerprint
+// from an mTLS connection state. Returns false if state is nil or
+// no peer cert was presented — callers that require identity
+// must reject in that case rather than substitute a default.
+func PeerFingerprintFromTLS(state *tls.ConnectionState) (Fingerprint, bool) {
+	if state == nil || len(state.PeerCertificates) == 0 {
+		return Fingerprint{}, false
+	}
+	return FingerprintCert(state.PeerCertificates[0]), true
+}
 
 // FingerprintCert hashes cert.RawSubjectPublicKeyInfo. The cert must
 // have been parsed (or freshly created) so RawSubjectPublicKeyInfo
