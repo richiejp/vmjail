@@ -17,6 +17,11 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
+// testListenAddr is the "any free port on loopback" we use for all
+// orchestrator tests. Defined once because golangci-lint's goconst
+// catches the repetition otherwise.
+const testListenAddr = "127.0.0.1:0"
+
 // testPair builds a server + client identity, peer-stores that
 // approve each other, and a started orchestrator listening on a
 // random port. Returns the server's URL and a Connect client wired
@@ -69,7 +74,7 @@ func newTestPair(t *testing.T, approveClient, approveServer bool) *testPair {
 	srv, err := New(Config{
 		Identity: srvID,
 		Peers:    srvStore,
-		Addr:     "127.0.0.1:0",
+		Addr:     testListenAddr,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -127,7 +132,7 @@ func TestServerAddrEmptyBeforeListen(t *testing.T) {
 	srv, err := New(Config{
 		Identity: mustGenerate(t, identity.RoleOrchestrator),
 		Peers:    mustOpenStore(t),
-		Addr:     "127.0.0.1:0",
+		Addr:     testListenAddr,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

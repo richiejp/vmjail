@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -196,4 +197,113 @@ func TestTraceHandlerEmptyBatch(t *testing.T) {
 	if resp == nil || resp.Msg == nil {
 		t.Error("expected non-nil response")
 	}
+}
+
+// TestServerIngressReaperMarksOrphanedTrace proves the reaper is
+// actually running while the server is up: ship a child span (no
+// root) over ReportSpans, wait past the configured quiet window,
+// and assert /debug/traces now shows a synthetic quiesced marker
+// for that trace_id. Wall-clock based with sub-second windows
+// because we need the reaper's ticker to fire on its own.
+func TestServerIngressReaperMarksOrphanedTrace(t *testing.T) {
+	tr := trace.New(component.Orchestrator)
+	reaper := trace.NewIngressReaper(
+		tr, component.Orchestrator,
+		trace.WithIngressQuietAfter(100*time.Millisecond),
+		trace.WithIngressScanInterval(20*time.Millisecond),
+	)
+	srv, httpc := startServerForReaperTest(t, tr, reaper)
+
+	traceID := strings.Repeat("d", 32)
+	postOrphanChild(t, httpc, "https://"+srv.Addr(), traceID)
+	waitForQuiescedMarker(t, httpc, "https://"+srv.Addr()+"/debug/traces", traceID)
+}
+
+func startServerForReaperTest(t *testing.T, tr *trace.Tracer, reaper *trace.IngressReaper) (*Server, *http.Client) {
+	t.Helper()
+	srvID := mustGenerate(t, identity.RoleOrchestrator)
+	cliID := mustGenerate(t, identity.RoleClient)
+	srvStore := mustOpenStore(t)
+	cliStore := mustOpenStore(t)
+	if err := srvStore.Add(identity.Peer{Fingerprint: cliID.Fingerprint()}); err != nil {
+		t.Fatalf("server Add: %v", err)
+	}
+	if err := cliStore.Add(identity.Peer{Fingerprint: srvID.Fingerprint()}); err != nil {
+		t.Fatalf("client Add: %v", err)
+	}
+	srv, err := New(Config{
+		Identity: srvID,
+		Peers:    srvStore,
+		Addr:     testListenAddr,
+		Tracer:   tr,
+		Reaper:   reaper,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := srv.Listen(); err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	go func() {
+		if err := srv.Serve(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Logf("Serve: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+	cliTLS, err := identity.ClientTLSConfig(cliID, cliStore, "")
+	if err != nil {
+		t.Fatalf("ClientTLSConfig: %v", err)
+	}
+	return srv, &http.Client{
+		Transport: &http2.Transport{TLSClientConfig: cliTLS},
+		Timeout:   5 * time.Second,
+	}
+}
+
+func postOrphanChild(t *testing.T, httpc *http.Client, base, traceID string) {
+	t.Helper()
+	client := tracev1connect.NewTraceServiceClient(httpc, base)
+	now := time.Now()
+	_, err := client.ReportSpans(context.Background(),
+		connect.NewRequest(&tracev1.ReportSpansRequest{
+			Spans: []*tracev1.Span{
+				{
+					TraceId:       traceID,
+					SpanId:        strings.Repeat("e", 16),
+					ParentSpanId:  strings.Repeat("f", 16),
+					Name:          "remote.op",
+					Component:     "daft-test",
+					StartUnixNano: now.Add(-time.Millisecond).UnixNano(),
+					EndUnixNano:   now.UnixNano(),
+				},
+			},
+		}))
+	if err != nil {
+		t.Fatalf("ReportSpans: %v", err)
+	}
+}
+
+func waitForQuiescedMarker(t *testing.T, httpc *http.Client, debugURL, traceID string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		body := getDebugTraces(t, httpc, debugURL, "application/json")
+		var dump []map[string]any
+		if err := json.Unmarshal(body, &dump); err != nil {
+			t.Fatalf("json: %v\nbody=%s", err, string(body))
+		}
+		for _, s := range dump {
+			id, _ := s[jsonKeyTraceID].(string)
+			name, _ := s[jsonKeyName].(string)
+			if id == traceID && name == trace.QuiescedSpanName {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("ingress reaper never emitted a quiesced marker for trace %s", traceID)
 }

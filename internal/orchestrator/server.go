@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -43,6 +44,13 @@ type Config struct {
 	// orchestrator's own server-side spans (via the Connect server
 	// interceptor). New constructs one if Tracer is nil.
 	Tracer *trace.Tracer
+
+	// Reaper sweeps the central tracer's buffer for trace_ids that
+	// have stopped receiving spans without finishing (typical
+	// failure mode: a producer crashes before its Flush lands) and
+	// injects a synthetic marker so the gap is visible. New
+	// constructs a default reaper if this is nil.
+	Reaper *trace.IngressReaper
 }
 
 // Server is the orchestrator's mTLS-gated control-plane listener.
@@ -52,6 +60,11 @@ type Config struct {
 type Server struct {
 	inner  *mtls.Server
 	tracer *trace.Tracer
+	reaper *trace.IngressReaper
+
+	reaperMu     sync.Mutex
+	reaperCancel context.CancelFunc
+	reaperDone   chan struct{}
 }
 
 // New builds a Server with the provided config. Returns an error if
@@ -98,7 +111,11 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{inner: inner, tracer: tracer}, nil
+	reaper := cfg.Reaper
+	if reaper == nil {
+		reaper = trace.NewIngressReaper(tracer, component.Orchestrator)
+	}
+	return &Server{inner: inner, tracer: tracer, reaper: reaper}, nil
 }
 
 // Tracer returns the orchestrator's Tracer. Callers can use it to
@@ -106,10 +123,58 @@ func New(cfg Config) (*Server, error) {
 // the buffer directly for tests.
 func (s *Server) Tracer() *trace.Tracer { return s.tracer }
 
-// Listen / Addr / Serve / Shutdown are passthroughs to the inner
-// mtls.Server. Kept on the wrapper so callers don't need to know
-// the listener's a separate package.
-func (s *Server) Listen() error                      { return s.inner.Listen() }
-func (s *Server) Addr() string                       { return s.inner.Addr() }
-func (s *Server) Serve() error                       { return s.inner.Serve() }
-func (s *Server) Shutdown(ctx context.Context) error { return s.inner.Shutdown(ctx) }
+// Listen and Addr are passthroughs to the inner mtls.Server.
+func (s *Server) Listen() error { return s.inner.Listen() }
+func (s *Server) Addr() string  { return s.inner.Addr() }
+
+// Serve starts the ingress reaper goroutine and then blocks on the
+// inner HTTP server. The reaper runs alongside Serve and is stopped
+// by Shutdown, so the typical pattern (Serve in one goroutine,
+// Shutdown from the signal handler) keeps the reaper bounded to
+// the server's lifetime without callers having to wire context.
+func (s *Server) Serve() error {
+	s.startReaper()
+	return s.inner.Serve()
+}
+
+// Shutdown stops the reaper first, then asks the inner server to
+// drain. Stopping the reaper before HTTP shutdown means we don't
+// race a final scan against a server that's about to lose its
+// span sources.
+func (s *Server) Shutdown(ctx context.Context) error {
+	s.stopReaper()
+	return s.inner.Shutdown(ctx)
+}
+
+func (s *Server) startReaper() {
+	s.reaperMu.Lock()
+	defer s.reaperMu.Unlock()
+	if s.reaperCancel != nil {
+		return
+	}
+	// The reaper's lifetime is the Serve->Shutdown window, which is
+	// intentionally independent of any request context — so a fresh
+	// Background-rooted ctx is what we want, not the caller's.
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:contextcheck // reaper lifetime is Serve→Shutdown, not request-scoped
+
+	s.reaperCancel = cancel
+	s.reaperDone = make(chan struct{})
+	go func() {
+		defer close(s.reaperDone)
+		s.reaper.Run(ctx)
+	}()
+}
+
+func (s *Server) stopReaper() {
+	s.reaperMu.Lock()
+	cancel := s.reaperCancel
+	done := s.reaperDone
+	s.reaperCancel = nil
+	s.reaperDone = nil
+	s.reaperMu.Unlock()
+	if cancel == nil {
+		return
+	}
+	cancel()
+	<-done
+}

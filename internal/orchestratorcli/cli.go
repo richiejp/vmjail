@@ -129,7 +129,11 @@ func serveCommand() *cobra.Command {
 // shutdown and is squashed.
 func runServer(ctx context.Context, srv *orchestrator.Server) error {
 	errCh := make(chan error, 1)
-	go func() {
+	// Serve internally starts the ingress reaper on a Background-rooted
+	// context (its lifetime is Serve→Shutdown, not request-scoped); we
+	// suppress contextcheck here rather than threading a ctx that would
+	// outlive the cancellation we actually want.
+	go func() { //nolint:contextcheck // reaper lifetime is bounded by Shutdown, not by ctx
 		errCh <- srv.Serve()
 	}()
 	select {

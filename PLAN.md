@@ -302,10 +302,20 @@ Out of Scope:
       breakdown surfaces in the trace. The sandbox e2e tests get a
       Tracer + LogOnFailure via the new `traceCtx(tb)` helper, so
       failed real-VM boots dump the per-stage timing breakdown
-      automatically. **Remaining slices**:
-      - Slice 2: orchestrator-side reaper for trace-id sets that
-        haven't seen a span in a while (catch crashed producers
-        whose buffer never made it across the wire).
+      automatically.
+      **Slice 2 landed**: orchestrator-side `IngressReaper` watches
+      the central Tracer's buffer; for each trace_id that has gone
+      `quietAfter` without new spans it injects a synthetic
+      `trace.quiesced` marker (StatusAbandoned when no root span
+      ever arrived — the producer-crashed-mid-trace signal — else
+      StatusOK). The reaper runs as a goroutine bounded to the
+      Server's Serve/Shutdown lifetime via a private cancel/done
+      pair on `orchestrator.Server`. Unit tests pin down the
+      no-root/has-root branches with an injected clock + ID
+      generator; an integration test ships an orphan child span
+      via real ReportSpans, waits past the configured quiet
+      window, and asserts the marker appears in /debug/traces.
+      **Remaining slices**:
       - Slice 4: in-VM agent → sandbox-host trace channel over
         vsock once vsock plumbing exists.
       - Slice 5 (optional): an OTel proxy-exporter as a separate

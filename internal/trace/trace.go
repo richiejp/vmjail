@@ -151,6 +151,33 @@ func (s *Span) Kind() SpanKind {
 }
 func (s *Span) Component() string { return safeStr(s, func(s *Span) string { return s.component }) }
 
+// EndTime returns the span's wall-clock end. Zero time for an
+// active span; consumers downstream (Snapshot, IngressReaper) only
+// see finished spans, so the zero value reliably means "not ended".
+// Safe on a nil span.
+func (s *Span) EndTime() time.Time {
+	if s == nil {
+		return time.Time{}
+	}
+	return s.end
+}
+
+// Status returns the span's outcome. StatusUnset on a nil or
+// never-finished span.
+func (s *Span) Status() SpanStatus {
+	if s == nil {
+		return StatusUnset
+	}
+	return s.status
+}
+
+// StatusMessage returns the message attached to a non-OK status
+// (e.g. the error text for StatusError, the abandonment reason for
+// StatusAbandoned). Empty for OK or unset.
+func (s *Span) StatusMessage() string {
+	return safeStr(s, func(s *Span) string { return s.statusMsg })
+}
+
 func safeStr(s *Span, get func(*Span) string) string {
 	if s == nil {
 		return ""
