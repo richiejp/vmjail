@@ -28,10 +28,13 @@ the same change.
 ```sh
 make all          # default: build the project + run check
 make check        # fmt + lint + unit tests + coverage gate (fast)
-make verify       # check + integration + bench-check + 1s fuzz sweep
+make verify       # check + e2e + bench-check + 1s fuzz sweep
                   # (= what the pre-commit hook runs)
 make fuzz         # active fuzz every FuzzXxx target (FUZZ_TIME=30s default)
-make integration  # KVM-gated end-to-end VM boot tests
+make integration  # e2e tests: real VM boot against /dev/kvm
+                  # (target name is historical; see CONTRIBUTING.md
+                  # "Test categories" for the unit / integration /
+                  # e2e distinction — these are e2e by that taxonomy)
 make proto        # regenerate Go code from proto/*.proto
 make cover        # update coverage.txt baseline (refuses to lower)
 make bench        # update bench.txt baseline

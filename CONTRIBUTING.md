@@ -111,7 +111,9 @@ Run `make hooks` once per clone. The pre-commit hook delegates to
   test step also replays every committed fuzz reproducer
   (`testdata/fuzz/FuzzXxx/<id>` corpora) automatically — that's
   Go's built-in behaviour for `go test`.
-- `make integration` — KVM-gated end-to-end VM boot tests.
+- `make integration` — e2e tests that boot real VMs against
+  `/dev/kvm` (see "Test categories" for the unit / integration /
+  e2e distinction).
 - `make bench-check` — benchmark regression gate (>2× fails,
   >1.1× warns) against `bench.txt`.
 - `FUZZ_TIME=1s scripts/fuzz.sh` — a tight active-fuzz sweep
@@ -175,22 +177,58 @@ a test that fails when the feature breaks.
 This includes negative paths (does the error case actually return an error?)
 and edge cases (empty input, zero, max int, unicode, etc).
 
-### Integration tests on every commit
+### Test categories
 
-The pre-commit hook runs the KVM-gated integration tests in
+This project uses three categories. The lines between them matter
+because they're load-bearing in how much you can claim a test
+actually proves.
+
+- **Unit** — single function or type, every external dependency
+  mocked at the package boundary. Lives in `*_test.go` alongside
+  the code. No build tag. Should run in milliseconds.
+
+- **Integration** — multiple components exercised together
+  in-process, with at least one external boundary stubbed
+  (in-process HTTP server instead of a real network peer, fake
+  VMM runner instead of cloud-hypervisor, simulated agent writes
+  instead of an in-VM container). Also lives in `*_test.go`. May
+  be slower (RPC round-trips, file I/O, certificate generation).
+  Names end `…Integration` so the category is obvious from `go
+  test -run`.
+
+- **End-to-end (e2e)** — the full system runs, period. For this
+  project that means: a real Cloud Hypervisor boots a real
+  kernel + initramfs against `/dev/kvm`, virtiofsd is a real
+  subprocess, the in-VM agent is the real binary, and any
+  network communication crosses a real socket. Lives behind the
+  `linux,integration` build tag (run via `make integration`).
+
+The rule that holds these apart: **if any major component is
+stubbed, faked, or simulated, it is not e2e.** A test that
+fakes the VM and simulates an in-VM write to the shared dir is
+integration, even if it covers every other leg of the workflow.
+Be honest in test names and PR descriptions — calling integration
+work "e2e" hides the gap that a real-VM check would have caught.
+
+### E2E tests on every commit
+
+The pre-commit hook runs the e2e tests in
 `internal/sandbox/integration_test.go` (build tag:
-`linux,integration`) on every commit, via `make integration`. They:
+`linux,integration`) on every commit, via `make integration`. The
+target name is historical; the tests it runs are e2e by the
+definition above. They:
 
 - nix-build the artefacts (`cloud-hypervisor`, `kernel`, `virtiofsd`,
   `initramfs`, `hello-bundle`),
 - spawn real VMs via Cloud Hypervisor against `/dev/kvm`,
 - and assert the full pull → bundle → boot → run pipeline.
 
-**Linux + KVM is a hard prerequisite for committing.** There is no
-useful work in this codebase that doesn't need it, so any developer
-who can write sandbox code already has the prerequisites. CI
-environments without KVM are useless for this project and don't
-gate commits. There are no skips: missing artefact → `t.Fatalf`,
+**Linux + KVM is required, not optional.** Every developer who
+can meaningfully contribute to this codebase has them — the whole
+project is a Linux sandbox harness, so there is no useful work
+without them. The pre-commit hook does not gracefully degrade
+when KVM is missing; it fails. CI without KVM does not gate
+commits. There are no skips: missing artefact → `t.Fatalf`,
 missing `/dev/kvm` → `t.Fatalf`, broken Nix → the make target
 fails. And as above, `--no-verify` is never OK — if the gate is
 wrong for your change, fix the gate.
@@ -198,8 +236,8 @@ wrong for your change, fix the gate.
 Artefact resolution is automatic: env vars (`DAFT_*`) override,
 otherwise the resolver looks for the `result-*` symlinks that
 `make integration-build` creates at the repo root. Silently
-skipping integration tests is exactly the kind of "green CI,
-broken merge" failure mode this gate exists to prevent.
+skipping e2e tests is exactly the kind of "green CI, broken
+merge" failure mode this gate exists to prevent.
 
 ### Coverage regression check (monotonic)
 

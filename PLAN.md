@@ -101,7 +101,7 @@ Out of Scope:
 - [x] Performance regression gate: `make bench` writes a ns/op baseline
       to `bench.txt`; `make bench-check` (run by the pre-commit hook)
       fails on >2.00× regressions and warns on >1.10×. Includes a
-      KVM-gated `BenchmarkHelloBoot` end-to-end boot-time benchmark.
+      `BenchmarkHelloBoot` e2e boot-time benchmark.
 - [x] Host → guest file sharing (v0): virtiofsd vendored as submodule
       (third_party/virtiofsd, v1.9.0) and bundled into daft-sandboxd.
       `Config.Share` causes Hello() to spawn virtiofsd alongside CH;
@@ -109,9 +109,9 @@ Out of Scope:
       mounts the share, reads `<mp>/hello.txt`, and reports its
       contents on the console with `share: <payload>`. Fuzz target
       `FuzzParseShareCmdline` covers the cmdline parser; mock-based
-      unit tests cover the orchestration; KVM-gated
+      unit tests cover the orchestration;
       `BenchmarkHelloBootWithShare` and `TestHelloIntegrationBootsVMWithShare`
-      cover the end-to-end path.
+      cover the e2e path (real VM, real virtiofsd).
       - **TODO (hardening)**: virtiofsd is currently dynamic-linked
         (glibc) — the only non-static binary in the daft-sandboxd
         bundle. Static-musl build hits unresolved libc symbols in
@@ -126,7 +126,7 @@ Out of Scope:
       cmdline; the agent parses it after the share, execs
       `crun run --no-pivot --bundle <path> daft-container`, and
       forwards the container's stdout+stderr line-by-line with
-      `container: <…>` prefix on the shared console. KVM-gated
+      `container: <…>` prefix on the shared console.
       `TestHelloIntegrationBootsVMWithContainer` and
       `BenchmarkHelloBootWithContainer` cover the e2e path; mock
       tests + a fake-crun TestMain self-exec cover unit-level
@@ -160,13 +160,16 @@ Out of Scope:
       ≥80% per non-test file (>10 statements) on top of the
       existing 1pp total-drop limit. Catches the case where
       total coverage stays high while one file is dark.
-- [x] KVM-gated integration tests run on every commit. Behind
-      a `linux,integration` build tag with auto-resolution from
-      `result-*` symlinks (env-var override available). No skips:
-      missing artefact → `t.Fatalf`, missing `/dev/kvm` →
-      `t.Fatalf`. Linux+KVM is a hard commit prerequisite — CI
-      without KVM is useless for this project and doesn't gate
-      commits.
+- [x] E2E tests run on every commit. Behind a `linux,integration`
+      build tag (target name is historical — see CONTRIBUTING.md
+      "Test categories" for the unit / integration / e2e
+      taxonomy; these are e2e by that taxonomy because they boot
+      a real Cloud Hypervisor against `/dev/kvm`). Artefacts auto-
+      resolve from `result-*` symlinks (env-var override
+      available). No skips: missing artefact → `t.Fatalf`,
+      missing `/dev/kvm` → `t.Fatalf`. Linux + KVM is a hard
+      commit prerequisite; environments without them are not a
+      use case we support.
 - [x] Project ethos codified in CONTRIBUTING.md: correctness +
       security + perf > shipping speed; reduce scope, never
       correctness; verification monotonically increases. Coverage
@@ -298,9 +301,9 @@ Out of Scope:
       kernel, shares, bundle) are spans. Hello fans out into
       `sandbox.start_virtiofsd`, `sandbox.run_cloud_hypervisor`,
       and `sandbox.scan_for_banner` so the cold-boot 310 ms
-      breakdown surfaces in the trace. KVM-gated integration
-      tests get a Tracer + LogOnFailure via the new `traceCtx(tb)`
-      helper, so failed boots dump the per-stage timing breakdown
+      breakdown surfaces in the trace. The sandbox e2e tests get a
+      Tracer + LogOnFailure via the new `traceCtx(tb)` helper, so
+      failed real-VM boots dump the per-stage timing breakdown
       automatically. **Remaining slices**:
       - Slice 2: orchestrator-side reaper for trace-id sets that
         haven't seen a span in a while (catch crashed producers

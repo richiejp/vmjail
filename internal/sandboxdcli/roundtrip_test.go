@@ -22,15 +22,21 @@ import (
 	"github.com/richiejp/darkaifactory/internal/workspace"
 )
 
-// TestWorkspaceFullRoundTrip exercises the end-to-end push +
-// pull-back the project promises for a sandbox VM workflow:
+// TestWorkspaceRoundTripIntegration exercises the push + pull-back
+// workspace pipeline with every leg in-process. Per the unit /
+// integration / e2e taxonomy in CONTRIBUTING.md this is an
+// integration test: the in-VM container is *simulated* by writing
+// directly into the sandbox-host tmpdir (step 3). A real e2e check
+// would boot a Cloud Hypervisor VM whose container does the writes
+// over a virtiofs share, and lives behind the `linux,integration`
+// build tag — that gap is intentionally still open here.
 //
 //  1. user-host has a workspace ./code and runs `daft workspace serve`
 //  2. sandbox-host's `daft-sandboxd run --workspace-from=…
 //     --keep-workspace` pulls that workspace into a tmpdir (here
 //     simulated by calling pullWorkspaceFrom directly)
 //  3. the in-VM container modifies a file in the tmpdir — this
-//     simulates the rw virtiofs share the real VM has
+//     simulates (NOT exercises) the rw virtiofs share the real VM has
 //  4. sandbox-host then runs `daft-sandboxd workspace serve` on the
 //     tmpdir
 //  5. user-host pulls the modifications back via the existing
@@ -40,7 +46,7 @@ import (
 // All three identities (user-host, sandbox-host, user-host-pull-back)
 // are separate and TOFU-approved against each other, mirroring the
 // production deployment.
-func TestWorkspaceFullRoundTrip(t *testing.T) {
+func TestWorkspaceRoundTripIntegration(t *testing.T) {
 	// Step 1: user-host has a workspace.
 	userSrc := t.TempDir()
 	mustWriteFile(t, filepath.Join(userSrc, "alpha.txt"), []byte("from-user\n"))
