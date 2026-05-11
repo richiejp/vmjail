@@ -28,7 +28,8 @@ var ErrUnsupportedFileType = errors.New("workspace: unsupported file type")
 // BuildOptions tunes manifest construction.
 type BuildOptions struct {
 	// Chunker overrides the chunker used for regular files. If
-	// nil, &FixedSizeChunker{ChunkSize: DefaultChunkSize} is used.
+	// nil, &FastCDCChunker{} is used — content-defined chunking
+	// so mid-stream edits only invalidate nearby chunks.
 	Chunker Chunker
 	// SkipPath returns true to omit a path from the manifest.
 	// Called once per dirent, including dirs (skipping a dir
@@ -51,7 +52,7 @@ func BuildManifest(root string, store *cas.Store, opts BuildOptions) (*workspace
 	}
 	chunker := opts.Chunker
 	if chunker == nil {
-		chunker = &FixedSizeChunker{ChunkSize: DefaultChunkSize}
+		chunker = &FastCDCChunker{}
 	}
 
 	absRoot, err := filepath.Abs(root)

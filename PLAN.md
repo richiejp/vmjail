@@ -396,9 +396,24 @@ Out of Scope:
       before this slice. The fix is in `buildCloudHypervisorArgs`,
       now a pure function with focused unit tests covering the
       0/1/N share cases so the regression can't reappear silently.
+      **Slice 3 landed (FastCDC chunker)**: content-defined
+      chunking via 64-bit gear-hash with normalized chunking
+      (NC=2) — boundary mask popcount is log2(AvgSize)±2 so the
+      realised chunk-size distribution is tighter around the
+      target than vanilla CDC. Defaults: Min 256 KiB, Avg 1 MiB,
+      Max 4 MiB. Gear table is generated deterministically from
+      SplitMix64 with a fixed seed; a pinned sha256 in
+      `TestGearTableStability` makes any accidental change fail
+      loudly (changing the gear table silently invalidates every
+      chunk boundary in existing stores). `FastCDCChunker` is now
+      the default in `BuildManifest`; `FixedSizeChunker` is kept
+      for tests and predictable-boundary workloads. Tested:
+      determinism (same bytes → same digests), locality (mid-stream
+      edit shares >= 50% of chunks), max-size enforcement on
+      all-zero input, custom Min/Avg/Max, bad-config rejection,
+      read/put error propagation, `FuzzFastCDCCut` (84k execs/s in
+      pre-commit, no panics observed).
       **Remaining slices**:
-      - Slice 3: FastCDC chunker behind the same Chunker
-        interface (replace FixedSizeChunker).
       - Slice 4: `daft-fuse` (go-fuse v2) — a FUSE FS the
         sandbox-host mounts, that virtiofsd then re-exports into
         the VM. Reads resolve via the local CAS, fetching missing

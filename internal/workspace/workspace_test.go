@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,6 +16,18 @@ import (
 	"github.com/richiejp/darkaifactory/internal/cas"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 )
+
+// randomBytes returns sz bytes from a seeded PRNG so tests are
+// deterministic across runs and across architectures. Not for
+// crypto use — these are test fixtures.
+func randomBytes(seed1, seed2 uint64, sz int) []byte {
+	rng := rand.New(rand.NewPCG(seed1, seed2)) //nolint:gosec // G404: test fixture, determinism > unpredictability
+	out := make([]byte, sz)
+	for i := range out {
+		out[i] = byte(rng.Uint32()) //nolint:gosec // G115: deliberate truncation to byte for test fixture
+	}
+	return out
+}
 
 const osWindows = "windows"
 

@@ -1,13 +1,12 @@
 // Package workspace builds and serves content-addressed manifests
 // of a directory tree on top of internal/cas.
 //
-// Slice 1 ships a fixed-size chunker (DefaultChunkSize) plus the
-// manifest builder. The fixed-size chunker is correct but suboptimal
-// for deduplication — when a file's middle changes by even one
-// byte, every following chunk's digest changes too. The PLAN.md
-// target is FastCDC (content-defined chunk boundaries), which we'll
-// swap in behind the same Chunker interface once the rest of the
-// pipeline is exercised.
+// Two chunkers live behind the [Chunker] interface: [FastCDCChunker]
+// (the default — content-defined boundaries via gear-hash, so
+// mid-stream edits only invalidate nearby chunks) and
+// [FixedSizeChunker] (kept for deterministic-boundary tests and for
+// workloads where worst-case dedup loss is acceptable in exchange
+// for predictable chunk sizes).
 package workspace
 
 import (
