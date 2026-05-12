@@ -228,42 +228,58 @@ func fetchAndApplyManifest(ctx context.Context, client workspacev1connect.Worksp
 // a fresh tmpdir, and returns that dir plus a cleanup. The tmpdir is
 // what the caller wires as the /workspace virtiofs share.
 func pullWorkspaceFrom(ctx context.Context, opts pullWorkspaceOpts) (dir string, cleanup func(), err error) {
-	sc, err := loadSandboxdContext(opts.configDir)
+	wc, err := openDirectWorkspaceClient(ctx, opts.addr, opts.configDir)
 	if err != nil {
 		return "", nil, err
 	}
+	defer wc.close()
+	return fetchAndApplyManifest(ctx, wc.rpc, wc.store, opts.name)
+}
+
+// workspaceClient bundles a WorkspaceService client (over either
+// direct mTLS or a brokered relay) with the cas.Store backing the
+// local chunk cache and a closer that tears down the underlying
+// transport. The pull path closes it after ApplyManifest; the
+// lazy-attach path keeps it alive past the daftfuse mount.
+type workspaceClient struct {
+	rpc   workspacev1connect.WorkspaceServiceClient
+	store *cas.Store
+	close func()
+}
+
+// openDirectWorkspaceClient builds a direct-dial mTLS transport to
+// addr and produces a WorkspaceServiceClient riding it. The close
+// func releases idle HTTP/2 conns; in-flight calls finish via ctx
+// cancellation.
+func openDirectWorkspaceClient(ctx context.Context, addr, configDir string) (*workspaceClient, error) {
+	sc, err := loadSandboxdContext(configDir)
+	if err != nil {
+		return nil, err
+	}
 	tlsCfg, err := identity.ClientTLSConfig(sc.id, sc.peers, "")
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
 	tracer := trace.TracerFromContext(ctx)
 	if tracer == nil {
 		tracer = trace.New(component.Sandboxd)
 	}
-	client := workspacev1connect.NewWorkspaceServiceClient(
-		httpc, "https://"+opts.addr,
-		connect.WithInterceptors(tracer.ClientInterceptor()),
-	)
-	return fetchAndApplyManifest(ctx, client, sc.store, opts.name)
-}
-
-// brokeredWorkspaceClient bundles a brokered WorkspaceService client
-// with the cas.Store backing the local chunk cache and a closer
-// that tears down the underlying broker InnerClient. The pull path
-// closes it after ApplyManifest; the lazy-attach path keeps it
-// alive past the daftfuse mount.
-type brokeredWorkspaceClient struct {
-	rpc   workspacev1connect.WorkspaceServiceClient
-	store *cas.Store
-	close func()
+	return &workspaceClient{
+		rpc: workspacev1connect.NewWorkspaceServiceClient(
+			httpc, "https://"+addr,
+			connect.WithInterceptors(tracer.ClientInterceptor()),
+		),
+		store: sc.store,
+		close: httpc.CloseIdleConnections,
+	}, nil
 }
 
 // openBrokeredWorkspaceClient runs the broker handshake: register
 // with the orchestrator, wait for the user-host's `daft workspace
 // attach`, run inner mTLS as TLS client, and produce a
 // WorkspaceServiceClient riding the brokered conn.
-func openBrokeredWorkspaceClient(ctx context.Context, opts pullWorkspaceBrokerOpts) (*brokeredWorkspaceClient, error) {
+func openBrokeredWorkspaceClient(ctx context.Context, opts pullWorkspaceBrokerOpts) (*workspaceClient, error) {
 	sc, err := loadSandboxdContext(opts.configDir)
 	if err != nil {
 		return nil, err
@@ -290,7 +306,7 @@ func openBrokeredWorkspaceClient(ctx context.Context, opts pullWorkspaceBrokerOp
 	if tracer == nil {
 		tracer = trace.New(component.Sandboxd)
 	}
-	return &brokeredWorkspaceClient{
+	return &workspaceClient{
 		rpc: workspacev1connect.NewWorkspaceServiceClient(
 			ic.HTTPClient, ic.BaseURL,
 			connect.WithInterceptors(tracer.ClientInterceptor()),
@@ -324,11 +340,12 @@ func pullWorkspaceBroker(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir
 
 // serveDaftFuse fetches the manifest via rpc, mounts a daft-fuse FS
 // over rpc + store in a fresh tmpdir, and returns the mountpoint
-// plus a cleanup that unmounts → calls closeTransport → removes
-// the tmpdir. closeTransport must release whatever held rpc alive
-// (HTTP transport, broker InnerClient, etc.). On any error before
-// Serve succeeds, the deferred no-success path closes the transport
-// + removes any half-created tmpdir.
+// plus a cleanup that unmounts → drains in-flight RPCs via
+// srv.Wait → calls closeTransport → removes the tmpdir.
+// closeTransport must release whatever held rpc alive (HTTP
+// transport, broker InnerClient, etc.). On any error before Serve
+// succeeds, the deferred error-path closes the transport and
+// removes any half-created tmpdir.
 func serveDaftFuse(
 	ctx context.Context,
 	rpc workspacev1connect.WorkspaceServiceClient,
@@ -336,12 +353,9 @@ func serveDaftFuse(
 	workspaceName string,
 	closeTransport func(),
 ) (mountpoint string, cleanup func(), err error) {
-	success := false
 	defer func() {
-		if !success {
-			if mountpoint != "" {
-				_ = os.RemoveAll(mountpoint)
-			}
+		if err != nil {
+			_ = os.RemoveAll(mountpoint)
 			closeTransport()
 		}
 	}()
@@ -363,9 +377,12 @@ func serveDaftFuse(
 	if err != nil {
 		return "", nil, fmt.Errorf("daft-sandboxd: daftfuse mount %s: %w", mountpoint, err)
 	}
-	success = true
 	return mountpoint, func() {
 		oops.Log("daft-sandboxd: unmount lazy workspace", srv.Unmount())
+		// Wait for in-flight FUSE reads to drain before tearing
+		// down the transport — a pending GetChunk holding the
+		// HTTP/2 stream would otherwise race the transport close.
+		srv.Wait()
 		closeTransport()
 		oops.Log("daft-sandboxd: remove lazy mountpoint", os.RemoveAll(mountpoint))
 	}, nil
@@ -378,24 +395,11 @@ func serveDaftFuse(
 // on demand. Mirrors pullWorkspaceFrom's signature so
 // resolveWorkspaceDir treats both modes symmetrically.
 func attachLazyWorkspaceFrom(ctx context.Context, opts pullWorkspaceOpts) (dir string, cleanup func(), err error) {
-	sc, err := loadSandboxdContext(opts.configDir)
+	wc, err := openDirectWorkspaceClient(ctx, opts.addr, opts.configDir)
 	if err != nil {
 		return "", nil, err
 	}
-	tlsCfg, err := identity.ClientTLSConfig(sc.id, sc.peers, "")
-	if err != nil {
-		return "", nil, err
-	}
-	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
-	tracer := trace.TracerFromContext(ctx)
-	if tracer == nil {
-		tracer = trace.New(component.Sandboxd)
-	}
-	rpc := workspacev1connect.NewWorkspaceServiceClient(
-		httpc, "https://"+opts.addr,
-		connect.WithInterceptors(tracer.ClientInterceptor()),
-	)
-	return serveDaftFuse(ctx, rpc, sc.store, opts.name, httpc.CloseIdleConnections)
+	return serveDaftFuse(ctx, wc.rpc, wc.store, opts.name, wc.close)
 }
 
 // attachLazyWorkspaceBroker is the lazy-mode counterpart of

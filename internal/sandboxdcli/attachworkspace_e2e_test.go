@@ -2,7 +2,6 @@ package sandboxdcli
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,12 +11,16 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/cas"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 )
 
 // badManifestClient returns a manifest whose chunk-sum mismatches
 // the declared size, forcing daftfuse.New to error in
-// serveDaftFuse's New branch.
-type badManifestClient struct{}
+// serveDaftFuse's New branch. GetChunk is inherited from
+// Unimplemented... and never called by this test path.
+type badManifestClient struct {
+	workspacev1connect.UnimplementedWorkspaceServiceHandler
+}
 
 func (badManifestClient) GetManifest(_ context.Context, _ *connect.Request[workspacev1.GetManifestRequest]) (*connect.Response[workspacev1.GetManifestResponse], error) {
 	return connect.NewResponse(&workspacev1.GetManifestResponse{
@@ -28,10 +31,6 @@ func (badManifestClient) GetManifest(_ context.Context, _ *connect.Request[works
 			Size:   99,
 		}}},
 	}), nil
-}
-
-func (badManifestClient) GetChunk(_ context.Context, _ *connect.Request[workspacev1.GetChunkRequest]) (*connect.Response[workspacev1.GetChunkResponse], error) {
-	return nil, errors.New("not used")
 }
 
 func mustOpenCAS(t *testing.T) *cas.Store {
