@@ -21,6 +21,8 @@ import (
 // pipeline against an in-process workspace serve. This is the
 // closest unit-test approximation of what daft-sandboxd does over
 // the wire when --workspace-from is set.
+//
+//nolint:dupl // Parallel to TestAttachLazyWorkspaceFromHappyPath by design.
 func TestPullWorkspaceFromHappyPath(t *testing.T) {
 	src := t.TempDir()
 	mustWriteFile(t, filepath.Join(src, "alpha.txt"), []byte("alpha\n"))
@@ -59,6 +61,8 @@ func TestPullWorkspaceFromHappyPath(t *testing.T) {
 // by pointing TMPDIR at a path that doesn't exist. Covers the
 // rare-error branch between the GetManifest success and the
 // ApplyManifest call.
+//
+//nolint:dupl // Parallel to TestAttachLazyWorkspaceFromMkdirTempError by design.
 func TestPullWorkspaceFromMkdirTempError(t *testing.T) {
 	src := t.TempDir()
 	mustWriteFile(t, filepath.Join(src, "alpha.txt"), []byte("alpha\n"))

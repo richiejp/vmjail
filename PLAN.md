@@ -448,12 +448,28 @@ Out of Scope:
       can be added when there's a driver). Pull's RPC setup
       consolidated into a shared `dialWorkspaceClient` helper.
 
+      **Slice 4b landed.** `daft-sandboxd run --workspace-attach`
+      mounts the workspace lazily via daft-fuse instead of
+      pre-fetching every chunk. Requires either `--workspace-from`
+      (direct mTLS) or `--workspace-broker` (NAT-friendly via the
+      orchestrator) for transport; daftfuse.NewConnectFetcher
+      bridges the GetChunk RPC to ChunkFetcher under the hood.
+      The FUSE mount is exposed to the VM via virtiofsd as a
+      regular share, so the container sees `/workspace` exactly
+      as it does with the eager-pull path — chunks materialise
+      on first read instead of at boot.
+      Mutually exclusive with `--workspace` (no local-dir input)
+      and `--keep-workspace` (chunks live in the CAS, no eager-
+      materialised tmpdir to preserve). New
+      `openBrokeredWorkspaceClient` helper consolidates the broker
+      handshake shared by `pullWorkspaceBroker` and
+      `attachLazyWorkspaceBroker`. Cleanup error-logs adopted
+      `oops.Log` to fit the project's "zero error discards" rule.
+      Non-linux stub of `daftfuse.Mount.Serve` returns an
+      "unsupported" error so the daft-sandboxd package still
+      compiles on darwin for IDE / cross-platform tooling.
+
       **Remaining slices**:
-      - Slice 4b: wire `daftfuse.Mount` into `daft-sandboxd run`
-        as a new `--workspace-attach <name>` flag (mutually
-        exclusive with `--workspace-from`); daft-sandboxd mounts
-        daft-fuse at `/run/daft/sandboxd/<sandbox-id>/workspace`
-        and points virtiofsd at it.
       - Slice 4c: QMP `stop` enforcement on the `Freeze` decision
         — the policy engine signals the running VM to freeze
         rather than just surfacing EAGAIN to the workload.

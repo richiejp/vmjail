@@ -18,10 +18,12 @@ import (
 	"github.com/richiejp/darkaifactory/internal/bundled"
 	"github.com/richiejp/darkaifactory/internal/cas"
 	"github.com/richiejp/darkaifactory/internal/component"
+	"github.com/richiejp/darkaifactory/internal/daftfuse"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/imagestore"
+	"github.com/richiejp/darkaifactory/internal/oops"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspace"
@@ -82,6 +84,10 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.keepWorkspace, "keep-workspace", false,
 		"after the VM exits, leave the workspace tmpdir on disk and print its path "+
 			"so `daft-sandboxd workspace serve --path=<dir>` can expose it for pull-back")
+	cmd.Flags().BoolVar(&opts.workspaceAttach, "workspace-attach", false,
+		"mount the workspace lazily via daft-fuse instead of pre-fetching all chunks. "+
+			"Requires --workspace-from or --workspace-broker; chunks fetch on first "+
+			"read. Mutex with --workspace and --keep-workspace.")
 	return cmd
 }
 
@@ -98,17 +104,20 @@ type runOptions struct {
 	workspaceSandboxID string
 	configDir          string
 	keepWorkspace      bool
+	workspaceAttach    bool
 }
 
 // runDeps bundles the moving parts of `run` so unit tests can swap
 // in fakes for the network-talking and VM-spawning bits.
 type runDeps struct {
-	openStore           func() (storeAPI, error)
-	cacheDir            func() (string, error)
-	extract             func(string) (bundled.Paths, error)
-	boot                func(context.Context, io.Writer, sandbox.Config) error
-	pullWorkspaceFrom   func(ctx context.Context, opts pullWorkspaceOpts) (dir string, cleanup func(), err error)
-	pullWorkspaceBroker func(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir string, cleanup func(), err error)
+	openStore             func() (storeAPI, error)
+	cacheDir              func() (string, error)
+	extract               func(string) (bundled.Paths, error)
+	boot                  func(context.Context, io.Writer, sandbox.Config) error
+	pullWorkspaceFrom     func(ctx context.Context, opts pullWorkspaceOpts) (dir string, cleanup func(), err error)
+	pullWorkspaceBroker   func(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir string, cleanup func(), err error)
+	attachWorkspaceFrom   func(ctx context.Context, opts pullWorkspaceOpts) (dir string, cleanup func(), err error)
+	attachWorkspaceBroker func(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir string, cleanup func(), err error)
 }
 
 // pullWorkspaceOpts gathers the inputs to pullWorkspaceFrom so the
@@ -146,12 +155,14 @@ var defaultRunDepsFn = defaultRunDeps
 
 func defaultRunDeps() runDeps {
 	return runDeps{
-		openStore:           func() (storeAPI, error) { return openStore() },
-		cacheDir:            userCacheDir,
-		extract:             bundled.Extract,
-		boot:                sandbox.Hello,
-		pullWorkspaceFrom:   pullWorkspaceFrom,
-		pullWorkspaceBroker: pullWorkspaceBroker,
+		openStore:             func() (storeAPI, error) { return openStore() },
+		cacheDir:              userCacheDir,
+		extract:               bundled.Extract,
+		boot:                  sandbox.Hello,
+		pullWorkspaceFrom:     pullWorkspaceFrom,
+		pullWorkspaceBroker:   pullWorkspaceBroker,
+		attachWorkspaceFrom:   attachLazyWorkspaceFrom,
+		attachWorkspaceBroker: attachLazyWorkspaceBroker,
 	}
 }
 
@@ -208,9 +219,7 @@ func fetchAndApplyManifest(ctx context.Context, client workspacev1connect.Worksp
 		return "", nil, err
 	}
 	return dest, func() {
-		if err := os.RemoveAll(dest); err != nil {
-			fmt.Fprintf(os.Stderr, "daft-sandboxd: cleanup workspace tmpdir: %v\n", err)
-		}
+		oops.Log("daft-sandboxd: cleanup workspace tmpdir", os.RemoveAll(dest))
 	}, nil
 }
 
@@ -239,26 +248,35 @@ func pullWorkspaceFrom(ctx context.Context, opts pullWorkspaceOpts) (dir string,
 	return fetchAndApplyManifest(ctx, client, sc.store, opts.name)
 }
 
-// pullWorkspaceBroker registers as a sandbox with the
-// orchestrator at opts.orchestratorURL, waits for the user-host's
-// `daft workspace attach` to broker us a connection, runs inner
-// mTLS as TLS client, and pulls the workspace manifest+chunks
-// into a fresh tmpdir. Mirrors pullWorkspaceFrom's interface so
-// the caller (resolveWorkspaceDir) treats both modes symmetrically.
-func pullWorkspaceBroker(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir string, cleanup func(), err error) {
+// brokeredWorkspaceClient bundles a brokered WorkspaceService client
+// with the cas.Store backing the local chunk cache and a closer
+// that tears down the underlying broker InnerClient. The pull path
+// closes it after ApplyManifest; the lazy-attach path keeps it
+// alive past the daftfuse mount.
+type brokeredWorkspaceClient struct {
+	rpc   workspacev1connect.WorkspaceServiceClient
+	store *cas.Store
+	close func()
+}
+
+// openBrokeredWorkspaceClient runs the broker handshake: register
+// with the orchestrator, wait for the user-host's `daft workspace
+// attach`, run inner mTLS as TLS client, and produce a
+// WorkspaceServiceClient riding the brokered conn.
+func openBrokeredWorkspaceClient(ctx context.Context, opts pullWorkspaceBrokerOpts) (*brokeredWorkspaceClient, error) {
 	sc, err := loadSandboxdContext(opts.configDir)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	serveFP, err := identity.ParseFingerprint(opts.serveFP)
 	if err != nil {
-		return "", nil, fmt.Errorf("daft-sandboxd: parse serve fingerprint: %w", err)
+		return nil, fmt.Errorf("daft-sandboxd: parse serve fingerprint: %w", err)
 	}
 	bc, err := brokerclient.New(brokerclient.Config{
 		URL: opts.orchestratorURL, Identity: sc.id, Peers: sc.peers,
 	})
 	if err != nil {
-		return "", nil, fmt.Errorf("daft-sandboxd: broker client: %w", err)
+		return nil, fmt.Errorf("daft-sandboxd: broker client: %w", err)
 	}
 	ic, err := bc.AttachAndDial(ctx, brokerclient.AttachOptions{
 		Workspace:        opts.workspace,
@@ -266,31 +284,130 @@ func pullWorkspaceBroker(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir
 		ServeFingerprint: serveFP,
 	})
 	if err != nil {
-		return "", nil, fmt.Errorf("daft-sandboxd: broker attach: %w", err)
+		return nil, fmt.Errorf("daft-sandboxd: broker attach: %w", err)
 	}
-	done := false
-	defer func() {
-		if !done {
-			_ = ic.Close()
-		}
-	}()
 	tracer := trace.TracerFromContext(ctx)
 	if tracer == nil {
 		tracer = trace.New(component.Sandboxd)
 	}
-	client := workspacev1connect.NewWorkspaceServiceClient(
-		ic.HTTPClient, ic.BaseURL,
-		connect.WithInterceptors(tracer.ClientInterceptor()),
-	)
-	dest, cleanupTmp, err := fetchAndApplyManifest(ctx, client, sc.store, opts.workspace)
+	return &brokeredWorkspaceClient{
+		rpc: workspacev1connect.NewWorkspaceServiceClient(
+			ic.HTTPClient, ic.BaseURL,
+			connect.WithInterceptors(tracer.ClientInterceptor()),
+		),
+		store: sc.store,
+		close: func() { _ = ic.Close() },
+	}, nil
+}
+
+// pullWorkspaceBroker registers as a sandbox with the
+// orchestrator at opts.orchestratorURL, waits for the user-host's
+// `daft workspace attach` to broker us a connection, runs inner
+// mTLS as TLS client, and pulls the workspace manifest+chunks
+// into a fresh tmpdir. Mirrors pullWorkspaceFrom's interface so
+// the caller (resolveWorkspaceDir) treats both modes symmetrically.
+func pullWorkspaceBroker(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir string, cleanup func(), err error) {
+	bc, err := openBrokeredWorkspaceClient(ctx, opts)
 	if err != nil {
 		return "", nil, err
 	}
-	done = true
+	dest, cleanupTmp, err := fetchAndApplyManifest(ctx, bc.rpc, bc.store, opts.workspace)
+	if err != nil {
+		bc.close()
+		return "", nil, err
+	}
 	return dest, func() {
-		_ = ic.Close()
+		bc.close()
 		cleanupTmp()
 	}, nil
+}
+
+// serveDaftFuse fetches the manifest via rpc, mounts a daft-fuse FS
+// over rpc + store in a fresh tmpdir, and returns the mountpoint
+// plus a cleanup that unmounts → calls closeTransport → removes
+// the tmpdir. closeTransport must release whatever held rpc alive
+// (HTTP transport, broker InnerClient, etc.). On any error before
+// Serve succeeds, the deferred no-success path closes the transport
+// + removes any half-created tmpdir.
+func serveDaftFuse(
+	ctx context.Context,
+	rpc workspacev1connect.WorkspaceServiceClient,
+	store *cas.Store,
+	workspaceName string,
+	closeTransport func(),
+) (mountpoint string, cleanup func(), err error) {
+	success := false
+	defer func() {
+		if !success {
+			if mountpoint != "" {
+				_ = os.RemoveAll(mountpoint)
+			}
+			closeTransport()
+		}
+	}()
+	resp, err := rpc.GetManifest(ctx,
+		connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: workspaceName}))
+	if err != nil {
+		return "", nil, fmt.Errorf("daft-sandboxd: GetManifest: %w", err)
+	}
+	mnt, err := daftfuse.New(resp.Msg.GetManifest(), store,
+		daftfuse.NewConnectFetcher(rpc), daftfuse.Options{})
+	if err != nil {
+		return "", nil, fmt.Errorf("daft-sandboxd: daftfuse: %w", err)
+	}
+	mountpoint, err = os.MkdirTemp("", "daft-sandboxd-lazy-")
+	if err != nil {
+		return "", nil, fmt.Errorf("daft-sandboxd: lazy mountpoint: %w", err)
+	}
+	srv, err := mnt.Serve(ctx, mountpoint)
+	if err != nil {
+		return "", nil, fmt.Errorf("daft-sandboxd: daftfuse mount %s: %w", mountpoint, err)
+	}
+	success = true
+	return mountpoint, func() {
+		oops.Log("daft-sandboxd: unmount lazy workspace", srv.Unmount())
+		closeTransport()
+		oops.Log("daft-sandboxd: remove lazy mountpoint", os.RemoveAll(mountpoint))
+	}, nil
+}
+
+// attachLazyWorkspaceFrom is the lazy-mode counterpart of
+// pullWorkspaceFrom: same direct-dial mTLS transport, but instead of
+// pre-fetching every chunk via ApplyManifest, it mounts daft-fuse at
+// a tmpdir and lets the VM's reads trigger per-chunk GetChunk calls
+// on demand. Mirrors pullWorkspaceFrom's signature so
+// resolveWorkspaceDir treats both modes symmetrically.
+func attachLazyWorkspaceFrom(ctx context.Context, opts pullWorkspaceOpts) (dir string, cleanup func(), err error) {
+	sc, err := loadSandboxdContext(opts.configDir)
+	if err != nil {
+		return "", nil, err
+	}
+	tlsCfg, err := identity.ClientTLSConfig(sc.id, sc.peers, "")
+	if err != nil {
+		return "", nil, err
+	}
+	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
+	tracer := trace.TracerFromContext(ctx)
+	if tracer == nil {
+		tracer = trace.New(component.Sandboxd)
+	}
+	rpc := workspacev1connect.NewWorkspaceServiceClient(
+		httpc, "https://"+opts.addr,
+		connect.WithInterceptors(tracer.ClientInterceptor()),
+	)
+	return serveDaftFuse(ctx, rpc, sc.store, opts.name, httpc.CloseIdleConnections)
+}
+
+// attachLazyWorkspaceBroker is the lazy-mode counterpart of
+// pullWorkspaceBroker: same orchestrator-brokered transport (inner
+// mTLS over Relay byte-splice), but mounts daft-fuse for on-demand
+// chunk fetch instead of pre-fetching.
+func attachLazyWorkspaceBroker(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir string, cleanup func(), err error) {
+	bc, err := openBrokeredWorkspaceClient(ctx, opts)
+	if err != nil {
+		return "", nil, err
+	}
+	return serveDaftFuse(ctx, bc.rpc, bc.store, opts.workspace, bc.close)
 }
 
 func runRun(ctx context.Context, w io.Writer, opts runOptions, deps runDeps) error {
@@ -343,26 +460,49 @@ func (o runOptions) validate() error {
 		return errors.New("daft-sandboxd: --workspace-broker requires --workspace-sandbox-id")
 	case o.workspaceName != "" && o.workspaceFrom == "" && o.workspaceBroker == "":
 		return errors.New("daft-sandboxd: --workspace-name requires --workspace-from or --workspace-broker")
+	case o.workspaceAttach && o.workspaceFrom == "" && o.workspaceBroker == "":
+		return errors.New("daft-sandboxd: --workspace-attach requires --workspace-from or --workspace-broker")
+	case o.workspaceAttach && o.keepWorkspace:
+		return errors.New("daft-sandboxd: --workspace-attach is mutually exclusive with --keep-workspace (nothing to keep — chunks live in CAS)")
 	}
 	return nil
 }
 
 // resolveWorkspaceDir returns the on-disk directory to expose at
-// /workspace, plus a cleanup that runs on function exit. Three
+// /workspace, plus a cleanup that runs on function exit. Four
 // modes:
 //   - --workspace: caller-supplied dir, no copy.
 //   - --workspace-from: direct-dial pull from a daft workspace
-//     serve at host:port. Fresh tmpdir.
+//     serve at host:port. Fresh tmpdir, every chunk pre-fetched.
 //   - --workspace-broker: register as a sandbox with the
 //     orchestrator and wait for the user-host's `daft workspace
-//     attach` to broker us a connection. Fresh tmpdir.
+//     attach` to broker us a connection. Fresh tmpdir,
+//     pre-fetched.
+//   - --workspace-attach (combined with --workspace-from or
+//     --workspace-broker): same transport, but the workspace is
+//     mounted lazily via daft-fuse — chunks fetch on first read
+//     instead of pre-loading at boot.
 //
 // When opts.keepWorkspace is set the tmpdir is preserved past the
 // run — the cleanup becomes a no-op that prints the path to stdout
 // so the operator knows where to point a follow-up
-// `daft-sandboxd workspace serve` for pull-back.
+// `daft-sandboxd workspace serve` for pull-back. --workspace-attach
+// rejects --keep-workspace (validated up-front): the chunks live
+// in the CAS, there's no eager-materialised tmpdir to preserve.
 func resolveWorkspaceDir(ctx context.Context, opts runOptions, deps runDeps) (dir string, cleanup func(), err error) {
 	switch {
+	case opts.workspaceAttach && opts.workspaceBroker != "":
+		dir, cleanup, err = deps.attachWorkspaceBroker(ctx, pullWorkspaceBrokerOpts{
+			orchestratorURL: opts.workspaceBroker,
+			workspace:       opts.workspaceName,
+			sandboxID:       opts.workspaceSandboxID,
+			serveFP:         opts.workspaceServeFP,
+			configDir:       opts.configDir,
+		})
+	case opts.workspaceAttach:
+		dir, cleanup, err = deps.attachWorkspaceFrom(ctx, pullWorkspaceOpts{
+			addr: opts.workspaceFrom, name: opts.workspaceName, configDir: opts.configDir,
+		})
 	case opts.workspaceBroker != "":
 		dir, cleanup, err = deps.pullWorkspaceBroker(ctx, pullWorkspaceBrokerOpts{
 			orchestratorURL: opts.workspaceBroker,

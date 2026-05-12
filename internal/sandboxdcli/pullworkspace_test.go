@@ -23,6 +23,8 @@ func TestPullWorkspaceFromConfigDirError(t *testing.T) {
 // TestPullWorkspaceFromCorruptIdentity plants garbage cert files so
 // loadOrGenerateSandboxd fails — covering the identity-load error
 // branch.
+//
+//nolint:dupl // Parallel to TestAttachLazyWorkspaceFromCorruptIdentity by design.
 func TestPullWorkspaceFromCorruptIdentity(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "cert.pem"), []byte("garbage"), 0o600); err != nil {

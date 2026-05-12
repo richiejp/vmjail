@@ -16,6 +16,7 @@ const (
 	testFakeAddr     = "127.0.0.1:1"
 	testFakeUserHost = "user.local:9443"
 	testFakeOrchURL  = "https://o"
+	testLocalWsDir   = "/some/dir"
 )
 
 // TestRunWorkspaceFromAndWorkspaceMutuallyExclusive proves the two
@@ -26,7 +27,7 @@ func TestRunWorkspaceFromAndWorkspaceMutuallyExclusive(t *testing.T) {
 	deps := runDepsForTest(&fakeStore{})
 	err := runRun(context.Background(), io.Discard, runOptions{
 		ref:           testImageRef,
-		workspace:     "/some/dir",
+		workspace:     testLocalWsDir,
 		workspaceFrom: testFakeAddr,
 		workspaceName: "ws",
 	}, deps)
@@ -90,7 +91,7 @@ func TestRunWorkspaceBrokerValidation(t *testing.T) {
 		{
 			name: "workspace + broker",
 			opts: runOptions{
-				ref: testImageRef, workspace: "/some/dir", workspaceBroker: testFakeOrchURL,
+				ref: testImageRef, workspace: testLocalWsDir, workspaceBroker: testFakeOrchURL,
 				workspaceName: "ws",
 			},
 			want: "mutually exclusive",
