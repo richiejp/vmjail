@@ -32,6 +32,7 @@ const (
 	workspaceCmdName = "workspace"
 	serveSubName     = "serve"
 	pullSubName      = "pull"
+	attachSubName    = "attach"
 )
 
 // newWorkspaceCmd returns the `daft workspace` subtree. Two
@@ -51,6 +52,7 @@ func newWorkspaceCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newWorkspaceServeCmd())
 	cmd.AddCommand(newWorkspacePullCmd())
+	cmd.AddCommand(newWorkspaceAttachCmd())
 	return cmd
 }
 
@@ -361,5 +363,76 @@ func runWorkspacePull(
 	if owned {
 		shipTraces(ctx, tracer, httpc, from, "daft workspace pull")
 	}
+	return nil
+}
+
+// workspaceAttachOpts gathers `daft workspace attach` flags.
+type workspaceAttachOpts struct {
+	orchestrator string
+	workspace    string
+	sandbox      string
+	configDir    string
+}
+
+func newWorkspaceAttachCmd() *cobra.Command {
+	var (
+		opts    workspaceAttachOpts
+		timeout time.Duration
+	)
+	cmd := &cobra.Command{
+		Use:   attachSubName,
+		Short: "Tell the orchestrator to broker a registered sandbox to a running serve",
+		Long: "After `daft workspace serve --orchestrator ...` is up on this host\n" +
+			"and a sandbox-host has `daft-sandboxd run --workspace-broker ...`\n" +
+			"waiting, this command issues RequestAttach so the broker pairs them.\n" +
+			"The v1 broker ACL accepts RequestAttach only from the serve owner,\n" +
+			"so the caller's own fingerprint is used as the serve identity.",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
+			defer cancel()
+			return runWorkspaceAttach(ctx, cmd.OutOrStdout(), opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.orchestrator, "orchestrator", "",
+		"orchestrator URL (https://host:port)")
+	cmd.Flags().StringVar(&opts.workspace, "workspace", "",
+		"workspace name registered by `daft workspace serve`")
+	cmd.Flags().StringVar(&opts.sandbox, "sandbox", "",
+		"sandbox id registered by `daft-sandboxd run`")
+	cmd.Flags().StringVar(&opts.configDir, configDirFlag, "",
+		"override the daft client config dir (default: $XDG_CONFIG_HOME/daft/client)")
+	cmd.Flags().DurationVar(&timeout, "timeout", 30*time.Second,
+		"overall timeout for the attach request")
+	return cmd
+}
+
+func runWorkspaceAttach(ctx context.Context, stdout io.Writer, opts workspaceAttachOpts) error {
+	switch {
+	case opts.orchestrator == "":
+		return errors.New("daft workspace attach: --orchestrator is required")
+	case opts.workspace == "":
+		return errors.New("daft workspace attach: --workspace is required")
+	case opts.sandbox == "":
+		return errors.New("daft workspace attach: --sandbox is required")
+	}
+	cc, err := openClientCtx(opts.configDir, "")
+	if err != nil {
+		return err
+	}
+	bc, err := brokerclient.New(brokerclient.Config{
+		URL: opts.orchestrator, Identity: cc.id, Peers: cc.peers,
+	})
+	if err != nil {
+		return fmt.Errorf("daft workspace attach: %w", err)
+	}
+	sessionID, _, err := bc.Attach(ctx, cc.id.Fingerprint(), opts.workspace, opts.sandbox)
+	if err != nil {
+		return fmt.Errorf("daft workspace attach: %w", err)
+	}
+	_, _ = fmt.Fprintf(stdout,
+		"daft workspace: requested attach of sandbox %q to workspace %q (session %s)\n",
+		opts.sandbox, opts.workspace, sessionID)
 	return nil
 }

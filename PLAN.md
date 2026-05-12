@@ -566,12 +566,17 @@ Out of Scope:
       the full cobra→broker→inner-mTLS→WorkspaceService round-trip
       on both sides.
 
-      *Remaining 3.5 commit.*
-      - 3.5d: `daft workspace attach` subcommand on the
-        client. (The broker accepts RequestAttach only from
-        the serve owner — see ACL in matcher.go — so this is
-        the user-host's trigger to broker an outstanding
-        registered sandbox with the running serve.)
+      *Slice 3.5d — landed.* `daft workspace attach
+      --orchestrator <url> --workspace <name> --sandbox <id>`
+      wraps `brokerclient.Client.Attach`, the user-host's
+      trigger for an outstanding registered sandbox to pair
+      with the running serve. The v1 broker ACL accepts
+      RequestAttach only from the serve owner (see
+      matcher.go), so the caller's own fingerprint is used as
+      the serve identity. End-to-end test drives the cobra
+      surface through the orchestrator and asserts both halves
+      complete; bad-flag and unreachable-orchestrator branches
+      are pinned independently. Slice 3.5 is now complete.
 
       *Direct-dial mode (kept, not default).* The existing
       Slice 2.5 path (`--workspace-from <host:port>`) becomes
