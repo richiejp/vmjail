@@ -413,11 +413,35 @@ Out of Scope:
       all-zero input, custom Min/Avg/Max, bad-config rejection,
       read/put error propagation, `FuzzFastCDCCut` (84k execs/s in
       pre-commit, no panics observed).
+      **Slice 4a landed.** `internal/daftfuse` is the read-only,
+      lazy-fetch FUSE library: a Manifest plus a `cas.Store` plus a
+      `ChunkFetcher` gives a `Mount` with goroutine-safe `ReadAt`,
+      Stat, Readdir, Readlink. Chunk misses fetch via the supplied
+      `ChunkFetcher` (transport-agnostic — connect-RPC adapter is a
+      caller concern), are de-duped by digest via `singleflight`,
+      retried with exponential backoff (default 3 attempts, 50ms
+      initial), and committed to the CAS via `PutCompressed` (so
+      the existing digest verification stays the source of truth).
+      The Policy interface (`OnRead` → Allow/Deny/Freeze) is wired
+      end-to-end: Deny surfaces EACCES to the VM, Freeze surfaces
+      EAGAIN (the QMP `stop` wiring is Slice 4c). Linux-only FUSE
+      adapter (`fuse_linux.go`) ships behind a build tag; pure-Go
+      tree + read logic stays in `tree.go` so unit tests don't need
+      `/dev/fuse`. Coverage: 27 unit tests via mock-fetcher exercise
+      every read/policy/retry branch + a real `fusermount` mount
+      drives Read/Lookup/Readdir/Readlink/Stat/EACCES/EAGAIN/EIO on
+      the kernel-facing side. No daft-sandboxd integration yet —
+      that lands in 4b.
+
       **Remaining slices**:
-      - Slice 3.5: orchestrator-brokered workspace transport.
-        See "Slice 3.5 design" below.
-      - Slice 4: `daft-fuse` (go-fuse v2). See "Slice 4 design"
-        below.
+      - Slice 4b: wire `daftfuse.Mount` into `daft-sandboxd run`
+        as a new `--workspace-attach <name>` flag (mutually
+        exclusive with `--workspace-from`); daft-sandboxd mounts
+        daft-fuse at `/run/daft/sandboxd/<sandbox-id>/workspace`
+        and points virtiofsd at it.
+      - Slice 4c: QMP `stop` enforcement on the `Freeze` decision
+        — the policy engine signals the running VM to freeze
+        rather than just surfacing EAGAIN to the workload.
       - Slice 5: write overlay + `daft pull` diff workflow (the
         user-host pulling sandbox-side modifications back).
 
