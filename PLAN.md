@@ -433,6 +433,21 @@ Out of Scope:
       the kernel-facing side. No daft-sandboxd integration yet —
       that lands in 4b.
 
+      **Slice 5a landed.** `workspace.DiffManifests(from, to)`
+      compares two manifests entry-by-entry and returns a `Diff`
+      with classified `Change`s — `Added` / `Removed` / `Modified`
+      / `ModeChanged` / `TypeChanged`, sorted by path so identical
+      inputs always produce byte-identical output. Mtime is
+      deliberately ignored — it's best-effort metadata, not
+      content. New CLI surface `daft workspace diff <local-dir>
+      --from <addr> --workspace <name>` builds a local manifest of
+      `<local-dir>` and prints the per-entry diff:
+      `+`/`-`/`~`/`m`/`t` prefixes; `--detail` includes the mode
+      transition and entry-kind transition on those lines. Direct-
+      dial only in v1 (the broker-aware path mirrors `pull` and
+      can be added when there's a driver). Pull's RPC setup
+      consolidated into a shared `dialWorkspaceClient` helper.
+
       **Remaining slices**:
       - Slice 4b: wire `daftfuse.Mount` into `daft-sandboxd run`
         as a new `--workspace-attach <name>` flag (mutually
@@ -442,8 +457,10 @@ Out of Scope:
       - Slice 4c: QMP `stop` enforcement on the `Freeze` decision
         — the policy engine signals the running VM to freeze
         rather than just surfacing EAGAIN to the workload.
-      - Slice 5: write overlay + `daft pull` diff workflow (the
-        user-host pulling sandbox-side modifications back).
+      - Slice 5b: write overlay on the sandbox-host (tmpfs-backed
+        overlayfs above the workspace virtiofs share inside the
+        VM) so writes from the container are captured locally
+        instead of going straight back to the bind mount.
 
       **Slice 3.5 design (orchestrator workspace broker + relay)**
       — *plan-only as of 2026-05-11.*

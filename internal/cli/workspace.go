@@ -33,6 +33,7 @@ const (
 	serveSubName     = "serve"
 	pullSubName      = "pull"
 	attachSubName    = "attach"
+	diffSubName      = "diff"
 )
 
 // newWorkspaceCmd returns the `daft workspace` subtree: `serve`
@@ -53,6 +54,7 @@ func newWorkspaceCmd() *cobra.Command {
 	cmd.AddCommand(newWorkspaceServeCmd())
 	cmd.AddCommand(newWorkspacePullCmd())
 	cmd.AddCommand(newWorkspaceAttachCmd())
+	cmd.AddCommand(newWorkspaceDiffCmd())
 	return cmd
 }
 
@@ -327,13 +329,10 @@ func runWorkspacePull(
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	tlsCfg, err := identity.ClientTLSConfig(cc.id, cc.peers, "")
+	httpc, client, err := dialWorkspaceClient(cc, from, tracer)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
-	interceptor := connect.WithInterceptors(tracer.ClientInterceptor())
-	client := workspacev1connect.NewWorkspaceServiceClient(httpc, "https://"+from, interceptor)
 
 	resp, err := client.GetManifest(ctx,
 		connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: workspaceName}))
@@ -396,6 +395,144 @@ func newWorkspaceAttachCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&opts.timeout, "timeout", 30*time.Second,
 		"overall timeout for the attach request")
 	return cmd
+}
+
+// workspaceDiffOpts gathers `daft workspace diff` flags.
+type workspaceDiffOpts struct {
+	from          string
+	workspaceName string
+	configDir     string
+	casDir        string
+	detail        bool
+	timeout       time.Duration
+}
+
+func newWorkspaceDiffCmd() *cobra.Command {
+	var opts workspaceDiffOpts
+	cmd := &cobra.Command{
+		Use:   diffSubName + " <local-dir>",
+		Short: "Compare a local directory against a remote workspace",
+		Long: "Builds a manifest of <local-dir> and fetches the remote workspace's\n" +
+			"manifest from --from. Prints the entry-level diff:\n" +
+			"  + path   added on the remote (would be pulled)\n" +
+			"  - path   removed on the remote (would be left intact locally)\n" +
+			"  ~ path   modified content\n" +
+			"  m path   mode change only\n" +
+			"  t path   entry kind changed (file <-> symlink etc.)\n" +
+			"Exit code 0 always; an empty diff prints nothing.",
+		Args:          cobra.ExactArgs(1),
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx, cancel := context.WithTimeout(cmd.Context(), opts.timeout)
+			defer cancel()
+			return runWorkspaceDiff(ctx, cmd.OutOrStdout(), args[0], opts)
+		},
+	}
+	cmd.Flags().StringVar(&opts.from, "from", "",
+		"server address (host:port)")
+	cmd.Flags().StringVar(&opts.workspaceName, "workspace", "",
+		"workspace name to fetch")
+	bindClientDirFlags(cmd, &opts.configDir, &opts.casDir)
+	cmd.Flags().BoolVar(&opts.detail, "detail", false,
+		"include kind/mode transitions on changed lines")
+	cmd.Flags().DurationVar(&opts.timeout, "timeout", 60*time.Second,
+		"overall timeout for the diff")
+	return cmd
+}
+
+func runWorkspaceDiff(ctx context.Context, stdout io.Writer, localDir string, opts workspaceDiffOpts) error {
+	switch {
+	case opts.from == "":
+		return errors.New("daft workspace diff: --from is required")
+	case opts.workspaceName == "":
+		return errors.New("daft workspace diff: --workspace is required")
+	}
+	cc, err := openClientCtx(opts.configDir, opts.casDir)
+	if err != nil {
+		return err
+	}
+	localManifest, err := workspace.BuildManifest(localDir, cc.store, workspace.BuildOptions{})
+	if err != nil {
+		return fmt.Errorf("daft workspace diff: build local manifest: %w", err)
+	}
+	tracer, _ := tracerForCommand(ctx)
+	httpc, client, err := dialWorkspaceClient(cc, opts.from, tracer)
+	if err != nil {
+		return err
+	}
+	defer httpc.CloseIdleConnections()
+	resp, err := client.GetManifest(ctx,
+		connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: opts.workspaceName}))
+	if err != nil {
+		return fmt.Errorf("daft workspace diff: GetManifest: %w", err)
+	}
+	d := workspace.DiffManifests(localManifest, resp.Msg.GetManifest())
+	for _, c := range d.Changes {
+		printChange(stdout, c, opts.detail)
+	}
+	return nil
+}
+
+func printChange(w io.Writer, c workspace.Change, detail bool) {
+	prefix := changePrefix(c.Kind)
+	if !detail {
+		_, _ = fmt.Fprintf(w, "%s %s\n", prefix, c.Path)
+		return
+	}
+	switch c.Kind {
+	case workspace.ModeChanged:
+		_, _ = fmt.Fprintf(w, "%s %s  mode %04o -> %04o\n", prefix, c.Path,
+			c.From.GetMode()&0o7777, c.To.GetMode()&0o7777)
+	case workspace.TypeChanged:
+		_, _ = fmt.Fprintf(w, "%s %s  %s -> %s\n", prefix, c.Path,
+			entryKindLabel(c.From), entryKindLabel(c.To))
+	default:
+		_, _ = fmt.Fprintf(w, "%s %s\n", prefix, c.Path)
+	}
+}
+
+func changePrefix(k workspace.ChangeKind) string {
+	switch k {
+	case workspace.Added:
+		return "+"
+	case workspace.Removed:
+		return "-"
+	case workspace.Modified:
+		return "~"
+	case workspace.ModeChanged:
+		return "m"
+	case workspace.TypeChanged:
+		return "t"
+	default:
+		return "?"
+	}
+}
+
+func entryKindLabel(e *workspacev1.FileEntry) string {
+	switch e.GetKind() {
+	case workspacev1.EntryKind_ENTRY_KIND_FILE:
+		return "file"
+	case workspacev1.EntryKind_ENTRY_KIND_DIR:
+		return "dir"
+	case workspacev1.EntryKind_ENTRY_KIND_SYMLINK:
+		return "symlink"
+	default:
+		return "?"
+	}
+}
+
+// dialWorkspaceClient builds an mTLS HTTP/2 client + Connect-RPC
+// WorkspaceServiceClient pointed at addr, wired through the
+// tracer's ClientInterceptor. Returned httpc must be closed by the
+// caller via CloseIdleConnections.
+func dialWorkspaceClient(cc *clientCtx, addr string, tracer *trace.Tracer) (*http.Client, workspacev1connect.WorkspaceServiceClient, error) {
+	tlsCfg, err := identity.ClientTLSConfig(cc.id, cc.peers, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
+	interceptor := connect.WithInterceptors(tracer.ClientInterceptor())
+	return httpc, workspacev1connect.NewWorkspaceServiceClient(httpc, "https://"+addr, interceptor), nil
 }
 
 func runWorkspaceAttach(ctx context.Context, stdout io.Writer, opts workspaceAttachOpts) error {
