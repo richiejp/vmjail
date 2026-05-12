@@ -14,6 +14,12 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
+// defaultMaxConcurrentAttaches caps how many brokered attaches
+// can be in flight at once on the serve side. A misbehaving (or
+// compromised) orchestrator could otherwise flood a single
+// user-host with handshake-spawning events.
+const defaultMaxConcurrentAttaches = 16
+
 // ServeOptions configures a broker-mode serve loop. Handler is the
 // inner HTTP/2 handler — typically a mux with WorkspaceService
 // registered. Per-attach inner-mTLS handshake deadline applies to
@@ -28,6 +34,11 @@ type ServeOptions struct {
 	// HandshakeTimeout caps the inner-mTLS handshake per attach.
 	// Defaults to 10s.
 	HandshakeTimeout time.Duration
+	// MaxConcurrentAttaches bounds how many per-attach goroutines
+	// run at once. PendingAttach events are processed in arrival
+	// order; when the cap is reached, new events queue until one
+	// in-flight attach finishes. Defaults to 16.
+	MaxConcurrentAttaches int
 }
 
 // ServeBrokered registers a workspace serve with the orchestrator
@@ -58,6 +69,9 @@ func (c *Client) ServeBrokered(ctx context.Context, opts ServeOptions) error {
 	if opts.HandshakeTimeout == 0 {
 		opts.HandshakeTimeout = 10 * time.Second
 	}
+	if opts.MaxConcurrentAttaches <= 0 {
+		opts.MaxConcurrentAttaches = defaultMaxConcurrentAttaches
+	}
 	reg, err := c.RegisterServe(ctx, opts.Workspace)
 	if err != nil {
 		return err
@@ -66,6 +80,7 @@ func (c *Client) ServeBrokered(ctx context.Context, opts ServeOptions) error {
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
+	sem := make(chan struct{}, opts.MaxConcurrentAttaches)
 
 	for {
 		select {
@@ -75,15 +90,19 @@ func (c *Client) ServeBrokered(ctx context.Context, opts ServeOptions) error {
 			if !ok {
 				return reg.Err()
 			}
-			// We trust the orchestrator (it's in our peer
-			// store) to emit well-formed fingerprints. A
-			// parse failure would crash inner-TLS handshake
-			// inside serveOneAttach; we don't need a
-			// defensive guard here.
+			// Trust the orchestrator (it's in our peer store)
+			// to emit well-formed fingerprints. A parse miss
+			// would surface inside the inner-TLS handshake.
 			peer, _ := identity.ParseFingerprint(ev.GetPeerFingerprint())
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return nil
+			}
 			wg.Add(1)
 			go func(sid string, peer identity.Fingerprint) {
 				defer wg.Done()
+				defer func() { <-sem }()
 				_ = c.serveOneAttach(ctx, sid, peer, opts)
 			}(ev.GetSessionId(), peer)
 		}
@@ -106,7 +125,6 @@ func (c *Client) serveOneAttach(ctx context.Context, sid string, peer identity.F
 	if err != nil {
 		return fmt.Errorf("brokerclient: inner TLS config: %w", err)
 	}
-	// HTTP/2 ALPN advertisement so http2.Server.ServeConn is happy.
 	tlsCfg.NextProtos = []string{"h2"}
 
 	tlsConn := tls.Server(conn, tlsCfg)
@@ -116,9 +134,9 @@ func (c *Client) serveOneAttach(ctx context.Context, sid string, peer identity.F
 		return fmt.Errorf("brokerclient: inner handshake: %w", err)
 	}
 
-	// http2.Server.ServeConn blocks until the conn closes. Wire
-	// ctx-cancel to a Close so the parent's ctx cancellation
-	// terminates idle attaches promptly.
+	// http2.Server.ServeConn blocks until the conn closes; this
+	// goroutine wakes it on ctx cancel so idle attaches don't
+	// outlive their parent.
 	stopWatch := make(chan struct{})
 	go func() {
 		select {

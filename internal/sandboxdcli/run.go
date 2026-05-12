@@ -155,36 +155,78 @@ func defaultRunDeps() runDeps {
 	}
 }
 
+// sandboxdContext bundles the per-config-dir bits both pull paths
+// need: identity, peer store, CAS store, and the resolved
+// configDir itself (for diagnostics).
+type sandboxdContext struct {
+	configDir string
+	id        *identity.Identity
+	peers     *identity.PeerStore
+	store     *cas.Store
+}
+
+// loadSandboxdContext resolves the sandboxd config dir (XDG-aware
+// when override is empty) and opens the identity + peer store +
+// CAS store under it.
+func loadSandboxdContext(override string) (*sandboxdContext, error) {
+	configDir, err := resolveSandboxdDir(override)
+	if err != nil {
+		return nil, err
+	}
+	id, err := loadOrGenerateSandboxd(configDir)
+	if err != nil {
+		return nil, err
+	}
+	peers, err := openSandboxdPeerStore(configDir)
+	if err != nil {
+		return nil, err
+	}
+	store, err := cas.Open(filepath.Join(configDir, "cas"))
+	if err != nil {
+		return nil, err
+	}
+	return &sandboxdContext{configDir: configDir, id: id, peers: peers, store: store}, nil
+}
+
+// fetchAndApplyManifest performs the GetManifest → MkdirTemp →
+// ApplyManifest tail shared by both pull-path implementations.
+// On error before MkdirTemp succeeds, no temp dir leaks. On any
+// error after, the temp dir is removed before returning.
+func fetchAndApplyManifest(ctx context.Context, client workspacev1connect.WorkspaceServiceClient, store *cas.Store, workspaceName string) (dir string, cleanup func(), err error) {
+	resp, err := client.GetManifest(ctx,
+		connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: workspaceName}))
+	if err != nil {
+		return "", nil, fmt.Errorf("daft-sandboxd: GetManifest: %w", err)
+	}
+	dest, err := os.MkdirTemp("", "daft-sandboxd-workspace-")
+	if err != nil {
+		return "", nil, fmt.Errorf("daft-sandboxd: workspace tmpdir: %w", err)
+	}
+	if err := workspace.ApplyManifest(ctx, client, store, resp.Msg.GetManifest(), dest,
+		workspace.ApplyOptions{}); err != nil {
+		_ = os.RemoveAll(dest)
+		return "", nil, err
+	}
+	return dest, func() {
+		if err := os.RemoveAll(dest); err != nil {
+			fmt.Fprintf(os.Stderr, "daft-sandboxd: cleanup workspace tmpdir: %v\n", err)
+		}
+	}, nil
+}
+
 // pullWorkspaceFrom dials a daft workspace serve at opts.addr over
 // mTLS, fetches opts.name's manifest + chunks via ApplyManifest into
 // a fresh tmpdir, and returns that dir plus a cleanup. The tmpdir is
 // what the caller wires as the /workspace virtiofs share.
-//
-// Identity is loaded/created under opts.configDir (or the
-// XDG-default sandboxd dir); the peer store at the same dir gates
-// the server's leaf cert fingerprint.
 func pullWorkspaceFrom(ctx context.Context, opts pullWorkspaceOpts) (dir string, cleanup func(), err error) {
-	configDir, err := resolveSandboxdDir(opts.configDir)
+	sc, err := loadSandboxdContext(opts.configDir)
 	if err != nil {
 		return "", nil, err
 	}
-	id, err := loadOrGenerateSandboxd(configDir)
+	tlsCfg, err := identity.ClientTLSConfig(sc.id, sc.peers, "")
 	if err != nil {
 		return "", nil, err
 	}
-	peers, err := openSandboxdPeerStore(configDir)
-	if err != nil {
-		return "", nil, err
-	}
-	tlsCfg, err := identity.ClientTLSConfig(id, peers, "")
-	if err != nil {
-		return "", nil, err
-	}
-	store, err := cas.Open(filepath.Join(configDir, "cas"))
-	if err != nil {
-		return "", nil, err
-	}
-
 	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
 	tracer := trace.TracerFromContext(ctx)
 	if tracer == nil {
@@ -194,28 +236,7 @@ func pullWorkspaceFrom(ctx context.Context, opts pullWorkspaceOpts) (dir string,
 		httpc, "https://"+opts.addr,
 		connect.WithInterceptors(tracer.ClientInterceptor()),
 	)
-
-	resp, err := client.GetManifest(ctx,
-		connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: opts.name}))
-	if err != nil {
-		return "", nil, fmt.Errorf("daft-sandboxd: GetManifest: %w", err)
-	}
-
-	dest, err := os.MkdirTemp("", "daft-sandboxd-workspace-")
-	if err != nil {
-		return "", nil, fmt.Errorf("daft-sandboxd: workspace tmpdir: %w", err)
-	}
-	cleanup = func() {
-		if err := os.RemoveAll(dest); err != nil {
-			fmt.Fprintf(os.Stderr, "daft-sandboxd: cleanup workspace tmpdir: %v\n", err)
-		}
-	}
-	if err := workspace.ApplyManifest(ctx, client, store, resp.Msg.GetManifest(), dest,
-		workspace.ApplyOptions{}); err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	return dest, cleanup, nil
+	return fetchAndApplyManifest(ctx, client, sc.store, opts.name)
 }
 
 // pullWorkspaceBroker registers as a sandbox with the
@@ -225,15 +246,7 @@ func pullWorkspaceFrom(ctx context.Context, opts pullWorkspaceOpts) (dir string,
 // into a fresh tmpdir. Mirrors pullWorkspaceFrom's interface so
 // the caller (resolveWorkspaceDir) treats both modes symmetrically.
 func pullWorkspaceBroker(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir string, cleanup func(), err error) {
-	configDir, err := resolveSandboxdDir(opts.configDir)
-	if err != nil {
-		return "", nil, err
-	}
-	id, err := loadOrGenerateSandboxd(configDir)
-	if err != nil {
-		return "", nil, err
-	}
-	peers, err := openSandboxdPeerStore(configDir)
+	sc, err := loadSandboxdContext(opts.configDir)
 	if err != nil {
 		return "", nil, err
 	}
@@ -241,12 +254,8 @@ func pullWorkspaceBroker(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir
 	if err != nil {
 		return "", nil, fmt.Errorf("daft-sandboxd: parse serve fingerprint: %w", err)
 	}
-	store, err := cas.Open(filepath.Join(configDir, "cas"))
-	if err != nil {
-		return "", nil, err
-	}
 	bc, err := brokerclient.New(brokerclient.Config{
-		URL: opts.orchestratorURL, Identity: id, Peers: peers,
+		URL: opts.orchestratorURL, Identity: sc.id, Peers: sc.peers,
 	})
 	if err != nil {
 		return "", nil, fmt.Errorf("daft-sandboxd: broker client: %w", err)
@@ -259,9 +268,6 @@ func pullWorkspaceBroker(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir
 	if err != nil {
 		return "", nil, fmt.Errorf("daft-sandboxd: broker attach: %w", err)
 	}
-	// One defer covers every error-return below; the success path
-	// flips done=true and the returned cleanup func owns the
-	// teardown instead.
 	done := false
 	defer func() {
 		if !done {
@@ -276,26 +282,14 @@ func pullWorkspaceBroker(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir
 		ic.HTTPClient, ic.BaseURL,
 		connect.WithInterceptors(tracer.ClientInterceptor()),
 	)
-	resp, err := client.GetManifest(ctx,
-		connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: opts.workspace}))
+	dest, cleanupTmp, err := fetchAndApplyManifest(ctx, client, sc.store, opts.workspace)
 	if err != nil {
-		return "", nil, fmt.Errorf("daft-sandboxd: GetManifest: %w", err)
-	}
-	dest, err := os.MkdirTemp("", "daft-sandboxd-workspace-")
-	if err != nil {
-		return "", nil, fmt.Errorf("daft-sandboxd: workspace tmpdir: %w", err)
-	}
-	if err := workspace.ApplyManifest(ctx, client, store, resp.Msg.GetManifest(), dest,
-		workspace.ApplyOptions{}); err != nil {
-		_ = os.RemoveAll(dest)
 		return "", nil, err
 	}
 	done = true
 	return dest, func() {
 		_ = ic.Close()
-		if err := os.RemoveAll(dest); err != nil {
-			fmt.Fprintf(os.Stderr, "daft-sandboxd: cleanup workspace tmpdir: %v\n", err)
-		}
+		cleanupTmp()
 	}, nil
 }
 

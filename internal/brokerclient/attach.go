@@ -15,6 +15,12 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
+// innerBaseURL is the host portion of an InnerClient request URL.
+// It is opaque — DialTLSContext returns the pre-handshaked conn
+// without consulting it — but Connect-RPC's URL parser still
+// requires a syntactically valid https:// origin.
+const innerBaseURL = "https://daft-relay"
+
 // InnerClient bundles an http.Client and the base URL that
 // callers point Connect-RPC clients at. Both are wired to a single
 // brokered + inner-mTLS conn — close via the returned Close func
@@ -38,16 +44,16 @@ type AttachOptions struct {
 
 // AttachAndDial drives the sandbox-host side of a brokered attach:
 // register, wait for the orchestrator's PendingAttach, dial Relay,
-// run inner-mTLS as TLS *client*, and return an InnerClient whose
+// run inner-mTLS as TLS client, and return an InnerClient whose
 // HTTPClient speaks to the user-host's WorkspaceService.
 //
-// The caller is responsible for invoking RequestAttach via some
-// other identity (usually the user-host running `daft workspace
-// attach`) — the v1 ACL forbids the sandbox-host from initiating
-// the attach itself.
+// The caller does not call RequestAttach — the matcher's ACL
+// rejects it from the sandbox-host's identity. The user-host
+// (`daft workspace attach`) is the only legal initiator. This
+// call blocks until that trigger fires.
 //
-// Returns when the inner connection is ready, or an error if any
-// stage fails. The InnerClient.Close func tears everything down.
+// On success, InnerClient.Close tears down both the inner TLS
+// conn and the outer broker registration.
 func (c *Client) AttachAndDial(ctx context.Context, opts AttachOptions) (*InnerClient, error) {
 	if err := opts.validate(); err != nil {
 		return nil, err
@@ -59,16 +65,13 @@ func (c *Client) AttachAndDial(ctx context.Context, opts AttachOptions) (*InnerC
 	if err != nil {
 		return nil, fmt.Errorf("RegisterSandbox: %w", err)
 	}
-	// One defer covers every early-return below; the success path
-	// flips done=true and the InnerClient.Close func takes over
-	// the registration teardown.
 	done := false
 	defer func() {
 		if !done {
 			_ = reg.Close()
 		}
 	}()
-	peer, sessionID, err := waitForAttach(ctx, reg, opts.ServeFingerprint)
+	sessionID, err := waitForAttach(ctx, reg, opts.ServeFingerprint)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +79,7 @@ func (c *Client) AttachAndDial(ctx context.Context, opts AttachOptions) (*InnerC
 	if err != nil {
 		return nil, fmt.Errorf("DialRelay: %w", err)
 	}
-	tlsConn, err := c.innerClientHandshake(ctx, conn, peer, opts.HandshakeTimeout)
+	tlsConn, err := c.innerClientHandshake(ctx, conn, opts.ServeFingerprint, opts.HandshakeTimeout)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -102,23 +105,23 @@ func (o AttachOptions) validate() error {
 // announced peer fingerprint must match expectedFP — the
 // caller's defence against an orchestrator pairing us with the
 // wrong workspace owner.
-func waitForAttach(ctx context.Context, reg *Registration, expectedFP identity.Fingerprint) (identity.Fingerprint, string, error) {
+func waitForAttach(ctx context.Context, reg *Registration, expectedFP identity.Fingerprint) (string, error) {
 	select {
 	case raw, ok := <-reg.Events():
 		if !ok {
-			return identity.Fingerprint{}, "", fmt.Errorf("brokerclient: registration ended before attach: %w", reg.Err())
+			return "", fmt.Errorf("brokerclient: registration ended before attach: %w", reg.Err())
 		}
 		peer, err := identity.ParseFingerprint(raw.GetPeerFingerprint())
 		if err != nil {
-			return identity.Fingerprint{}, "", fmt.Errorf("brokerclient: parse peer fingerprint: %w", err)
+			return "", fmt.Errorf("brokerclient: parse peer fingerprint: %w", err)
 		}
 		if peer != expectedFP {
-			return identity.Fingerprint{}, "", fmt.Errorf("brokerclient: orchestrator announced peer %s, expected %s",
+			return "", fmt.Errorf("brokerclient: orchestrator announced peer %s, expected %s",
 				peer, expectedFP)
 		}
-		return peer, raw.GetSessionId(), nil
+		return raw.GetSessionId(), nil
 	case <-ctx.Done():
-		return identity.Fingerprint{}, "", ctx.Err()
+		return "", ctx.Err()
 	}
 }
 
@@ -140,9 +143,6 @@ func (c *Client) innerClientHandshake(ctx context.Context, conn net.Conn, peer i
 
 func innerClientFromTLSConn(tlsConn *tls.Conn, cleanupReg func()) *InnerClient {
 	tr := &http2.Transport{
-		// DialTLSContext yields the already-handshaked conn so
-		// http2.Transport doesn't try to redial. TLSClientConfig
-		// is unused when DialTLSContext returns directly.
 		DialTLSContext: func(_ context.Context, _, _ string, _ *tls.Config) (net.Conn, error) {
 			return tlsConn, nil
 		},
@@ -153,9 +153,7 @@ func innerClientFromTLSConn(tlsConn *tls.Conn, cleanupReg func()) *InnerClient {
 	)
 	return &InnerClient{
 		HTTPClient: &http.Client{Transport: tr},
-		// The host portion is opaque — DialTLSContext ignores
-		// it — but Connect-RPC needs a parseable URL.
-		BaseURL: "https://daft-relay",
+		BaseURL:    innerBaseURL,
 		Close: func() error {
 			once.Do(func() {
 				err = tlsConn.Close()

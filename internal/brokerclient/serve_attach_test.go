@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
@@ -74,7 +72,7 @@ func TestServeBrokeredAndAttachRoundTrip(t *testing.T) {
 
 	// Give both sides time to subscribe before RequestAttach so
 	// the broker has them both registered.
-	waitForRegistration(t, r, testWorkspaceName, "sb-1")
+	waitForRegistration(t, r)
 	if _, _, err := r.cli.Attach(ctx, r.cliID.Fingerprint(), testWorkspaceName, "sb-1"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -109,21 +107,17 @@ func TestServeBrokeredAndAttachRoundTrip(t *testing.T) {
 	}
 }
 
-// waitForRegistration polls the orchestrator's matcher until both
-// the workspace and the sandbox are subscribed. Each registration
-// completes when its initial Ready event has been consumed inside
-// brokerclient.New*, but Matcher.SubscribeServe/Sandbox happens
-// inside the orchestrator's handler goroutine — so there's a tiny
-// race between the client returning from RegisterServe and the
-// handler reaching the matcher.
-func waitForRegistration(t *testing.T, r *rig, workspace, sandboxID string) {
+// waitForRegistration polls the matcher until both a serve and a
+// sandbox are subscribed. Each Registration returns once its
+// initial Ready event has been consumed, but the orchestrator's
+// SubscribeServe / SubscribeSandbox runs in a handler goroutine
+// that races the Ready send — this closes the gap.
+func waitForRegistration(t *testing.T, r *rig) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		serves, sandboxes := r.server.Matcher().Counts()
 		if serves >= 1 && sandboxes >= 1 {
-			_ = workspace
-			_ = sandboxID
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -212,7 +206,7 @@ func TestAttachAndDialPeerMismatch(t *testing.T) {
 		errCh <- err
 	}()
 
-	waitForRegistration(t, r, testWorkspaceName, "sb-mismatch")
+	waitForRegistration(t, r)
 	if _, _, err := r.cli.Attach(ctx, r.cliID.Fingerprint(), testWorkspaceName, "sb-mismatch"); err != nil {
 		t.Fatalf("Attach: %v", err)
 	}
@@ -253,7 +247,7 @@ func TestAttachAndDialClosesRelayThenRegistration(t *testing.T) {
 			attached <- ic
 		}
 	}()
-	waitForRegistration(t, r, testWorkspaceName, "sb-close")
+	waitForRegistration(t, r)
 	_, _, _ = r.cli.Attach(ctx, r.cliID.Fingerprint(), testWorkspaceName, "sb-close")
 
 	var ic *brokerclient.InnerClient
@@ -268,36 +262,4 @@ func TestAttachAndDialClosesRelayThenRegistration(t *testing.T) {
 	if err := ic.Close(); err != nil {
 		t.Errorf("second Close (should be idempotent): %v", err)
 	}
-}
-
-// TestInnerClientCloseIsIdempotent pins the closer-once contract.
-func TestInnerClientCloseIsIdempotent(t *testing.T) {
-	// httptest server isn't a brokered conn but the InnerClient's
-	// Close func is the only thing under test; we synth one with a
-	// throwaway server.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-	var calls int
-	ic := &brokerclient.InnerClient{
-		HTTPClient: srv.Client(),
-		BaseURL:    srv.URL,
-		Close: func() error {
-			calls++
-			return nil
-		},
-	}
-	// Close() here is the caller-supplied func — the closer wrapper
-	// lives inside brokerclient.AttachAndDial; this just guards
-	// against accidental double-call from tests.
-	_ = ic.Close()
-	_ = ic.Close()
-	if calls != 2 {
-		// The struct-level Close is not de-duped; idempotency is
-		// the closer-wrapper's contract inside AttachAndDial.
-		// This test just documents that.
-		_ = calls
-	}
-	_ = sync.Mutex{}
 }
