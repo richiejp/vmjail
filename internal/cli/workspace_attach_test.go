@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/richiejp/darkaifactory/internal/brokerclient"
 )
 
 // TestWorkspaceAttachRoundTrip drives `daft workspace attach`
@@ -22,24 +20,7 @@ func TestWorkspaceAttachRoundTrip(t *testing.T) {
 	defer cancel()
 
 	sbClient := mustBrokerClient(t, sbID, srvID, addr)
-	attached := make(chan *brokerclient.InnerClient, 1)
-	attachErr := make(chan error, 1)
-	go func() {
-		ic, err := sbClient.AttachAndDial(ctx, brokerclient.AttachOptions{
-			Workspace: "ws", SandboxID: "sb-attach",
-			ServeFingerprint: cliID.Fingerprint(),
-		})
-		if err != nil {
-			attachErr <- err
-			return
-		}
-		attached <- ic
-	}()
-
-	// Give the sandbox-side registration time to land in the
-	// matcher before triggering attach (mirrors the
-	// time.Sleep in startBrokered tests).
-	time.Sleep(200 * time.Millisecond)
+	attached, attachErr := startAttachAndDial(ctx, sbClient, "ws", "sb-attach", cliID.Fingerprint())
 	stdout, stderr, err := runDaft(
 		t, workspaceCmdName, attachSubName,
 		configDirArg, clientDir,
@@ -54,15 +35,7 @@ func TestWorkspaceAttachRoundTrip(t *testing.T) {
 	if !strings.Contains(stdout, `requested attach of sandbox "sb-attach"`) {
 		t.Errorf("stdout missing attach line: %q", stdout)
 	}
-
-	var ic *brokerclient.InnerClient
-	select {
-	case ic = <-attached:
-	case err := <-attachErr:
-		t.Fatalf("AttachAndDial: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("AttachAndDial didn't return after CLI attach")
-	}
+	ic := awaitAttach(t, attached, attachErr)
 	_ = ic.Close()
 }
 

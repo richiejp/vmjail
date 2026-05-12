@@ -75,15 +75,7 @@ func runPing(ctx context.Context, stdout io.Writer, addr, message, configDirOver
 	)
 	defer span.End()
 
-	dir, err := resolveClientDir(configDirOverride)
-	if err != nil {
-		return trace.RecordError(ctx, err)
-	}
-	id, err := loadOrGenerateClient(dir)
-	if err != nil {
-		return trace.RecordError(ctx, err)
-	}
-	peers, err := openClientPeerStore(dir)
+	_, id, peers, err := openClientIdentity(configDirOverride)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}

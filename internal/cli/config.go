@@ -45,3 +45,23 @@ func loadOrGenerateClient(dir string) (*identity.Identity, error) {
 func openClientPeerStore(dir string) (*identity.PeerStore, error) {
 	return identity.OpenPeerStore(filepath.Join(dir, peersFilename))
 }
+
+// openClientIdentity resolves the config dir, loads or generates the
+// client identity, and opens the TOFU peer store. Returned for the
+// subcommands that don't need a CAS store (attach, ping); see
+// openClientCtx in workspace.go for the +CAS variant.
+func openClientIdentity(configDirOverride string) (dir string, id *identity.Identity, peers *identity.PeerStore, err error) {
+	dir, err = resolveClientDir(configDirOverride)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	id, err = loadOrGenerateClient(dir)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	peers, err = openClientPeerStore(dir)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	return dir, id, peers, nil
+}

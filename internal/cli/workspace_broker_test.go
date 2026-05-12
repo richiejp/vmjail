@@ -33,33 +33,11 @@ func TestWorkspaceServeBrokeredRoundTrip(t *testing.T) {
 
 	sbClient := mustBrokerClient(t, sbID, srvID, addr)
 	userClient := mustBrokerClient(t, cliID, srvID, addr)
-
-	attached := make(chan *brokerclient.InnerClient, 1)
-	attachErr := make(chan error, 1)
-	go func() {
-		ic, err := sbClient.AttachAndDial(ctx, brokerclient.AttachOptions{
-			Workspace: "ws", SandboxID: "sb-1",
-			ServeFingerprint: cliID.Fingerprint(),
-		})
-		if err != nil {
-			attachErr <- err
-			return
-		}
-		attached <- ic
-	}()
-	time.Sleep(200 * time.Millisecond)
+	attached, attachErr := startAttachAndDial(ctx, sbClient, "ws", "sb-1", cliID.Fingerprint())
 	if _, _, err := userClient.Attach(ctx, cliID.Fingerprint(), "ws", "sb-1"); err != nil {
 		t.Fatalf("user Attach: %v", err)
 	}
-
-	var ic *brokerclient.InnerClient
-	select {
-	case ic = <-attached:
-	case err := <-attachErr:
-		t.Fatalf("AttachAndDial: %v", err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("AttachAndDial didn't return")
-	}
+	ic := awaitAttach(t, attached, attachErr)
 	defer func() { _ = ic.Close() }()
 
 	wsc := workspacev1connect.NewWorkspaceServiceClient(ic.HTTPClient, ic.BaseURL)
@@ -141,6 +119,50 @@ func startServeBrokered(t *testing.T, clientDir, addr, src string) {
 	waitFor(t, 5*time.Second, func() bool {
 		return strings.Contains(stdout.String(), "brokered \"ws\"")
 	})
+}
+
+// startAttachAndDial spawns the sandbox-side AttachAndDial half in a
+// goroutine and gives the orchestrator a beat to land its
+// RegisterSandbox subscription before returning. The sibling
+// `awaitAttach` collects the result with a fatal-on-timeout.
+//
+// The 200ms sleep is a stand-in for "the sandbox's RegisterSandbox
+// has been picked up by the matcher"; a non-sleep alternative
+// requires lifting matcher introspection through runOrchestrator.
+func startAttachAndDial(
+	ctx context.Context,
+	sbClient *brokerclient.Client,
+	workspace, sandboxID string,
+	serveFP identity.Fingerprint,
+) (attached <-chan *brokerclient.InnerClient, attachErr <-chan error) {
+	att := make(chan *brokerclient.InnerClient, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		ic, err := sbClient.AttachAndDial(ctx, brokerclient.AttachOptions{
+			Workspace: workspace, SandboxID: sandboxID,
+			ServeFingerprint: serveFP,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		att <- ic
+	}()
+	time.Sleep(200 * time.Millisecond)
+	return att, errCh
+}
+
+func awaitAttach(t *testing.T, attached <-chan *brokerclient.InnerClient, attachErr <-chan error) *brokerclient.InnerClient {
+	t.Helper()
+	select {
+	case ic := <-attached:
+		return ic
+	case err := <-attachErr:
+		t.Fatalf("AttachAndDial: %v", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("AttachAndDial didn't return")
+	}
+	return nil
 }
 
 func mustBrokerClient(t *testing.T, peerID, orchID *identity.Identity, addr string) *brokerclient.Client {
