@@ -474,38 +474,17 @@ func runWorkspaceDiff(ctx context.Context, stdout io.Writer, localDir string, op
 }
 
 func printChange(w io.Writer, c workspace.Change, detail bool) {
-	prefix := changePrefix(c.Kind)
-	if !detail {
-		_, _ = fmt.Fprintf(w, "%s %s\n", prefix, c.Path)
+	if detail && c.Kind == workspace.ModeChanged {
+		_, _ = fmt.Fprintf(w, "%c %s  mode %04o -> %04o\n", c.Kind.Glyph(), c.Path,
+			c.From.GetMode()&0o7777, c.To.GetMode()&0o7777)
 		return
 	}
-	switch c.Kind {
-	case workspace.ModeChanged:
-		_, _ = fmt.Fprintf(w, "%s %s  mode %04o -> %04o\n", prefix, c.Path,
-			c.From.GetMode()&0o7777, c.To.GetMode()&0o7777)
-	case workspace.TypeChanged:
-		_, _ = fmt.Fprintf(w, "%s %s  %s -> %s\n", prefix, c.Path,
+	if detail && c.Kind == workspace.TypeChanged {
+		_, _ = fmt.Fprintf(w, "%c %s  %s -> %s\n", c.Kind.Glyph(), c.Path,
 			entryKindLabel(c.From), entryKindLabel(c.To))
-	default:
-		_, _ = fmt.Fprintf(w, "%s %s\n", prefix, c.Path)
+		return
 	}
-}
-
-func changePrefix(k workspace.ChangeKind) string {
-	switch k {
-	case workspace.Added:
-		return "+"
-	case workspace.Removed:
-		return "-"
-	case workspace.Modified:
-		return "~"
-	case workspace.ModeChanged:
-		return "m"
-	case workspace.TypeChanged:
-		return "t"
-	default:
-		return "?"
-	}
+	_, _ = fmt.Fprintf(w, "%c %s\n", c.Kind.Glyph(), c.Path)
 }
 
 func entryKindLabel(e *workspacev1.FileEntry) string {

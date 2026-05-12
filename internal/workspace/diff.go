@@ -1,8 +1,6 @@
 package workspace
 
 import (
-	"sort"
-
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 )
 
@@ -17,9 +15,9 @@ const (
 	Added ChangeKind = iota + 1
 	// Removed means the entry exists in the "from" manifest only.
 	Removed
-	// Modified means a regular file's chunk list (and thus
-	// content) differs between the two manifests. Mode and
-	// mtime alone do not trigger Modified — see ModeChanged.
+	// Modified means content differs: a regular file's chunk
+	// list, or a symlink's target. Mode and mtime alone do not
+	// trigger Modified — see ModeChanged for the mode-only case.
 	Modified
 	// ModeChanged means the entry kind is unchanged and the
 	// chunk list (if any) is identical, but Unix perm bits
@@ -45,6 +43,27 @@ func (c ChangeKind) String() string {
 		return "type"
 	default:
 		return "unknown"
+	}
+}
+
+// Glyph returns the one-rune marker conventional CLIs use for this
+// change kind: + added, - removed, ~ modified, m mode-only, t
+// type-change. Lives next to String() so the CLI presentation and
+// the kind enum can't drift.
+func (c ChangeKind) Glyph() rune {
+	switch c {
+	case Added:
+		return '+'
+	case Removed:
+		return '-'
+	case Modified:
+		return '~'
+	case ModeChanged:
+		return 'm'
+	case TypeChanged:
+		return 't'
+	default:
+		return '?'
 	}
 }
 
@@ -94,38 +113,39 @@ func (d Diff) Counts() (added, removed, modified, modeChanged, typeChanged int) 
 // content. Two files with the same chunks at the same offsets and
 // the same mode are equal regardless of when they were last
 // touched.
+//
+// Manifests are lex-sorted by path (see workspace.proto Manifest);
+// this is a two-pointer merge, O(n+m) with no auxiliary maps. The
+// output preserves that sort.
 func DiffManifests(from, to *workspacev1.Manifest) Diff {
-	fromMap := indexEntries(from)
-	toMap := indexEntries(to)
-	changes := []Change{}
-	for path, f := range fromMap {
-		t, present := toMap[path]
-		if !present {
-			changes = append(changes, Change{Path: path, Kind: Removed, From: f})
-			continue
-		}
-		if k, differ := classify(f, t); differ {
-			changes = append(changes, Change{Path: path, Kind: k, From: f, To: t})
+	fromE := from.GetEntries()
+	toE := to.GetEntries()
+	var changes []Change
+	i, j := 0, 0
+	for i < len(fromE) && j < len(toE) {
+		f, t := fromE[i], toE[j]
+		switch {
+		case f.GetPath() < t.GetPath():
+			changes = append(changes, Change{Path: f.GetPath(), Kind: Removed, From: f})
+			i++
+		case f.GetPath() > t.GetPath():
+			changes = append(changes, Change{Path: t.GetPath(), Kind: Added, To: t})
+			j++
+		default:
+			if k, differ := classify(f, t); differ {
+				changes = append(changes, Change{Path: f.GetPath(), Kind: k, From: f, To: t})
+			}
+			i++
+			j++
 		}
 	}
-	for path, t := range toMap {
-		if _, present := fromMap[path]; !present {
-			changes = append(changes, Change{Path: path, Kind: Added, To: t})
-		}
+	for ; i < len(fromE); i++ {
+		changes = append(changes, Change{Path: fromE[i].GetPath(), Kind: Removed, From: fromE[i]})
 	}
-	sort.Slice(changes, func(i, j int) bool { return changes[i].Path < changes[j].Path })
+	for ; j < len(toE); j++ {
+		changes = append(changes, Change{Path: toE[j].GetPath(), Kind: Added, To: toE[j]})
+	}
 	return Diff{Changes: changes}
-}
-
-func indexEntries(m *workspacev1.Manifest) map[string]*workspacev1.FileEntry {
-	out := map[string]*workspacev1.FileEntry{}
-	if m == nil {
-		return out
-	}
-	for _, e := range m.GetEntries() {
-		out[e.GetPath()] = e
-	}
-	return out
 }
 
 // classify returns the strongest non-zero change between two entries

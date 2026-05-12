@@ -72,9 +72,16 @@ var (
 	_ gofuse.NodeReadlinker = (*fuseNode)(nil)
 )
 
+// attrCacheDuration is how long the kernel may treat an attr lookup
+// as fresh before re-asking. The manifest is immutable for the
+// mount's lifetime so this can be quite long; we cap at one minute
+// to bound the staleness window if a future slice ever allows
+// live-replacing the manifest.
+const attrCacheDuration = 60 * time.Second
+
 func (f *fuseNode) Getattr(_ context.Context, _ gofuse.FileHandle, out *fuse.AttrOut) syscall.Errno {
 	fillAttr(&out.Attr, f.node)
-	out.SetTimeout(1 * time.Second)
+	out.SetTimeout(attrCacheDuration)
 	return 0
 }
 
@@ -95,8 +102,8 @@ func (f *fuseNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		mount: f.mount, relPath: childPath, node: child,
 	}, stable)
 	fillAttr(&out.Attr, child)
-	out.SetEntryTimeout(1 * time.Second)
-	out.SetAttrTimeout(1 * time.Second)
+	out.SetEntryTimeout(attrCacheDuration)
+	out.SetAttrTimeout(attrCacheDuration)
 	return inode, 0
 }
 

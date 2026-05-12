@@ -177,3 +177,19 @@ func TestChangeKindString(t *testing.T) {
 		}
 	}
 }
+
+func TestChangeKindGlyph(t *testing.T) {
+	cases := map[workspace.ChangeKind]rune{
+		workspace.Added:          '+',
+		workspace.Removed:        '-',
+		workspace.Modified:       '~',
+		workspace.ModeChanged:    'm',
+		workspace.TypeChanged:    't',
+		workspace.ChangeKind(99): '?',
+	}
+	for k, want := range cases {
+		if got := k.Glyph(); got != want {
+			t.Errorf("%d.Glyph() = %q, want %q", k, got, want)
+		}
+	}
+}

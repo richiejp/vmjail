@@ -10,8 +10,6 @@ import (
 	"time"
 )
 
-func chmodPath(p string, mode os.FileMode) error { return os.Chmod(p, mode) }
-
 // TestWorkspaceDiffEndToEnd serves a workspace from one dir then
 // runs `daft workspace diff` against a sibling dir engineered to
 // surface one added, one removed, and one modified entry. Hits
@@ -56,7 +54,7 @@ func TestWorkspaceDiffDetailMode(t *testing.T) {
 	local := buildDiffFixture(t, fixtureSide{"a.txt": "x"})
 	// Identical content but flip local's mode (default 0o600
 	// from mustWriteFile) to 0o644 to surface ModeChanged.
-	if err := chmodPath(filepath.Join(local, "a.txt"), 0o644); err != nil {
+	if err := os.Chmod(filepath.Join(local, "a.txt"), 0o644); err != nil { //nolint:gosec // test fixture; the mode is the point.
 		t.Fatalf("chmod: %v", err)
 	}
 	addr, clientDir := startDirectServeAndApprove(t, remote)
@@ -151,30 +149,14 @@ func buildDiffFixture(t *testing.T, files fixtureSide) string {
 	return dir
 }
 
-// startDirectServeAndApprove brings up a direct-mode `daft
-// workspace serve` against srcDir, mutually approves a fresh
-// client identity, and returns (addr, clientConfigDir).
+// startDirectServeAndApprove brings up a direct-mode `daft workspace
+// serve` against srcDir, mutually approves a fresh client identity,
+// and returns (addr, clientConfigDir). Reuses approveBoth +
+// freeAddr from workspace_test.go.
 func startDirectServeAndApprove(t *testing.T, srcDir string) (addr, clientDir string) {
 	t.Helper()
-	serverDir := t.TempDir()
-	srvID, err := loadOrGenerateClient(serverDir)
-	if err != nil {
-		t.Fatalf("server identity: %v", err)
-	}
-	clientDir = t.TempDir()
-	cliID, err := loadOrGenerateClient(clientDir)
-	if err != nil {
-		t.Fatalf("client identity: %v", err)
-	}
-	if _, _, err := runDaft(t, authCmdName, configDirArg, serverDir,
-		"approve", cliID.Fingerprint().String()); err != nil {
-		t.Fatalf("server approve client: %v", err)
-	}
-	if _, _, err := runDaft(t, authCmdName, configDirArg, clientDir,
-		"approve", srvID.Fingerprint().String()); err != nil {
-		t.Fatalf("client approve server: %v", err)
-	}
-
+	serverDir, clientDir := approveBoth(t)
+	addr = freeAddr(t)
 	stdout, stderr := &syncBuf{}, &syncBuf{}
 	cmd := NewRootCmd()
 	cmd.SetOut(stdout)
@@ -182,7 +164,7 @@ func startDirectServeAndApprove(t *testing.T, srcDir string) (addr, clientDir st
 	cmd.SetArgs([]string{
 		workspaceCmdName, serveSubName,
 		"--workspace=ws=" + srcDir,
-		"--addr=127.0.0.1:0",
+		"--addr=" + addr,
 		configDirArg, serverDir,
 		"--cas-dir=" + filepath.Join(serverDir, "cas"),
 	})
@@ -199,22 +181,11 @@ func startDirectServeAndApprove(t *testing.T, srcDir string) (addr, clientDir st
 		wg.Wait()
 	})
 	waitFor(t, 5*time.Second, func() bool {
-		addr = extractServeAddr(stdout.String())
-		return addr != ""
+		return strings.Contains(stdout.String(), `serving "ws"`)
 	})
+	if !strings.Contains(stdout.String(), `serving "ws"`) {
+		t.Fatalf("server did not start: stdout=%q stderr=%q",
+			stdout.String(), stderr.String())
+	}
 	return addr, clientDir
-}
-
-func extractServeAddr(out string) string {
-	const prefix = "on 127.0.0.1:"
-	idx := strings.Index(out, prefix)
-	if idx < 0 {
-		return ""
-	}
-	rest := out[idx+len("on "):]
-	end := strings.IndexAny(rest, "\n\r ")
-	if end < 0 {
-		return strings.TrimSpace(rest)
-	}
-	return strings.TrimSpace(rest[:end])
 }

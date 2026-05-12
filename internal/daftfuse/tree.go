@@ -13,6 +13,7 @@ import (
 	"time"
 
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/workspace"
 )
 
 // node is one inode in the in-memory tree. Mirrors FileEntry but
@@ -62,10 +63,10 @@ func buildTree(m *workspacev1.Manifest) (*tree, error) {
 }
 
 func insertEntry(root *node, e *workspacev1.FileEntry) error {
-	clean := path.Clean(e.GetPath())
-	if clean == "." || clean == "/" || strings.HasPrefix(clean, "../") {
+	if !workspace.SanitisePath(e.GetPath()) {
 		return fmt.Errorf("daftfuse: bad entry path %q", e.GetPath())
 	}
+	clean := path.Clean(e.GetPath())
 	parts := strings.Split(clean, "/")
 	cur := root
 	for i, part := range parts[:len(parts)-1] {
@@ -206,10 +207,15 @@ func (m *Mount) ReadAt(ctx context.Context, p string, dest []byte, off int64) (i
 func (m *Mount) readFileSpans(ctx context.Context, relPath string, n *node, off uint64, dest []byte) (int, error) {
 	end := off + uint64(len(dest))
 	written := 0
-	for _, span := range n.chunks {
-		if span.end <= off {
-			continue
-		}
+	// chunks are sorted by span.start, non-overlapping and
+	// contiguous (built that way in nodeFromEntry). Binary-search
+	// for the first chunk whose end > off so a read at offset 1
+	// GiB into a multi-GiB file doesn't walk 1000+ pre-offset
+	// chunks linearly.
+	first := sort.Search(len(n.chunks), func(i int) bool {
+		return n.chunks[i].end > off
+	})
+	for _, span := range n.chunks[first:] {
 		if span.start >= end {
 			break
 		}
