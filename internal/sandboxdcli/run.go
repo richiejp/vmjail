@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/net/http2"
 
+	"github.com/richiejp/darkaifactory/internal/brokerclient"
 	"github.com/richiejp/darkaifactory/internal/bundled"
 	"github.com/richiejp/darkaifactory/internal/cas"
 	"github.com/richiejp/darkaifactory/internal/component"
@@ -67,9 +68,15 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&opts.workspace, "workspace", "w", "",
 		"host directory to mount read-write at /workspace inside the container")
 	cmd.Flags().StringVar(&opts.workspaceFrom, "workspace-from", "",
-		"address (host:port) of a daft workspace serve to pull from")
+		"address (host:port) of a daft workspace serve to pull from (direct-dial mode)")
 	cmd.Flags().StringVar(&opts.workspaceName, "workspace-name", "",
-		"workspace name to fetch from --workspace-from")
+		"workspace name to fetch from --workspace-from or --workspace-broker")
+	cmd.Flags().StringVar(&opts.workspaceBroker, "workspace-broker", "",
+		"orchestrator URL (https://host:port) to register this sandbox with for a brokered workspace attach (NAT-friendly alternative to --workspace-from)")
+	cmd.Flags().StringVar(&opts.workspaceServeFP, "workspace-serve-fingerprint", "",
+		"required with --workspace-broker: the user-host's leaf-cert fingerprint")
+	cmd.Flags().StringVar(&opts.workspaceSandboxID, "workspace-sandbox-id", "",
+		"required with --workspace-broker: sandbox identifier the user-host's `daft workspace attach` will target")
 	cmd.Flags().StringVar(&opts.configDir, "config-dir", "",
 		"override the daft-sandboxd config dir (default: $XDG_CONFIG_HOME/daft/sandboxd)")
 	cmd.Flags().BoolVar(&opts.keepWorkspace, "keep-workspace", false,
@@ -81,23 +88,27 @@ func newRunCmd() *cobra.Command {
 // runOptions consolidates the run command's flags. Hoisted so adding
 // a flag is one struct field plus one Flags() call.
 type runOptions struct {
-	ref           string
-	cmdArgs       []string
-	workspace     string
-	workspaceFrom string
-	workspaceName string
-	configDir     string
-	keepWorkspace bool
+	ref                string
+	cmdArgs            []string
+	workspace          string
+	workspaceFrom      string
+	workspaceName      string
+	workspaceBroker    string
+	workspaceServeFP   string
+	workspaceSandboxID string
+	configDir          string
+	keepWorkspace      bool
 }
 
 // runDeps bundles the moving parts of `run` so unit tests can swap
 // in fakes for the network-talking and VM-spawning bits.
 type runDeps struct {
-	openStore         func() (storeAPI, error)
-	cacheDir          func() (string, error)
-	extract           func(string) (bundled.Paths, error)
-	boot              func(context.Context, io.Writer, sandbox.Config) error
-	pullWorkspaceFrom func(ctx context.Context, opts pullWorkspaceOpts) (dir string, cleanup func(), err error)
+	openStore           func() (storeAPI, error)
+	cacheDir            func() (string, error)
+	extract             func(string) (bundled.Paths, error)
+	boot                func(context.Context, io.Writer, sandbox.Config) error
+	pullWorkspaceFrom   func(ctx context.Context, opts pullWorkspaceOpts) (dir string, cleanup func(), err error)
+	pullWorkspaceBroker func(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir string, cleanup func(), err error)
 }
 
 // pullWorkspaceOpts gathers the inputs to pullWorkspaceFrom so the
@@ -106,6 +117,16 @@ type pullWorkspaceOpts struct {
 	addr      string
 	name      string
 	configDir string
+}
+
+// pullWorkspaceBrokerOpts collects the inputs to the brokered
+// pull path so the dep signature stays stable.
+type pullWorkspaceBrokerOpts struct {
+	orchestratorURL string
+	workspace       string
+	sandboxID       string
+	serveFP         string
+	configDir       string
 }
 
 // storeAPI is the surface of imagestore.Store the run command uses.
@@ -125,11 +146,12 @@ var defaultRunDepsFn = defaultRunDeps
 
 func defaultRunDeps() runDeps {
 	return runDeps{
-		openStore:         func() (storeAPI, error) { return openStore() },
-		cacheDir:          userCacheDir,
-		extract:           bundled.Extract,
-		boot:              sandbox.Hello,
-		pullWorkspaceFrom: pullWorkspaceFrom,
+		openStore:           func() (storeAPI, error) { return openStore() },
+		cacheDir:            userCacheDir,
+		extract:             bundled.Extract,
+		boot:                sandbox.Hello,
+		pullWorkspaceFrom:   pullWorkspaceFrom,
+		pullWorkspaceBroker: pullWorkspaceBroker,
 	}
 }
 
@@ -196,6 +218,87 @@ func pullWorkspaceFrom(ctx context.Context, opts pullWorkspaceOpts) (dir string,
 	return dest, cleanup, nil
 }
 
+// pullWorkspaceBroker registers as a sandbox with the
+// orchestrator at opts.orchestratorURL, waits for the user-host's
+// `daft workspace attach` to broker us a connection, runs inner
+// mTLS as TLS client, and pulls the workspace manifest+chunks
+// into a fresh tmpdir. Mirrors pullWorkspaceFrom's interface so
+// the caller (resolveWorkspaceDir) treats both modes symmetrically.
+func pullWorkspaceBroker(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir string, cleanup func(), err error) {
+	configDir, err := resolveSandboxdDir(opts.configDir)
+	if err != nil {
+		return "", nil, err
+	}
+	id, err := loadOrGenerateSandboxd(configDir)
+	if err != nil {
+		return "", nil, err
+	}
+	peers, err := openSandboxdPeerStore(configDir)
+	if err != nil {
+		return "", nil, err
+	}
+	serveFP, err := identity.ParseFingerprint(opts.serveFP)
+	if err != nil {
+		return "", nil, fmt.Errorf("daft-sandboxd: parse serve fingerprint: %w", err)
+	}
+	store, err := cas.Open(filepath.Join(configDir, "cas"))
+	if err != nil {
+		return "", nil, err
+	}
+	bc, err := brokerclient.New(brokerclient.Config{
+		URL: opts.orchestratorURL, Identity: id, Peers: peers,
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("daft-sandboxd: broker client: %w", err)
+	}
+	ic, err := bc.AttachAndDial(ctx, brokerclient.AttachOptions{
+		Workspace:        opts.workspace,
+		SandboxID:        opts.sandboxID,
+		ServeFingerprint: serveFP,
+	})
+	if err != nil {
+		return "", nil, fmt.Errorf("daft-sandboxd: broker attach: %w", err)
+	}
+	// One defer covers every error-return below; the success path
+	// flips done=true and the returned cleanup func owns the
+	// teardown instead.
+	done := false
+	defer func() {
+		if !done {
+			_ = ic.Close()
+		}
+	}()
+	tracer := trace.TracerFromContext(ctx)
+	if tracer == nil {
+		tracer = trace.New(component.Sandboxd)
+	}
+	client := workspacev1connect.NewWorkspaceServiceClient(
+		ic.HTTPClient, ic.BaseURL,
+		connect.WithInterceptors(tracer.ClientInterceptor()),
+	)
+	resp, err := client.GetManifest(ctx,
+		connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: opts.workspace}))
+	if err != nil {
+		return "", nil, fmt.Errorf("daft-sandboxd: GetManifest: %w", err)
+	}
+	dest, err := os.MkdirTemp("", "daft-sandboxd-workspace-")
+	if err != nil {
+		return "", nil, fmt.Errorf("daft-sandboxd: workspace tmpdir: %w", err)
+	}
+	if err := workspace.ApplyManifest(ctx, client, store, resp.Msg.GetManifest(), dest,
+		workspace.ApplyOptions{}); err != nil {
+		_ = os.RemoveAll(dest)
+		return "", nil, err
+	}
+	done = true
+	return dest, func() {
+		_ = ic.Close()
+		if err := os.RemoveAll(dest); err != nil {
+			fmt.Fprintf(os.Stderr, "daft-sandboxd: cleanup workspace tmpdir: %v\n", err)
+		}
+	}, nil
+}
+
 func runRun(ctx context.Context, w io.Writer, opts runOptions, deps runDeps) error {
 	if trace.TracerFromContext(ctx) == nil {
 		ctx = trace.ContextWithTracer(ctx, trace.New(component.Sandboxd))
@@ -231,33 +334,56 @@ func runRun(ctx context.Context, w io.Writer, opts runOptions, deps runDeps) err
 // validate checks the flag combinations rejected by runRun before
 // any side-effects fire.
 func (o runOptions) validate() error {
-	if (o.workspaceFrom == "") != (o.workspaceName == "") {
-		return errors.New("daft-sandboxd: --workspace-from and --workspace-name must be set together")
-	}
-	if o.workspace != "" && o.workspaceFrom != "" {
-		return errors.New("daft-sandboxd: --workspace and --workspace-from are mutually exclusive")
+	switch {
+	case o.workspaceFrom != "" && o.workspaceBroker != "":
+		return errors.New("daft-sandboxd: --workspace-from and --workspace-broker are mutually exclusive")
+	case o.workspace != "" && (o.workspaceFrom != "" || o.workspaceBroker != ""):
+		return errors.New("daft-sandboxd: --workspace is mutually exclusive with --workspace-from / --workspace-broker")
+	case o.workspaceFrom != "" && o.workspaceName == "":
+		return errors.New("daft-sandboxd: --workspace-from requires --workspace-name")
+	case o.workspaceBroker != "" && o.workspaceName == "":
+		return errors.New("daft-sandboxd: --workspace-broker requires --workspace-name")
+	case o.workspaceBroker != "" && o.workspaceServeFP == "":
+		return errors.New("daft-sandboxd: --workspace-broker requires --workspace-serve-fingerprint")
+	case o.workspaceBroker != "" && o.workspaceSandboxID == "":
+		return errors.New("daft-sandboxd: --workspace-broker requires --workspace-sandbox-id")
+	case o.workspaceName != "" && o.workspaceFrom == "" && o.workspaceBroker == "":
+		return errors.New("daft-sandboxd: --workspace-name requires --workspace-from or --workspace-broker")
 	}
 	return nil
 }
 
 // resolveWorkspaceDir returns the on-disk directory to expose at
-// /workspace, plus a cleanup that runs on function exit. For
-// --workspace-from this is a fresh tmpdir populated by
-// pullWorkspaceFrom; for --workspace it's the path the user gave
-// us; otherwise the empty string with a no-op cleanup (the boot
-// config simply omits the share).
+// /workspace, plus a cleanup that runs on function exit. Three
+// modes:
+//   - --workspace: caller-supplied dir, no copy.
+//   - --workspace-from: direct-dial pull from a daft workspace
+//     serve at host:port. Fresh tmpdir.
+//   - --workspace-broker: register as a sandbox with the
+//     orchestrator and wait for the user-host's `daft workspace
+//     attach` to broker us a connection. Fresh tmpdir.
 //
 // When opts.keepWorkspace is set the tmpdir is preserved past the
 // run — the cleanup becomes a no-op that prints the path to stdout
 // so the operator knows where to point a follow-up
 // `daft-sandboxd workspace serve` for pull-back.
 func resolveWorkspaceDir(ctx context.Context, opts runOptions, deps runDeps) (dir string, cleanup func(), err error) {
-	if opts.workspaceFrom == "" {
+	switch {
+	case opts.workspaceBroker != "":
+		dir, cleanup, err = deps.pullWorkspaceBroker(ctx, pullWorkspaceBrokerOpts{
+			orchestratorURL: opts.workspaceBroker,
+			workspace:       opts.workspaceName,
+			sandboxID:       opts.workspaceSandboxID,
+			serveFP:         opts.workspaceServeFP,
+			configDir:       opts.configDir,
+		})
+	case opts.workspaceFrom != "":
+		dir, cleanup, err = deps.pullWorkspaceFrom(ctx, pullWorkspaceOpts{
+			addr: opts.workspaceFrom, name: opts.workspaceName, configDir: opts.configDir,
+		})
+	default:
 		return opts.workspace, func() {}, nil
 	}
-	dir, cleanup, err = deps.pullWorkspaceFrom(ctx, pullWorkspaceOpts{
-		addr: opts.workspaceFrom, name: opts.workspaceName, configDir: opts.configDir,
-	})
 	if err != nil {
 		return "", nil, fmt.Errorf("daft-sandboxd: pull workspace: %w", err)
 	}

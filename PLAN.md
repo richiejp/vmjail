@@ -555,13 +555,23 @@ Out of Scope:
       net.Conn well enough for crypto/tls (and by extension
       HTTP/2) to ride over it.
 
-      *Remaining 3.5 commits.*
-      - 3.5c-3: Migrate `daft workspace serve` and
-        `daft-sandboxd run --workspace-from` to use the
-        broker. Keep `--workspace-direct <addr>` as the
-        existing LAN-mode fallback (rename the current flag).
+      *Slice 3.5c-3 — landed.* `daft workspace serve
+      --orchestrator <url>` and `daft-sandboxd run
+      --workspace-broker <url>` now run through the broker.
+      Both keep the direct-dial flags (`--addr` and
+      `--workspace-from`) as LAN-mode fallbacks rather than
+      renaming — backward-compatible. Inner mTLS terminates at
+      each endpoint with a per-attach `identity.NewMemoryPeerStore`
+      trusting only the orchestrator-announced peer. Tests pin
+      the full cobra→broker→inner-mTLS→WorkspaceService round-trip
+      on both sides.
+
+      *Remaining 3.5 commit.*
       - 3.5d: `daft workspace attach` subcommand on the
-        client.
+        client. (The broker accepts RequestAttach only from
+        the serve owner — see ACL in matcher.go — so this is
+        the user-host's trigger to broker an outstanding
+        registered sandbox with the running serve.)
 
       *Direct-dial mode (kept, not default).* The existing
       Slice 2.5 path (`--workspace-from <host:port>`) becomes

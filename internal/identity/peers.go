@@ -123,9 +123,31 @@ func (s *PeerStore) Path() string {
 	return s.path
 }
 
+// NewMemoryPeerStore returns a PeerStore that lives only in
+// memory — never reads from or writes to disk. fps are pre-added
+// as approved peers (ApprovedAt = now). Used by short-lived flows
+// like a brokered workspace attach where the per-session trust
+// set ("only this peer's fingerprint, just for this attach")
+// shouldn't pollute the user's persistent peers.json.
+func NewMemoryPeerStore(fps ...Fingerprint) *PeerStore {
+	s := &PeerStore{peers: map[Fingerprint]Peer{}}
+	now := time.Now().UTC()
+	for _, fp := range fps {
+		if fp == (Fingerprint{}) {
+			continue
+		}
+		s.peers[fp] = Peer{Fingerprint: fp, ApprovedAt: now}
+	}
+	return s
+}
+
 // saveLocked rewrites the JSON file atomically. The mutex is the
-// caller's responsibility.
+// caller's responsibility. In-memory stores (empty path) skip
+// persistence entirely.
 func (s *PeerStore) saveLocked() error {
+	if s.path == "" {
+		return nil
+	}
 	list := make([]Peer, 0, len(s.peers))
 	for _, p := range s.peers {
 		list = append(list, p)

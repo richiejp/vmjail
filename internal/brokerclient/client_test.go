@@ -19,7 +19,10 @@ import (
 	"github.com/richiejp/darkaifactory/internal/orchestrator"
 )
 
-const testListenAddr = "127.0.0.1:0"
+const (
+	testListenAddr    = "127.0.0.1:0"
+	testFakeBrokerURL = "https://x"
+)
 
 // rig is the broker-client test harness: a running orchestrator,
 // two approved peers (cli + sb), and a Client each.
@@ -194,8 +197,8 @@ func TestNewRejectsBadConfig(t *testing.T) {
 		cfg  brokerclient.Config
 	}{
 		{"empty URL", brokerclient.Config{Identity: id, Peers: store}},
-		{"nil identity", brokerclient.Config{URL: "https://x", Peers: store}},
-		{"nil peers", brokerclient.Config{URL: "https://x", Identity: id}},
+		{"nil identity", brokerclient.Config{URL: testFakeBrokerURL, Peers: store}},
+		{"nil peers", brokerclient.Config{URL: testFakeBrokerURL, Identity: id}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -203,6 +206,19 @@ func TestNewRejectsBadConfig(t *testing.T) {
 				t.Error("expected error")
 			}
 		})
+	}
+}
+
+// TestNewRejectsIncompleteIdentity hits the ClientTLSConfig error
+// branch of brokerclient.New: an identity missing key/cert is
+// non-nil but unusable, so the TLS config builder rejects it.
+func TestNewRejectsIncompleteIdentity(t *testing.T) {
+	store := mustOpenStore(t)
+	_, err := brokerclient.New(brokerclient.Config{
+		URL: testFakeBrokerURL, Identity: &identity.Identity{}, Peers: store,
+	})
+	if err == nil {
+		t.Error("expected error for incomplete identity")
 	}
 }
 

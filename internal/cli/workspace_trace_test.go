@@ -36,8 +36,12 @@ func TestWorkspacePullTraceShape(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		err := runWorkspaceServe(serveCtx, &syncBuf{},
-			"ws="+src, addr, serverDir, filepath.Join(serverDir, "cas"))
+		err := runWorkspaceServe(serveCtx, &syncBuf{}, workspaceServeOpts{
+			workspaceFlag: "ws=" + src,
+			addr:          addr,
+			configDir:     serverDir,
+			casDir:        filepath.Join(serverDir, "cas"),
+		})
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			t.Logf("serve: %v", err)
 		}

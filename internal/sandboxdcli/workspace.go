@@ -119,13 +119,11 @@ func runWorkspaceServe(ctx context.Context, stdout io.Writer, path, name, addr, 
 	if err := srv.Listen(); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout,
+	_, _ = fmt.Fprintf(stdout,
 		"daft-sandboxd workspace: serving %q from %s on %s\n"+
 			"daft-sandboxd workspace: fingerprint %s\n"+
 			"daft-sandboxd workspace: %d entries\n",
-		name, path, srv.Addr(), id.Fingerprint(), len(manifest.GetEntries())); err != nil {
-		return err
-	}
+		name, path, srv.Addr(), id.Fingerprint(), len(manifest.GetEntries()))
 	return runUntilCancel(ctx, srv)
 }
 

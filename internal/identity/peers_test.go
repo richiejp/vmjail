@@ -225,6 +225,47 @@ func TestPeerStoreSaveCreatesParentDir(t *testing.T) {
 	}
 }
 
+// TestNewMemoryPeerStore covers the in-memory variant used by
+// brokered workspace attaches.
+func TestNewMemoryPeerStore(t *testing.T) {
+	var a, b Fingerprint
+	a[0], b[0] = 1, 2
+	s := NewMemoryPeerStore(a, b, Fingerprint{} /* skipped: zero */)
+	if _, ok := s.Lookup(a); !ok {
+		t.Error("missing fingerprint a")
+	}
+	if _, ok := s.Lookup(b); !ok {
+		t.Error("missing fingerprint b")
+	}
+	if got := len(s.List()); got != 2 {
+		t.Errorf("List len = %d, want 2 (zero skipped)", got)
+	}
+	if s.Path() != "" {
+		t.Errorf("Path = %q, want empty for in-memory store", s.Path())
+	}
+	// Add / Remove on an in-memory store must not error despite
+	// the empty path (saveLocked early-returns).
+	var c Fingerprint
+	c[0] = 3
+	if err := s.Add(Peer{Fingerprint: c}); err != nil {
+		t.Errorf("Add on mem store: %v", err)
+	}
+	if err := s.Remove(c); err != nil {
+		t.Errorf("Remove on mem store: %v", err)
+	}
+	if _, ok := s.Lookup(c); ok {
+		t.Error("Remove didn't take effect")
+	}
+}
+
+// TestNewMemoryPeerStoreEmpty covers the zero-arg constructor.
+func TestNewMemoryPeerStoreEmpty(t *testing.T) {
+	s := NewMemoryPeerStore()
+	if got := len(s.List()); got != 0 {
+		t.Errorf("List len = %d, want 0", got)
+	}
+}
+
 // TestOpenPeerStoreFailsWhenParentIsAFile exercises the read-error
 // branch of OpenPeerStore (anything other than fs.ErrNotExist must be
 // surfaced — a corrupt or unreadable file should never be silently

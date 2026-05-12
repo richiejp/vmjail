@@ -88,6 +88,22 @@ func TestRelayConnWriteSendsAsFrame(t *testing.T) {
 	}
 }
 
+// TestRelayConnWritePropagatesSendError exercises the uncommon
+// branch of Write where the underlying DataStream rejects the
+// frame. Mirrors TestSplicePropagatesSendError.
+func TestRelayConnWritePropagatesSendError(t *testing.T) {
+	s := newFakeStream(0, 0)
+	s.closed.Store(true) // any Send fails
+	c := NewRelayConn(s, nil)
+	n, err := c.Write([]byte("data"))
+	if err == nil {
+		t.Error("expected error")
+	}
+	if n != 0 {
+		t.Errorf("n = %d, want 0", n)
+	}
+}
+
 func TestRelayConnCloseInvokesStopOnce(t *testing.T) {
 	var stopCount atomic.Int32
 	c := NewRelayConn(newFakeStream(0, 0), func() error {

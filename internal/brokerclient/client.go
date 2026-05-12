@@ -144,18 +144,15 @@ func (c *Client) RegisterSandbox(ctx context.Context, sandboxID string) (*Regist
 
 // newRegistration synchronously consumes the initial Ready event
 // then spawns a goroutine that forwards subsequent PendingAttach
-// events on the returned Registration's channel.
+// events on the returned Registration's channel. We don't
+// type-check the initial event — the orchestrator's contract is
+// to send Ready first, and a malformed first event would just
+// produce an empty PendingAttach later (since GetAttach() returns
+// nil for non-attach types).
 func newRegistration(stream *connect.ServerStreamForClient[workspacebrokerv1.RegistrationEvent]) (*Registration, error) {
 	if !stream.Receive() {
 		_ = stream.Close()
-		if err := stream.Err(); err != nil {
-			return nil, fmt.Errorf("brokerclient: stream closed before Ready: %w", err)
-		}
-		return nil, errors.New("brokerclient: stream closed before Ready")
-	}
-	if stream.Msg().GetReady() == nil {
-		_ = stream.Close()
-		return nil, fmt.Errorf("brokerclient: first event was not Ready: %v", stream.Msg())
+		return nil, fmt.Errorf("brokerclient: stream closed before Ready: %w", stream.Err())
 	}
 	r := &Registration{
 		stream: stream,
@@ -166,11 +163,9 @@ func newRegistration(stream *connect.ServerStreamForClient[workspacebrokerv1.Reg
 		defer close(r.done)
 		defer close(r.events)
 		for stream.Receive() {
-			ev := stream.Msg().GetAttach()
-			if ev == nil {
-				continue
+			if ev := stream.Msg().GetAttach(); ev != nil {
+				r.events <- ev
 			}
-			r.events <- ev
 		}
 		r.err = stream.Err()
 	}()

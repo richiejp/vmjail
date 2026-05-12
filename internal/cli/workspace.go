@@ -18,6 +18,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/net/http2"
 
+	"github.com/richiejp/darkaifactory/internal/brokerclient"
 	"github.com/richiejp/darkaifactory/internal/cas"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
@@ -105,48 +106,58 @@ func bindClientDirFlags(cmd *cobra.Command, configDir, casDir *string) {
 }
 
 func newWorkspaceServeCmd() *cobra.Command {
-	var (
-		workspaceFlag string
-		addr          string
-		configDir     string
-		casDir        string
-	)
+	opts := workspaceServeOpts{}
 	cmd := &cobra.Command{
-		Use:           serveSubName,
-		Short:         "Serve a directory as a workspace over mTLS",
+		Use:   serveSubName,
+		Short: "Serve a directory as a workspace over mTLS",
+		Long: "Two modes:\n" +
+			"  Direct: --addr <host:port> binds a TCP listener and accepts mTLS\n" +
+			"          dials from approved peers. LAN/dev only.\n" +
+			"  Broker: --orchestrator <addr> registers with an orchestrator and\n" +
+			"          accepts brokered attaches over the relay. Works through\n" +
+			"          NAT — the user-host has no inbound port.\n" +
+			"Direct is the default for backward compatibility; --orchestrator\n" +
+			"takes precedence when set.",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx, cancel := signal.NotifyContext(cmd.Context(),
 				os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			return runWorkspaceServe(ctx, cmd.OutOrStdout(),
-				workspaceFlag, addr, configDir, casDir)
+			return runWorkspaceServe(ctx, cmd.OutOrStdout(), opts)
 		},
 	}
-	cmd.Flags().StringVar(&workspaceFlag, "workspace", "",
+	cmd.Flags().StringVar(&opts.workspaceFlag, "workspace", "",
 		"workspace to expose, in name=path form (e.g. dev=./repo)")
-	cmd.Flags().StringVar(&addr, "addr", "0.0.0.0:9443",
-		"TCP listen address (host:port)")
-	bindClientDirFlags(cmd, &configDir, &casDir)
+	cmd.Flags().StringVar(&opts.addr, "addr", "0.0.0.0:9443",
+		"TCP listen address for direct-dial mode (host:port)")
+	cmd.Flags().StringVar(&opts.orchestrator, "orchestrator", "",
+		"orchestrator URL (https://host:port) for broker mode; takes precedence over --addr")
+	bindClientDirFlags(cmd, &opts.configDir, &opts.casDir)
 	return cmd
 }
 
-func runWorkspaceServe(
-	ctx context.Context,
-	stdout io.Writer,
-	workspaceArg, addr, configDirOverride, casDirOverride string,
-) error {
+// workspaceServeOpts gathers `daft workspace serve` flags so adding
+// a new one is a single struct field plus one Flags() binding.
+type workspaceServeOpts struct {
+	workspaceFlag string
+	addr          string
+	orchestrator  string
+	configDir     string
+	casDir        string
+}
+
+func runWorkspaceServe(ctx context.Context, stdout io.Writer, opts workspaceServeOpts) error {
 	tracer, _ := tracerForCommand(ctx)
 	ctx = trace.ContextWithTracer(ctx, tracer)
-	if workspaceArg == "" {
+	if opts.workspaceFlag == "" {
 		return errors.New("daft workspace serve: --workspace is required")
 	}
-	name, srcPath, err := parseWorkspaceFlag(workspaceArg)
+	name, srcPath, err := parseWorkspaceFlag(opts.workspaceFlag)
 	if err != nil {
 		return err
 	}
-	cc, err := openClientCtx(configDirOverride, casDirOverride)
+	cc, err := openClientCtx(opts.configDir, opts.casDir)
 	if err != nil {
 		return err
 	}
@@ -154,6 +165,16 @@ func runWorkspaceServe(
 	if err != nil {
 		return err
 	}
+	if opts.orchestrator != "" {
+		return runWorkspaceServeBrokered(ctx, stdout, opts.orchestrator, name, srcPath, cc, manifest, tracer)
+	}
+	return runWorkspaceServeDirect(ctx, stdout, opts.addr, name, srcPath, cc, manifest, tracer)
+}
+
+func runWorkspaceServeDirect(
+	ctx context.Context, stdout io.Writer, addr, name, srcPath string,
+	cc *clientCtx, manifest *workspacev1.Manifest, tracer *trace.Tracer,
+) error {
 	srv, err := buildWorkspaceListener(name, addr, cc, manifest, tracer)
 	if err != nil {
 		return err
@@ -161,15 +182,51 @@ func runWorkspaceServe(
 	if err := srv.Listen(); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout,
+	_, _ = fmt.Fprintf(stdout,
 		"daft workspace: serving %q from %s on %s\n"+
 			"daft workspace: fingerprint %s\n"+
 			"daft workspace: cas %s (%d entries)\n",
 		name, srcPath, srv.Addr(), cc.id.Fingerprint(),
-		cc.store.Root(), len(manifest.GetEntries())); err != nil {
+		cc.store.Root(), len(manifest.GetEntries()))
+	return runUntilCancel(ctx, srv)
+}
+
+// runWorkspaceServeBrokered registers with the orchestrator's
+// BrokerService and accepts inbound attaches over the spliced
+// relay. Inner mTLS terminates here; each attach gets a fresh
+// http2.Server running the same WorkspaceService handler as the
+// direct path.
+func runWorkspaceServeBrokered(
+	ctx context.Context, stdout io.Writer, orchestratorURL, name, srcPath string,
+	cc *clientCtx, manifest *workspacev1.Manifest, tracer *trace.Tracer,
+) error {
+	wsServer, err := workspace.NewServer(cc.store)
+	if err != nil {
 		return err
 	}
-	return runUntilCancel(ctx, srv)
+	if err := wsServer.Add(name, manifest); err != nil {
+		return err
+	}
+	mux := http.NewServeMux()
+	path, handler := workspacev1connect.NewWorkspaceServiceHandler(wsServer,
+		connect.WithInterceptors(tracer.ServerInterceptor()))
+	mux.Handle(path, handler)
+
+	bc, err := brokerclient.New(brokerclient.Config{
+		URL: orchestratorURL, Identity: cc.id, Peers: cc.peers,
+	})
+	if err != nil {
+		return fmt.Errorf("daft workspace serve: %w", err)
+	}
+	_, _ = fmt.Fprintf(stdout,
+		"daft workspace: brokered %q from %s via %s\n"+
+			"daft workspace: fingerprint %s\n"+
+			"daft workspace: cas %s (%d entries)\n",
+		name, srcPath, orchestratorURL, cc.id.Fingerprint(),
+		cc.store.Root(), len(manifest.GetEntries()))
+	return bc.ServeBrokered(ctx, brokerclient.ServeOptions{
+		Workspace: name, Handler: mux,
+	})
 }
 
 // buildWorkspaceListener wires a workspace.Server (registered with
