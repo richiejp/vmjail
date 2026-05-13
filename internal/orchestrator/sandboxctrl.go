@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -10,8 +11,26 @@ import (
 	"github.com/richiejp/darkaifactory/internal/assert"
 	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1/sandboxctrlv1connect"
+	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
 )
+
+// dispatchBacklog is the per-stream Dispatch buffer depth. Bounded
+// so a stalled sandbox can't grow the orchestrator's memory; a
+// caller that overflows the buffer gets ErrDispatchBacklog and must
+// retry or pick another sandbox.
+const dispatchBacklog = 16
+
+// ErrSandboxNotConnected is returned by Dispatch when the addressed
+// fingerprint has no open RegisterSandbox stream. The caller must
+// pick a different sandbox or wait for the original to reconnect.
+var ErrSandboxNotConnected = errors.New("orchestrator: sandbox not connected")
+
+// ErrDispatchBacklog is returned by Dispatch when the sandbox's
+// stream send buffer is full — the sandboxd is alive but slower
+// than the dispatch rate. The orchestrator scheduler should treat
+// this like a transient failure.
+var ErrDispatchBacklog = errors.New("orchestrator: dispatch backlog full")
 
 // SandboxControlHandler adapts the sandboxctrl.Registry to the
 // Connect-RPC SandboxControlService surface. Peer identity for
@@ -20,6 +39,9 @@ import (
 type SandboxControlHandler struct {
 	sandboxctrlv1connect.UnimplementedSandboxControlServiceHandler
 	reg *sandboxctrl.Registry
+
+	mu      sync.Mutex
+	streams map[identity.Fingerprint]chan *sandboxctrlv1.RegisterEvent
 }
 
 // NewSandboxControlHandler returns a handler that records
@@ -29,7 +51,55 @@ func NewSandboxControlHandler(reg *sandboxctrl.Registry) (*SandboxControlHandler
 	if reg == nil {
 		return nil, errors.New("orchestrator: nil sandboxctrl registry")
 	}
-	return &SandboxControlHandler{reg: reg}, nil
+	return &SandboxControlHandler{
+		reg:     reg,
+		streams: map[identity.Fingerprint]chan *sandboxctrlv1.RegisterEvent{},
+	}, nil
+}
+
+// Dispatch pushes a Dispatch event to the addressed sandbox's
+// live RegisterSandbox stream. Returns ErrSandboxNotConnected if
+// the sandbox has no open stream; ErrDispatchBacklog if the
+// per-stream buffer is full.
+func (h *SandboxControlHandler) Dispatch(
+	fp identity.Fingerprint,
+	dispatchID string,
+	spec *sandboxctrlv1.SandboxSpec,
+) error {
+	h.mu.Lock()
+	ch, ok := h.streams[fp]
+	h.mu.Unlock()
+	if !ok {
+		return ErrSandboxNotConnected
+	}
+	ev := &sandboxctrlv1.RegisterEvent{
+		Event: &sandboxctrlv1.RegisterEvent_Dispatch{
+			Dispatch: &sandboxctrlv1.Dispatch{
+				DispatchId: dispatchID,
+				Spec:       spec,
+			},
+		},
+	}
+	select {
+	case ch <- ev:
+		return nil
+	default:
+		return ErrDispatchBacklog
+	}
+}
+
+func (h *SandboxControlHandler) attachStream(fp identity.Fingerprint) chan *sandboxctrlv1.RegisterEvent {
+	ch := make(chan *sandboxctrlv1.RegisterEvent, dispatchBacklog)
+	h.mu.Lock()
+	h.streams[fp] = ch
+	h.mu.Unlock()
+	return ch
+}
+
+func (h *SandboxControlHandler) detachStream(fp identity.Fingerprint) {
+	h.mu.Lock()
+	delete(h.streams, fp)
+	h.mu.Unlock()
 }
 
 // RegisterSandbox records the caller's host-resource advertisement
@@ -52,6 +122,9 @@ func (h *SandboxControlHandler) RegisterSandbox(
 	acceptedAt := h.reg.Register(fp, req.Msg.GetVersion(), resources)
 	defer h.reg.Forget(fp)
 
+	events := h.attachStream(fp)
+	defer h.detachStream(fp)
+
 	ready := &sandboxctrlv1.RegisterEvent{
 		Event: &sandboxctrlv1.RegisterEvent_Ready{
 			Ready: &sandboxctrlv1.SubscriptionReady{
@@ -63,15 +136,23 @@ func (h *SandboxControlHandler) RegisterSandbox(
 		return err
 	}
 
-	// Cancellability is required: the only termination signal for
-	// this stream in A1 is ctx.Done (Slice A4 will add Dispatch
-	// pushes from the orchestrator). Background context here would
-	// keep the handler goroutine alive forever.
+	// Stream loop: forward Dispatch events from the per-stream
+	// channel until ctx fires. stream.Send is not safe for
+	// concurrent use, so this single goroutine is the only writer.
 	done := ctx.Done()
 	assert.True(done != nil,
 		"RegisterSandbox requires a cancellable context; Connect-RPC handlers always receive one — Background here means a wiring bug")
-	<-done
-	return nil
+	//daft:lint:disable=forloopbound reason="exits on ctx.Done or stream.Send error"
+	for {
+		select {
+		case <-done:
+			return nil
+		case ev := <-events:
+			if err := stream.Send(ev); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // Heartbeat refreshes the caller's LastSeenAt and returns the

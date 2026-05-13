@@ -35,6 +35,19 @@ import (
 // enough to be invisible in the trace tail.
 const DefaultHeartbeatInterval = 5 * time.Second
 
+// DispatchHandler is invoked once per Dispatch event the
+// orchestrator pushes on the RegisterSandbox stream. Implementations
+// run on the stream's consumer goroutine; long-running work should
+// be moved off-thread by the handler itself.
+//
+// Returning an error tears down the registration — the client
+// surfaces the error to its caller, and the orchestrator's `defer
+// Forget` releases the entry. Non-error returns continue to drain
+// the stream.
+type DispatchHandler interface {
+	HandleDispatch(ctx context.Context, dispatch *sandboxctrlv1.Dispatch) error
+}
+
 // Config is everything the client needs to dial the orchestrator
 // and keep a sandbox registration alive.
 type Config struct {
@@ -52,6 +65,13 @@ type Config struct {
 	// HeartbeatInterval is the ticker cadence. Zero ⇒
 	// DefaultHeartbeatInterval.
 	HeartbeatInterval time.Duration
+	// Dispatch is the seam invoked on every Dispatch event from the
+	// orchestrator. Nil ⇒ events are accepted off the wire and
+	// dropped silently — used when running sandboxd in pure
+	// register-and-heartbeat mode (e.g. operator inspecting a
+	// fleet). Production wiring sets this to an executor that
+	// drives the Hello / container pipeline (Slice A4b).
+	Dispatch DispatchHandler
 }
 
 // Client wraps a generated SandboxControlServiceClient with a
@@ -133,7 +153,7 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources sandboxctrl.Res
 	}
 
 	streamErr := make(chan error, 1)
-	go consumeStream(stream, streamErr)
+	go consumeStream(ctx, stream, c.cfg.Dispatch, streamErr)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -157,16 +177,25 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources sandboxctrl.Res
 }
 
 // consumeStream drains the RegisterSandbox stream for the lifetime
-// of the registration. v1 has no further events to handle — the
-// goroutine exists purely to detect server-side stream termination.
-// Slice A4 will dispatch SandboxSpec frames here.
+// of the registration. Dispatch events go to handler when non-nil;
+// nil handler drops them silently (register-only mode). A handler
+// error tears the stream down by surfacing through errCh.
 func consumeStream(
+	ctx context.Context,
 	stream *connect.ServerStreamForClient[sandboxctrlv1.RegisterEvent],
+	handler DispatchHandler,
 	errCh chan<- error,
 ) {
 	//daft:lint:disable=forloopbound reason="bounded by stream lifetime; Receive returns false when the server closes or ctx cancels the underlying connection"
 	for stream.Receive() {
-		// A1 ignores additional events; Slice A4 lands Dispatch.
+		d := stream.Msg().GetDispatch()
+		if d == nil || handler == nil {
+			continue
+		}
+		if err := handler.HandleDispatch(ctx, d); err != nil {
+			errCh <- fmt.Errorf("sandboxctrlclient: dispatch handler: %w", err)
+			return
+		}
 	}
 	errCh <- stream.Err()
 }

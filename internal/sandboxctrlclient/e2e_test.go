@@ -9,11 +9,20 @@ import (
 	"testing"
 	"time"
 
+	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/orchestrator"
 	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
 	"github.com/richiejp/darkaifactory/internal/sandboxctrlclient"
 )
+
+// dispatchFn adapts a function to the DispatchHandler interface so
+// tests can use closures without declaring a struct.
+type dispatchFn func(context.Context, *sandboxctrlv1.Dispatch) error
+
+func (f dispatchFn) HandleDispatch(ctx context.Context, d *sandboxctrlv1.Dispatch) error {
+	return f(ctx, d)
+}
 
 const (
 	testListenAddr = "127.0.0.1:0"
@@ -252,6 +261,130 @@ func TestRegisterAndServePropagatesHeartbeatError(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("RegisterAndServe did not return within 2s after Forget")
+	}
+}
+
+// TestRegisterAndServeDeliversDispatchToHandler exercises the
+// orchestrator → sandboxd Dispatch path end-to-end: orchestrator
+// pushes Dispatch on the stream; the sandboxctrlclient receives it
+// and invokes the configured DispatchHandler with the spec.
+func TestRegisterAndServeDeliversDispatchToHandler(t *testing.T) {
+	rig := newE2ERig(t)
+
+	got := make(chan *sandboxctrlv1.Dispatch, 1)
+	handler := dispatchFn(func(_ context.Context, d *sandboxctrlv1.Dispatch) error {
+		got <- d
+		return nil
+	})
+
+	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+		URL:               rig.url,
+		Identity:          rig.sbID,
+		Peers:             rig.sbPeer,
+		Version:           testFixtureVer,
+		HeartbeatInterval: 5 * time.Second,
+		Dispatch:          handler,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	served := make(chan error, 1)
+	go func() {
+		served <- client.RegisterAndServe(ctx, sandboxctrl.Resources{CPUs: 1})
+	}()
+
+	// Wait for registration to land before pushing — Dispatch
+	// before attachStream returns ErrSandboxNotConnected.
+	fp := rig.sbID.Fingerprint()
+	deadline := time.Now().Add(time.Second)
+	want := &sandboxctrlv1.SandboxSpec{ImageRef: "alpine:3", WorkspaceUuid: "ws-1"}
+	//daft:lint:disable=forloopbound reason="poll until the orchestrator sees the stream attach (≤1s)"
+	for time.Now().Before(deadline) {
+		err := rig.server.SandboxControl().Dispatch(fp, "d-1", want)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, orchestrator.ErrSandboxNotConnected) {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	select {
+	case d := <-got:
+		if d.GetDispatchId() != "d-1" {
+			t.Errorf("dispatch_id = %q, want d-1", d.GetDispatchId())
+		}
+		if d.GetSpec().GetImageRef() != "alpine:3" {
+			t.Errorf("image_ref = %q, want alpine:3", d.GetSpec().GetImageRef())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler not invoked within 2s")
+	}
+
+	cancel()
+	select {
+	case err := <-served:
+		if err != nil {
+			t.Errorf("RegisterAndServe = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RegisterAndServe did not return after ctx cancel")
+	}
+}
+
+// TestRegisterAndServeSurfacesDispatchError covers the failure
+// branch of consumeStream's handler call: a non-nil return tears
+// the registration down.
+func TestRegisterAndServeSurfacesDispatchError(t *testing.T) {
+	rig := newE2ERig(t)
+	want := errors.New("synthetic handler failure")
+	handler := dispatchFn(func(context.Context, *sandboxctrlv1.Dispatch) error {
+		return want
+	})
+
+	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+		URL:               rig.url,
+		Identity:          rig.sbID,
+		Peers:             rig.sbPeer,
+		Version:           testFixtureVer,
+		HeartbeatInterval: 5 * time.Second,
+		Dispatch:          handler,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	served := make(chan error, 1)
+	go func() {
+		served <- client.RegisterAndServe(ctx, sandboxctrl.Resources{CPUs: 1})
+	}()
+
+	fp := rig.sbID.Fingerprint()
+	deadline := time.Now().Add(time.Second)
+	//daft:lint:disable=forloopbound reason="poll until the stream attaches"
+	for time.Now().Before(deadline) {
+		err := rig.server.SandboxControl().Dispatch(fp, "d-bad", &sandboxctrlv1.SandboxSpec{})
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, orchestrator.ErrSandboxNotConnected) {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	select {
+	case err := <-served:
+		if err == nil {
+			t.Error("RegisterAndServe returned nil, want handler error to propagate")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RegisterAndServe did not return after handler error")
 	}
 }
 

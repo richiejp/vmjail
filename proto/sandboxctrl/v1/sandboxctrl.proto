@@ -63,12 +63,22 @@ message RegisterSandboxRequest {
 }
 
 // RegisterEvent is the envelope for events pushed on the
-// RegisterSandbox stream. v1 only carries SubscriptionReady;
-// Slice A4 adds a Dispatch variant inside the same oneof.
+// RegisterSandbox stream.
 message RegisterEvent {
   oneof event {
     SubscriptionReady ready = 1;
+    Dispatch dispatch = 2;
   }
+}
+
+// Dispatch hands a workload to the registered sandbox-host.
+// The dispatch_id is opaque to the wire — a future ACK RPC (B-phase)
+// will reference it so the orchestrator can correlate completion
+// signals back to the originating Dispatch. For A4 the sandboxd
+// executor only needs to handle the spec.
+message Dispatch {
+  string dispatch_id = 1;
+  SandboxSpec spec = 2;
 }
 
 // SubscriptionReady confirms the registration was recorded.

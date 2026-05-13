@@ -330,3 +330,104 @@ func newSandboxCtrlRig(t *testing.T) *sandboxCtrlRig {
 	client := sandboxctrlv1connect.NewSandboxControlServiceClient(httpc, url)
 	return &sandboxCtrlRig{server: srv, reg: reg, sbID: sbID, client: client}
 }
+
+// TestDispatchReachesActiveStream drives Dispatch end-to-end: open
+// a RegisterSandbox stream, push a Dispatch on the server side,
+// receive the event over the wire, decode the spec.
+func TestDispatchReachesActiveStream(t *testing.T) {
+	rig := newSandboxCtrlRig(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	stream, err := rig.client.RegisterSandbox(ctx, connect.NewRequest(
+		&sandboxctrlv1.RegisterSandboxRequest{Version: "v0"},
+	))
+	if err != nil {
+		t.Fatalf("RegisterSandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+	if !stream.Receive() || stream.Msg().GetReady() == nil {
+		t.Fatalf("expected Ready, got err=%v", stream.Err())
+	}
+
+	// Wait briefly for the handler to install its sender; the
+	// Ready ack is sent before attachStream returns in the loop,
+	// so a direct Dispatch right after Receive may race.
+	want := &sandboxctrlv1.SandboxSpec{ImageRef: "alpine:3", WorkspaceUuid: "ws-1"}
+	if err := dispatchUntilReady(rig.server.SandboxControl(), rig.sbID.Fingerprint(), "d-1", want); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	if !stream.Receive() {
+		t.Fatalf("expected Dispatch, got err=%v", stream.Err())
+	}
+	d := stream.Msg().GetDispatch()
+	if d == nil {
+		t.Fatalf("event = %+v, want Dispatch", stream.Msg())
+	}
+	if d.GetDispatchId() != "d-1" {
+		t.Errorf("dispatch_id = %q, want d-1", d.GetDispatchId())
+	}
+	if d.GetSpec().GetImageRef() != "alpine:3" {
+		t.Errorf("image_ref = %q, want alpine:3", d.GetSpec().GetImageRef())
+	}
+}
+
+// dispatchUntilReady retries Dispatch for up to 1s while the
+// handler's attachStream call is still racing in. ErrSandboxNotConnected
+// is the only retryable error.
+func dispatchUntilReady(
+	h *SandboxControlHandler,
+	fp identity.Fingerprint,
+	id string,
+	spec *sandboxctrlv1.SandboxSpec,
+) error {
+	deadline := time.Now().Add(time.Second)
+	//daft:lint:disable=forloopbound reason="wall-clock bounded to 1s while the handler's attachStream goroutine races with the client's first Receive"
+	for time.Now().Before(deadline) {
+		err := h.Dispatch(fp, id, spec)
+		if !errors.Is(err, ErrSandboxNotConnected) {
+			return err
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return ErrSandboxNotConnected
+}
+
+// TestDispatchUnknownSandbox covers ErrSandboxNotConnected: no
+// stream was ever opened, so the handler has no sender to push to.
+func TestDispatchUnknownSandbox(t *testing.T) {
+	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+	if err != nil {
+		t.Fatalf("NewSandboxControlHandler: %v", err)
+	}
+	id := mustGenerate(t, identity.RoleSandboxHost)
+	err = h.Dispatch(id.Fingerprint(), "d-1", &sandboxctrlv1.SandboxSpec{})
+	if !errors.Is(err, ErrSandboxNotConnected) {
+		t.Errorf("err = %v, want ErrSandboxNotConnected", err)
+	}
+}
+
+// TestDispatchBacklogFull covers ErrDispatchBacklog: fill the
+// per-stream channel without anyone draining it, then push one
+// more. attachStream/detachStream are exercised directly so we
+// don't need a real client.
+func TestDispatchBacklogFull(t *testing.T) {
+	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+	if err != nil {
+		t.Fatalf("NewSandboxControlHandler: %v", err)
+	}
+	id := mustGenerate(t, identity.RoleSandboxHost)
+	fp := id.Fingerprint()
+	h.attachStream(fp)
+	t.Cleanup(func() { h.detachStream(fp) })
+
+	for range dispatchBacklog {
+		if err := h.Dispatch(fp, "x", &sandboxctrlv1.SandboxSpec{}); err != nil {
+			t.Fatalf("Dispatch (fill): %v", err)
+		}
+	}
+	if err := h.Dispatch(fp, "x", &sandboxctrlv1.SandboxSpec{}); !errors.Is(err, ErrDispatchBacklog) {
+		t.Errorf("err = %v, want ErrDispatchBacklog", err)
+	}
+}

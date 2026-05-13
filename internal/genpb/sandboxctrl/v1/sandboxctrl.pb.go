@@ -258,13 +258,13 @@ func (x *RegisterSandboxRequest) GetResources() *HostResources {
 }
 
 // RegisterEvent is the envelope for events pushed on the
-// RegisterSandbox stream. v1 only carries SubscriptionReady;
-// Slice A4 adds a Dispatch variant inside the same oneof.
+// RegisterSandbox stream.
 type RegisterEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Event:
 	//
 	//	*RegisterEvent_Ready
+	//	*RegisterEvent_Dispatch
 	Event         isRegisterEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -316,6 +316,15 @@ func (x *RegisterEvent) GetReady() *SubscriptionReady {
 	return nil
 }
 
+func (x *RegisterEvent) GetDispatch() *Dispatch {
+	if x != nil {
+		if x, ok := x.Event.(*RegisterEvent_Dispatch); ok {
+			return x.Dispatch
+		}
+	}
+	return nil
+}
+
 type isRegisterEvent_Event interface {
 	isRegisterEvent_Event()
 }
@@ -324,7 +333,70 @@ type RegisterEvent_Ready struct {
 	Ready *SubscriptionReady `protobuf:"bytes,1,opt,name=ready,proto3,oneof"`
 }
 
+type RegisterEvent_Dispatch struct {
+	Dispatch *Dispatch `protobuf:"bytes,2,opt,name=dispatch,proto3,oneof"`
+}
+
 func (*RegisterEvent_Ready) isRegisterEvent_Event() {}
+
+func (*RegisterEvent_Dispatch) isRegisterEvent_Event() {}
+
+// Dispatch hands a workload to the registered sandbox-host.
+// The dispatch_id is opaque to the wire — a future ACK RPC (B-phase)
+// will reference it so the orchestrator can correlate completion
+// signals back to the originating Dispatch. For A4 the sandboxd
+// executor only needs to handle the spec.
+type Dispatch struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DispatchId    string                 `protobuf:"bytes,1,opt,name=dispatch_id,json=dispatchId,proto3" json:"dispatch_id,omitempty"`
+	Spec          *SandboxSpec           `protobuf:"bytes,2,opt,name=spec,proto3" json:"spec,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Dispatch) Reset() {
+	*x = Dispatch{}
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Dispatch) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Dispatch) ProtoMessage() {}
+
+func (x *Dispatch) ProtoReflect() protoreflect.Message {
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Dispatch.ProtoReflect.Descriptor instead.
+func (*Dispatch) Descriptor() ([]byte, []int) {
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Dispatch) GetDispatchId() string {
+	if x != nil {
+		return x.DispatchId
+	}
+	return ""
+}
+
+func (x *Dispatch) GetSpec() *SandboxSpec {
+	if x != nil {
+		return x.Spec
+	}
+	return nil
+}
 
 // SubscriptionReady confirms the registration was recorded.
 // Sent once, as the first event on every RegisterSandbox stream.
@@ -339,7 +411,7 @@ type SubscriptionReady struct {
 
 func (x *SubscriptionReady) Reset() {
 	*x = SubscriptionReady{}
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[3]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -351,7 +423,7 @@ func (x *SubscriptionReady) String() string {
 func (*SubscriptionReady) ProtoMessage() {}
 
 func (x *SubscriptionReady) ProtoReflect() protoreflect.Message {
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[3]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -364,7 +436,7 @@ func (x *SubscriptionReady) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscriptionReady.ProtoReflect.Descriptor instead.
 func (*SubscriptionReady) Descriptor() ([]byte, []int) {
-	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{3}
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SubscriptionReady) GetAcceptedAt() *timestamppb.Timestamp {
@@ -385,7 +457,7 @@ type HeartbeatRequest struct {
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[4]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -397,7 +469,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[4]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -410,7 +482,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{4}
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *HeartbeatRequest) GetCurrent() *HostResources {
@@ -431,7 +503,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[5]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -443,7 +515,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[5]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -456,7 +528,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{5}
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *HeartbeatResponse) GetSeenAt() *timestamppb.Timestamp {
@@ -476,7 +548,7 @@ type ListSandboxesRequest struct {
 
 func (x *ListSandboxesRequest) Reset() {
 	*x = ListSandboxesRequest{}
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[6]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -488,7 +560,7 @@ func (x *ListSandboxesRequest) String() string {
 func (*ListSandboxesRequest) ProtoMessage() {}
 
 func (x *ListSandboxesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[6]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -501,7 +573,7 @@ func (x *ListSandboxesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSandboxesRequest.ProtoReflect.Descriptor instead.
 func (*ListSandboxesRequest) Descriptor() ([]byte, []int) {
-	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{6}
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{7}
 }
 
 // SandboxRegistration mirrors sandboxctrl.Entry on the wire.
@@ -524,7 +596,7 @@ type SandboxRegistration struct {
 
 func (x *SandboxRegistration) Reset() {
 	*x = SandboxRegistration{}
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[7]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -536,7 +608,7 @@ func (x *SandboxRegistration) String() string {
 func (*SandboxRegistration) ProtoMessage() {}
 
 func (x *SandboxRegistration) ProtoReflect() protoreflect.Message {
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[7]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -549,7 +621,7 @@ func (x *SandboxRegistration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxRegistration.ProtoReflect.Descriptor instead.
 func (*SandboxRegistration) Descriptor() ([]byte, []int) {
-	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{7}
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *SandboxRegistration) GetFingerprint() string {
@@ -596,7 +668,7 @@ type ListSandboxesResponse struct {
 
 func (x *ListSandboxesResponse) Reset() {
 	*x = ListSandboxesResponse{}
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[8]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -608,7 +680,7 @@ func (x *ListSandboxesResponse) String() string {
 func (*ListSandboxesResponse) ProtoMessage() {}
 
 func (x *ListSandboxesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[8]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -621,7 +693,7 @@ func (x *ListSandboxesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSandboxesResponse.ProtoReflect.Descriptor instead.
 func (*ListSandboxesResponse) Descriptor() ([]byte, []int) {
-	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{8}
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListSandboxesResponse) GetSandboxes() []*SandboxRegistration {
@@ -669,7 +741,7 @@ type SandboxSpec struct {
 
 func (x *SandboxSpec) Reset() {
 	*x = SandboxSpec{}
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[9]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -681,7 +753,7 @@ func (x *SandboxSpec) String() string {
 func (*SandboxSpec) ProtoMessage() {}
 
 func (x *SandboxSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[9]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -694,7 +766,7 @@ func (x *SandboxSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxSpec.ProtoReflect.Descriptor instead.
 func (*SandboxSpec) Descriptor() ([]byte, []int) {
-	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{9}
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *SandboxSpec) GetImageRef() string {
@@ -766,7 +838,7 @@ type Mount struct {
 
 func (x *Mount) Reset() {
 	*x = Mount{}
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[10]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -778,7 +850,7 @@ func (x *Mount) String() string {
 func (*Mount) ProtoMessage() {}
 
 func (x *Mount) ProtoReflect() protoreflect.Message {
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[10]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -791,7 +863,7 @@ func (x *Mount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Mount.ProtoReflect.Descriptor instead.
 func (*Mount) Descriptor() ([]byte, []int) {
-	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{10}
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *Mount) GetTarget() string {
@@ -828,7 +900,7 @@ type EnvVar struct {
 
 func (x *EnvVar) Reset() {
 	*x = EnvVar{}
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[11]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -840,7 +912,7 @@ func (x *EnvVar) String() string {
 func (*EnvVar) ProtoMessage() {}
 
 func (x *EnvVar) ProtoReflect() protoreflect.Message {
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[11]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -853,7 +925,7 @@ func (x *EnvVar) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvVar.ProtoReflect.Descriptor instead.
 func (*EnvVar) Descriptor() ([]byte, []int) {
-	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{11}
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *EnvVar) GetName() string {
@@ -887,7 +959,7 @@ type PortMapping struct {
 
 func (x *PortMapping) Reset() {
 	*x = PortMapping{}
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[12]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -899,7 +971,7 @@ func (x *PortMapping) String() string {
 func (*PortMapping) ProtoMessage() {}
 
 func (x *PortMapping) ProtoReflect() protoreflect.Message {
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[12]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -912,7 +984,7 @@ func (x *PortMapping) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortMapping.ProtoReflect.Descriptor instead.
 func (*PortMapping) Descriptor() ([]byte, []int) {
-	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{12}
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *PortMapping) GetContainerPort() uint32 {
@@ -944,7 +1016,7 @@ type GpuRequest struct {
 
 func (x *GpuRequest) Reset() {
 	*x = GpuRequest{}
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[13]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -956,7 +1028,7 @@ func (x *GpuRequest) String() string {
 func (*GpuRequest) ProtoMessage() {}
 
 func (x *GpuRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[13]
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -969,7 +1041,7 @@ func (x *GpuRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GpuRequest.ProtoReflect.Descriptor instead.
 func (*GpuRequest) Descriptor() ([]byte, []int) {
-	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{13}
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *GpuRequest) GetCount() uint32 {
@@ -996,10 +1068,15 @@ const file_sandboxctrl_v1_sandboxctrl_proto_rawDesc = "" +
 	"\fmemory_bytes\x18\x02 \x01(\x04R\vmemoryBytes\"t\n" +
 	"\x16RegisterSandboxRequest\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12@\n" +
-	"\tresources\x18\x02 \x01(\v2\".daft.sandboxctrl.v1.HostResourcesR\tresources\"X\n" +
+	"\tresources\x18\x02 \x01(\v2\".daft.sandboxctrl.v1.HostResourcesR\tresources\"\x95\x01\n" +
 	"\rRegisterEvent\x12>\n" +
-	"\x05ready\x18\x01 \x01(\v2&.daft.sandboxctrl.v1.SubscriptionReadyH\x00R\x05readyB\a\n" +
-	"\x05event\"P\n" +
+	"\x05ready\x18\x01 \x01(\v2&.daft.sandboxctrl.v1.SubscriptionReadyH\x00R\x05ready\x12;\n" +
+	"\bdispatch\x18\x02 \x01(\v2\x1d.daft.sandboxctrl.v1.DispatchH\x00R\bdispatchB\a\n" +
+	"\x05event\"a\n" +
+	"\bDispatch\x12\x1f\n" +
+	"\vdispatch_id\x18\x01 \x01(\tR\n" +
+	"dispatchId\x124\n" +
+	"\x04spec\x18\x02 \x01(\v2 .daft.sandboxctrl.v1.SandboxSpecR\x04spec\"P\n" +
 	"\x11SubscriptionReady\x12;\n" +
 	"\vaccepted_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"acceptedAt\"P\n" +
@@ -1066,53 +1143,56 @@ func file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP() []byte {
 }
 
 var file_sandboxctrl_v1_sandboxctrl_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_sandboxctrl_v1_sandboxctrl_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_sandboxctrl_v1_sandboxctrl_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_sandboxctrl_v1_sandboxctrl_proto_goTypes = []any{
 	(Protocol)(0),                  // 0: daft.sandboxctrl.v1.Protocol
 	(Isolation)(0),                 // 1: daft.sandboxctrl.v1.Isolation
 	(*HostResources)(nil),          // 2: daft.sandboxctrl.v1.HostResources
 	(*RegisterSandboxRequest)(nil), // 3: daft.sandboxctrl.v1.RegisterSandboxRequest
 	(*RegisterEvent)(nil),          // 4: daft.sandboxctrl.v1.RegisterEvent
-	(*SubscriptionReady)(nil),      // 5: daft.sandboxctrl.v1.SubscriptionReady
-	(*HeartbeatRequest)(nil),       // 6: daft.sandboxctrl.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),      // 7: daft.sandboxctrl.v1.HeartbeatResponse
-	(*ListSandboxesRequest)(nil),   // 8: daft.sandboxctrl.v1.ListSandboxesRequest
-	(*SandboxRegistration)(nil),    // 9: daft.sandboxctrl.v1.SandboxRegistration
-	(*ListSandboxesResponse)(nil),  // 10: daft.sandboxctrl.v1.ListSandboxesResponse
-	(*SandboxSpec)(nil),            // 11: daft.sandboxctrl.v1.SandboxSpec
-	(*Mount)(nil),                  // 12: daft.sandboxctrl.v1.Mount
-	(*EnvVar)(nil),                 // 13: daft.sandboxctrl.v1.EnvVar
-	(*PortMapping)(nil),            // 14: daft.sandboxctrl.v1.PortMapping
-	(*GpuRequest)(nil),             // 15: daft.sandboxctrl.v1.GpuRequest
-	(*timestamppb.Timestamp)(nil),  // 16: google.protobuf.Timestamp
+	(*Dispatch)(nil),               // 5: daft.sandboxctrl.v1.Dispatch
+	(*SubscriptionReady)(nil),      // 6: daft.sandboxctrl.v1.SubscriptionReady
+	(*HeartbeatRequest)(nil),       // 7: daft.sandboxctrl.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),      // 8: daft.sandboxctrl.v1.HeartbeatResponse
+	(*ListSandboxesRequest)(nil),   // 9: daft.sandboxctrl.v1.ListSandboxesRequest
+	(*SandboxRegistration)(nil),    // 10: daft.sandboxctrl.v1.SandboxRegistration
+	(*ListSandboxesResponse)(nil),  // 11: daft.sandboxctrl.v1.ListSandboxesResponse
+	(*SandboxSpec)(nil),            // 12: daft.sandboxctrl.v1.SandboxSpec
+	(*Mount)(nil),                  // 13: daft.sandboxctrl.v1.Mount
+	(*EnvVar)(nil),                 // 14: daft.sandboxctrl.v1.EnvVar
+	(*PortMapping)(nil),            // 15: daft.sandboxctrl.v1.PortMapping
+	(*GpuRequest)(nil),             // 16: daft.sandboxctrl.v1.GpuRequest
+	(*timestamppb.Timestamp)(nil),  // 17: google.protobuf.Timestamp
 }
 var file_sandboxctrl_v1_sandboxctrl_proto_depIdxs = []int32{
 	2,  // 0: daft.sandboxctrl.v1.RegisterSandboxRequest.resources:type_name -> daft.sandboxctrl.v1.HostResources
-	5,  // 1: daft.sandboxctrl.v1.RegisterEvent.ready:type_name -> daft.sandboxctrl.v1.SubscriptionReady
-	16, // 2: daft.sandboxctrl.v1.SubscriptionReady.accepted_at:type_name -> google.protobuf.Timestamp
-	2,  // 3: daft.sandboxctrl.v1.HeartbeatRequest.current:type_name -> daft.sandboxctrl.v1.HostResources
-	16, // 4: daft.sandboxctrl.v1.HeartbeatResponse.seen_at:type_name -> google.protobuf.Timestamp
-	2,  // 5: daft.sandboxctrl.v1.SandboxRegistration.resources:type_name -> daft.sandboxctrl.v1.HostResources
-	16, // 6: daft.sandboxctrl.v1.SandboxRegistration.registered_at:type_name -> google.protobuf.Timestamp
-	16, // 7: daft.sandboxctrl.v1.SandboxRegistration.last_seen_at:type_name -> google.protobuf.Timestamp
-	9,  // 8: daft.sandboxctrl.v1.ListSandboxesResponse.sandboxes:type_name -> daft.sandboxctrl.v1.SandboxRegistration
-	12, // 9: daft.sandboxctrl.v1.SandboxSpec.mounts:type_name -> daft.sandboxctrl.v1.Mount
-	13, // 10: daft.sandboxctrl.v1.SandboxSpec.env:type_name -> daft.sandboxctrl.v1.EnvVar
-	14, // 11: daft.sandboxctrl.v1.SandboxSpec.ports:type_name -> daft.sandboxctrl.v1.PortMapping
-	15, // 12: daft.sandboxctrl.v1.SandboxSpec.gpu_request:type_name -> daft.sandboxctrl.v1.GpuRequest
-	1,  // 13: daft.sandboxctrl.v1.SandboxSpec.isolation:type_name -> daft.sandboxctrl.v1.Isolation
-	0,  // 14: daft.sandboxctrl.v1.PortMapping.protocol:type_name -> daft.sandboxctrl.v1.Protocol
-	3,  // 15: daft.sandboxctrl.v1.SandboxControlService.RegisterSandbox:input_type -> daft.sandboxctrl.v1.RegisterSandboxRequest
-	6,  // 16: daft.sandboxctrl.v1.SandboxControlService.Heartbeat:input_type -> daft.sandboxctrl.v1.HeartbeatRequest
-	8,  // 17: daft.sandboxctrl.v1.SandboxControlService.ListSandboxes:input_type -> daft.sandboxctrl.v1.ListSandboxesRequest
-	4,  // 18: daft.sandboxctrl.v1.SandboxControlService.RegisterSandbox:output_type -> daft.sandboxctrl.v1.RegisterEvent
-	7,  // 19: daft.sandboxctrl.v1.SandboxControlService.Heartbeat:output_type -> daft.sandboxctrl.v1.HeartbeatResponse
-	10, // 20: daft.sandboxctrl.v1.SandboxControlService.ListSandboxes:output_type -> daft.sandboxctrl.v1.ListSandboxesResponse
-	18, // [18:21] is the sub-list for method output_type
-	15, // [15:18] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	6,  // 1: daft.sandboxctrl.v1.RegisterEvent.ready:type_name -> daft.sandboxctrl.v1.SubscriptionReady
+	5,  // 2: daft.sandboxctrl.v1.RegisterEvent.dispatch:type_name -> daft.sandboxctrl.v1.Dispatch
+	12, // 3: daft.sandboxctrl.v1.Dispatch.spec:type_name -> daft.sandboxctrl.v1.SandboxSpec
+	17, // 4: daft.sandboxctrl.v1.SubscriptionReady.accepted_at:type_name -> google.protobuf.Timestamp
+	2,  // 5: daft.sandboxctrl.v1.HeartbeatRequest.current:type_name -> daft.sandboxctrl.v1.HostResources
+	17, // 6: daft.sandboxctrl.v1.HeartbeatResponse.seen_at:type_name -> google.protobuf.Timestamp
+	2,  // 7: daft.sandboxctrl.v1.SandboxRegistration.resources:type_name -> daft.sandboxctrl.v1.HostResources
+	17, // 8: daft.sandboxctrl.v1.SandboxRegistration.registered_at:type_name -> google.protobuf.Timestamp
+	17, // 9: daft.sandboxctrl.v1.SandboxRegistration.last_seen_at:type_name -> google.protobuf.Timestamp
+	10, // 10: daft.sandboxctrl.v1.ListSandboxesResponse.sandboxes:type_name -> daft.sandboxctrl.v1.SandboxRegistration
+	13, // 11: daft.sandboxctrl.v1.SandboxSpec.mounts:type_name -> daft.sandboxctrl.v1.Mount
+	14, // 12: daft.sandboxctrl.v1.SandboxSpec.env:type_name -> daft.sandboxctrl.v1.EnvVar
+	15, // 13: daft.sandboxctrl.v1.SandboxSpec.ports:type_name -> daft.sandboxctrl.v1.PortMapping
+	16, // 14: daft.sandboxctrl.v1.SandboxSpec.gpu_request:type_name -> daft.sandboxctrl.v1.GpuRequest
+	1,  // 15: daft.sandboxctrl.v1.SandboxSpec.isolation:type_name -> daft.sandboxctrl.v1.Isolation
+	0,  // 16: daft.sandboxctrl.v1.PortMapping.protocol:type_name -> daft.sandboxctrl.v1.Protocol
+	3,  // 17: daft.sandboxctrl.v1.SandboxControlService.RegisterSandbox:input_type -> daft.sandboxctrl.v1.RegisterSandboxRequest
+	7,  // 18: daft.sandboxctrl.v1.SandboxControlService.Heartbeat:input_type -> daft.sandboxctrl.v1.HeartbeatRequest
+	9,  // 19: daft.sandboxctrl.v1.SandboxControlService.ListSandboxes:input_type -> daft.sandboxctrl.v1.ListSandboxesRequest
+	4,  // 20: daft.sandboxctrl.v1.SandboxControlService.RegisterSandbox:output_type -> daft.sandboxctrl.v1.RegisterEvent
+	8,  // 21: daft.sandboxctrl.v1.SandboxControlService.Heartbeat:output_type -> daft.sandboxctrl.v1.HeartbeatResponse
+	11, // 22: daft.sandboxctrl.v1.SandboxControlService.ListSandboxes:output_type -> daft.sandboxctrl.v1.ListSandboxesResponse
+	20, // [20:23] is the sub-list for method output_type
+	17, // [17:20] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_sandboxctrl_v1_sandboxctrl_proto_init() }
@@ -1122,6 +1202,7 @@ func file_sandboxctrl_v1_sandboxctrl_proto_init() {
 	}
 	file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[2].OneofWrappers = []any{
 		(*RegisterEvent_Ready)(nil),
+		(*RegisterEvent_Dispatch)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1129,7 +1210,7 @@ func file_sandboxctrl_v1_sandboxctrl_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sandboxctrl_v1_sandboxctrl_proto_rawDesc), len(file_sandboxctrl_v1_sandboxctrl_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -242,9 +242,17 @@ Phase A — **Sandboxd daemon mode**:
   executor yet — the proto is reserved for A4 to drive
   orchestrator → sandboxd workload handoff over the existing
   RegisterSandbox stream.
-- A4: Orchestrator → sandboxd `Dispatch(SandboxSpec)` over the
-  control stream. Sandboxd executor wraps the current `Hello`
-  pipeline but driven by the dispatched spec, not CLI flags.
+- A4a (landed): wire path for orchestrator → sandboxd dispatch.
+  `RegisterEvent` oneof gains a `Dispatch` variant carrying
+  `dispatch_id` + `SandboxSpec`. `SandboxControlHandler` now owns a
+  per-fingerprint event channel (bounded buffer), exposes
+  `Dispatch(fp, id, spec)`, and the RegisterSandbox stream goroutine
+  forwards the channel to `stream.Send`. Sandboxd-side: a
+  `DispatchHandler` seam on `sandboxctrlclient.Config` is invoked
+  per Dispatch event; handler errors tear the registration down.
+- A4b: sandboxd-side executor wraps the current `Hello` pipeline
+  but driven by the dispatched `SandboxSpec` (image_ref, mounts[],
+  workspace_uuid, …) instead of CLI flags.
 - A5: `daft-sandboxd run …` → `daft-sandboxd debug run …` with a
   deprecation banner. Keep for offline e2e.
 
@@ -1184,6 +1192,19 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
       orchestrator-allocated (workspace UUID or registered tag),
       not free-form host paths — adoption (Slice F1) is how
       user-host directories enter the namespace.
+- [x] Workflow reorientation Slice A4a — Dispatch wire path.
+      `RegisterEvent` oneof gains a `Dispatch` variant
+      (`dispatch_id` + `SandboxSpec`). Orchestrator-side handler
+      now owns a per-fingerprint bounded event channel and exposes
+      `SandboxControlHandler.Dispatch(fp, id, spec)`; the
+      `RegisterSandbox` goroutine is the sole `stream.Send` writer.
+      Sandboxd-side `sandboxctrlclient.Config` gains a
+      `DispatchHandler` seam — `consumeStream` invokes it on every
+      Dispatch event, and a non-nil error tears the registration
+      down. Defaults to nil (drop events silently), so the real
+      executor lands in A4b without churning the wire path again.
+      End-to-end tests cover delivery, handler error propagation,
+      ErrSandboxNotConnected, and ErrDispatchBacklog.
 
 ## Architecture
 

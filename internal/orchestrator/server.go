@@ -75,11 +75,12 @@ type Config struct {
 // TraceService.ReportSpans, BrokerService, SandboxControlService)
 // plus a /debug/traces dump endpoint.
 type Server struct {
-	inner      *mtls.Server
-	tracer     *trace.Tracer
-	reaper     *trace.IngressReaper
-	matcher    *workspacebroker.Matcher
-	sandboxReg *sandboxctrl.Registry
+	inner       *mtls.Server
+	tracer      *trace.Tracer
+	reaper      *trace.IngressReaper
+	matcher     *workspacebroker.Matcher
+	sandboxReg  *sandboxctrl.Registry
+	sandboxCtrl *SandboxControlHandler
 
 	reaperStart  sync.Once
 	reaperStop   sync.Once
@@ -95,6 +96,11 @@ func (s *Server) Matcher() *workspacebroker.Matcher { return s.matcher }
 // registry. Exposed for tests that want to assert registration
 // state directly, and (Slice A2) for ListSandboxes.
 func (s *Server) SandboxRegistry() *sandboxctrl.Registry { return s.sandboxReg }
+
+// SandboxControl returns the orchestrator's sandbox-control
+// handler. Exposed so operator tooling (and tests) can call
+// Dispatch on a live sandbox without a separate RPC client.
+func (s *Server) SandboxControl() *SandboxControlHandler { return s.sandboxCtrl }
 
 // New builds a Server with the provided config. Returns an error if
 // Config.Identity or Config.Peers is missing or if the TLS template
@@ -122,6 +128,10 @@ func New(cfg Config) (*Server, error) {
 	if sandboxReg == nil {
 		sandboxReg = sandboxctrl.NewRegistry(nil)
 	}
+	sandboxCtrl, scErr := NewSandboxControlHandler(sandboxReg)
+	if scErr != nil {
+		return nil, scErr
+	}
 	// The broker handler needs the orchestrator's bound address
 	// to return as the relay endpoint, but the listener doesn't
 	// bind until Listen(). Close over a late-bound *mtls.Server
@@ -133,7 +143,7 @@ func New(cfg Config) (*Server, error) {
 		}
 		return inner.Addr()
 	}
-	if err := registerServices(mux, interceptor, tracer, matcher, sandboxReg, getRelayEndpoint); err != nil {
+	if err := registerServices(mux, interceptor, tracer, matcher, sandboxCtrl, getRelayEndpoint); err != nil {
 		return nil, err
 	}
 	handler := withPeerMiddleware(mux)
@@ -154,11 +164,12 @@ func New(cfg Config) (*Server, error) {
 		reaper = trace.NewIngressReaper(tracer, component.Orchestrator)
 	}
 	return &Server{
-		inner:      inner,
-		tracer:     tracer,
-		reaper:     reaper,
-		matcher:    matcher,
-		sandboxReg: sandboxReg,
+		inner:       inner,
+		tracer:      tracer,
+		reaper:      reaper,
+		matcher:     matcher,
+		sandboxReg:  sandboxReg,
+		sandboxCtrl: sandboxCtrl,
 	}, nil
 }
 
@@ -170,7 +181,7 @@ func registerServices(
 	interceptor connect.HandlerOption,
 	tracer *trace.Tracer,
 	matcher *workspacebroker.Matcher,
-	sandboxReg *sandboxctrl.Registry,
+	sandboxCtrl *SandboxControlHandler,
 	relayEndpointFn func() string,
 ) error {
 	healthPath, healthHandler := healthv1connect.NewHealthServiceHandler(
@@ -197,12 +208,8 @@ func registerServices(
 	)
 	mux.Handle(brokerPath, brokerConnectHandler)
 
-	sandboxCtrlHandler, err := NewSandboxControlHandler(sandboxReg)
-	if err != nil {
-		return err
-	}
 	sandboxCtrlPath, sandboxCtrlConnectHandler := sandboxctrlv1connect.NewSandboxControlServiceHandler(
-		sandboxCtrlHandler, interceptor,
+		sandboxCtrl, interceptor,
 	)
 	mux.Handle(sandboxCtrlPath, sandboxCtrlConnectHandler)
 	return nil
