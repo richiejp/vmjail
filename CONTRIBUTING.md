@@ -360,27 +360,46 @@ its weight.
 ### Use runtime assertions liberally
 
 If a comment claims something to be true (e.g. "x is always non-nil here",
-"the slice is sorted by this point"), assert it at runtime where reasonable.
-Assertions are documentation that breaks loudly when violated, and they pay
-for themselves the first time they catch a bug that a static type couldn't.
+"the slice is sorted by this point"), assert it at runtime. Assertions are
+documentation that breaks loudly when violated, and they pay for themselves
+the first time they catch a bug that a static type couldn't.
+
+Use `internal/assert` rather than bare `panic` — assertions go through the
+project's vocabulary so they're greppable, formatted consistently, and
+covered by the `assertpure` analyzer (see "Power of 10 (Go)" below).
 
 ```go
+import "github.com/richiejp/darkaifactory/internal/assert"
+
 // Caller guarantees nodes is non-empty and sorted ascending by ID.
 func process(nodes []Node) {
-    if len(nodes) == 0 {
-        panic("process: nodes must be non-empty")
-    }
+    assert.True(len(nodes) > 0, "process: nodes must be non-empty")
     for i := 1; i < len(nodes); i++ {
-        if nodes[i-1].ID > nodes[i].ID {
-            panic("process: nodes must be sorted ascending by ID")
-        }
+        assert.True(nodes[i-1].ID <= nodes[i].ID,
+            "process: nodes must be sorted ascending by ID")
     }
     // ... real work ...
 }
 ```
 
-For invariants in hot loops where panics are too expensive, hide them behind
-a build tag or debug flag — but the default position is "assert it."
+The argument to `assert.True` / `assert.NoErr` must be side-effect free —
+no function calls — so assertions could in principle be compiled out
+without changing observed behaviour. Compute the value first, assert on the
+named local:
+
+```go
+// Bad — analyzer flags this:
+assert.True(node.Children() > 0, "...")
+
+// Good:
+n := node.Children()
+assert.True(n > 0, "...")
+```
+
+For invariants in hot loops where the assert cost is itself measurable,
+keep the check but factor the body so the assert is the cheap part of the
+iteration. We don't have a debug-build escape hatch — the default position
+is "assert it always."
 
 ### Handle every error
 
@@ -431,6 +450,95 @@ The lint surface itself is monotonic: linters get added, never
 removed. If a linter produces too many false positives to be
 useful, configure it tighter or scope it to specific paths in
 `.golangci.yml` — but don't disable it wholesale.
+
+### Power of 10 (Go)
+
+We adopt a Go-shaped subset of Holzmann's "Power of Ten: Rules for
+Developing Safety-Critical Code" (JPL, 2006). The rationale is the
+same as theirs: when a sandbox is the security boundary between
+untrusted AI agents and the user's data, "we'll harden it later" is
+not survivable. The full original ten rules target C; this section
+documents the subset we adopt, the static check that enforces each,
+and the rules we deliberately dropped because we could not
+mechanically enforce them in Go.
+
+**Every adopted rule has a static check.** If a proposed rule has
+no analyzer, it doesn't ship — review-only "rules" do not survive
+contact with deadlines. The custom analyzers live under
+`internal/lint/analyzers/`, are bundled into `cmd/daft-lint`, and
+are run by `make lint` after `golangci-lint`.
+
+#### Adopted rules
+
+| # | Rule (Go form) | Enforcement |
+|---|---|---|
+| 1a | No `goto` | `nogoto` analyzer |
+| 1b | No `panic(` outside allowlisted packages (`internal/assert`, `internal/oops`) | `forbidigo` |
+| 1c | No `recover()` outside allowlisted call sites | `forbidigo` + allowlist |
+| 1d | No `unsafe.*` | `forbidigo` + `gosec` G103 |
+| 1e | No `//go:linkname` | `nolinkname` analyzer |
+| 1f | No recursion in our packages | `norecursion` analyzer (call-graph SCCs) |
+| 2 | `for {}` loops require a `//daft:unbounded reason="…"` annotation | `forloopbound` analyzer |
+| 3a | Channel buffer sizes must be a typed constant or unbuffered | `chanconst` analyzer |
+| 3b | HTTP request bodies must be wrapped in `http.MaxBytesReader` before being read | `maxbytes` analyzer |
+| 4 | Function length cap | `funlen` (existing config; cap unchanged) |
+| 5 | `internal/assert` exists; assertion arguments are side-effect free and non-trivial | `assertpure` analyzer |
+| 6 | No package-level mutable `var` (sentinel errors + compile-time interface checks excepted) | `gochecknoglobals` |
+| 7 | Errors are not silently discarded | `errcheck` + `internal/oops` (existing) |
+| 8 | `//go:build` tags drawn from a closed catalog (`linux`, `darwin`, `integration`) | `tagcatalog` analyzer |
+| 9 | No `**T` types | `nodoubleptr` analyzer |
+| 10 | Max compiler/lint warnings; static analysis surface monotonically tightens | existing policy |
+
+#### Rules we deliberately dropped
+
+- Rule 3 in its broad C form ("no dynamic memory after init"). Go's
+  GC makes the literal rule meaningless; the *spirit* (bounded
+  inputs) is preserved by the two narrow checks 3a/3b above. Wider
+  "no unbounded `append` from untrusted input" stays a review
+  concern — there is no honest static check for it.
+- Rule 5's "two assertions per function" density target. We adopt
+  the *vocabulary* (`internal/assert`) and the *purity check*
+  (`assertpure`); a per-function count would be density theatre.
+- Rule 7's "validate every parameter" half. We have the tool
+  (`internal/assert`); whether you use it in any given function is
+  judgement, caught at review.
+- Rule 9's "no function pointers" / one-level-deref limit. Go's
+  interface dispatch and closures are the language's main
+  abstraction tool; banning them is not viable. We keep the
+  `**T` ban (`nodoubleptr`) as the one piece that translates.
+
+#### Escape-hatch convention
+
+Every analyzer that flags a pattern accepts the same suppression
+directive on the offending line or the line immediately above:
+
+```go
+//daft:lint:disable=norecursion reason="protobuf decoder, depth-capped by Validate above"
+func decode(b []byte) (*Msg, error) { ... }
+```
+
+- Multiple analyzers in one disable: `disable=A,B`.
+- `reason="…"` is mandatory and must be non-empty — the
+  `lintreasons` analyzer fails the build otherwise.
+- Suppressions are reviewable artefacts: every PR with a new
+  `//daft:lint:disable=` line gets the reason examined.
+
+`//nolint:…` (the golangci-lint form) is still allowed for the
+linters it controls, with the same one-line-comment justification
+rule from "Static analysis is not optional." The two prefixes
+coexist: `daft:lint:` for our custom analyzers, `nolint:` for
+upstream linters.
+
+#### Where it lives
+
+- `internal/assert/` — the assertion vocabulary.
+- `internal/lint/analyzers/<name>/` — custom analyzers, one
+  package each.
+- `cmd/daft-lint/` — the multichecker binary that bundles them.
+- `make lint` runs `golangci-lint` and then `daft-lint`.
+
+New analyzers ship with `analysistest`-driven unit tests; see
+existing analyzer dirs for the pattern.
 
 ## Pull request expectations
 

@@ -81,6 +81,286 @@ Out of Scope:
 - Project layout: ../behtree
 - Project layout 2: ../VoxInput
 
+## Direction (2026-05-12) — workflows and reorientation
+
+The Project goal (above) is the *what*; this section is the *how* —
+two concrete workflows that drive every product decision. Existing
+primitives (broker, daft-fuse, overlayfs, mTLS, registry, CAS,
+FastCDC, tracing) stay. The control surface above them changes
+shape: sandboxd becomes a daemon, the orchestrator owns workspace
+state, and the client drives everything from the user-host.
+
+### Two reference workflows
+
+Both are described from the **client on the user-host**. The
+orchestrator and sandboxd daemons run on their own schedule and
+authenticate separately — the user never has to set them up to use
+them, only the client.
+
+**CPU workflow (1 VM per workspace).** A git repo for a web app
+on the user's laptop. They want claude-code + the dev server in the
+same VM, the dev server reachable in a browser.
+
+```sh
+cd ~/src/myapp
+daft workspace create                    # default name = basename(pwd)
+daft workspace target <sandbox-host>     # CPU; one VM per workspace
+daft workspace image ghcr.io/me/claude-dev:latest
+daft workspace mount add ~/.config/git --readonly
+daft workspace mount add ~/.claude       --readonly
+daft workspace mount add .                # cwd, default rw push+pull
+daft workspace env add GH_TOKEN --from-env
+daft workspace env add NODE_ENV=development
+daft workspace port add 3000 --tls --listen orchestrator,user-host
+daft workspace launch \
+    --terminal --forward-ports --stream-files
+# attached; ^C stops the VM (unless --detach)
+```
+
+Inside the VM: claude-code is the container PID 1 (or the entrypoint
+the image declares), it runs `npm run dev`. The user views the app
+at `https://<workspace>.<orchestrator>/` or `https://localhost:3000`
+(forwarded). Files in `.` stream on first read; writes land in the
+overlay; the user explicitly `daft workspace pull` to surface them
+back.
+
+**GPU workflow (N workspaces share one VM).** A GPU-bound workload —
+fine-tune, batch inference, training. The orchestrator co-locates
+workspaces on a single GPU-bound VM as sibling containers so VM-boot
+and model-load costs amortize across jobs.
+
+```sh
+daft workspace create
+daft workspace target <sandbox-host> --gpu rtx-4090
+daft workspace image ghcr.io/me/trainer:latest
+daft workspace mount add .
+daft workspace launch --terminal
+```
+
+Default `--isolation shared` on `--gpu …`; `--isolation strict`
+forces 1:1 (full VM-per-task, slow first boot, no sibling exposure).
+The GPU-bound VM survives idle for $TTL between workspaces.
+
+### Architectural implications
+
+1. **Sandboxd is a daemon.** `daft-sandboxd serve --orchestrator
+   <url>` opens a persistent outbound control channel (reusing the
+   broker's outbound-mTLS plumbing), authenticates once, advertises
+   its resources (cores, RAM, GPUs by BDF, image cache size, CAS
+   size), and waits for work. The orchestrator pushes `RunSandbox`,
+   `RunContainer`, `Freeze`, `Thaw`, `Stop` over the control
+   channel. No workspaces, images, or paths on the sandboxd CLI.
+   The current `daft-sandboxd run …` form survives as
+   `daft-sandboxd debug run` for one-shot local testing.
+
+2. **Orchestrator owns workspace state.** A `Workspace` is a
+   persistent first-class object stored on the orchestrator: name,
+   UUID, owner fingerprint, mounts[], env_vars[], image_ref or
+   pending-build, ports[], target_sandbox_host, gpu_request,
+   isolation, lock_owner_fp, lock_expires_at, status. Clients
+   mutate it incrementally via `WorkspaceService.*`. The
+   sandbox-host receives a one-shot `SandboxSpec` derived from
+   workspace state at launch time; it stores nothing across runs.
+
+3. **Client-driven incremental assembly.** Each `daft workspace …`
+   command returns the workspace's current readiness state
+   (`status`, `missing[]`) so the user sees what's left before
+   `launch` will accept the workspace. `launch` refuses when
+   `missing[]` is non-empty, with an instructive message naming
+   each gap. Sensible defaults (cwd as a mount, `~/.config/git`
+   and `~/.claude` offered with `--with-dev-defaults`, workspace
+   name = `basename($PWD)`) keep the common path one command.
+
+4. **Port forwarding through the orchestrator.** Containers expose
+   ports back over the existing broker channel. The orchestrator
+   can:
+   - serve them on its own LAN/VPN interface under
+     `https://<workspace>.<orchestrator>/`, optionally terminating
+     TLS with an auto-issued cert (so the workspace dev server
+     doesn't need TLS at all),
+   - tunnel them to a localhost listener on the user-host
+     (`--forward-ports`).
+   No direct sandbox-host network exposure required; mTLS continues
+   to terminate at the orchestrator on the control side, and the
+   port-forward tunnels run inside that mTLS.
+
+5. **Workspace adoption.** A workspace is launched from one
+   user-host but isn't bound to it once data has synced. Any
+   user-host approved by the orchestrator can:
+   ```sh
+   daft workspace adopt <name-or-uuid>
+   # CLI walks each mount, prompts for a local mapping or --skip
+   daft workspace mount remap </src/a> </local/a>
+   daft workspace mount flag </local/a> --pull-only
+   ```
+   Per-user-host overrides (skip / pull-only / push-only / remap)
+   live alongside the global workspace spec; the global spec is
+   the source of truth for "what's mounted into the VM".
+
+6. **Workspace locks.** State mutations and pushes require a write
+   lock, held by one client at a time. `daft workspace lock` and
+   `--force` are explicit. Locks auto-release on heartbeat timeout
+   (default 60 s after the client's control channel drops).
+
+7. **Freeze-on-disconnect.** With `--stream-files`, daft-fuse
+   reaches the user-host (over the broker) on chunk misses. If the
+   user-host control channel disconnects and a chunk miss happens
+   on the sandbox-host, the controller QMP `stop`s the VM; on
+   reconnect the VM thaws and the read resumes. The
+   already-scoped Slice 4c is the policy-driven half of this; the
+   disconnect-triggered half is Phase G below.
+
+8. **Dockerfile build in VM (Ayup-style).** If the workspace
+   declares a Dockerfile instead of an image ref, the
+   orchestrator schedules a transient buildkit-VM on a
+   sandbox-host (taking the Dockerfile context as a workspace),
+   pushes the resulting image into the orchestrator's embedded
+   registry, and rewrites the workspace's `image` field. No
+   host-side docker required.
+
+### Slice plan
+
+Phase A — **Sandboxd daemon mode**:
+- A1: `daft-sandboxd serve --orchestrator <url>` opens an
+  outbound mTLS control channel (reusing `brokerclient`),
+  issues `SandboxControlService.RegisterSandbox` with resource
+  advertisement, sends heartbeats.
+- A2: Orchestrator-side `SandboxControlService`: tracks
+  registrations (in-memory v1; persistence in B5), exposes
+  `ListSandboxes` to the client.
+- A3: `SandboxSpec` proto (image, mounts[], env[], ports[],
+  gpu_request, isolation, workspace_uuid).
+- A4: Orchestrator → sandboxd `Dispatch(SandboxSpec)` over the
+  control stream. Sandboxd executor wraps the current `Hello`
+  pipeline but driven by the dispatched spec, not CLI flags.
+- A5: `daft-sandboxd run …` → `daft-sandboxd debug run …` with a
+  deprecation banner. Keep for offline e2e.
+
+Phase B — **Workspace as a first-class orchestrator object**:
+- B1: `Workspace` proto + orchestrator-side store (in-memory
+  v1).
+- B2: `WorkspaceService`: Create, AddMount, RemoveMount,
+  RemapMount, FlagMount, AddEnv, RemoveEnv, SetImage,
+  AddPort, RemovePort, SetTarget, Validate, Launch, Stop,
+  Lock, Unlock, Adopt, Status, List.
+- B3: Client CLI surface — `daft workspace <create|mount|env|
+  image|port|target|status|launch|stop|adopt|list>`. Each
+  subcommand has `--with-dev-defaults` where it makes sense.
+- B4: Workspace state machine: Draft → Ready → Running →
+  Frozen → Stopped → Archived. `status` is one cobra subcommand
+  showing both state and `missing[]`.
+- B5: Persistence: BoltDB or JSON-on-disk for workspace +
+  sandbox registrations (orchestrator side).
+
+Phase C — **Orchestrator-driven port ingress**:
+- C1: Sandbox-side: container `0.0.0.0:N` exposed back over the
+  broker as a labeled stream (`workspace=<uuid>, port=N`).
+- C2: Orchestrator side: per-workspace HTTP/HTTPS listener (or
+  subpath under one wildcard) that byte-relays into the
+  sandbox-side stream. TLS termination on the orchestrator with
+  an auto-issued cert; backend stays plaintext over the
+  outer-mTLS broker channel.
+- C3: User-host `--forward-ports`: opens localhost listeners
+  that tunnel through the orchestrator to the same sandbox
+  stream.
+- C4: Allowlist of egress destinations per workspace (the
+  "shadow services" hook): outbound from the container is
+  intercepted at the controller and either forwarded
+  upstream or routed back to the orchestrator for inspection.
+
+Phase D — **GPU mode + multi-container VMs**:
+- D1: Sandboxd resource advertisement: GPU BDFs + VRAM, current
+  utilisation; orchestrator scheduler.
+- D2: daft-agent multi-container: a vsock control stream from
+  the controller; agent accepts `RunContainer(spec)` /
+  `StopContainer(id)`, runs N crun children, isolates each by
+  user-namespace subuid range and a per-container subpath of
+  `/workspace`.
+- D3: GPU-bound VM lifecycle: orchestrator keeps the VM up
+  while ≥1 workspace targets it; stops it when idle for $TTL
+  (default 10 min) or on operator command.
+- D4: `--isolation strict` opt-out from sharing — 1 VM per
+  workspace even with `--gpu`. Same control surface as CPU
+  mode.
+
+Phase E — **Dockerfile build in VM (Ayup-style)**:
+- E1: `daft workspace image --dockerfile <path>` packages
+  build context as a transient workspace; workspace image is
+  set to `pending-build:<uuid>`.
+- E2: Orchestrator schedules a buildkit-VM on a sandbox-host
+  with that workspace mounted as the build context.
+- E3: Build pushes into the orchestrator registry; orchestrator
+  flips the workspace's `image` field to the new digest;
+  workspace becomes launchable.
+- E4: Build caching: orchestrator-side buildkit cache stored
+  in the CAS layer.
+
+Phase F — **Adoption + locks**:
+- F1: `daft workspace adopt <name-or-uuid>` walks the spec,
+  prompts for each mount's local mapping or `--skip`.
+- F2: Per-user-host mount overrides (skip / pull-only /
+  push-only / remap), persisted client-side under the
+  orchestrator's identity.
+- F3: Lock service: `Acquire`, `Release`, `--force` (with an
+  audit-log entry on the orchestrator), auto-release on
+  heartbeat timeout.
+
+Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
+- G1: Wire daft-fuse `Freeze` decision to QMP `stop` (the
+  current Slice 4c).
+- G2: Disconnect detection on the user-host's control channel
+  promotes daft-fuse policy from "Allow" to "Freeze" on the
+  active workspace until the channel reconnects. EAGAIN ceases
+  to be a user-visible symptom — the VM stops instead of
+  serving stale errors.
+- G3: Thaw protocol: when the control channel reconnects,
+  orchestrator sends `Thaw(workspace=<uuid>)` to the
+  controller, which `cont`s the VM via QMP.
+
+### What survives, what moves
+
+- **Survives**: broker (relay), daft-fuse, overlayfs, mTLS
+  identity, registry, CAS, manifest format, FastCDC, tracing,
+  image bundle refcount, privilege model, microVM stack.
+- **Moves**: workspace metadata (sandbox-host → orchestrator);
+  invocation control (sandbox-host CLI → orchestrator dispatch);
+  port exposure (none → orchestrator ingress); image build
+  (none → buildkit-VM); freeze trigger (policy-only →
+  policy-or-disconnect).
+- **Deprecated** (kept as `debug` for e2e): `daft-sandboxd run`,
+  `daft-sandboxd workspace serve`, the `--workspace-from` /
+  `--workspace-broker` / `--workspace-attach` /
+  `--workspace-overlay` / `--keep-workspace` flag set. Replaced
+  by orchestrator dispatch driving the same code paths.
+
+### Open questions for this re-orientation
+
+- **Workspace identity across hosts**: use `<owner-fp>/<name>`
+  everywhere, or mint a UUID at create time and let names be
+  per-user-host aliases? UUID seems necessary once adoption is
+  real — `name` collisions across owners are inevitable.
+- **Dispatch granularity**: SandboxSpec as a one-shot RPC vs a
+  continuously-mutable workspace state mirrored to the sandbox?
+  Lean one-shot for v1; mutations re-dispatch.
+- **Port allocation**: per-workspace subpath under one shared
+  TLS vhost, or per-workspace hostname with a wildcard cert?
+  Subpaths simpler for v1; hostnames needed once apps care
+  about their `Origin` / cookies.
+- **Lock semantics on adopt**: does adopt take the lock
+  automatically, or require an explicit lock? Probably explicit
+  + warn if the previous owner is still alive.
+- **GPU isolation within a shared VM**: NVIDIA driver fairness
+  is FIFO; do we expose a queue or rely on cgroups + per-uid
+  scheduling? Defer to D2.
+- **Dockerfile build escape hatch**: if no sandbox-host is
+  free, do we build on the user-host with their docker? Probably
+  not — keeps the "everything reproducible inside daft" story.
+- **dev-defaults set**: `~/.config/git`, `~/.claude`,
+  `~/.ssh` (read-only), `~/.gitconfig`, and an env-var subset
+  (`GH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) — what
+  goes in, what doesn't? Conservative default + `--with-dev-
+  defaults` opt-in; explicit catalog in CONTRIBUTING.
+
 ## Status
 
 - [x] Repository skeleton (Go layout, Nix flake, direnv, git hooks)
@@ -761,6 +1041,59 @@ Out of Scope:
       - Bundle `fusermount` setuid binary into
         daft-sandboxd's Nix closure (decision: yes, to stay
         self-contained per project ethos).
+- [/] Power of 10 (Go) — Holzmann's safety-critical-code rules,
+      translated to Go and enforced by custom analyzers (review-only
+      "rules" don't survive contact with deadlines; every adopted
+      rule has a static check). See CONTRIBUTING.md "Power of 10
+      (Go)" for the full rule list + escape-hatch convention.
+
+      Why now: the sandbox is the security boundary between
+      untrusted AI agents and the user's data — "we'll harden it
+      later" doesn't survive. Static enforcement is cheaper than
+      audits.
+
+      **Program of work** (5 slices):
+      - **Slice 1 — foundation** (in progress): `internal/assert`
+        package (`True` / `NoErr`); `internal/lint/analyzers/`
+        scaffolding; `cmd/daft-lint` multichecker binary wired
+        into `make lint`; first two analyzers — `assertpure`
+        (`assert.*` first arg must be side-effect free and
+        non-trivial) and `lintreasons` (every
+        `//daft:lint:disable=…` line must carry a non-empty
+        `reason="…"`). Adopts Rule 5 (in its purity-checked form)
+        and the escape-hatch convention used by every later
+        slice.
+      - **Slice 2 — keyword/pattern bans**: `nogoto`,
+        `nolinkname`, `nodoubleptr` custom analyzers;
+        `forbidigo` configured to ban `panic(` outside
+        `internal/assert`+`internal/oops`, `recover(` outside an
+        explicit allowlist, `unsafe.*` everywhere; enable
+        `gochecknoglobals` with an allowlist for sentinel
+        errors and compile-time interface checks. Adopts
+        rules 1a/1b/1c/1d/1e, 6, 9.
+      - **Slice 3 — bounded-input checks**: `chanconst` (channel
+        buffer sizes must be a typed constant or unbuffered) +
+        `maxbytes` (`io.ReadAll` on `http.Request.Body` must be
+        preceded by `http.MaxBytesReader`). Adopts rule 3 in its
+        Go-shaped form.
+      - **Slice 4 — annotation-driven checks**: `forloopbound`
+        (`for {}` must carry `//daft:unbounded reason="…"`) +
+        `tagcatalog` (`//go:build` tag identifiers drawn from a
+        closed allowlist). Adopts rules 2 and 8.
+      - **Slice 5 — call-graph analyzer**: `norecursion` flags
+        SCCs of size > 1 in our packages, using
+        `golang.org/x/tools/go/callgraph/cha`. Separate slice
+        because it pulls in the call-graph dep and has the
+        highest implementation risk. Adopts rule 1f.
+
+      *Out of scope.*
+      - "Two assertions per function" density target — density
+        theatre without a useful signal.
+      - "No function pointers" / one-level-deref limit — Go's
+        interface dispatch and closures are the main abstraction
+        tool; banning them is not viable.
+      - Broad "no unbounded `append` from untrusted input" — no
+        honest static check; stays a review concern.
 
 ## Architecture
 
@@ -1058,12 +1391,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
   for SSH-style trust but is awkward for a fleet of sandbox-hosts. When
   do we promote the orchestrator to a CA and stop bothering the user
   for every new host?
-- **Workspace sync UX**: do we want a `daft push` / `daft pull` model
-  (explicit, diff-visible, matches the "user controls when data moves"
-  principle) or live virtiofs streaming with a "freeze on suspicious IO"
-  hook (faster iteration, but the user trusts the policy engine to
-  catch exfil)? PLAN.md currently assumes the explicit model — revisit
-  when we have a real workload.
+- **Workspace sync UX**: ~~push/pull vs streaming~~ resolved by the
+  2026-05-12 direction — both are offered. Streaming via `--stream-files`
+  (daft-fuse over the broker, freeze-on-disconnect via Phase G);
+  explicit push/pull via `daft workspace push|pull` for the deterministic
+  path. The user picks per workspace.
 - **virtiofsd static-musl**: ~~missing libc symbol references~~ Done.
   Switched to `pkgsStatic.rustPlatform.buildRustPackage` with
   `LIBCAPNG_LINK_TYPE=static` + `pkgsStatic.libcap_ng`. virtiofsd is

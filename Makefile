@@ -1,4 +1,4 @@
-.PHONY: all check verify fmt check-fmt lint test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator integration integration-build proto clean help
+.PHONY: all check verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator integration integration-build proto clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -64,9 +64,26 @@ check-fmt:
 	@echo "All files formatted correctly"
 
 ## Linting -------------------------------------------------------------------
+#
+# Two-stage: upstream golangci-lint first (broad coverage, well-known
+# rules), then our own daft-lint binary (custom analyzers under
+# internal/lint/analyzers/, bundled by cmd/daft-lint). The order is
+# load-bearing — golangci-lint's diagnostics overlap with parts of
+# what our custom analyzers check, so running it first surfaces the
+# generic-named issues with the more recognisable tool. See
+# CONTRIBUTING.md "Power of 10 (Go)" for the per-analyzer policy.
 
-lint:
+lint: lint-golangci lint-daft
+
+lint-golangci:
 	golangci-lint run $(OUR_GO_PKGS)
+
+# daft-lint is `go run`-invoked rather than pre-built; the cost is
+# trivial (under a second) and the alternative would require a
+# build-then-run dance that desyncs from go.mod whenever the
+# analyzer package changes.
+lint-daft:
+	@go run ./cmd/daft-lint $(OUR_GO_PKGS)
 
 ## Testing ------------------------------------------------------------------
 

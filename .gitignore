@@ -34,3 +34,6 @@
 .DS_Store
 *.swp
 *.swo
+
+# Claude Code session/runtime state.
+/.claude/
