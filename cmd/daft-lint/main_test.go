@@ -26,7 +26,13 @@ func TestMainWiring(t *testing.T) {
 	if len(seen) != len(analyzers) {
 		t.Fatalf("checkerMain saw %d analyzers, want %d", len(seen), len(analyzers))
 	}
-	wantNames := map[string]bool{"assertpure": true, "lintreasons": true}
+	wantNames := map[string]bool{
+		"assertpure":  true,
+		"lintreasons": true,
+		"nogoto":      true,
+		"nolinkname":  true,
+		"nodoubleptr": true,
+	}
 	for _, a := range seen {
 		if !wantNames[a.Name] {
 			t.Errorf("unexpected analyzer %q in bundle", a.Name)

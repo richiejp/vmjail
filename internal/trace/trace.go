@@ -657,6 +657,7 @@ func randHex(n int) string {
 		// crypto/rand.Read on Linux is documented infallible.
 		// If it ever does fail we'd rather see a loud panic than
 		// emit duplicate IDs and silently break the trace tree.
+		//nolint:forbidigo // unrecoverable: duplicate trace IDs would break the trace tree silently; loud fail is the only sane response.
 		panic(fmt.Sprintf("trace: rand.Read: %v", err))
 	}
 	return hex.EncodeToString(buf)

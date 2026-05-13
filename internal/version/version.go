@@ -11,4 +11,6 @@ package version
 
 // Version is the semantic version of the daft binary. Overridden at build
 // time via -ldflags. The default "dev" indicates an unversioned local build.
+//
+//nolint:gochecknoglobals // ldflags-set build identity, conventional Go pattern.
 var Version = "dev"

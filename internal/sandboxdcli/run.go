@@ -157,6 +157,8 @@ type storeAPI interface {
 // newRunCmd's RunE. Hoisted to a var so tests can swap it for a
 // canned set of fakes and exercise the full cobra → runRun wiring
 // without spinning up an image registry.
+//
+//nolint:gochecknoglobals // test-hook indirection for the cobra wiring; swapped only in tests.
 var defaultRunDepsFn = defaultRunDeps
 
 func defaultRunDeps() runDeps {

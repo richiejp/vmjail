@@ -62,6 +62,7 @@ func run(pass *analysis.Pass) (any, error) {
 	if !ok {
 		// inspect.Analyzer is in Requires; if its result isn't an
 		// *inspector.Inspector the framework is broken, not us.
+		//nolint:forbidigo // x/tools/go/analysis framework invariant violation; the analyzer pipeline is broken if we reach here.
 		panic("assertpure: inspect.Analyzer result has wrong type")
 	}
 	sup := suppress.New(pass)

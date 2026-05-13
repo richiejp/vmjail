@@ -29,8 +29,11 @@ import (
 // runners and shell pipelines treat it the same way.
 const FatalExitCode = 2
 
+// Package-level singletons backing SetSink/SetExitFn so the process
+// has exactly one log destination and one exit hook.
+//
+//nolint:gochecknoglobals // intentional package singleton; mutated only by SetSink/SetExitFn under mu.
 var (
-	// Mu guards Sink + ExitFn so tests can swap them safely.
 	mu     sync.Mutex
 	sink   io.Writer = os.Stderr
 	exitFn           = os.Exit

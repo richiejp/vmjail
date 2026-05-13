@@ -20,6 +20,8 @@ const vmaddrCIDHost = 2
 // vsockDialer is the indirection that lets tests substitute an
 // in-process pipe for vsock.Dial. Production wires the real
 // vsock.Dial via this var; tests swap it for net.Pipe.
+//
+//nolint:gochecknoglobals // test-hook indirection over vsock.Dial; mutated only in tests.
 var vsockDialer = func(port uint32) (net.Conn, error) {
 	return vsock.Dial(vmaddrCIDHost, port, nil)
 }

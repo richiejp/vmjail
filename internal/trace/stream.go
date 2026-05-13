@@ -34,6 +34,8 @@ const streamLenPrefix = 4
 // mid-handshake, open but never writing) must not be able to pin
 // a receiver goroutine indefinitely. Variable rather than constant
 // so the parked-connection test can shrink it to keep CI fast.
+//
+//nolint:gochecknoglobals // test-hook timeout; mutated only by the parked-connection test.
 var streamReadTimeoutForTest = 30 * time.Second
 
 // StreamExporter is an Exporter that, on each Export call, opens a

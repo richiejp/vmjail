@@ -23,6 +23,8 @@ import (
 // ~/.docker/config.json, $DOCKER_CONFIG, and the standard cloud
 // keychains. Once the orchestrator-bundled registry lands we'll wrap
 // this with our mTLS-cert-derived auth.
+//
+//nolint:gochecknoglobals // singleton credential source; swap point for the future orchestrator-mTLS keychain.
 var remoteKeychain = authn.DefaultKeychain
 
 // Image is the result of a successful Pull.

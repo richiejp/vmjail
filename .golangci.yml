@@ -40,6 +40,13 @@ linters:
     - dupword        # accidental "the the"
     - misspell       # misspellings in comments + strings
 
+    # Power of 10 (Go) — keyword/pattern bans (Slice 2). See
+    # CONTRIBUTING.md "Power of 10 (Go)". Custom analyzers
+    # (nogoto / nolinkname / nodoubleptr) ship in cmd/daft-lint
+    # alongside these.
+    - forbidigo          # ban panic(/recover(/unsafe.*; allowlist via //nolint
+    - gochecknoglobals   # no package-level mutable var; sentinels auto-exempt
+
   settings:
     gocyclo:
       min-complexity: 100
@@ -72,6 +79,21 @@ linters:
         # G306 (file perms 0644 not strict enough) — config.json
         # and meta.json are intentionally world-readable.
         - G306
+    forbidigo:
+      # Each pattern bans a token. Legitimate uses surface at the
+      # call site with a //nolint:forbidigo comment explaining why
+      # — see CONTRIBUTING.md "Power of 10 (Go)" rules 1b/1c/1d.
+      # Patterns are unanchored regex against the identifier text;
+      # the leading `^` + trailing `$` keeps them from matching
+      # substrings like "panicNotReally".
+      forbid:
+        - pattern: '^panic$'
+          msg: "use internal/assert.True/NoErr (Power of 10 rule 1b); add //nolint:forbidigo with reason if this is the assert vocabulary itself"
+        - pattern: '^recover$'
+          msg: "recover() is forbidden except at goroutine/handler boundaries (Power of 10 rule 1c); document with //nolint:forbidigo + reason"
+        - pattern: '^unsafe\.'
+          msg: "unsafe.* is forbidden by Power of 10 rule 1d"
+      analyze-types: true
     gocritic:
       # gocritic's "experimental" diagnostics include some that
       # over-flag patterns Go code commonly uses. Pin to the stable
@@ -95,3 +117,30 @@ linters:
         # converting to pointers would lose that. Disable wholesale
         # rather than annotating every interface method.
         - hugeParam
+
+  exclusions:
+    # Path-scoped exclusions for patterns we deliberately allow in
+    # specific tree locations. Per-line //nolint suppressions handle
+    # the one-off cases; these patterns are systemic and the
+    # alternative is hundreds of identical nolint comments.
+    rules:
+      # Test fixtures, probe analyzers, panic/recover round-trip
+      # helpers — all legitimate test concerns that the production
+      # rules don't apply to.
+      - path: _test\.go
+        linters:
+          - forbidigo
+          - gochecknoglobals
+      # cmd/<name>/main.go follows the project's "testable main"
+      # pattern: package vars like osExit, stdout, fsRead are
+      # indirection points the in-package test swaps, not shared
+      # mutable state. See cmd/daft/main.go for the canonical form.
+      - path: cmd/.+/main\.go
+        linters:
+          - gochecknoglobals
+      # go/analysis analyzers expose their Analyzer entry point as a
+      # package var by API contract — every linter built on x/tools
+      # does this. Per-file nolint on every such file is just noise.
+      - path: internal/lint/analyzers/.+\.go
+        linters:
+          - gochecknoglobals

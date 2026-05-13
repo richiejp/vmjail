@@ -13,6 +13,8 @@ import (
 //
 // A var rather than a const so tests can point execContainerLinux at
 // a fake binary; production never reassigns it.
+//
+//nolint:gochecknoglobals // test-hook indirection for the crun binary path; never mutated in production.
 var ContainerRuntime = "/bin/crun"
 
 // ContainerID is the crun-side container identifier. crun keeps state

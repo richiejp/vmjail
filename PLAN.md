@@ -1063,14 +1063,21 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
         `reason="…"`). Adopts Rule 5 (in its purity-checked form)
         and the escape-hatch convention used by every later
         slice.
-      - **Slice 2 — keyword/pattern bans**: `nogoto`,
-        `nolinkname`, `nodoubleptr` custom analyzers;
-        `forbidigo` configured to ban `panic(` outside
-        `internal/assert`+`internal/oops`, `recover(` outside an
-        explicit allowlist, `unsafe.*` everywhere; enable
-        `gochecknoglobals` with an allowlist for sentinel
-        errors and compile-time interface checks. Adopts
-        rules 1a/1b/1c/1d/1e, 6, 9.
+      - **Slice 2 — keyword/pattern bans (landed)**: three new
+        custom analyzers — `nogoto` (rule 1a), `nolinkname`
+        (rule 1e), `nodoubleptr` (rule 9 Go-form). `forbidigo`
+        enabled in `.golangci.yml` with patterns banning
+        `panic(`, `recover()`, and `unsafe.*` — legitimate uses
+        survive at the call site with `//nolint:forbidigo` plus
+        a reason (assert vocabulary, trace rand.Read fatality,
+        analyzer-framework integrity). `gochecknoglobals`
+        enabled with path-scoped exclusions for systemic
+        patterns (cmd/*/main.go testable-main, _test.go
+        fixtures, internal/lint/analyzers Analyzer vars);
+        per-line nolints justify each remaining production
+        global (oops singletons, container/vsock/keychain
+        injection points, FastCDC lookup tables, etc.).
+        Adopts rules 1a/1b/1c/1d/1e, 6, 9.
       - **Slice 3 — bounded-input checks**: `chanconst` (channel
         buffer sizes must be a typed constant or unbuffered) +
         `maxbytes` (`io.ReadAll` on `http.Request.Body` must be

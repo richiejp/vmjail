@@ -196,6 +196,8 @@ func fastCDCMasks(avgSize int) (maskS, maskL uint64) {
 // added). The exact order is arbitrary but stable — changing it
 // would invalidate every chunk boundary in stores built by older
 // versions.
+//
+//nolint:gochecknoglobals // stable lookup table; mutating it would invalidate every existing chunk store.
 var fastCDCMaskPositions = [56]uint{
 	15, 31, 23, 47, 39, 55, 19, 35, 27, 43, 11, 51, 59, 17, 33, 25,
 	41, 9, 49, 57, 13, 21, 29, 37, 45, 53, 61, 63, 14, 22, 30, 38,
@@ -223,6 +225,8 @@ func buildFastCDCMask(popcount int) uint64 {
 // seed so the values are stable across builds — changing the
 // table would change every chunk boundary, invalidating dedup
 // against existing stores.
+//
+//nolint:gochecknoglobals // stable lookup table populated in init from a fixed seed; mutating it would invalidate every existing chunk store.
 var gearTable [256]uint64
 
 func init() {

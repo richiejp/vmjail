@@ -21,6 +21,9 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/assertpure"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/lintreasons"
+	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nodoubleptr"
+	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nogoto"
+	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nolinkname"
 )
 
 // analyzers is the bundled set. Package-scoped so tests can verify
@@ -29,6 +32,9 @@ import (
 var analyzers = []*analysis.Analyzer{
 	assertpure.Analyzer,
 	lintreasons.Analyzer,
+	nogoto.Analyzer,
+	nolinkname.Analyzer,
+	nodoubleptr.Analyzer,
 }
 
 // osExit and checkerMain are indirection points that let the

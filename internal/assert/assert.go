@@ -45,6 +45,7 @@ func True(cond bool, format string, args ...any) {
 	if cond {
 		return
 	}
+	//nolint:forbidigo // internal/assert IS the project's panic vocabulary; see CONTRIBUTING.md "Power of 10 (Go)".
 	panic(prefix + fmt.Sprintf(format, args...))
 }
 
@@ -63,5 +64,6 @@ func NoErr(err error, format string, args ...any) {
 	if err == nil {
 		return
 	}
+	//nolint:forbidigo // internal/assert IS the project's panic vocabulary; see CONTRIBUTING.md "Power of 10 (Go)".
 	panic(prefix + fmt.Sprintf(format, args...) + ": " + err.Error())
 }
