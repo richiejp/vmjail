@@ -116,6 +116,7 @@ func sortByStart(spans []*Span) {
 	sort.Slice(spans, func(i, j int) bool { return spans[i].start.Before(spans[j].start) })
 }
 
+//daft:lint:disable=norecursion reason="tree walk over span children; depth bounded by the producer's trace nesting, which is itself capped by Span.deadline + the reaper"
 func writeSpan(w io.Writer, s *Span, childrenOf map[string][]*Span, prefix string, last bool) error {
 	branch := "├─ "
 	contPrefix := prefix + "│  "

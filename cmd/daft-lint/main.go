@@ -27,6 +27,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nodoubleptr"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nogoto"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nolinkname"
+	"github.com/richiejp/darkaifactory/internal/lint/analyzers/norecursion"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/tagcatalog"
 )
 
@@ -43,6 +44,7 @@ var analyzers = []*analysis.Analyzer{
 	maxbytes.Analyzer,
 	forloopbound.Analyzer,
 	tagcatalog.Analyzer,
+	norecursion.Analyzer,
 }
 
 // osExit and checkerMain are indirection points that let the

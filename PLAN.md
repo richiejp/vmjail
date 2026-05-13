@@ -1041,11 +1041,12 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
       - Bundle `fusermount` setuid binary into
         daft-sandboxd's Nix closure (decision: yes, to stay
         self-contained per project ethos).
-- [/] Power of 10 (Go) — Holzmann's safety-critical-code rules,
+- [x] Power of 10 (Go) — Holzmann's safety-critical-code rules,
       translated to Go and enforced by custom analyzers (review-only
       "rules" don't survive contact with deadlines; every adopted
       rule has a static check). See CONTRIBUTING.md "Power of 10
       (Go)" for the full rule list + escape-hatch convention.
+      All 5 program-of-work slices landed; 10 analyzers shipped.
 
       Why now: the sandbox is the security boundary between
       untrusted AI agents and the user's data — "we'll harden it
@@ -1103,11 +1104,19 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
         failure from a 3am hang to an immediate panic at the
         call site. See CONTRIBUTING.md "Assert caller contracts
         at function entry" for the broader pattern.
-      - **Slice 5 — call-graph analyzer**: `norecursion` flags
-        SCCs of size > 1 in our packages, using
-        `golang.org/x/tools/go/callgraph/cha`. Separate slice
-        because it pulls in the call-graph dep and has the
-        highest implementation risk. Adopts rule 1f.
+      - **Slice 5 — call-graph analyzer (landed)**: `norecursion`
+        flags self-recursive and mutually-recursive functions
+        within a single package. Three-colour DFS over a
+        per-package call graph built from `pass.TypesInfo` (AST
+        only, no SSA needed — runs in milliseconds). Tracks
+        method calls and same-package function calls; deliberately
+        doesn't follow function values, closures, or interface
+        dispatch (those need CHA on a whole-program SSA model,
+        far more expensive and harder to keep stable in CI).
+        Cleanup: two recursive tree-walks (`trace.writeSpan` over
+        span children, `tagcatalog.walkTags` over a constraint
+        expression) suppressed with reasons citing the structural
+        depth bound of each input. Adopts rule 1f.
 
       *Out of scope.*
       - "Two assertions per function" density target — density

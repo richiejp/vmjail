@@ -36,6 +36,7 @@ func TestMainWiring(t *testing.T) {
 		"maxbytes":     true,
 		"forloopbound": true,
 		"tagcatalog":   true,
+		"norecursion":  true,
 	}
 	for _, a := range seen {
 		if !wantNames[a.Name] {

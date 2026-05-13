@@ -136,6 +136,8 @@ func unknownTags(expr constraint.Expr) []string {
 // trivially bounded by the source line's length (Go's constraint
 // parser caps expressions at one line per directive), so the
 // recursion depth is small and statically bounded.
+//
+//daft:lint:disable=norecursion reason="tree walk over a constraint.Expr; depth bounded by Go's one-line-per-directive parser, structurally ≤ a few dozen"
 func walkTags(expr constraint.Expr, visit func(string)) {
 	switch e := expr.(type) {
 	case *constraint.TagExpr:
