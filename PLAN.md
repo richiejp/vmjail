@@ -231,9 +231,11 @@ Phase A — **Sandboxd daemon mode**:
   `LastSeenAt` on every heartbeat, and releases the entry on
   stream close. `ListSandboxes` exposure to clients is deferred
   to A2.
-- A2: Orchestrator-side `SandboxControlService` exposes
-  `ListSandboxes` to the client (the registry foundation landed
-  in A1; persistence in B5).
+- A2 (landed): `SandboxControlService.ListSandboxes` returns a
+  snapshot of the registry (fingerprint, version, resources,
+  RegisteredAt, LastSeenAt). Surfaced to operators as
+  `daft sandbox list --orchestrator <url>`. Read-only; in-memory
+  only — persistence still B5.
 - A3: `SandboxSpec` proto (image, mounts[], env[], ports[],
   gpu_request, isolation, workspace_uuid).
 - A4: Orchestrator → sandboxd `Dispatch(SandboxSpec)` over the
@@ -255,7 +257,7 @@ Phase B — **Workspace as a first-class orchestrator object**:
 - B4: Workspace state machine: Draft → Ready → Running →
   Frozen → Stopped → Archived. `status` is one cobra subcommand
   showing both state and `missing[]`.
-- B5: Persistence: BoltDB or JSON-on-disk for workspace +
+- B5: Persistence: Badger or JSON-on-disk for workspace +
   sandbox registrations (orchestrator side).
 
 Phase C — **Orchestrator-driven port ingress**:
@@ -1160,6 +1162,14 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
       stands up an in-process orchestrator and verifies
       registration appears, heartbeat refreshes `LastSeenAt`, and
       the entry is released on stream close.
+- [x] Workflow reorientation Slice A2 — `ListSandboxes` RPC on
+      `SandboxControlService`. Adds `ListSandboxesRequest` /
+      `ListSandboxesResponse` + `SandboxRegistration` messages and a
+      handler that projects `Registry.Snapshot()` onto the wire.
+      Operator surface is `daft sandbox list --orchestrator <url>`
+      (mTLS-dial, render fingerprint / version / CPUs / memory /
+      last-seen age as a tab-aligned table). Read-only; persistence
+      still deferred to Slice B5.
 
 ## Architecture
 

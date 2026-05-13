@@ -227,7 +227,7 @@ func TestRunUntilCancelReturnsServeError(t *testing.T) {
 		t.Fatalf("OpenPeerStore: %v", err)
 	}
 	srv, err2 := mtls.New(mtls.Config{
-		Identity: id, Peers: store, Addr: "127.0.0.1:0",
+		Identity: id, Peers: store, Addr: loopbackAddrAny,
 		Handler: http.NewServeMux(),
 	})
 	if err2 != nil {

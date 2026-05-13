@@ -102,6 +102,7 @@ func newSandboxCmd() *cobra.Command {
 			"described in PLAN.md.",
 	}
 	cmd.AddCommand(newSandboxHelloCmd())
+	cmd.AddCommand(newSandboxListCmd())
 	return cmd
 }
 

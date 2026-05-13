@@ -362,6 +362,171 @@ func (x *HeartbeatResponse) GetSeenAt() *timestamppb.Timestamp {
 	return nil
 }
 
+// ListSandboxesRequest is empty in v1. A filter / pagination
+// surface will land alongside persistence in Slice B5.
+type ListSandboxesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSandboxesRequest) Reset() {
+	*x = ListSandboxesRequest{}
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSandboxesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSandboxesRequest) ProtoMessage() {}
+
+func (x *ListSandboxesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSandboxesRequest.ProtoReflect.Descriptor instead.
+func (*ListSandboxesRequest) Descriptor() ([]byte, []int) {
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{6}
+}
+
+// SandboxRegistration mirrors sandboxctrl.Entry on the wire.
+// Fingerprint is the orchestrator's canonical sandbox id.
+type SandboxRegistration struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// mTLS leaf-cert fingerprint of the sandboxd.
+	Fingerprint string `protobuf:"bytes,1,opt,name=fingerprint,proto3" json:"fingerprint,omitempty"`
+	// Version advertised at RegisterSandbox time.
+	Version string `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	// Last reported host capacity (updated on every Heartbeat).
+	Resources *HostResources `protobuf:"bytes,3,opt,name=resources,proto3" json:"resources,omitempty"`
+	// When the orchestrator first accepted this registration.
+	RegisteredAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=registered_at,json=registeredAt,proto3" json:"registered_at,omitempty"`
+	// Most recent Heartbeat (or RegisterSandbox, whichever is later).
+	LastSeenAt    *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_seen_at,json=lastSeenAt,proto3" json:"last_seen_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SandboxRegistration) Reset() {
+	*x = SandboxRegistration{}
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SandboxRegistration) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SandboxRegistration) ProtoMessage() {}
+
+func (x *SandboxRegistration) ProtoReflect() protoreflect.Message {
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SandboxRegistration.ProtoReflect.Descriptor instead.
+func (*SandboxRegistration) Descriptor() ([]byte, []int) {
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *SandboxRegistration) GetFingerprint() string {
+	if x != nil {
+		return x.Fingerprint
+	}
+	return ""
+}
+
+func (x *SandboxRegistration) GetVersion() string {
+	if x != nil {
+		return x.Version
+	}
+	return ""
+}
+
+func (x *SandboxRegistration) GetResources() *HostResources {
+	if x != nil {
+		return x.Resources
+	}
+	return nil
+}
+
+func (x *SandboxRegistration) GetRegisteredAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.RegisteredAt
+	}
+	return nil
+}
+
+func (x *SandboxRegistration) GetLastSeenAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastSeenAt
+	}
+	return nil
+}
+
+type ListSandboxesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sandboxes     []*SandboxRegistration `protobuf:"bytes,1,rep,name=sandboxes,proto3" json:"sandboxes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListSandboxesResponse) Reset() {
+	*x = ListSandboxesResponse{}
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListSandboxesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListSandboxesResponse) ProtoMessage() {}
+
+func (x *ListSandboxesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sandboxctrl_v1_sandboxctrl_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListSandboxesResponse.ProtoReflect.Descriptor instead.
+func (*ListSandboxesResponse) Descriptor() ([]byte, []int) {
+	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ListSandboxesResponse) GetSandboxes() []*SandboxRegistration {
+	if x != nil {
+		return x.Sandboxes
+	}
+	return nil
+}
+
 var File_sandboxctrl_v1_sandboxctrl_proto protoreflect.FileDescriptor
 
 const file_sandboxctrl_v1_sandboxctrl_proto_rawDesc = "" +
@@ -382,10 +547,21 @@ const file_sandboxctrl_v1_sandboxctrl_proto_rawDesc = "" +
 	"\x10HeartbeatRequest\x12<\n" +
 	"\acurrent\x18\x01 \x01(\v2\".daft.sandboxctrl.v1.HostResourcesR\acurrent\"H\n" +
 	"\x11HeartbeatResponse\x123\n" +
-	"\aseen_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x06seenAt2\xdd\x01\n" +
+	"\aseen_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x06seenAt\"\x16\n" +
+	"\x14ListSandboxesRequest\"\x92\x02\n" +
+	"\x13SandboxRegistration\x12 \n" +
+	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\x12\x18\n" +
+	"\aversion\x18\x02 \x01(\tR\aversion\x12@\n" +
+	"\tresources\x18\x03 \x01(\v2\".daft.sandboxctrl.v1.HostResourcesR\tresources\x12?\n" +
+	"\rregistered_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\fregisteredAt\x12<\n" +
+	"\flast_seen_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastSeenAt\"_\n" +
+	"\x15ListSandboxesResponse\x12F\n" +
+	"\tsandboxes\x18\x01 \x03(\v2(.daft.sandboxctrl.v1.SandboxRegistrationR\tsandboxes2\xc7\x02\n" +
 	"\x15SandboxControlService\x12f\n" +
 	"\x0fRegisterSandbox\x12+.daft.sandboxctrl.v1.RegisterSandboxRequest\x1a\".daft.sandboxctrl.v1.RegisterEvent\"\x000\x01\x12\\\n" +
-	"\tHeartbeat\x12%.daft.sandboxctrl.v1.HeartbeatRequest\x1a&.daft.sandboxctrl.v1.HeartbeatResponse\"\x00BOZMgithub.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1;sandboxctrlv1b\x06proto3"
+	"\tHeartbeat\x12%.daft.sandboxctrl.v1.HeartbeatRequest\x1a&.daft.sandboxctrl.v1.HeartbeatResponse\"\x00\x12h\n" +
+	"\rListSandboxes\x12).daft.sandboxctrl.v1.ListSandboxesRequest\x1a*.daft.sandboxctrl.v1.ListSandboxesResponse\"\x00BOZMgithub.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1;sandboxctrlv1b\x06proto3"
 
 var (
 	file_sandboxctrl_v1_sandboxctrl_proto_rawDescOnce sync.Once
@@ -399,7 +575,7 @@ func file_sandboxctrl_v1_sandboxctrl_proto_rawDescGZIP() []byte {
 	return file_sandboxctrl_v1_sandboxctrl_proto_rawDescData
 }
 
-var file_sandboxctrl_v1_sandboxctrl_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_sandboxctrl_v1_sandboxctrl_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_sandboxctrl_v1_sandboxctrl_proto_goTypes = []any{
 	(*HostResources)(nil),          // 0: daft.sandboxctrl.v1.HostResources
 	(*RegisterSandboxRequest)(nil), // 1: daft.sandboxctrl.v1.RegisterSandboxRequest
@@ -407,23 +583,32 @@ var file_sandboxctrl_v1_sandboxctrl_proto_goTypes = []any{
 	(*SubscriptionReady)(nil),      // 3: daft.sandboxctrl.v1.SubscriptionReady
 	(*HeartbeatRequest)(nil),       // 4: daft.sandboxctrl.v1.HeartbeatRequest
 	(*HeartbeatResponse)(nil),      // 5: daft.sandboxctrl.v1.HeartbeatResponse
-	(*timestamppb.Timestamp)(nil),  // 6: google.protobuf.Timestamp
+	(*ListSandboxesRequest)(nil),   // 6: daft.sandboxctrl.v1.ListSandboxesRequest
+	(*SandboxRegistration)(nil),    // 7: daft.sandboxctrl.v1.SandboxRegistration
+	(*ListSandboxesResponse)(nil),  // 8: daft.sandboxctrl.v1.ListSandboxesResponse
+	(*timestamppb.Timestamp)(nil),  // 9: google.protobuf.Timestamp
 }
 var file_sandboxctrl_v1_sandboxctrl_proto_depIdxs = []int32{
-	0, // 0: daft.sandboxctrl.v1.RegisterSandboxRequest.resources:type_name -> daft.sandboxctrl.v1.HostResources
-	3, // 1: daft.sandboxctrl.v1.RegisterEvent.ready:type_name -> daft.sandboxctrl.v1.SubscriptionReady
-	6, // 2: daft.sandboxctrl.v1.SubscriptionReady.accepted_at:type_name -> google.protobuf.Timestamp
-	0, // 3: daft.sandboxctrl.v1.HeartbeatRequest.current:type_name -> daft.sandboxctrl.v1.HostResources
-	6, // 4: daft.sandboxctrl.v1.HeartbeatResponse.seen_at:type_name -> google.protobuf.Timestamp
-	1, // 5: daft.sandboxctrl.v1.SandboxControlService.RegisterSandbox:input_type -> daft.sandboxctrl.v1.RegisterSandboxRequest
-	4, // 6: daft.sandboxctrl.v1.SandboxControlService.Heartbeat:input_type -> daft.sandboxctrl.v1.HeartbeatRequest
-	2, // 7: daft.sandboxctrl.v1.SandboxControlService.RegisterSandbox:output_type -> daft.sandboxctrl.v1.RegisterEvent
-	5, // 8: daft.sandboxctrl.v1.SandboxControlService.Heartbeat:output_type -> daft.sandboxctrl.v1.HeartbeatResponse
-	7, // [7:9] is the sub-list for method output_type
-	5, // [5:7] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	0,  // 0: daft.sandboxctrl.v1.RegisterSandboxRequest.resources:type_name -> daft.sandboxctrl.v1.HostResources
+	3,  // 1: daft.sandboxctrl.v1.RegisterEvent.ready:type_name -> daft.sandboxctrl.v1.SubscriptionReady
+	9,  // 2: daft.sandboxctrl.v1.SubscriptionReady.accepted_at:type_name -> google.protobuf.Timestamp
+	0,  // 3: daft.sandboxctrl.v1.HeartbeatRequest.current:type_name -> daft.sandboxctrl.v1.HostResources
+	9,  // 4: daft.sandboxctrl.v1.HeartbeatResponse.seen_at:type_name -> google.protobuf.Timestamp
+	0,  // 5: daft.sandboxctrl.v1.SandboxRegistration.resources:type_name -> daft.sandboxctrl.v1.HostResources
+	9,  // 6: daft.sandboxctrl.v1.SandboxRegistration.registered_at:type_name -> google.protobuf.Timestamp
+	9,  // 7: daft.sandboxctrl.v1.SandboxRegistration.last_seen_at:type_name -> google.protobuf.Timestamp
+	7,  // 8: daft.sandboxctrl.v1.ListSandboxesResponse.sandboxes:type_name -> daft.sandboxctrl.v1.SandboxRegistration
+	1,  // 9: daft.sandboxctrl.v1.SandboxControlService.RegisterSandbox:input_type -> daft.sandboxctrl.v1.RegisterSandboxRequest
+	4,  // 10: daft.sandboxctrl.v1.SandboxControlService.Heartbeat:input_type -> daft.sandboxctrl.v1.HeartbeatRequest
+	6,  // 11: daft.sandboxctrl.v1.SandboxControlService.ListSandboxes:input_type -> daft.sandboxctrl.v1.ListSandboxesRequest
+	2,  // 12: daft.sandboxctrl.v1.SandboxControlService.RegisterSandbox:output_type -> daft.sandboxctrl.v1.RegisterEvent
+	5,  // 13: daft.sandboxctrl.v1.SandboxControlService.Heartbeat:output_type -> daft.sandboxctrl.v1.HeartbeatResponse
+	8,  // 14: daft.sandboxctrl.v1.SandboxControlService.ListSandboxes:output_type -> daft.sandboxctrl.v1.ListSandboxesResponse
+	12, // [12:15] is the sub-list for method output_type
+	9,  // [9:12] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_sandboxctrl_v1_sandboxctrl_proto_init() }
@@ -440,7 +625,7 @@ func file_sandboxctrl_v1_sandboxctrl_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sandboxctrl_v1_sandboxctrl_proto_rawDesc), len(file_sandboxctrl_v1_sandboxctrl_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   9,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

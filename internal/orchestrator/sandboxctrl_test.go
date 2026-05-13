@@ -43,6 +43,88 @@ func TestSandboxControlHandlerRejectsMissingPeerIdentity(t *testing.T) {
 	if _, err := h.Heartbeat(t.Context(), req2); connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Errorf("Heartbeat: code = %s, want Unauthenticated", connect.CodeOf(err))
 	}
+	req3 := connect.NewRequest(&sandboxctrlv1.ListSandboxesRequest{})
+	if _, err := h.ListSandboxes(t.Context(), req3); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Errorf("ListSandboxes: code = %s, want Unauthenticated", connect.CodeOf(err))
+	}
+}
+
+// TestListSandboxesReflectsRegistry pins the projection from the
+// registry snapshot onto the wire SandboxRegistration shape: every
+// registered entry shows up exactly once, sorted by fingerprint, with
+// version + resources + timestamps preserved.
+func TestListSandboxesReflectsRegistry(t *testing.T) {
+	reg := sandboxctrl.NewRegistry(nil)
+	h, err := NewSandboxControlHandler(reg)
+	if err != nil {
+		t.Fatalf("NewSandboxControlHandler: %v", err)
+	}
+	caller := mustGenerate(t, identity.RoleOrchestrator)
+	sandboxA := mustGenerate(t, identity.RoleSandboxHost)
+	sandboxB := mustGenerate(t, identity.RoleSandboxHost)
+	reg.Register(sandboxA.Fingerprint(), "v1.0.0", sandboxctrl.Resources{CPUs: 2, MemoryBytes: 1 << 30})
+	reg.Register(sandboxB.Fingerprint(), "v1.0.1", sandboxctrl.Resources{CPUs: 4, MemoryBytes: 4 << 30})
+
+	req := connect.NewRequest(&sandboxctrlv1.ListSandboxesRequest{})
+	req.Header().Set(peerFingerprintHeader, caller.Fingerprint().String())
+	resp, err := h.ListSandboxes(t.Context(), req)
+	if err != nil {
+		t.Fatalf("ListSandboxes: %v", err)
+	}
+	got := resp.Msg.GetSandboxes()
+	if len(got) != 2 {
+		t.Fatalf("len(sandboxes) = %d, want 2", len(got))
+	}
+	// Snapshot is sorted by fingerprint string; build the same
+	// expectation independently so we test against the contract,
+	// not the implementation.
+	wantFirst, wantSecond := sandboxA.Fingerprint().String(), sandboxB.Fingerprint().String()
+	if wantFirst > wantSecond {
+		wantFirst, wantSecond = wantSecond, wantFirst
+	}
+	if got[0].GetFingerprint() != wantFirst || got[1].GetFingerprint() != wantSecond {
+		t.Errorf("fingerprints = [%s, %s], want [%s, %s]",
+			got[0].GetFingerprint(), got[1].GetFingerprint(), wantFirst, wantSecond)
+	}
+	// Spot-check the entry that maps to sandboxA.
+	var entryA *sandboxctrlv1.SandboxRegistration
+	for _, e := range got {
+		if e.GetFingerprint() == sandboxA.Fingerprint().String() {
+			entryA = e
+		}
+	}
+	if entryA == nil {
+		t.Fatal("sandboxA missing from response")
+	}
+	if entryA.GetVersion() != "v1.0.0" {
+		t.Errorf("version = %q, want v1.0.0", entryA.GetVersion())
+	}
+	if entryA.GetResources().GetCpus() != 2 || entryA.GetResources().GetMemoryBytes() != 1<<30 {
+		t.Errorf("resources = %+v, want {2, 1GiB}", entryA.GetResources())
+	}
+	if !entryA.GetRegisteredAt().IsValid() || !entryA.GetLastSeenAt().IsValid() {
+		t.Error("timestamps not populated")
+	}
+}
+
+// TestListSandboxesEmpty exercises the zero-entry path explicitly.
+// Skipping it would leave the empty Registry projection uncovered
+// when the test above populates the registry first.
+func TestListSandboxesEmpty(t *testing.T) {
+	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+	if err != nil {
+		t.Fatalf("NewSandboxControlHandler: %v", err)
+	}
+	caller := mustGenerate(t, identity.RoleOrchestrator)
+	req := connect.NewRequest(&sandboxctrlv1.ListSandboxesRequest{})
+	req.Header().Set(peerFingerprintHeader, caller.Fingerprint().String())
+	resp, err := h.ListSandboxes(t.Context(), req)
+	if err != nil {
+		t.Fatalf("ListSandboxes: %v", err)
+	}
+	if len(resp.Msg.GetSandboxes()) != 0 {
+		t.Errorf("len(sandboxes) = %d, want 0", len(resp.Msg.GetSandboxes()))
+	}
 }
 
 // TestHeartbeatUnknownSandboxMapsToFailedPrecondition pins the

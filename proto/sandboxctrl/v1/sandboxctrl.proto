@@ -35,6 +35,13 @@ service SandboxControlService {
   // ping so the orchestrator scheduler has a fresh view without
   // a separate RPC. Stateless and idempotent.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse) {}
+
+  // ListSandboxes returns a snapshot of every sandbox currently
+  // registered with the orchestrator. Read-only, intended for
+  // operator tooling (`daft sandbox list`) and Slice A4's
+  // dispatcher. Snapshot ordering is stable (sorted by fingerprint)
+  // for deterministic test output.
+  rpc ListSandboxes(ListSandboxesRequest) returns (ListSandboxesResponse) {}
 }
 
 // HostResources advertises what a sandbox-host can dispatch onto.
@@ -82,4 +89,27 @@ message HeartbeatResponse {
   // Server-side wall-clock time at which the heartbeat was
   // recorded. Useful for clock-skew debugging in traces.
   google.protobuf.Timestamp seen_at = 1;
+}
+
+// ListSandboxesRequest is empty in v1. A filter / pagination
+// surface will land alongside persistence in Slice B5.
+message ListSandboxesRequest {}
+
+// SandboxRegistration mirrors sandboxctrl.Entry on the wire.
+// Fingerprint is the orchestrator's canonical sandbox id.
+message SandboxRegistration {
+  // mTLS leaf-cert fingerprint of the sandboxd.
+  string fingerprint = 1;
+  // Version advertised at RegisterSandbox time.
+  string version = 2;
+  // Last reported host capacity (updated on every Heartbeat).
+  HostResources resources = 3;
+  // When the orchestrator first accepted this registration.
+  google.protobuf.Timestamp registered_at = 4;
+  // Most recent Heartbeat (or RegisterSandbox, whichever is later).
+  google.protobuf.Timestamp last_seen_at = 5;
+}
+
+message ListSandboxesResponse {
+  repeated SandboxRegistration sandboxes = 1;
 }

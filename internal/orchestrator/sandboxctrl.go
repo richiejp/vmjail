@@ -100,6 +100,28 @@ func (h *SandboxControlHandler) Heartbeat(
 	}), nil
 }
 
+// ListSandboxes returns a snapshot of every live registration in
+// the orchestrator's registry. Read-only; the only side-effect is
+// the peer-identity check shared with the other RPCs on this
+// service.
+func (h *SandboxControlHandler) ListSandboxes(
+	_ context.Context,
+	req *connect.Request[sandboxctrlv1.ListSandboxesRequest],
+) (*connect.Response[sandboxctrlv1.ListSandboxesResponse], error) {
+	if _, ok := PeerFingerprintFromRequestHeader(req.Header()); !ok {
+		return nil, connect.NewError(connect.CodeUnauthenticated,
+			errors.New("orchestrator: no mTLS peer identity"))
+	}
+	entries := h.reg.Snapshot()
+	out := make([]*sandboxctrlv1.SandboxRegistration, len(entries))
+	for i := range entries {
+		out[i] = entryToProto(entries[i])
+	}
+	return connect.NewResponse(&sandboxctrlv1.ListSandboxesResponse{
+		Sandboxes: out,
+	}), nil
+}
+
 // resourcesFromProto converts a (possibly nil) wire HostResources
 // to the registry's native struct. nil → zero value.
 func resourcesFromProto(p *sandboxctrlv1.HostResources) sandboxctrl.Resources {
@@ -109,5 +131,19 @@ func resourcesFromProto(p *sandboxctrlv1.HostResources) sandboxctrl.Resources {
 	return sandboxctrl.Resources{
 		CPUs:        p.GetCpus(),
 		MemoryBytes: p.GetMemoryBytes(),
+	}
+}
+
+// entryToProto projects a registry Entry onto its wire form.
+func entryToProto(e sandboxctrl.Entry) *sandboxctrlv1.SandboxRegistration {
+	return &sandboxctrlv1.SandboxRegistration{
+		Fingerprint: e.Fingerprint.String(),
+		Version:     e.Version,
+		Resources: &sandboxctrlv1.HostResources{
+			Cpus:        e.Resources.CPUs,
+			MemoryBytes: e.Resources.MemoryBytes,
+		},
+		RegisteredAt: timestamppb.New(e.RegisteredAt),
+		LastSeenAt:   timestamppb.New(e.LastSeenAt),
 	}
 }

@@ -58,6 +58,9 @@ const (
 	// SandboxControlServiceHeartbeatProcedure is the fully-qualified name of the
 	// SandboxControlService's Heartbeat RPC.
 	SandboxControlServiceHeartbeatProcedure = "/daft.sandboxctrl.v1.SandboxControlService/Heartbeat"
+	// SandboxControlServiceListSandboxesProcedure is the fully-qualified name of the
+	// SandboxControlService's ListSandboxes RPC.
+	SandboxControlServiceListSandboxesProcedure = "/daft.sandboxctrl.v1.SandboxControlService/ListSandboxes"
 )
 
 // SandboxControlServiceClient is a client for the daft.sandboxctrl.v1.SandboxControlService
@@ -72,6 +75,12 @@ type SandboxControlServiceClient interface {
 	// ping so the orchestrator scheduler has a fresh view without
 	// a separate RPC. Stateless and idempotent.
 	Heartbeat(context.Context, *connect.Request[v1.HeartbeatRequest]) (*connect.Response[v1.HeartbeatResponse], error)
+	// ListSandboxes returns a snapshot of every sandbox currently
+	// registered with the orchestrator. Read-only, intended for
+	// operator tooling (`daft sandbox list`) and Slice A4's
+	// dispatcher. Snapshot ordering is stable (sorted by fingerprint)
+	// for deterministic test output.
+	ListSandboxes(context.Context, *connect.Request[v1.ListSandboxesRequest]) (*connect.Response[v1.ListSandboxesResponse], error)
 }
 
 // NewSandboxControlServiceClient constructs a client for the
@@ -97,6 +106,12 @@ func NewSandboxControlServiceClient(httpClient connect.HTTPClient, baseURL strin
 			connect.WithSchema(sandboxControlServiceMethods.ByName("Heartbeat")),
 			connect.WithClientOptions(opts...),
 		),
+		listSandboxes: connect.NewClient[v1.ListSandboxesRequest, v1.ListSandboxesResponse](
+			httpClient,
+			baseURL+SandboxControlServiceListSandboxesProcedure,
+			connect.WithSchema(sandboxControlServiceMethods.ByName("ListSandboxes")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -104,6 +119,7 @@ func NewSandboxControlServiceClient(httpClient connect.HTTPClient, baseURL strin
 type sandboxControlServiceClient struct {
 	registerSandbox *connect.Client[v1.RegisterSandboxRequest, v1.RegisterEvent]
 	heartbeat       *connect.Client[v1.HeartbeatRequest, v1.HeartbeatResponse]
+	listSandboxes   *connect.Client[v1.ListSandboxesRequest, v1.ListSandboxesResponse]
 }
 
 // RegisterSandbox calls daft.sandboxctrl.v1.SandboxControlService.RegisterSandbox.
@@ -114,6 +130,11 @@ func (c *sandboxControlServiceClient) RegisterSandbox(ctx context.Context, req *
 // Heartbeat calls daft.sandboxctrl.v1.SandboxControlService.Heartbeat.
 func (c *sandboxControlServiceClient) Heartbeat(ctx context.Context, req *connect.Request[v1.HeartbeatRequest]) (*connect.Response[v1.HeartbeatResponse], error) {
 	return c.heartbeat.CallUnary(ctx, req)
+}
+
+// ListSandboxes calls daft.sandboxctrl.v1.SandboxControlService.ListSandboxes.
+func (c *sandboxControlServiceClient) ListSandboxes(ctx context.Context, req *connect.Request[v1.ListSandboxesRequest]) (*connect.Response[v1.ListSandboxesResponse], error) {
+	return c.listSandboxes.CallUnary(ctx, req)
 }
 
 // SandboxControlServiceHandler is an implementation of the
@@ -128,6 +149,12 @@ type SandboxControlServiceHandler interface {
 	// ping so the orchestrator scheduler has a fresh view without
 	// a separate RPC. Stateless and idempotent.
 	Heartbeat(context.Context, *connect.Request[v1.HeartbeatRequest]) (*connect.Response[v1.HeartbeatResponse], error)
+	// ListSandboxes returns a snapshot of every sandbox currently
+	// registered with the orchestrator. Read-only, intended for
+	// operator tooling (`daft sandbox list`) and Slice A4's
+	// dispatcher. Snapshot ordering is stable (sorted by fingerprint)
+	// for deterministic test output.
+	ListSandboxes(context.Context, *connect.Request[v1.ListSandboxesRequest]) (*connect.Response[v1.ListSandboxesResponse], error)
 }
 
 // NewSandboxControlServiceHandler builds an HTTP handler from the service implementation. It
@@ -149,12 +176,20 @@ func NewSandboxControlServiceHandler(svc SandboxControlServiceHandler, opts ...c
 		connect.WithSchema(sandboxControlServiceMethods.ByName("Heartbeat")),
 		connect.WithHandlerOptions(opts...),
 	)
+	sandboxControlServiceListSandboxesHandler := connect.NewUnaryHandler(
+		SandboxControlServiceListSandboxesProcedure,
+		svc.ListSandboxes,
+		connect.WithSchema(sandboxControlServiceMethods.ByName("ListSandboxes")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.sandboxctrl.v1.SandboxControlService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case SandboxControlServiceRegisterSandboxProcedure:
 			sandboxControlServiceRegisterSandboxHandler.ServeHTTP(w, r)
 		case SandboxControlServiceHeartbeatProcedure:
 			sandboxControlServiceHeartbeatHandler.ServeHTTP(w, r)
+		case SandboxControlServiceListSandboxesProcedure:
+			sandboxControlServiceListSandboxesHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -170,4 +205,8 @@ func (UnimplementedSandboxControlServiceHandler) RegisterSandbox(context.Context
 
 func (UnimplementedSandboxControlServiceHandler) Heartbeat(context.Context, *connect.Request[v1.HeartbeatRequest]) (*connect.Response[v1.HeartbeatResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.sandboxctrl.v1.SandboxControlService.Heartbeat is not implemented"))
+}
+
+func (UnimplementedSandboxControlServiceHandler) ListSandboxes(context.Context, *connect.Request[v1.ListSandboxesRequest]) (*connect.Response[v1.ListSandboxesResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.sandboxctrl.v1.SandboxControlService.ListSandboxes is not implemented"))
 }

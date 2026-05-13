@@ -26,7 +26,7 @@ func runOrchestrator(t *testing.T, srvStore *identity.PeerStore) (addr string, s
 	srv, err := orchestrator.New(orchestrator.Config{
 		Identity: srvID,
 		Peers:    srvStore,
-		Addr:     "127.0.0.1:0",
+		Addr:     loopbackAddrAny,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
