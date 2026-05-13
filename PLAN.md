@@ -1078,11 +1078,16 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
         global (oops singletons, container/vsock/keychain
         injection points, FastCDC lookup tables, etc.).
         Adopts rules 1a/1b/1c/1d/1e, 6, 9.
-      - **Slice 3 — bounded-input checks**: `chanconst` (channel
-        buffer sizes must be a typed constant or unbuffered) +
-        `maxbytes` (`io.ReadAll` on `http.Request.Body` must be
-        preceded by `http.MaxBytesReader`). Adopts rule 3 in its
-        Go-shaped form.
+      - **Slice 3 — bounded-input checks (landed)**: `chanconst`
+        (channel buffer sizes must be a typed constant or
+        unbuffered) and `maxbytes` (`io.ReadAll` on
+        `http.Request.Body` must be preceded by
+        `http.MaxBytesReader` in the same function). Adopts rule
+        3 in its Go-shaped form. Cleanup: `brokerclient.ServeBrokered`
+        gained a hard `maxConcurrentAttachesCeiling` upward cap
+        so the semaphore buffer's bound is statically knowable
+        even though the make() call itself reads from
+        opts.MaxConcurrentAttaches.
       - **Slice 4 — annotation-driven checks**: `forloopbound`
         (`for {}` must carry `//daft:unbounded reason="…"`) +
         `tagcatalog` (`//go:build` tag identifiers drawn from a

@@ -32,6 +32,8 @@ func TestMainWiring(t *testing.T) {
 		"nogoto":      true,
 		"nolinkname":  true,
 		"nodoubleptr": true,
+		"chanconst":   true,
+		"maxbytes":    true,
 	}
 	for _, a := range seen {
 		if !wantNames[a.Name] {

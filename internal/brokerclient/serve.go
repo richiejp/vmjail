@@ -20,6 +20,12 @@ import (
 // user-host with handshake-spawning events.
 const defaultMaxConcurrentAttaches = 16
 
+// maxConcurrentAttachesCeiling is the hard upper bound the
+// semaphore is clamped against. Even an opts.MaxConcurrentAttaches
+// of math.MaxInt32 cannot make the channel buffer larger than this.
+// Bounded memory per Power of 10 rule 3 (Go form).
+const maxConcurrentAttachesCeiling = 1024
+
 // ServeOptions configures a broker-mode serve loop. Handler is the
 // inner HTTP/2 handler — typically a mux with WorkspaceService
 // registered. Per-attach inner-mTLS handshake deadline applies to
@@ -72,6 +78,9 @@ func (c *Client) ServeBrokered(ctx context.Context, opts ServeOptions) error {
 	if opts.MaxConcurrentAttaches <= 0 {
 		opts.MaxConcurrentAttaches = defaultMaxConcurrentAttaches
 	}
+	if opts.MaxConcurrentAttaches > maxConcurrentAttachesCeiling {
+		opts.MaxConcurrentAttaches = maxConcurrentAttachesCeiling
+	}
 	reg, err := c.RegisterServe(ctx, opts.Workspace)
 	if err != nil {
 		return err
@@ -80,6 +89,7 @@ func (c *Client) ServeBrokered(ctx context.Context, opts ServeOptions) error {
 
 	var wg sync.WaitGroup
 	defer wg.Wait()
+	//daft:lint:disable=chanconst reason="opts.MaxConcurrentAttaches is clamped above to the maxConcurrentAttachesCeiling constant; the bound is statically known."
 	sem := make(chan struct{}, opts.MaxConcurrentAttaches)
 
 	for {

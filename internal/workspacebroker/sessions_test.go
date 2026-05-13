@@ -22,7 +22,9 @@ type fakeStream struct {
 
 func newFakeStream(bufIn, bufOut int) *fakeStream {
 	return &fakeStream{
-		in:  make(chan []byte, bufIn),
+		//daft:lint:disable=chanconst reason="test fixture: caller controls buffer sizes to exercise back-pressure shapes"
+		in: make(chan []byte, bufIn),
+		//daft:lint:disable=chanconst reason="test fixture: caller controls buffer sizes to exercise back-pressure shapes"
 		out: make(chan []byte, bufOut),
 	}
 }

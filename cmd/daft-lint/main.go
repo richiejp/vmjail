@@ -20,7 +20,9 @@ import (
 	"golang.org/x/tools/go/analysis/multichecker"
 
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/assertpure"
+	"github.com/richiejp/darkaifactory/internal/lint/analyzers/chanconst"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/lintreasons"
+	"github.com/richiejp/darkaifactory/internal/lint/analyzers/maxbytes"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nodoubleptr"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nogoto"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nolinkname"
@@ -35,6 +37,8 @@ var analyzers = []*analysis.Analyzer{
 	nogoto.Analyzer,
 	nolinkname.Analyzer,
 	nodoubleptr.Analyzer,
+	chanconst.Analyzer,
+	maxbytes.Analyzer,
 }
 
 // osExit and checkerMain are indirection points that let the
