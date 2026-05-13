@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/richiejp/darkaifactory/internal/assert"
 	"github.com/richiejp/darkaifactory/internal/oops"
 	"github.com/richiejp/darkaifactory/internal/trace"
 )
@@ -356,7 +357,11 @@ func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig) (
 // cancelled, or timeout elapses. Returns a wrapped error on timeout
 // for the operator's logs.
 func waitForSocket(ctx context.Context, path string, timeout time.Duration) error {
+	done := ctx.Done()
+	assert.True(done != nil,
+		"waitForSocket requires a cancellable context (Background/TODO would only bound on the timeout, missing the operator-cancel signal)")
 	deadline := time.Now().Add(timeout)
+	//daft:lint:disable=forloopbound reason="exits when the socket appears, the deadline passes, or ctx.Done() fires; ctx cancellability asserted at entry"
 	for {
 		if info, err := os.Stat(path); err == nil && info.Mode()&os.ModeSocket != 0 {
 			return nil

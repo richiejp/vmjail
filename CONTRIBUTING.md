@@ -401,6 +401,66 @@ keep the check but factor the body so the assert is the cheap part of the
 iteration. We don't have a debug-build escape hatch — the default position
 is "assert it always."
 
+#### Assert caller contracts at function entry
+
+Many bugs in this codebase have shapes like:
+
+- Caller passes a non-cancellable `context.Context`; the callee's
+  `for { select … }` blocks forever and the bug surfaces minutes
+  later as a hang in a downstream service.
+- Caller passes `nil` where the type system says nothing about it,
+  callee dereferences deep in a stack, panic stack-trace points
+  at the wrong line.
+- Caller passes a "sorted" slice that isn't, callee binary-searches
+  on garbage, returns silently-wrong results.
+
+Each of these *could* be caught by a reviewer noticing the caller.
+Reviewers miss things. A one-line assertion at function entry turns
+the bug from a runtime hang (or silent data corruption) into a
+loud panic at the offending call site.
+
+The canonical pattern:
+
+```go
+import "github.com/richiejp/darkaifactory/internal/assert"
+
+func (r *Reaper) Run(ctx context.Context) {
+    assert.True(ctx.Done() != nil,
+        "reaper: Run requires a cancellable context")
+    // ... loop body that depends on <-ctx.Done() ...
+}
+```
+
+The `ctx.Done() != nil` check is worth knowing about specifically:
+`context.Background()` and `context.TODO()` return a nil channel
+from `Done()`, and any `WithValue` chain rooted at them does the
+same. Calling `<-ctx.Done()` on a nil channel blocks forever —
+exactly the bug `for { select … }` is supposed to *avoid* by
+having an exit case. The runtime check pushes the failure from "we
+hang at 03:00 AM" to "the call site panics immediately."
+
+When to write a contract assertion:
+
+- Every function whose loop or blocking I/O depends on a ctx →
+  assert `ctx.Done() != nil`.
+- Every function that dereferences a parameter without further
+  nil-checking → assert non-nil.
+- Every function that takes a "sorted" / "non-empty" / "deduped"
+  slice → assert the invariant.
+- Every function that takes a duration or time assumed positive
+  / future / non-zero → assert it.
+
+The assertion arguments must be side-effect free — `internal/lint/
+analyzers/assertpure` enforces that. Compute any value you need
+into a local first, then assert on the local.
+
+This dovetails with the Power-of-10 (Go) rules below: many of the
+analyzers enforce *structural* properties (no goto, no recursion,
+bounded loops). Runtime contract assertions cover the cases the
+type system and the structural analyzers can't see — caller
+correctness across the function boundary. The two layers are
+complementary; both are mandatory where they apply.
+
 ### Handle every error
 
 Every error return is load-bearing. The default position is "the

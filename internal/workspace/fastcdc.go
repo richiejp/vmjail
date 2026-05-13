@@ -75,6 +75,7 @@ func (c *FastCDCChunker) Chunk(r io.Reader, store *cas.Store) ([]*workspacev1.Ch
 		tail = 0
 		eof  bool
 	)
+	//daft:lint:disable=forloopbound reason="exits when the input is fully drained (head == tail after EOF) or any non-EOF read error fires"
 	for {
 		for !eof && tail-head < maxS {
 			if tail == cap(buf) {

@@ -27,13 +27,15 @@ func TestMainWiring(t *testing.T) {
 		t.Fatalf("checkerMain saw %d analyzers, want %d", len(seen), len(analyzers))
 	}
 	wantNames := map[string]bool{
-		"assertpure":  true,
-		"lintreasons": true,
-		"nogoto":      true,
-		"nolinkname":  true,
-		"nodoubleptr": true,
-		"chanconst":   true,
-		"maxbytes":    true,
+		"assertpure":   true,
+		"lintreasons":  true,
+		"nogoto":       true,
+		"nolinkname":   true,
+		"nodoubleptr":  true,
+		"chanconst":    true,
+		"maxbytes":     true,
+		"forloopbound": true,
+		"tagcatalog":   true,
 	}
 	for _, a := range seen {
 		if !wantNames[a.Name] {

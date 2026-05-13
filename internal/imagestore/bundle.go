@@ -193,6 +193,7 @@ func unpackRootfs(img v1.Image, dst string) error {
 // header) are rejected — defence against tar-bomb / path traversal.
 func untarTo(r io.Reader, dst string) error {
 	tr := tar.NewReader(r)
+	//daft:lint:disable=forloopbound reason="exits on tar.Reader.Next returning io.EOF (clean end) or any other read error"
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {

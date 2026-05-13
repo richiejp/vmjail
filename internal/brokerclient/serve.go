@@ -11,6 +11,7 @@ import (
 
 	"golang.org/x/net/http2"
 
+	"github.com/richiejp/darkaifactory/internal/assert"
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
@@ -81,6 +82,13 @@ func (c *Client) ServeBrokered(ctx context.Context, opts ServeOptions) error {
 	if opts.MaxConcurrentAttaches > maxConcurrentAttachesCeiling {
 		opts.MaxConcurrentAttaches = maxConcurrentAttachesCeiling
 	}
+	// Cancellability is asserted past the input-validation block
+	// so bad-options callers (typically tests) can use Background:
+	// the assertion only matters if we're about to enter the
+	// blocking event loop.
+	done := ctx.Done()
+	assert.True(done != nil,
+		"ServeBrokered requires a cancellable context once options are valid; Background/TODO would block forever in the event loop")
 	reg, err := c.RegisterServe(ctx, opts.Workspace)
 	if err != nil {
 		return err
@@ -92,6 +100,7 @@ func (c *Client) ServeBrokered(ctx context.Context, opts ServeOptions) error {
 	//daft:lint:disable=chanconst reason="opts.MaxConcurrentAttaches is clamped above to the maxConcurrentAttachesCeiling constant; the bound is statically known."
 	sem := make(chan struct{}, opts.MaxConcurrentAttaches)
 
+	//daft:lint:disable=forloopbound reason="exits on ctx.Done() or registration stream EOF; ctx cancellability asserted at ServeBrokered entry"
 	for {
 		select {
 		case <-ctx.Done():

@@ -228,6 +228,12 @@ func (b *SessionBroker) Count() int {
 // underlying error on transport failures. Callers run this in
 // each Relay handler with from=their own stream and to=partner's.
 func Splice(ctx context.Context, from, to DataStream, done <-chan struct{}) error {
+	// No ctx-cancellability assertion here: Splice's contract is
+	// "terminate on EOF / recv error / done channel close / ctx
+	// cancel" and any one of those suffices. Callers that don't
+	// need ctx cancellation (typically tests that close `done`)
+	// pass context.Background, which is a legitimate choice given
+	// the alternative exit paths.
 	type rcv struct {
 		data []byte
 		err  error
@@ -244,6 +250,7 @@ func Splice(ctx context.Context, from, to DataStream, done <-chan struct{}) erro
 		}()
 	}
 	startRecv()
+	//daft:lint:disable=forloopbound reason="exits on io.EOF / recv error, on done close, or on ctx.Done() — three independent termination paths, any one suffices"
 	for {
 		select {
 		case r := <-rcvCh:

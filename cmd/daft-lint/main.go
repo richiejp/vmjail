@@ -21,11 +21,13 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/assertpure"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/chanconst"
+	"github.com/richiejp/darkaifactory/internal/lint/analyzers/forloopbound"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/lintreasons"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/maxbytes"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nodoubleptr"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nogoto"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nolinkname"
+	"github.com/richiejp/darkaifactory/internal/lint/analyzers/tagcatalog"
 )
 
 // analyzers is the bundled set. Package-scoped so tests can verify
@@ -39,6 +41,8 @@ var analyzers = []*analysis.Analyzer{
 	nodoubleptr.Analyzer,
 	chanconst.Analyzer,
 	maxbytes.Analyzer,
+	forloopbound.Analyzer,
+	tagcatalog.Analyzer,
 }
 
 // osExit and checkerMain are indirection points that let the

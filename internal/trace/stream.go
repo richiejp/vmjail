@@ -135,6 +135,7 @@ func (r *StreamReceiver) Run(ctx context.Context) error {
 	}()
 	defer close(doneCtx)
 
+	//daft:lint:disable=forloopbound reason="exits when r.listener.Close drives Accept to return net.ErrClosed"
 	for {
 		conn, err := r.listener.Accept()
 		if err != nil {

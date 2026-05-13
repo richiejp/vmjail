@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/richiejp/darkaifactory/internal/assert"
 	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
 )
 
@@ -510,12 +511,16 @@ func (t *Tracer) finishLocked(s *Span, now time.Time, abandoned bool, abandonedM
 // Long-running components call this once at startup; one-shot
 // CLIs skip it (their spans are reaped by Shutdown instead).
 func (t *Tracer) Run(ctx context.Context) {
+	done := ctx.Done()
+	assert.True(done != nil,
+		"Tracer.Run requires a cancellable context (Background/TODO would block forever)")
 	if t.reapInterval <= 0 {
 		<-ctx.Done()
 		return
 	}
 	ticker := time.NewTicker(t.reapInterval)
 	defer ticker.Stop()
+	//daft:lint:disable=forloopbound reason="exits on ctx.Done(); cancellability asserted at Run entry"
 	for {
 		select {
 		case <-ctx.Done():

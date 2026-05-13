@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/richiejp/darkaifactory/internal/assert"
 	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
 )
 
@@ -80,12 +81,16 @@ func NewIngressReaper(tr *Tracer, component string, opts ...IngressReaperOption)
 
 // Run drives the reaper until ctx is cancelled.
 func (r *IngressReaper) Run(ctx context.Context) {
+	done := ctx.Done()
+	assert.True(done != nil,
+		"IngressReaper.Run requires a cancellable context (Background/TODO would block forever)")
 	if r.scanInterval <= 0 {
 		<-ctx.Done()
 		return
 	}
 	ticker := time.NewTicker(r.scanInterval)
 	defer ticker.Stop()
+	//daft:lint:disable=forloopbound reason="exits on ctx.Done(); cancellability asserted at Run entry"
 	for {
 		select {
 		case <-ctx.Done():

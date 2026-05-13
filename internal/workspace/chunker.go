@@ -62,6 +62,7 @@ func (c *FixedSizeChunker) Chunk(r io.Reader, store *cas.Store) ([]*workspacev1.
 		total uint64
 		buf   = make([]byte, size)
 	)
+	//daft:lint:disable=forloopbound reason="exits on io.EOF / io.ErrUnexpectedEOF (final partial chunk) or any other read error"
 	for {
 		n, err := io.ReadFull(r, buf)
 		switch {

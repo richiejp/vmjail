@@ -1088,10 +1088,21 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
         so the semaphore buffer's bound is statically knowable
         even though the make() call itself reads from
         opts.MaxConcurrentAttaches.
-      - **Slice 4 — annotation-driven checks**: `forloopbound`
-        (`for {}` must carry `//daft:unbounded reason="…"`) +
-        `tagcatalog` (`//go:build` tag identifiers drawn from a
-        closed allowlist). Adopts rules 2 and 8.
+      - **Slice 4 — annotation-driven checks (landed)**:
+        `forloopbound` (bare `for {}` must carry
+        `//daft:lint:disable=forloopbound reason="…"`) and
+        `tagcatalog` (`//go:build` tag identifiers must come
+        from a closed allowlist: `linux`, `darwin`, `integration`).
+        Adopts rules 2 and 8.
+        Cleanup pass added 10 directive comments to existing
+        production for-loops, naming each loop's termination
+        signal in the `reason` clause. The 6 ctx-driven loops
+        also got a runtime `assert.True(ctx.Done() != nil, …)`
+        at function entry (after input validation, before the
+        blocking loop) — shifts the "non-cancellable context"
+        failure from a 3am hang to an immediate panic at the
+        call site. See CONTRIBUTING.md "Assert caller contracts
+        at function entry" for the broader pattern.
       - **Slice 5 — call-graph analyzer**: `norecursion` flags
         SCCs of size > 1 in our packages, using
         `golang.org/x/tools/go/callgraph/cha`. Separate slice

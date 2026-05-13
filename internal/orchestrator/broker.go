@@ -7,6 +7,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/richiejp/darkaifactory/internal/assert"
 	workspacebrokerv1 "github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
@@ -74,6 +75,12 @@ func (h *BrokerHandler) RegisterServe(
 	}
 	defer cancel()
 
+	// Cancellability asserted just before the blocking event pump:
+	// validation-only callers (bad mTLS / empty workspace) error
+	// out above without needing a cancellable ctx.
+	done := ctx.Done()
+	assert.True(done != nil,
+		"RegisterServe's event loop requires a cancellable context; Connect-RPC handlers always receive one — Background here means a wiring bug")
 	return pumpAttachEvents(ctx, notif, stream)
 }
 
@@ -250,6 +257,7 @@ func pumpAttachEvents(
 	if err := stream.Send(ready); err != nil {
 		return err
 	}
+	//daft:lint:disable=forloopbound reason="exits on ctx.Done() or notif-channel close; ctx cancellability asserted at RegisterServe entry"
 	for {
 		select {
 		case <-ctx.Done():
