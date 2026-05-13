@@ -1,14 +1,10 @@
 // Workspace-broker wire protocol. The orchestrator pairs a
 // `daft workspace serve` running on a user-host with a
 // `daft-sandboxd` waiting to consume a workspace, mints a session,
-// and (in Slice 3.5b) relays the spliced byte channel between
-// them. mTLS runs end-to-end between client and sandbox inside
-// the relay — the orchestrator authenticates both peers but never
-// sees plaintext workspace bytes.
-//
-// Slice 3.5a (this proto) lands the matcher: Register/RequestAttach
-// pair up two peers and hand back a session_id. Slice 3.5b lands
-// the Relay byte-splice. Until then, Relay returns Unimplemented.
+// and relays the spliced byte channel between them. mTLS runs
+// end-to-end between client and sandbox inside the relay — the
+// orchestrator authenticates both peers but never sees plaintext
+// workspace bytes.
 //
 // See PLAN.md "Slice 3.5 design" for the architectural rationale.
 
@@ -94,9 +90,6 @@ type BrokerServiceClient interface {
 	// Subsequent messages carry opaque bytes — inner mTLS runs
 	// end-to-end between client and sandbox-host, so the
 	// orchestrator never sees workspace plaintext.
-	//
-	// Slice 3.5a stub: returns Unimplemented. Slice 3.5b adds the
-	// splice.
 	Relay(context.Context) *connect.BidiStreamForClient[v1.RelayMessage, v1.RelayMessage]
 }
 
@@ -200,9 +193,6 @@ type BrokerServiceHandler interface {
 	// Subsequent messages carry opaque bytes — inner mTLS runs
 	// end-to-end between client and sandbox-host, so the
 	// orchestrator never sees workspace plaintext.
-	//
-	// Slice 3.5a stub: returns Unimplemented. Slice 3.5b adds the
-	// splice.
 	Relay(context.Context, *connect.BidiStream[v1.RelayMessage, v1.RelayMessage]) error
 }
 

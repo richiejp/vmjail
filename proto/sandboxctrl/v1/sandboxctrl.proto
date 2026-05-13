@@ -1,0 +1,85 @@
+// SandboxControlService is the orchestrator-side control plane for
+// `daft-sandboxd serve`. A sandbox-host opens a single outbound
+// mTLS connection to the orchestrator and:
+//
+//   1. calls RegisterSandbox with its host-resource advertisement,
+//      holding the server-streamed channel open for the lifetime
+//      of the sandboxd process. The first event is a SubscriptionReady;
+//      Slice A4 will reuse the stream for orchestrator → sandboxd
+//      Dispatch.
+//   2. emits Heartbeat unaries on a fixed interval so the
+//      orchestrator's registry can mark sandboxes dead when the
+//      heartbeats stop.
+//
+// Caller identity for every RPC is the mTLS leaf-cert fingerprint
+// surfaced via withPeerMiddleware — there is no sandbox_id field;
+// the sandboxd's own identity is the identifier.
+//
+// See PLAN.md "Direction (2026-05-12)" Phase A.
+syntax = "proto3";
+
+package daft.sandboxctrl.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1;sandboxctrlv1";
+
+service SandboxControlService {
+  // RegisterSandbox advertises a sandbox-host's resources and holds
+  // the stream open for the orchestrator to push control events
+  // (initially just SubscriptionReady; Slice A4 adds Dispatch).
+  rpc RegisterSandbox(RegisterSandboxRequest) returns (stream RegisterEvent) {}
+
+  // Heartbeat refreshes the sandbox's last-seen timestamp. The
+  // sandbox advertises current resource utilisation alongside the
+  // ping so the orchestrator scheduler has a fresh view without
+  // a separate RPC. Stateless and idempotent.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse) {}
+}
+
+// HostResources advertises what a sandbox-host can dispatch onto.
+// v1 carries CPU count and physical RAM only; GPU/PCI inventory
+// lands in Slice D1.
+message HostResources {
+  // Logical CPU count (runtime.NumCPU).
+  uint32 cpus = 1;
+  // Total host RAM in bytes (/proc/meminfo MemTotal × 1024).
+  uint64 memory_bytes = 2;
+}
+
+message RegisterSandboxRequest {
+  // Sandboxd build version (matches `daft version`). Lets the
+  // orchestrator reject sandboxes too old to dispatch onto.
+  string version = 1;
+  // Host resource advertisement, captured at registration time.
+  HostResources resources = 2;
+}
+
+// RegisterEvent is the envelope for events pushed on the
+// RegisterSandbox stream. v1 only carries SubscriptionReady;
+// Slice A4 adds a Dispatch variant inside the same oneof.
+message RegisterEvent {
+  oneof event {
+    SubscriptionReady ready = 1;
+  }
+}
+
+// SubscriptionReady confirms the registration was recorded.
+// Sent once, as the first event on every RegisterSandbox stream.
+// Carries the orchestrator's monotonic accept time so the caller
+// can detect a re-register (e.g. after orchestrator restart).
+message SubscriptionReady {
+  google.protobuf.Timestamp accepted_at = 1;
+}
+
+message HeartbeatRequest {
+  // Optional updated resource snapshot. Allowed to be nil if the
+  // sandbox has nothing fresh to report.
+  HostResources current = 1;
+}
+
+message HeartbeatResponse {
+  // Server-side wall-clock time at which the heartbeat was
+  // recorded. Useful for clock-skew debugging in traces.
+  google.protobuf.Timestamp seen_at = 1;
+}

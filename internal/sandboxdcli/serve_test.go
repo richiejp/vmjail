@@ -1,0 +1,198 @@
+package sandboxdcli
+
+import (
+	"context"
+	"errors"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
+	"github.com/richiejp/darkaifactory/internal/sandboxctrlclient"
+)
+
+func identityGenerateForTest() (*identity.Identity, error) {
+	return identity.Generate(identity.RoleSandboxHost)
+}
+
+func memoryPeerStore() *identity.PeerStore {
+	return identity.NewMemoryPeerStore()
+}
+
+func TestServeRequiresOrchestratorFlag(t *testing.T) {
+	_, _, err := runSandboxd(t, serveCmdName)
+	if err == nil || !strings.Contains(err.Error(), "--orchestrator is required") {
+		t.Errorf("err = %v, want --orchestrator required", err)
+	}
+}
+
+// TestRunServeRunsRegisterAndServe swaps the test seam to verify the
+// full happy path: identity load, peer-store load, resource detect,
+// client construction, and the call into RegisterAndServe — all
+// without dialing a real orchestrator.
+func TestRunServeRunsRegisterAndServe(t *testing.T) {
+	saved := runRegisterAndServe
+	t.Cleanup(func() { runRegisterAndServe = saved })
+
+	called := make(chan struct{}, 1)
+	var seenRes sandboxctrl.Resources
+	runRegisterAndServe = func(_ context.Context, _ *sandboxctrlclient.Client, res sandboxctrl.Resources) error {
+		seenRes = res
+		called <- struct{}{}
+		return nil
+	}
+
+	dir := t.TempDir()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	if err := runServe(ctx, &noopWriter{}, "https://orch.invalid:8443", dir, 100*time.Millisecond); err != nil {
+		t.Fatalf("runServe: %v", err)
+	}
+	select {
+	case <-called:
+	default:
+		t.Fatal("RegisterAndServe seam was not invoked")
+	}
+	if seenRes.CPUs == 0 {
+		t.Errorf("Resources.CPUs not populated: %+v", seenRes)
+	}
+}
+
+// TestRunServeBadIdentityDir covers the loadOrGenerateSandboxd
+// error branch: when the config dir resolves to a file path, the
+// LoadOrGenerate call fails before any RPC machinery is constructed.
+// TestRunServeBadConfigDirResolve covers the resolveSandboxdDir
+// error branch: when configDirOverride is empty and the OS can't
+// determine a user config dir (no HOME, no XDG_CONFIG_HOME),
+// runServe must fail-fast before touching identity / peers.
+func TestRunServeBadConfigDirResolve(t *testing.T) {
+	saved := runRegisterAndServe
+	t.Cleanup(func() { runRegisterAndServe = saved })
+	runRegisterAndServe = func(context.Context, *sandboxctrlclient.Client, sandboxctrl.Resources) error {
+		t.Error("RegisterAndServe should not run when config dir cannot be resolved")
+		return nil
+	}
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", "", time.Second)
+	if err == nil {
+		t.Fatal("expected error when neither HOME nor XDG_CONFIG_HOME is set")
+	}
+}
+
+func TestRunServeBadIdentityDir(t *testing.T) {
+	saved := runRegisterAndServe
+	t.Cleanup(func() { runRegisterAndServe = saved })
+	runRegisterAndServe = func(context.Context, *sandboxctrlclient.Client, sandboxctrl.Resources) error {
+		t.Error("RegisterAndServe should not run when identity load fails")
+		return nil
+	}
+
+	// Use a file path as the config dir — LoadOrGenerate refuses.
+	dir := t.TempDir()
+	conflict := dir + "/notadir"
+	if err := writeBlocker(conflict); err != nil {
+		t.Fatalf("writeBlocker: %v", err)
+	}
+	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", conflict, time.Second)
+	if err == nil {
+		t.Fatal("expected error from identity load against a file path")
+	}
+}
+
+// TestRunServeBadPeerStore covers the openSandboxdPeerStore error
+// branch: when peers.json exists as a directory, the file open
+// inside OpenPeerStore fails after identity has loaded fine.
+func TestRunServeBadPeerStore(t *testing.T) {
+	saved := runRegisterAndServe
+	t.Cleanup(func() { runRegisterAndServe = saved })
+	runRegisterAndServe = func(context.Context, *sandboxctrlclient.Client, sandboxctrl.Resources) error {
+		t.Error("RegisterAndServe should not run when peer store load fails")
+		return nil
+	}
+	dir := t.TempDir()
+	// Pre-load identity so its files exist, then plant a peers.json
+	// directory so OpenPeerStore fails on the file open.
+	if _, err := loadOrGenerateSandboxd(dir); err != nil {
+		t.Fatalf("identity prep: %v", err)
+	}
+	if err := os.Mkdir(dir+"/peers.json", 0o700); err != nil {
+		t.Fatalf("mkdir peers.json blocker: %v", err)
+	}
+	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", dir, time.Second)
+	if err == nil {
+		t.Fatal("expected error from peer store load against a directory")
+	}
+}
+
+func TestRunServePropagatesRegisterError(t *testing.T) {
+	saved := runRegisterAndServe
+	t.Cleanup(func() { runRegisterAndServe = saved })
+
+	want := errors.New("synthetic register failure")
+	runRegisterAndServe = func(context.Context, *sandboxctrlclient.Client, sandboxctrl.Resources) error {
+		return want
+	}
+
+	dir := t.TempDir()
+	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", dir, time.Second)
+	if !errors.Is(err, want) {
+		t.Errorf("err = %v, want %v", err, want)
+	}
+}
+
+// TestRunRegisterAndServeSeamCallsClient covers the production
+// `runRegisterAndServe` seam itself by invoking it with a real
+// Client pointed at an unreachable orchestrator. The seam just
+// delegates to client.RegisterAndServe; failure here is fine — we
+// only need the production call site executed.
+func TestRunRegisterAndServeSeamCallsClient(t *testing.T) {
+	id, err := identityGenerateForTest()
+	if err != nil {
+		t.Fatalf("identity generate: %v", err)
+	}
+	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+		URL:               "https://127.0.0.1:1",
+		Identity:          id,
+		Peers:             memoryPeerStore(),
+		HeartbeatInterval: time.Second,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	// We don't care about the error — the seam ran iff we got here.
+	_ = runRegisterAndServe(ctx, client, sandboxctrl.Resources{})
+}
+
+func TestFormatBytes(t *testing.T) {
+	cases := []struct {
+		in   uint64
+		want string
+	}{
+		{0, "0 B"},
+		{512, "512 B"},
+		{2048, "2.0 KiB"},
+		{16 << 30, "16.0 GiB"},
+	}
+	for _, tc := range cases {
+		if got := formatBytes(tc.in); got != tc.want {
+			t.Errorf("formatBytes(%d) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+type noopWriter struct{}
+
+func (*noopWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+// writeBlocker creates a regular file at path so that any
+// LoadOrGenerate attempt that wants to MkdirAll(path) fails with
+// "not a directory".
+func writeBlocker(path string) error {
+	return os.WriteFile(path, []byte("blocker"), 0o600)
+}

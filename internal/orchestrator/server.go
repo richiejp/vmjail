@@ -20,10 +20,12 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/component"
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
+	"github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1/sandboxctrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/mtls"
+	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
 	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspacebroker"
 )
@@ -59,18 +61,25 @@ type Config struct {
 	// peers. New constructs a default matcher if this is nil.
 	// Tests pass a pre-populated matcher to inspect state.
 	Matcher *workspacebroker.Matcher
+
+	// SandboxRegistry tracks live sandbox-host registrations
+	// (`daft-sandboxd serve` callers) and their heartbeats. New
+	// constructs a default registry if this is nil. Tests pass a
+	// pre-built registry to observe state directly.
+	SandboxRegistry *sandboxctrl.Registry
 }
 
 // Server is the orchestrator's mTLS-gated control-plane listener.
 // It's a thin wrapper around mtls.Server that registers the
 // orchestrator's Connect-RPC handlers (Health.Ping,
-// TraceService.ReportSpans, BrokerService) plus a /debug/traces
-// dump endpoint.
+// TraceService.ReportSpans, BrokerService, SandboxControlService)
+// plus a /debug/traces dump endpoint.
 type Server struct {
-	inner   *mtls.Server
-	tracer  *trace.Tracer
-	reaper  *trace.IngressReaper
-	matcher *workspacebroker.Matcher
+	inner      *mtls.Server
+	tracer     *trace.Tracer
+	reaper     *trace.IngressReaper
+	matcher    *workspacebroker.Matcher
+	sandboxReg *sandboxctrl.Registry
 
 	reaperStart  sync.Once
 	reaperStop   sync.Once
@@ -81,6 +90,11 @@ type Server struct {
 // Matcher returns the orchestrator's workspace-broker matcher.
 // Exposed for tests that want to assert matcher state directly.
 func (s *Server) Matcher() *workspacebroker.Matcher { return s.matcher }
+
+// SandboxRegistry returns the orchestrator's sandbox-control
+// registry. Exposed for tests that want to assert registration
+// state directly, and (Slice A2) for ListSandboxes.
+func (s *Server) SandboxRegistry() *sandboxctrl.Registry { return s.sandboxReg }
 
 // New builds a Server with the provided config. Returns an error if
 // Config.Identity or Config.Peers is missing or if the TLS template
@@ -100,47 +114,31 @@ func New(cfg Config) (*Server, error) {
 
 	mux := http.NewServeMux()
 	interceptor := connect.WithInterceptors(tracer.ServerInterceptor())
-	healthPath, healthHandler := healthv1connect.NewHealthServiceHandler(
-		NewHealthHandler(), interceptor,
-	)
-	mux.Handle(healthPath, healthHandler)
-
-	traceHandler, err := NewTraceHandler(tracer)
-	if err != nil {
-		return nil, err
-	}
-	tracePath, traceConnectHandler := tracev1connect.NewTraceServiceHandler(
-		traceHandler, interceptor,
-	)
-	mux.Handle(tracePath, traceConnectHandler)
-
-	mux.Handle("/debug/traces", debugTracesHandler(tracer))
-
 	matcher := cfg.Matcher
 	if matcher == nil {
 		matcher = workspacebroker.New()
+	}
+	sandboxReg := cfg.SandboxRegistry
+	if sandboxReg == nil {
+		sandboxReg = sandboxctrl.NewRegistry(nil)
 	}
 	// The broker handler needs the orchestrator's bound address
 	// to return as the relay endpoint, but the listener doesn't
 	// bind until Listen(). Close over a late-bound *mtls.Server
 	// that gets filled in once mtls.New returns below.
 	var inner *mtls.Server
-	brokerHandler, err := NewBrokerHandler(matcher, func() string {
+	getRelayEndpoint := func() string {
 		if inner == nil {
 			return ""
 		}
 		return inner.Addr()
-	})
-	if err != nil {
+	}
+	if err := registerServices(mux, interceptor, tracer, matcher, sandboxReg, getRelayEndpoint); err != nil {
 		return nil, err
 	}
-	brokerPath, brokerConnectHandler := workspacebrokerv1connect.NewBrokerServiceHandler(
-		brokerHandler, interceptor,
-	)
-	mux.Handle(brokerPath, brokerConnectHandler)
-
 	handler := withPeerMiddleware(mux)
 
+	var err error
 	inner, err = mtls.New(mtls.Config{
 		Identity:          cfg.Identity,
 		Peers:             cfg.Peers,
@@ -156,11 +154,58 @@ func New(cfg Config) (*Server, error) {
 		reaper = trace.NewIngressReaper(tracer, component.Orchestrator)
 	}
 	return &Server{
-		inner:   inner,
-		tracer:  tracer,
-		reaper:  reaper,
-		matcher: matcher,
+		inner:      inner,
+		tracer:     tracer,
+		reaper:     reaper,
+		matcher:    matcher,
+		sandboxReg: sandboxReg,
 	}, nil
+}
+
+// registerServices installs every Connect-RPC handler plus the
+// /debug/traces endpoint on mux. Extracted from New so that Slice
+// A's incremental services keep New itself under funlen's cap.
+func registerServices(
+	mux *http.ServeMux,
+	interceptor connect.HandlerOption,
+	tracer *trace.Tracer,
+	matcher *workspacebroker.Matcher,
+	sandboxReg *sandboxctrl.Registry,
+	relayEndpointFn func() string,
+) error {
+	healthPath, healthHandler := healthv1connect.NewHealthServiceHandler(
+		NewHealthHandler(), interceptor,
+	)
+	mux.Handle(healthPath, healthHandler)
+
+	traceHandler, err := NewTraceHandler(tracer)
+	if err != nil {
+		return err
+	}
+	tracePath, traceConnectHandler := tracev1connect.NewTraceServiceHandler(
+		traceHandler, interceptor,
+	)
+	mux.Handle(tracePath, traceConnectHandler)
+	mux.Handle("/debug/traces", debugTracesHandler(tracer))
+
+	brokerHandler, err := NewBrokerHandler(matcher, relayEndpointFn)
+	if err != nil {
+		return err
+	}
+	brokerPath, brokerConnectHandler := workspacebrokerv1connect.NewBrokerServiceHandler(
+		brokerHandler, interceptor,
+	)
+	mux.Handle(brokerPath, brokerConnectHandler)
+
+	sandboxCtrlHandler, err := NewSandboxControlHandler(sandboxReg)
+	if err != nil {
+		return err
+	}
+	sandboxCtrlPath, sandboxCtrlConnectHandler := sandboxctrlv1connect.NewSandboxControlServiceHandler(
+		sandboxCtrlHandler, interceptor,
+	)
+	mux.Handle(sandboxCtrlPath, sandboxCtrlConnectHandler)
+	return nil
 }
 
 // Tracer returns the orchestrator's Tracer. Callers can use it to

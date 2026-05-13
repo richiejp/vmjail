@@ -221,13 +221,19 @@ The GPU-bound VM survives idle for $TTL between workspaces.
 ### Slice plan
 
 Phase A — **Sandboxd daemon mode**:
-- A1: `daft-sandboxd serve --orchestrator <url>` opens an
-  outbound mTLS control channel (reusing `brokerclient`),
-  issues `SandboxControlService.RegisterSandbox` with resource
-  advertisement, sends heartbeats.
-- A2: Orchestrator-side `SandboxControlService`: tracks
-  registrations (in-memory v1; persistence in B5), exposes
-  `ListSandboxes` to the client.
+- A1 (landed): `daft-sandboxd serve --orchestrator <url>` opens
+  an outbound mTLS control channel over a new
+  `SandboxControlService` (`proto/sandboxctrl/v1`), issues
+  `RegisterSandbox` with a CPU + RAM advertisement, and emits
+  `Heartbeat` pings on a 5-second ticker until SIGTERM. The
+  orchestrator-side registry (`internal/sandboxctrl.Registry`)
+  tracks live registrations keyed by mTLS fingerprint, refreshes
+  `LastSeenAt` on every heartbeat, and releases the entry on
+  stream close. `ListSandboxes` exposure to clients is deferred
+  to A2.
+- A2: Orchestrator-side `SandboxControlService` exposes
+  `ListSandboxes` to the client (the registry foundation landed
+  in A1; persistence in B5).
 - A3: `SandboxSpec` proto (image, mounts[], env[], ports[],
   gpu_request, isolation, workspace_uuid).
 - A4: Orchestrator → sandboxd `Dispatch(SandboxSpec)` over the
@@ -1126,6 +1132,21 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
         tool; banning them is not viable.
       - Broad "no unbounded `append` from untrusted input" — no
         honest static check; stays a review concern.
+- [x] Workflow reorientation Slice A1 — `daft-sandboxd serve` daemon
+      mode. New `SandboxControlService` proto under
+      `proto/sandboxctrl/v1` (`RegisterSandbox` server-stream +
+      unary `Heartbeat`); orchestrator-side registry in
+      `internal/sandboxctrl` keyed by mTLS fingerprint with
+      `RegisteredAt` / `LastSeenAt`; outbound client in
+      `internal/sandboxctrlclient` (mTLS dial → register → 5s
+      heartbeat ticker until ctx cancel); CLI surface added as
+      `daft-sandboxd serve --orchestrator <url>` with a
+      `runRegisterAndServe` test seam. Resource probe reads CPU
+      via `runtime.NumCPU()` and total RAM via `/proc/meminfo`
+      MemTotal. End-to-end test in `internal/sandboxctrlclient`
+      stands up an in-process orchestrator and verifies
+      registration appears, heartbeat refreshes `LastSeenAt`, and
+      the entry is released on stream close.
 
 ## Architecture
 

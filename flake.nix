@@ -87,7 +87,7 @@
             pname = name;
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-++uPMwZ4sXtzY1Ox/tRxG9wA/rUQtr589sRwJ0/m2GY=";
+            vendorHash = "sha256-8YS/GSe85WpSdhgNU9PdPUcmPH3GljNT2s0NuF3akXQ=";
             env.CGO_ENABLED = if cgoEnabled then "1" else "0";
             ldflags = [
               "-s" "-w"
@@ -162,7 +162,7 @@
             pname = "daft-sandboxd";
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-++uPMwZ4sXtzY1Ox/tRxG9wA/rUQtr589sRwJ0/m2GY=";
+            vendorHash = "sha256-8YS/GSe85WpSdhgNU9PdPUcmPH3GljNT2s0NuF3akXQ=";
             env.CGO_ENABLED = "0";
 
             # Stage the real artifacts into internal/bundled/assets/

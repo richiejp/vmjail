@@ -1,14 +1,10 @@
 // Workspace-broker wire protocol. The orchestrator pairs a
 // `daft workspace serve` running on a user-host with a
 // `daft-sandboxd` waiting to consume a workspace, mints a session,
-// and (in Slice 3.5b) relays the spliced byte channel between
-// them. mTLS runs end-to-end between client and sandbox inside
-// the relay — the orchestrator authenticates both peers but never
-// sees plaintext workspace bytes.
-//
-// Slice 3.5a (this proto) lands the matcher: Register/RequestAttach
-// pair up two peers and hand back a session_id. Slice 3.5b lands
-// the Relay byte-splice. Until then, Relay returns Unimplemented.
+// and relays the spliced byte channel between them. mTLS runs
+// end-to-end between client and sandbox inside the relay — the
+// orchestrator authenticates both peers but never sees plaintext
+// workspace bytes.
 //
 // See PLAN.md "Slice 3.5 design" for the architectural rationale.
 
