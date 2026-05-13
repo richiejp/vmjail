@@ -1132,6 +1132,19 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
         tool; banning them is not viable.
       - Broad "no unbounded `append` from untrusted input" — no
         honest static check; stays a review concern.
+- [x] Local-artefact integration build — `make integration` no
+      longer calls `nix build` for the initramfs or the hello
+      bundle. The slow-moving artefacts (cloud-hypervisor, kernel,
+      virtiofsd, crun, u-root) are pinned by the Nix dev shell and
+      exposed via `DAFT_*` env vars; per-commit artefacts assemble
+      locally under `bin/initramfs.cpio.gz` + `bin/hello-bundle/`
+      via Make + u-root. Why: `nix build .#initramfs` minted a new
+      store path on every commit (the daft-agent binary embeds into
+      the cpio), flooding `/nix/store` over time and exhausting the
+      root partition on dev machines. The flake's initramfs /
+      hello-bundle derivations are still used by
+      `nix build .#daft-sandboxd` for release builds — only the
+      iteration path moved.
 - [x] Workflow reorientation Slice A1 — `daft-sandboxd serve` daemon
       mode. New `SandboxControlService` proto under
       `proto/sandboxctrl/v1` (`RegisterSandbox` server-stream +

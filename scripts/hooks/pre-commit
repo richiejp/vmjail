@@ -20,6 +20,15 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-make --no-print-directory verify
+# `make integration` needs the dev shell's tools (u-root, gzip, cpio)
+# plus the pinned DAFT_* artefact env vars. direnv-aware shells
+# already have these via flake.nix; for shells where git is invoked
+# outside the dev shell, fall back to `nix develop -c` so the hook
+# still works.
+if [ -n "${DAFT_UROOT:-}" ]; then
+	make --no-print-directory verify
+else
+	nix develop -c make --no-print-directory verify
+fi
 
 echo "[pre-commit] OK"

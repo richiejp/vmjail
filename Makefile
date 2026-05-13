@@ -1,4 +1,4 @@
-.PHONY: all check verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator integration integration-build proto clean help
+.PHONY: all check verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-initramfs build-hello-bundle integration integration-build proto clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -11,6 +11,12 @@ LDFLAGS := -X github.com/richiejp/darkaifactory/internal/version.Version=$(VERSI
 # on.
 OUR_GO_PKGS := ./internal/... ./cmd/...
 OUR_GO_DIRS := internal cmd
+
+# Output directory for every locally-built artefact (Go binaries
+# plus the VM-side initramfs/bundle). Gitignored. Keep at the top so
+# every Makefile section can reference BIN_DIR without ordering
+# constraints.
+BIN_DIR := bin
 
 # Default target follows the GNU convention: `make all` builds the
 # project and runs the fast checks. Pre-commit and CI use `make
@@ -44,7 +50,7 @@ help:
 	@echo "  bench       - update committed bench.txt baseline"
 	@echo "  bench-check - fail on >2x regressions, warn on >1.1x, vs bench.txt"
 	@echo "  fuzz        - run every FuzzXxx target (FUZZ_TIME, default 30s, per target)"
-	@echo "  integration - nix-build artefacts and run e2e tests (real VM boot)"
+	@echo "  integration - build initramfs + bundle locally, run e2e tests (real VM boot)"
 	@echo "  proto       - regenerate Go code from proto/*.proto"
 	@echo "  hooks       - install git pre-commit hook into .git/hooks"
 	@echo "  build       - build daft, daft-agent, daft-sandboxd, daft-orchestrator into ./bin/ (dev only)"
@@ -154,25 +160,78 @@ fuzz:
 # internal/sandbox/integration_test.go (build tag: linux,integration).
 # The target name is historical; by the unit/integration/e2e
 # taxonomy in CONTRIBUTING.md these are e2e because they boot a
-# real cloud-hypervisor against the Nix-built kernel / initramfs /
-# virtiofsd / OCI bundle artefacts. We nix-build them first and
-# let the test resolver pick them up via the result-* symlinks at
-# the repo root.
+# real cloud-hypervisor against the kernel / initramfs / virtiofsd /
+# OCI bundle artefacts.
+#
+# Slow-moving artefacts (cloud-hypervisor, kernel, virtiofsd, crun,
+# u-root) come from the Nix dev shell via DAFT_* env vars — pinned
+# in flake.nix, only realised when their sources change. Per-commit
+# artefacts (the initramfs and the hello-bundle, both of which embed
+# our own Go binaries) assemble locally under bin/ via `go build` +
+# u-root, so iterating on agent / hello-container code does not
+# flood /nix/store with a new store path each commit.
 #
 # Linux + KVM is required, not optional. The pre-commit hook runs
 # this on every commit — there is no graceful degradation.
 
-integration-build:
-	@echo "[e2e] nix-building artefacts..."
-	@nix build -L .#cloud-hypervisor -o result-ch
-	@nix build -L .#kernel -o result-kernel
-	@nix build -L .#virtiofsd -o result-virtiofsd
-	@nix build -L .#initramfs -o result-initramfs
-	@nix build -L .#hello-bundle -o result-bundle
+# Local artefact outputs. Both live under bin/ (gitignored) so they
+# don't escape into the repo or into /nix/store.
+INITRAMFS_OUT := $(BIN_DIR)/initramfs.cpio.gz
+BUNDLE_OUT    := $(BIN_DIR)/hello-bundle
+
+# build-initramfs assembles the sandbox-VM initramfs locally with
+# u-root, using daft-agent + crun from the dev shell. Mirrors the
+# layout produced by the flake's `initramfs` derivation (which the
+# `daft-sandboxd` build still uses).
+#
+# Requires the dev shell's DAFT_CRUN / DAFT_UROOT / DAFT_UROOT_SRC
+# env vars to be set; the recipe asserts that up front so a failed
+# build doesn't dump a confusing stack trace.
+build-initramfs: build-daft-agent
+	@: "$${DAFT_UROOT:?DAFT_UROOT not set — enter the Nix dev shell}"
+	@: "$${DAFT_UROOT_SRC:?DAFT_UROOT_SRC not set — enter the Nix dev shell}"
+	@: "$${DAFT_CRUN:?DAFT_CRUN not set — enter the Nix dev shell}"
+	@echo "[initramfs] assembling $(INITRAMFS_OUT)"
+	@rm -rf $(BIN_DIR)/initramfs-work && mkdir -p $(BIN_DIR)/initramfs-work
+	@cp -r --no-preserve=mode $$DAFT_UROOT_SRC/. $(BIN_DIR)/initramfs-work/
+	@# u-root spawns `go` internally to compile cmds/core/init; it
+	@# locates the toolchain via $GOROOT/bin/go, so spell GOROOT out
+	@# explicitly (the dev shell's `go env GOROOT` resolves it).
+	@cd $(BIN_DIR)/initramfs-work && GOROOT="$$(go env GOROOT)" $$DAFT_UROOT \
+		-o ../initramfs.cpio \
+		-defaultsh="" \
+		-base=/dev/null \
+		-files "$(CURDIR)/$(BIN_DIR)/daft-agent:bin/daft-agent" \
+		-files "$$DAFT_CRUN:bin/crun" \
+		-uinitcmd=/bin/daft-agent \
+		./cmds/core/init
+	@gzip -f -n $(BIN_DIR)/initramfs.cpio
+	@rm -rf $(BIN_DIR)/initramfs-work
+
+# build-hello-bundle assembles the OCI bundle the integration test
+# feeds to crun. Mirrors the flake's `hello-bundle` derivation
+# layout — one binary in rootfs/ plus the checked-in config.json.
+build-hello-bundle: build-daft-hello-container
+	@echo "[hello-bundle] assembling $(BUNDLE_OUT)"
+	@rm -rf $(BUNDLE_OUT)
+	@mkdir -p $(BUNDLE_OUT)/rootfs
+	@cp $(BIN_DIR)/daft-hello-container $(BUNDLE_OUT)/rootfs/hello
+	@chmod +x $(BUNDLE_OUT)/rootfs/hello
+	@cp contrib/hello-bundle/config.json $(BUNDLE_OUT)/config.json
+
+# integration-build prepares everything `make integration` needs to
+# run. The slow-moving binaries are already on disk from the dev
+# shell; only the per-commit artefacts have to be built.
+integration-build: build-initramfs build-hello-bundle
+	@: "$${DAFT_CLOUD_HYPERVISOR:?DAFT_CLOUD_HYPERVISOR not set — enter the Nix dev shell}"
+	@: "$${DAFT_KERNEL:?DAFT_KERNEL not set — enter the Nix dev shell}"
+	@: "$${DAFT_VIRTIOFSD:?DAFT_VIRTIOFSD not set — enter the Nix dev shell}"
 
 integration: integration-build
 	@echo "[e2e] booting real VMs against /dev/kvm..."
-	@go test -tags=integration -count=1 ./internal/sandbox/
+	@DAFT_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT) \
+		DAFT_BUNDLE=$(CURDIR)/$(BUNDLE_OUT) \
+		go test -tags=integration -count=1 ./internal/sandbox/
 
 ## Git hooks -----------------------------------------------------------------
 
@@ -194,7 +253,6 @@ hooks:
 #     the real cloud-hypervisor / kernel / initramfs are pulled in
 #     only by the Nix build (`nix build .#daft-sandboxd`). Use Nix
 #     for any release artefact.
-BIN_DIR := bin
 
 build: build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator
 
@@ -205,6 +263,14 @@ build-daft:
 build-daft-agent:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-agent ./cmd/daft-agent
+
+# daft-hello-container is the workload binary that runs *inside the
+# container*. The integration test's hello-bundle rootfs/hello is a
+# copy of this. Statically linked: it runs against the VM's minimal
+# initramfs, no host libc.
+build-daft-hello-container:
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-hello-container ./cmd/daft-hello-container
 
 build-daft-sandboxd:
 	@mkdir -p $(BIN_DIR)
@@ -231,3 +297,8 @@ clean:
 	@# Legacy: earlier builds put binaries at the repo root. Clean
 	@# those too in case someone is upgrading from an older Makefile.
 	rm -f daft daft-agent daft-sandboxd
+	@# Legacy: pre-2026-05-13 `make integration-build` planted
+	@# result-* symlinks at the repo root. We no longer create them
+	@# (the dev shell pins the same store paths), but keep the rm so
+	@# upgrading developers get a clean tree without an extra step.
+	rm -f result result-ch result-kernel result-virtiofsd result-initramfs result-bundle

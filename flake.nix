@@ -17,39 +17,88 @@
         version = pkgs.lib.strings.removeSuffix "\n" (builtins.readFile ./version.txt);
       in
       {
-        devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            go
-            gopls
-            gotools
-            go-tools
+        devShells.default =
+          let
+            # Slow-moving sandbox-host artefacts pinned by the flake.
+            # They land on the shell as DAFT_* env vars; `make
+            # integration` reads those vars (with a fall-back to
+            # ./result-* for the legacy nix-build path). Their store
+            # paths change only when their sources change, so a
+            # commit-by-commit iteration doesn't add anything to
+            # /nix/store — unlike the per-commit `initramfs` and
+            # `hello-bundle` derivations, which now assemble locally
+            # under bin/ via Make. See PLAN.md "Dev-shell artefacts"
+            # for the rationale.
+            inherit (self.packages.${system})
+              cloud-hypervisor kernel virtiofsd crun u-root;
+          in
+          pkgs.mkShell {
+            buildInputs = with pkgs; [
+              go
+              gopls
+              gotools
+              go-tools
 
-            # Formatting
-            gofumpt
+              # Formatting
+              gofumpt
 
-            # Metrics & linting (mirrors the linters configured in .golangci.yml)
-            golangci-lint
-            gocyclo
-            goconst
-            scc
+              # Metrics & linting (mirrors the linters configured in .golangci.yml)
+              golangci-lint
+              gocyclo
+              goconst
+              scc
 
-            # Protobuf / Connect-RPC codegen. The codegen plugins
-            # (protoc-gen-go, protoc-gen-connect-go) are pinned via
-            # tools/tools.go and invoked through `go run`, so only
-            # buf itself needs to be in the dev shell. `make proto`
-            # is the entry point.
-            buf
-          ];
+              # Protobuf / Connect-RPC codegen. The codegen plugins
+              # (protoc-gen-go, protoc-gen-connect-go) are pinned via
+              # tools/tools.go and invoked through `go run`, so only
+              # buf itself needs to be in the dev shell. `make proto`
+              # is the entry point.
+              buf
 
-          shellHook = ''
-            echo "darkaifactory dev shell ready (version ${version})"
-            echo "  make fmt    - format Go code"
-            echo "  make lint   - run golangci-lint"
-            echo "  make test   - run tests"
-            echo "  make cover  - update coverage.txt baseline"
-            echo "  make hooks  - install git hooks"
-          '';
-        };
+              # `make build-initramfs` calls u-root + gzip + cpio.
+              gzip
+              cpio
+            ] ++ [
+              # The slow-moving artefacts as build inputs so their
+              # store paths are realised when the shell starts and
+              # stay alive as long as the shell exists.
+              cloud-hypervisor
+              kernel
+              virtiofsd
+              crun
+              u-root
+            ];
+
+            shellHook = ''
+              # Normalize TMPDIR back to /tmp. `nix develop -c <cmd>`
+              # nests a fresh /tmp/nix-shell.X for every invocation,
+              # and a few of our unit tests use Unix sockets via
+              # t.TempDir() — the Linux sockaddr_un path limit is
+              # 108 bytes, which two nested levels of nix-shell
+              # TMPDIR + the test's own subdir blow through. The dev
+              # shell isn't a Nix build sandbox; /tmp is fine.
+              export TMPDIR=/tmp
+
+              # Pin the artefact paths that `make integration` consumes.
+              # Updating any of these requires editing the corresponding
+              # derivation in flake.nix; the path stays stable across
+              # commits otherwise.
+              export DAFT_CLOUD_HYPERVISOR="${cloud-hypervisor}/bin/cloud-hypervisor"
+              export DAFT_KERNEL="${kernel}/bzImage"
+              export DAFT_VIRTIOFSD="${virtiofsd}/bin/virtiofsd"
+              export DAFT_CRUN="${crun}/bin/crun"
+              export DAFT_UROOT="${u-root}/bin/u-root"
+              export DAFT_UROOT_SRC="${./third_party/u-root}"
+
+              echo "darkaifactory dev shell ready (version ${version})"
+              echo "  make fmt          - format Go code"
+              echo "  make lint         - run golangci-lint"
+              echo "  make test         - run tests"
+              echo "  make integration  - build initramfs + bundle locally, run e2e"
+              echo "  make cover        - update coverage.txt baseline"
+              echo "  make hooks        - install git hooks"
+            '';
+          };
 
         packages = rec {
           default = daft;
