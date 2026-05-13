@@ -236,8 +236,12 @@ Phase A — **Sandboxd daemon mode**:
   RegisteredAt, LastSeenAt). Surfaced to operators as
   `daft sandbox list --orchestrator <url>`. Read-only; in-memory
   only — persistence still B5.
-- A3: `SandboxSpec` proto (image, mounts[], env[], ports[],
-  gpu_request, isolation, workspace_uuid).
+- A3 (landed): `SandboxSpec` proto + supporting messages
+  (`Mount`, `EnvVar`, `PortMapping`, `Protocol`, `GpuRequest`,
+  `Isolation`) in `daft.sandboxctrl.v1`. No Dispatch RPC and no
+  executor yet — the proto is reserved for A4 to drive
+  orchestrator → sandboxd workload handoff over the existing
+  RegisterSandbox stream.
 - A4: Orchestrator → sandboxd `Dispatch(SandboxSpec)` over the
   control stream. Sandboxd executor wraps the current `Hello`
   pipeline but driven by the dispatched spec, not CLI flags.
@@ -1170,6 +1174,16 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
       (mTLS-dial, render fingerprint / version / CPUs / memory /
       last-seen age as a tab-aligned table). Read-only; persistence
       still deferred to Slice B5.
+- [x] Workflow reorientation Slice A3 — `SandboxSpec` proto. Adds
+      `SandboxSpec` plus supporting messages `Mount`, `EnvVar`,
+      `PortMapping`, `GpuRequest`, and enums `Protocol`, `Isolation`
+      under `daft.sandboxctrl.v1`. Wire-only — no Dispatch RPC, no
+      sandboxd-side executor yet. Field set matches the PLAN.md A3
+      sketch (image_ref, mounts[], env[], ports[], gpu_request,
+      isolation, workspace_uuid); `Mount.source` is documented as
+      orchestrator-allocated (workspace UUID or registered tag),
+      not free-form host paths — adoption (Slice F1) is how
+      user-host directories enter the namespace.
 
 ## Architecture
 

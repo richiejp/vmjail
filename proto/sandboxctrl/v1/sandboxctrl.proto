@@ -113,3 +113,99 @@ message SandboxRegistration {
 message ListSandboxesResponse {
   repeated SandboxRegistration sandboxes = 1;
 }
+
+// SandboxSpec is one dispatchable workload. The orchestrator
+// composes a SandboxSpec from a Workspace + scheduler decision and
+// hands it to a sandbox-host over the RegisterSandbox stream via
+// Dispatch (Slice A4). A3 lands the proto only — there is no
+// Dispatch RPC yet, and no sandboxd-side executor consumes this
+// message.
+//
+// Wire compatibility: fields are added at the tail; never renumbered.
+message SandboxSpec {
+  // OCI image reference (registry/repo:tag or @sha256:...).
+  // Resolved against the sandbox-host's imagestore on dispatch.
+  string image_ref = 1;
+  // Filesystem mounts visible inside the VM. Order is irrelevant;
+  // the executor may sort by target for deterministic mounting.
+  repeated Mount mounts = 2;
+  // Environment variables seen by the container's entrypoint.
+  // No ordering guarantees; duplicate names resolve last-write-wins
+  // at the executor (matches Docker / runc behaviour).
+  repeated EnvVar env = 3;
+  // Container TCP/UDP ports the workload binds. Slice C1 wires
+  // these back to the orchestrator's ingress; for A-phase this
+  // field is informational.
+  repeated PortMapping ports = 4;
+  // Optional GPU reservation. Unset (or zero count) ⇒ CPU-only.
+  GpuRequest gpu_request = 5;
+  // Sharing policy. UNSPECIFIED ⇒ scheduler-default (currently
+  // shared-VM with other workspaces owned by the same identity).
+  Isolation isolation = 6;
+  // Workspace this spec instantiates. The sandboxd executor uses
+  // it to scope filesystem state, port labels, and teardown.
+  string workspace_uuid = 7;
+}
+
+// Mount is one bind-style mount inside the sandbox VM.
+message Mount {
+  // In-VM mount point, absolute (e.g. "/workspace"). The executor
+  // rejects relative or empty targets.
+  string target = 1;
+  // Logical source identifier. Resolution is sandbox-host policy:
+  // a workspace UUID maps to the daft-fuse view of that workspace;
+  // a registered host-path tag maps to a pre-approved bind source.
+  // Free-form host paths are not accepted — adoption (Slice F1)
+  // is how user-host directories enter the namespace.
+  string source = 2;
+  // Mount read-only. Defaults to false (read-write) on the wire.
+  bool read_only = 3;
+}
+
+// EnvVar is one name=value pair forwarded into the container.
+message EnvVar {
+  // Variable name. Empty names are rejected by the executor.
+  string name = 1;
+  // Variable value. Allowed to be empty; the variable is still set.
+  string value = 2;
+}
+
+// Protocol selects the transport for a PortMapping.
+enum Protocol {
+  PROTOCOL_UNSPECIFIED = 0;
+  PROTOCOL_TCP = 1;
+  PROTOCOL_UDP = 2;
+}
+
+// PortMapping declares a port the container listens on.
+// The reverse direction (host-port allocation) is owned by the
+// orchestrator's ingress (Phase C).
+message PortMapping {
+  // Container listen port. Zero means "any free port"; the
+  // ingress reports back the chosen value.
+  uint32 container_port = 1;
+  // Transport. UNSPECIFIED is rejected — every PortMapping must
+  // declare its protocol explicitly so ingress can shape correctly.
+  Protocol protocol = 2;
+}
+
+// GpuRequest is the GPU reservation attached to a SandboxSpec.
+// Wire-level placeholder for Slice D1 (sandboxd GPU advertisement
+// + scheduler); A3 just reserves the shape.
+message GpuRequest {
+  // Number of logical GPUs required. Zero ⇒ no GPU.
+  uint32 count = 1;
+  // Minimum VRAM per GPU, in bytes. Zero ⇒ no minimum.
+  uint64 min_vram_bytes = 2;
+}
+
+// Isolation is the per-workspace sharing policy.
+enum Isolation {
+  ISOLATION_UNSPECIFIED = 0;
+  // SHARED: pack into an existing compatible VM when one is
+  // available. Default for CPU-mode workspaces.
+  ISOLATION_SHARED = 1;
+  // STRICT: dedicate a fresh VM to this workspace. Required for
+  // GPU workspaces that don't opt in to sharing (Slice D4).
+  ISOLATION_STRICT = 2;
+}
