@@ -175,18 +175,37 @@ func applySharesFromCmdline(w io.Writer, d runDeps, cmdline string, haveBundle b
 	if cmdline == "" {
 		return
 	}
+	overlays, err := ParseWorkspaceOverlayCmdlines(cmdline)
+	if err != nil {
+		writeReport(w, OverlayReportPrefix, "cmdline: "+err.Error())
+		overlays = nil
+	}
+	overlaySet := make(map[string]bool, len(overlays))
+	for _, mp := range overlays {
+		overlaySet[mp] = true
+	}
+
 	specs, err := ParseShareCmdlines(cmdline)
 	if err != nil {
 		writeReport(w, ShareReportPrefix, "cmdline: "+err.Error())
 		return
 	}
 	for i, spec := range specs {
+		target := spec
+		if overlaySet[spec.Mountpoint] {
+			target.Mountpoint = OverlayLowerPath(spec.Mountpoint)
+		}
 		if i == 0 && !haveBundle {
-			ApplyShare(spec, d.share, w)
+			ApplyShare(target, d.share, w)
 			continue
 		}
-		if err := MountShare(spec, d.share); err != nil {
+		if err := MountShare(target, d.share); err != nil {
 			writeReport(w, ShareReportPrefix, err.Error())
+		}
+	}
+	for i, merged := range overlays {
+		if err := MountOverlay(i, merged, d.share); err != nil {
+			writeReport(w, OverlayReportPrefix, err.Error())
 		}
 	}
 }

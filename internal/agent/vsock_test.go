@@ -187,7 +187,7 @@ func spanNames(spans []*tracev1.Span) []string {
 // but minimal — these tests don't care about share content.
 func noopShareDeps() ShareDeps {
 	return ShareDeps{
-		Mount:    func(_, _, _ string) error { return nil },
+		Mount:    func(_, _, _, _ string) error { return nil },
 		MkdirAll: func(_ string, _ os.FileMode) error { return nil },
 		ReadFile: func(name string) ([]byte, error) {
 			if filepath.Base(name) == ShareMarkerFile {

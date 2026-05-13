@@ -505,6 +505,24 @@ func TestBuildKernelCmdlineIncludesBundle(t *testing.T) {
 	}
 }
 
+func TestBuildKernelCmdlineIncludesWorkspaceOverlay(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.Shares = []*ShareConfig{{Tag: "ws", Mountpoint: testMountpoint, Overlay: true}}
+	got := buildKernelCmdline(cfg)
+	if !strings.Contains(got, agent.WorkspaceOverlayCmdlineKey+"="+testMountpoint) {
+		t.Errorf("cmdline %q missing overlay token", got)
+	}
+}
+
+func TestBuildKernelCmdlineOmitsOverlayWhenFlagFalse(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.Shares = []*ShareConfig{{Tag: "ws", Mountpoint: testMountpoint}}
+	got := buildKernelCmdline(cfg)
+	if strings.Contains(got, agent.WorkspaceOverlayCmdlineKey) {
+		t.Errorf("cmdline %q should not contain overlay token when Overlay=false", got)
+	}
+}
+
 func TestHelloRejectsRelativeBundle(t *testing.T) {
 	cfg := validCfg()
 	cfg.Bundle = "relative/bundle"

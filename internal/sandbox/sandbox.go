@@ -107,6 +107,14 @@ type ShareConfig struct {
 	// Mountpoint is the absolute path inside the guest where the agent
 	// mounts the share. Must start with `/`.
 	Mountpoint string
+	// Overlay, when true, wraps the share in a tmpfs-backed
+	// overlayfs inside the VM. The share is mounted at
+	// `<Mountpoint>.lower`; the container sees a writable view at
+	// `<Mountpoint>`. Container writes go to an in-VM tmpfs and
+	// vanish with the VM. Useful when the underlying share is
+	// either daft-fuse (read-only by construction) or a host dir
+	// we don't want the container mutating directly.
+	Overlay bool
 }
 
 // validate returns an error listing every missing required field.
@@ -381,6 +389,11 @@ func buildKernelCmdline(cfg Config) string {
 	}
 	if cfg.Vsock != nil && cfg.Vsock.TracePort != 0 {
 		parts = append(parts, agent.FormatVsockTracePortCmdline(cfg.Vsock.TracePort))
+	}
+	for _, s := range cfg.Shares {
+		if s.Overlay {
+			parts = append(parts, agent.FormatWorkspaceOverlayCmdline(s.Mountpoint))
+		}
 	}
 	return strings.Join(parts, " ")
 }

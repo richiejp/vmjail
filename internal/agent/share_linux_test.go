@@ -32,7 +32,7 @@ func TestDefaultShareDepsWiresStdlibCalls(t *testing.T) {
 	// Mount(2) requires CAP_SYS_ADMIN. We expect it to fail in any
 	// non-root test environment — but the closure body must execute
 	// for coverage. A bogus fstype guarantees ENODEV / EPERM.
-	if err := deps.Mount("none", t.TempDir(), "no_such_fs"); err == nil {
+	if err := deps.Mount("none", t.TempDir(), "no_such_fs", ""); err == nil {
 		t.Error("expected Mount to fail for bogus fstype")
 	}
 }

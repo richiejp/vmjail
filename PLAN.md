@@ -469,14 +469,38 @@ Out of Scope:
       "unsupported" error so the daft-sandboxd package still
       compiles on darwin for IDE / cross-platform tooling.
 
+      **Slice 5b landed.** `daft-sandboxd run --workspace-overlay`
+      wraps the workspace virtiofs share in a tmpfs-backed
+      overlayfs *inside the VM*. The agent honours a new
+      `daft.workspace.overlay=<mountpoint>` kernel-cmdline token:
+      the share is mounted at `<mp>.lower` instead of `<mp>`, a
+      single tmpfs at `/run/daft/overlay` backs per-overlay
+      `upper`+`work` dirs, and an overlayfs at `<mp>` merges them
+      so the container sees a writable view layered on the
+      read-only share. Container writes land in the in-VM tmpfs
+      upper and vanish with the VM — the underlying share is
+      untouched, exactly what's needed so `daft pull` can later
+      surface the diff explicitly. The flag is paired with any
+      workspace source (`--workspace`, `--workspace-from`,
+      `--workspace-broker`, `--workspace-attach`); validation
+      rejects it when there's nothing to overlay. Effectively
+      mandatory with `--workspace-attach` since daft-fuse is
+      read-only by construction. Real-VM e2e
+      (`TestWorkspaceOverlayE2E`) boots the workload container,
+      asserts the container banner is reached (write succeeded
+      inside the VM) and that `/workspace/out.txt` never appears
+      on the sandbox-host source directory (write was isolated).
+      The "diff + pull back" half of "default local-only overlay,
+      surfaced as a diff and pulled explicitly via `daft pull`"
+      is deferred — Slice 5a already gives the diff primitive
+      `workspace.DiffManifests`; a future slice will wire it to
+      the upper-layer contents (vsock-served or virtiofs-shared
+      upper) so the user-host can pull the changeset.
+
       **Remaining slices**:
       - Slice 4c: QMP `stop` enforcement on the `Freeze` decision
         — the policy engine signals the running VM to freeze
         rather than just surfacing EAGAIN to the workload.
-      - Slice 5b: write overlay on the sandbox-host (tmpfs-backed
-        overlayfs above the workspace virtiofs share inside the
-        VM) so writes from the container are captured locally
-        instead of going straight back to the bind mount.
 
       **Slice 3.5 design (orchestrator workspace broker + relay)**
       — *plan-only as of 2026-05-11.*

@@ -11,8 +11,8 @@ import (
 // filesystem helpers. Used by Run() in production.
 func defaultShareDeps() ShareDeps {
 	return ShareDeps{
-		Mount: func(source, target, fstype string) error {
-			return syscall.Mount(source, target, fstype, 0, "")
+		Mount: func(source, target, fstype, data string) error {
+			return syscall.Mount(source, target, fstype, 0, data)
 		},
 		MkdirAll: os.MkdirAll,
 		ReadFile: os.ReadFile,

@@ -21,13 +21,12 @@ const ShareMarkerFile = "hello.txt"
 // reads cleanly.
 const ShareReportPrefix = "share: "
 
-// ShareDeps abstracts the file-system / syscall surface ApplyShare uses
-// so tests can swap real mount/read for fakes without touching the
-// host's actual file system.
+// ShareDeps abstracts the file-system / syscall surface the share +
+// overlay paths share with mount(2). data is the comma-separated
+// fs-options string mount(2) takes — empty for virtiofs/tmpfs,
+// non-empty for overlayfs (lowerdir=,upperdir=,workdir=).
 type ShareDeps struct {
-	// Mount calls mount(2) — equivalent to `mount -t <fstype> <source> <target>`.
-	Mount func(source, target, fstype string) error
-	// MkdirAll, ReadFile mirror os.MkdirAll / os.ReadFile.
+	Mount    func(source, target, fstype, data string) error
 	MkdirAll func(path string, perm os.FileMode) error
 	ReadFile func(path string) ([]byte, error)
 }
@@ -40,7 +39,7 @@ func MountShare(spec ShareSpec, deps ShareDeps) error {
 	if err := deps.MkdirAll(spec.Mountpoint, 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-	if err := deps.Mount(spec.Tag, spec.Mountpoint, "virtiofs"); err != nil {
+	if err := deps.Mount(spec.Tag, spec.Mountpoint, "virtiofs", ""); err != nil {
 		return fmt.Errorf("mount: %w", err)
 	}
 	return nil

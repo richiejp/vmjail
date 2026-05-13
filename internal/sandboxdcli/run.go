@@ -88,6 +88,11 @@ func newRunCmd() *cobra.Command {
 		"mount the workspace lazily via daft-fuse instead of pre-fetching all chunks. "+
 			"Requires --workspace-from or --workspace-broker; chunks fetch on first "+
 			"read. Mutex with --workspace and --keep-workspace.")
+	cmd.Flags().BoolVar(&opts.workspaceOverlay, "workspace-overlay", false,
+		"wrap the workspace share in a tmpfs-backed overlayfs inside the VM "+
+			"so container writes go to a per-boot upper layer and the underlying "+
+			"share is never written to. Recommended (and effectively required) "+
+			"with --workspace-attach, since daft-fuse is read-only.")
 	return cmd
 }
 
@@ -105,6 +110,7 @@ type runOptions struct {
 	configDir          string
 	keepWorkspace      bool
 	workspaceAttach    bool
+	workspaceOverlay   bool
 }
 
 // runDeps bundles the moving parts of `run` so unit tests can swap
@@ -468,8 +474,18 @@ func (o runOptions) validate() error {
 		return errors.New("daft-sandboxd: --workspace-attach requires --workspace-from or --workspace-broker")
 	case o.workspaceAttach && o.keepWorkspace:
 		return errors.New("daft-sandboxd: --workspace-attach is mutually exclusive with --keep-workspace (nothing to keep — chunks live in CAS)")
+	case o.workspaceOverlay && !o.hasWorkspaceShare():
+		return errors.New("daft-sandboxd: --workspace-overlay requires a workspace share (use --workspace, --workspace-from, --workspace-broker, or --workspace-attach)")
 	}
 	return nil
+}
+
+// hasWorkspaceShare reports whether any flag will produce a
+// workspace share inside the VM. Used by validate to gate
+// --workspace-overlay so the flag can't sit alone with nothing to
+// overlay.
+func (o runOptions) hasWorkspaceShare() bool {
+	return o.workspace != "" || o.workspaceFrom != "" || o.workspaceBroker != "" || o.workspaceAttach
 }
 
 // resolveWorkspaceDir returns the on-disk directory to expose at
@@ -604,6 +620,7 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 			HostDir:    abs,
 			Tag:        workspaceTag,
 			Mountpoint: workspaceMount,
+			Overlay:    opts.workspaceOverlay,
 		})
 	}
 	return cfg, unlock, nil

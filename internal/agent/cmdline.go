@@ -84,6 +84,32 @@ func findCmdlineValue(cmdline, key string) (string, bool) {
 	return "", false
 }
 
+// findAllCmdlineValues returns every value of key=... tokens in
+// cmdline, in order of appearance. nil when the key is absent.
+// Plural counterpart to findCmdlineValue.
+func findAllCmdlineValues(cmdline, key string) []string {
+	prefix := key + "="
+	var vals []string
+	for tok := range strings.FieldsSeq(cmdline) {
+		if v, ok := strings.CutPrefix(tok, prefix); ok {
+			vals = append(vals, v)
+		}
+	}
+	return vals
+}
+
+// validateAbsoluteCmdlinePath rejects empty and relative values with
+// the canonical error shape every absolute-path cmdline parser uses.
+func validateAbsoluteCmdlinePath(key, val string) error {
+	if val == "" {
+		return fmt.Errorf("agent: %s value is empty", key)
+	}
+	if !strings.HasPrefix(val, "/") {
+		return fmt.Errorf("agent: %s path %q must be absolute", key, val)
+	}
+	return nil
+}
+
 // ParseBundleCmdline scans a kernel cmdline for `daft.bundle=<path>`.
 // Returns (path, ok=true, nil) on a well-formed token, (_, false, err)
 // on malformed input, and ("", false, nil) when the token is absent.
@@ -97,13 +123,8 @@ func ParseBundleCmdline(cmdline string) (path string, ok bool, err error) {
 	if !ok {
 		return "", false, nil
 	}
-	if val == "" {
-		return "", false, fmt.Errorf("agent: %s value is empty", BundleCmdlineKey)
-	}
-	if !strings.HasPrefix(val, "/") {
-		return "", false, fmt.Errorf(
-			"agent: %s path %q must be absolute", BundleCmdlineKey, val,
-		)
+	if err := validateAbsoluteCmdlinePath(BundleCmdlineKey, val); err != nil {
+		return "", false, err
 	}
 	return val, true, nil
 }

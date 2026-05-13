@@ -33,7 +33,7 @@ type fakeShareDeps struct {
 	madeDirs []string
 }
 
-type mountCall struct{ source, target, fstype string }
+type mountCall struct{ source, target, fstype, data string }
 
 func newFakeShareDeps() *fakeShareDeps {
 	return &fakeShareDeps{files: map[string][]byte{}}
@@ -41,8 +41,8 @@ func newFakeShareDeps() *fakeShareDeps {
 
 func (f *fakeShareDeps) toShareDeps() ShareDeps {
 	return ShareDeps{
-		Mount: func(source, target, fstype string) error {
-			f.mounts = append(f.mounts, mountCall{source, target, fstype})
+		Mount: func(source, target, fstype, data string) error {
+			f.mounts = append(f.mounts, mountCall{source, target, fstype, data})
 			return f.mountErr
 		},
 		MkdirAll: func(path string, _ os.FileMode) error {
@@ -74,7 +74,7 @@ func TestApplyShareHappyPath(t *testing.T) {
 	if buf.String() != want {
 		t.Errorf("output = %q, want %q", buf.String(), want)
 	}
-	if len(f.mounts) != 1 || f.mounts[0] != (mountCall{spec.Tag, spec.Mountpoint, "virtiofs"}) {
+	if len(f.mounts) != 1 || f.mounts[0] != (mountCall{spec.Tag, spec.Mountpoint, "virtiofs", ""}) {
 		t.Errorf("mounts = %+v, want one virtiofs mount of %q at %q", f.mounts, spec.Tag, spec.Mountpoint)
 	}
 	if len(f.madeDirs) != 1 || f.madeDirs[0] != spec.Mountpoint {

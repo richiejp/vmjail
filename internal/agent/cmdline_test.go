@@ -47,7 +47,7 @@ func TestParseShareCmdline(t *testing.T) {
 			name:      "relative mountpoint",
 			cmdline:   "daft.share=ws:share",
 			wantErr:   true,
-			errSubstr: "must be absolute",
+			errSubstr: errSubMustBeAbsolute,
 		},
 	}
 
@@ -96,6 +96,12 @@ const (
 	testCmdlineShareOnly = "console=hvc0 daft.share=ws:/share"
 	testHappyPath        = "happy path"
 	testAbsent           = "absent"
+	// Error-substring fragments shared between cmdline + overlay
+	// tests so goconst's 3-occurrence threshold isn't tripped by
+	// having the same matcher in two files.
+	errSubMustBeAbsolute = "must be absolute"
+	errSubEmptyValue     = "value is empty"
+	caseNameEmptyValue   = "empty value"
 )
 
 func TestParseBundleCmdline(t *testing.T) {
@@ -119,16 +125,16 @@ func TestParseBundleCmdline(t *testing.T) {
 			wantOK:  true,
 		},
 		{
-			name:      "empty value",
+			name:      caseNameEmptyValue,
 			cmdline:   "daft.bundle= console=hvc0",
 			wantErr:   true,
-			errSubstr: "value is empty",
+			errSubstr: errSubEmptyValue,
 		},
 		{
 			name:      "relative path",
 			cmdline:   "daft.bundle=relative/path",
 			wantErr:   true,
-			errSubstr: "must be absolute",
+			errSubstr: errSubMustBeAbsolute,
 		},
 	}
 	for _, tt := range tests {
@@ -167,7 +173,7 @@ func TestParseVsockTracePortCmdline(t *testing.T) {
 	}{
 		{name: testAbsent, cmdline: testCmdlineShareOnly, wantOK: false},
 		{name: testHappyPath, cmdline: "console=hvc0 daft.vsock.trace_port=8000", want: 8000, wantOK: true},
-		{name: "empty value", cmdline: "daft.vsock.trace_port=", wantErr: true, errSubstr: "value is empty"},
+		{name: caseNameEmptyValue, cmdline: "daft.vsock.trace_port=", wantErr: true, errSubstr: errSubEmptyValue},
 		{name: "non-numeric", cmdline: "daft.vsock.trace_port=hello", wantErr: true, errSubstr: "invalid syntax"},
 		{name: "zero", cmdline: "daft.vsock.trace_port=0", wantErr: true, errSubstr: "non-zero"},
 		{

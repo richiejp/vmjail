@@ -164,6 +164,73 @@ func TestRunAddsWorkspaceShareAndMount(t *testing.T) {
 	}
 }
 
+// TestRunWorkspaceOverlayPopulatesConfig pins the
+// --workspace-overlay → workspace ShareConfig.Overlay wiring.
+func TestRunWorkspaceOverlayPopulatesConfig(t *testing.T) {
+	wsDir := t.TempDir()
+	store := &fakeStore{
+		pulledImage: &imagestore.Image{Ref: testImageRef, Digest: testDigest},
+		bundle:      &imagestore.Bundle{Digest: testDigest, Path: testBundleDir},
+	}
+	deps := runDepsForTest(store)
+	bootCfgs := captureBootCfg(&deps)
+	err := runRun(context.Background(), io.Discard, runOptions{
+		ref: testImageRef, workspace: wsDir, workspaceOverlay: true,
+	}, deps)
+	if err != nil {
+		t.Fatalf("runRun: %v", err)
+	}
+	cfg := *bootCfgs
+	var workspaceShare *sandbox.ShareConfig
+	for _, s := range cfg.Shares {
+		if s.Mountpoint == workspaceMount {
+			workspaceShare = s
+		}
+	}
+	if workspaceShare == nil {
+		t.Fatalf("no workspace share in cfg.Shares: %+v", cfg.Shares)
+	}
+	if !workspaceShare.Overlay {
+		t.Errorf("workspace share Overlay = false, want true")
+	}
+}
+
+// TestRunWorkspaceOverlayWithoutShareIsRejected pins the validation
+// rule: --workspace-overlay alone (no workspace flag of any kind) is
+// nonsense — nothing to overlay.
+func TestRunWorkspaceOverlayWithoutShareIsRejected(t *testing.T) {
+	deps := runDepsForTest(&fakeStore{})
+	err := runRun(context.Background(), io.Discard, runOptions{
+		ref: testImageRef, workspaceOverlay: true,
+	}, deps)
+	if err == nil || !strings.Contains(err.Error(), "--workspace-overlay requires a workspace share") {
+		t.Errorf("err = %v, want --workspace-overlay rejection", err)
+	}
+}
+
+// TestRunNoOverlayLeavesShareFlagFalse pins the negative: without
+// --workspace-overlay, the workspace share's Overlay flag stays
+// false so the agent's overlay path stays dormant.
+func TestRunNoOverlayLeavesShareFlagFalse(t *testing.T) {
+	wsDir := t.TempDir()
+	store := &fakeStore{
+		pulledImage: &imagestore.Image{Ref: testImageRef, Digest: testDigest},
+		bundle:      &imagestore.Bundle{Digest: testDigest, Path: testBundleDir},
+	}
+	deps := runDepsForTest(store)
+	bootCfgs := captureBootCfg(&deps)
+	if err := runRun(context.Background(), io.Discard, runOptions{
+		ref: testImageRef, workspace: wsDir,
+	}, deps); err != nil {
+		t.Fatalf("runRun: %v", err)
+	}
+	for _, s := range bootCfgs.Shares {
+		if s.Overlay {
+			t.Errorf("share %+v has Overlay=true, want false", s)
+		}
+	}
+}
+
 func TestRunPropagatesPullError(t *testing.T) {
 	want := errors.New("synthetic pull failure")
 	store := &fakeStore{pullErr: want}
