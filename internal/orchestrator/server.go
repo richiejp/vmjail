@@ -22,6 +22,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1/sandboxctrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/mtls"
@@ -149,6 +150,10 @@ func New(cfg Config) (*Server, error) {
 	if scErr != nil {
 		return nil, scErr
 	}
+	workspaceCtrl, wcErr := NewWorkspaceCatalogHandler(workspaceCat)
+	if wcErr != nil {
+		return nil, wcErr
+	}
 	// The broker handler needs the orchestrator's bound address
 	// to return as the relay endpoint, but the listener doesn't
 	// bind until Listen(). Close over a late-bound *mtls.Server
@@ -160,7 +165,7 @@ func New(cfg Config) (*Server, error) {
 		}
 		return inner.Addr()
 	}
-	if err := registerServices(mux, interceptor, tracer, matcher, sandboxCtrl, getRelayEndpoint); err != nil {
+	if err := registerServices(mux, interceptor, tracer, matcher, sandboxCtrl, workspaceCtrl, getRelayEndpoint); err != nil {
 		return nil, err
 	}
 	handler := withPeerMiddleware(mux)
@@ -200,6 +205,7 @@ func registerServices(
 	tracer *trace.Tracer,
 	matcher *workspacebroker.Matcher,
 	sandboxCtrl *SandboxControlHandler,
+	workspaceCtrl *WorkspaceCatalogHandler,
 	relayEndpointFn func() string,
 ) error {
 	healthPath, healthHandler := healthv1connect.NewHealthServiceHandler(
@@ -230,6 +236,11 @@ func registerServices(
 		sandboxCtrl, interceptor,
 	)
 	mux.Handle(sandboxCtrlPath, sandboxCtrlConnectHandler)
+
+	workspaceCtrlPath, workspaceCtrlConnectHandler := workspacev1connect.NewWorkspaceCatalogServiceHandler(
+		workspaceCtrl, interceptor,
+	)
+	mux.Handle(workspaceCtrlPath, workspaceCtrlConnectHandler)
 	return nil
 }
 

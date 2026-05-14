@@ -3,15 +3,12 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"net/http"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"connectrpc.com/connect"
-	"golang.org/x/net/http2"
 
 	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1/sandboxctrlv1connect"
@@ -273,64 +270,15 @@ type sandboxCtrlRig struct {
 
 func newSandboxCtrlRig(t *testing.T) *sandboxCtrlRig {
 	t.Helper()
-	srvID := mustGenerate(t, identity.RoleOrchestrator)
-	sbID := mustGenerate(t, identity.RoleSandboxHost)
-
-	srvPeers, err := identity.OpenPeerStore(filepath.Join(t.TempDir(), "peers.json"))
-	if err != nil {
-		t.Fatalf("OpenPeerStore: %v", err)
-	}
-	if err := srvPeers.Add(identity.Peer{Fingerprint: sbID.Fingerprint()}); err != nil {
-		t.Fatalf("Add peer: %v", err)
-	}
 	reg := sandboxctrl.NewRegistry(nil)
-
-	srv, err := New(Config{
-		Identity:        srvID,
-		Peers:           srvPeers,
-		Addr:            "127.0.0.1:0",
-		SandboxRegistry: reg,
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
+	env := newOrchTestEnv(t, identity.RoleSandboxHost, Config{SandboxRegistry: reg})
+	client := sandboxctrlv1connect.NewSandboxControlServiceClient(env.httpc, env.baseURL)
+	return &sandboxCtrlRig{
+		server: env.server,
+		reg:    reg,
+		sbID:   env.callerID,
+		client: client,
 	}
-	if err := srv.Listen(); err != nil {
-		t.Fatalf("Listen: %v", err)
-	}
-	var srvErrOnce sync.Once
-	srvErr := make(chan error, 1)
-	go func() {
-		err := srv.Serve()
-		srvErrOnce.Do(func() { srvErr <- err })
-	}()
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(ctx)
-		select {
-		case e := <-srvErr:
-			if e != nil && !errors.Is(e, http.ErrServerClosed) {
-				t.Logf("Serve: %v", e)
-			}
-		case <-time.After(2 * time.Second):
-		}
-	})
-
-	sbPeers, err := identity.OpenPeerStore(filepath.Join(t.TempDir(), "sb-peers.json"))
-	if err != nil {
-		t.Fatalf("OpenPeerStore sb: %v", err)
-	}
-	if err := sbPeers.Add(identity.Peer{Fingerprint: srvID.Fingerprint()}); err != nil {
-		t.Fatalf("sb approve srv: %v", err)
-	}
-	tlsCfg, err := identity.ClientTLSConfig(sbID, sbPeers, "")
-	if err != nil {
-		t.Fatalf("ClientTLSConfig: %v", err)
-	}
-	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
-	url := "https://" + srv.Addr()
-	client := sandboxctrlv1connect.NewSandboxControlServiceClient(httpc, url)
-	return &sandboxCtrlRig{server: srv, reg: reg, sbID: sbID, client: client}
 }
 
 // TestDispatchReachesActiveStream drives Dispatch end-to-end: open

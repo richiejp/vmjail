@@ -310,10 +310,28 @@ Phase B — **Workspace as a first-class orchestrator object**:
   with a `Server.WorkspaceCatalog()` accessor, mirroring the
   SandboxRegistry pattern. Still in-memory only — persistence is
   B5. No service surface yet — RPCs land in B2.
-- B2: `WorkspaceService`: Create, AddMount, RemoveMount,
-  RemapMount, FlagMount, AddEnv, RemoveEnv, SetImage,
-  AddPort, RemovePort, SetTarget, Validate, Launch, Stop,
-  Lock, Unlock, Adopt, Status, List.
+- B2 (split for size; see B2a..B2d):
+  `WorkspaceCatalogService` — orchestrator-facing wire surface
+  over `internal/workspacecatalog`. Named with the "Catalog"
+  suffix because `daft.workspace.v1.WorkspaceService` is already
+  the chunk/manifest sync service.
+- B2a (landed): Create, Get, List, SetImage, SetTarget,
+  AddMount, AddEnv, AddPort — the assembly-time happy path.
+  `WorkspaceHandle{uuid|name}` oneof lets every addressing RPC
+  accept either form, with name-scoped lookups gated on the
+  caller's mTLS fingerprint. Catalog errors map cleanly to
+  Connect codes (NotFound / AlreadyExists / FailedPrecondition).
+  UUIDs are minted server-side as RFC-4122 v4. New
+  `internal/workspacecatalog.PortMapping` carries the wire
+  protocol enum integer so the catalog stays the single source
+  of truth for what's on the wire.
+- B2b: RemoveMount, RemapMount, FlagMount, RemoveEnv,
+  RemovePort.
+- B2c: Validate, Launch, Stop. Launch composes the workspace
+  into a SandboxSpec and dispatches via the existing
+  SandboxControlHandler.Dispatch path.
+- B2d: Lock, Unlock, Adopt. Per-owner write-lock enforcement
+  gates the B2a/B2b/B2c mutators retroactively.
 - B3: Client CLI surface — `daft workspace <create|mount|env|
   image|port|target|status|launch|stop|adopt|list>`. Each
   subcommand has `--with-dev-defaults` where it makes sense.

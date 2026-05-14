@@ -78,6 +78,20 @@ type EnvVar struct {
 	Value string
 }
 
+// PortMapping is one container port the workload binds. Mirrors
+// the proto PortMapping from daft.sandboxctrl.v1; Protocol is kept
+// as the wire enum integer rather than its own Go enum so the
+// catalog stays single-source-of-truth for what's on the wire.
+type PortMapping struct {
+	ContainerPort uint32
+	// Protocol carries the wire integer from
+	// daft.sandboxctrl.v1.Protocol (TCP=1, UDP=2). Zero means
+	// UNSPECIFIED and is refused by the Connect adapter. int32
+	// matches the proto enum's underlying type so handler-side
+	// casts are no-ops.
+	Protocol int32
+}
+
 // Workspace is the catalog's record of a single workspace.
 //
 // Identity fields (UUID, OwnerFingerprint, CreatedAt) are
@@ -90,6 +104,7 @@ type Workspace struct {
 
 	Mounts []Mount
 	Env    []EnvVar
+	Ports  []PortMapping
 
 	ImageRef       string
 	PendingBuildID string

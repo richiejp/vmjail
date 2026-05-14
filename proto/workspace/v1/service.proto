@@ -1,0 +1,143 @@
+// WorkspaceCatalogService is the orchestrator-facing surface that
+// clients (`daft workspace …` from the user-host) use to
+// incrementally assemble a Workspace. The catalog itself lives in
+// internal/workspacecatalog (Slice B1); this service is the wire
+// adapter (Slice B2).
+//
+// Naming: the existing daft.workspace.v1.WorkspaceService is the
+// chunk/manifest sync service. The catalog service is named with
+// a "Catalog" suffix to keep both addressable.
+//
+// Slice scope (B2 is split across multiple slices for size):
+//
+//   B2a (this file): Create, Get, List, AddMount, AddEnv, AddPort,
+//   SetImage, SetTarget — the "happy path" RPCs the user-host CLI
+//   needs to assemble a workspace.
+//
+//   B2b: RemoveMount, RemapMount, FlagMount, RemoveEnv, RemovePort.
+//   B2c: Validate, Launch, Stop (workspace → SandboxSpec dispatch).
+//   B2d: Lock, Unlock, Adopt.
+//
+// Authorization model: every RPC is authenticated via mTLS peer
+// fingerprint (extracted by withPeerMiddleware). For B2a, any
+// authenticated caller can mutate any workspace — the per-owner
+// lock subsystem that scopes mutation to the holder lands in B2d.
+// owner_fingerprint on Workspace is informational and scopes
+// name-based handle resolution (your "myapp" can't collide with
+// someone else's "myapp").
+syntax = "proto3";
+
+package daft.workspace.v1;
+
+import "sandboxctrl/v1/sandboxctrl.proto";
+import "workspace/v1/catalog.proto";
+
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1";
+
+service WorkspaceCatalogService {
+  // Create mints a new Workspace owned by the calling identity.
+  // The orchestrator assigns the UUID; the caller supplies the
+  // human-readable name (defaults applied client-side from
+  // basename($PWD), but server-side requires a non-empty name).
+  rpc Create(CreateWorkspaceRequest) returns (WorkspaceResponse) {}
+
+  // Get returns the Workspace addressed by handle. Used by the
+  // CLI's `daft workspace status` (which renders the Missing[]
+  // list for the user).
+  rpc Get(GetWorkspaceRequest) returns (WorkspaceResponse) {}
+
+  // List returns every workspace in the catalog. mine_only=true
+  // filters to those owned by the calling identity. List is
+  // read-only; persistence (Slice B5) will reuse the same shape.
+  rpc List(ListWorkspacesRequest) returns (ListWorkspacesResponse) {}
+
+  // SetImage records an OCI image reference. Replaces any prior
+  // image_ref or pending_build_id. Empty image_ref clears the
+  // field (reverts to DRAFT if no other image source set).
+  rpc SetImage(SetImageRequest) returns (WorkspaceResponse) {}
+
+  // SetTarget pins the workspace to a specific sandbox-host by
+  // mTLS fingerprint. Empty fingerprint clears the pin (scheduler
+  // will pick at Launch time, once Launch lands in B2c).
+  rpc SetTarget(SetTargetRequest) returns (WorkspaceResponse) {}
+
+  // AddMount appends a Mount to the workspace. Mount.target must
+  // be absolute; the orchestrator rejects empty or relative targets
+  // and refuses a duplicate target in the existing mount set.
+  rpc AddMount(AddMountRequest) returns (WorkspaceResponse) {}
+
+  // AddEnv appends an EnvVar. Empty name is rejected. Duplicate
+  // names are rejected (use the future B2b RemoveEnv first).
+  rpc AddEnv(AddEnvRequest) returns (WorkspaceResponse) {}
+
+  // AddPort appends a PortMapping. Container port and protocol
+  // must be set explicitly; UNSPECIFIED protocol is rejected so
+  // the orchestrator's ingress (Phase C) can shape correctly.
+  rpc AddPort(AddPortRequest) returns (WorkspaceResponse) {}
+}
+
+// WorkspaceHandle addresses a workspace by either its canonical
+// UUID or its per-owner name. Name resolution is scoped to the
+// calling identity's mTLS fingerprint — addressing a workspace
+// owned by a different identity requires the UUID. Adoption
+// (Slice F1) adds a way to address by name across owners.
+message WorkspaceHandle {
+  oneof handle {
+    string uuid = 1;
+    string name = 2;
+  }
+}
+
+message CreateWorkspaceRequest {
+  // Per-owner human alias (default basename($PWD) on the user
+  // -host). Required; empty is rejected.
+  string name = 1;
+}
+
+message WorkspaceResponse {
+  Workspace workspace = 1;
+}
+
+message GetWorkspaceRequest {
+  WorkspaceHandle handle = 1;
+}
+
+message ListWorkspacesRequest {
+  // Filter to workspaces owned by the calling identity. Default
+  // (false) returns the whole catalog — useful for operator
+  // tooling. Per-owner scoping for non-operator clients lands
+  // when role gating (post-B-phase) is introduced.
+  bool mine_only = 1;
+}
+
+message ListWorkspacesResponse {
+  repeated Workspace workspaces = 1;
+}
+
+message SetImageRequest {
+  WorkspaceHandle handle = 1;
+  // OCI image reference. Empty clears the field.
+  string image_ref = 2;
+}
+
+message SetTargetRequest {
+  WorkspaceHandle handle = 1;
+  // mTLS fingerprint of the pinned sandbox-host. Empty clears
+  // the pin.
+  string sandbox_fingerprint = 2;
+}
+
+message AddMountRequest {
+  WorkspaceHandle handle = 1;
+  daft.sandboxctrl.v1.Mount mount = 2;
+}
+
+message AddEnvRequest {
+  WorkspaceHandle handle = 1;
+  daft.sandboxctrl.v1.EnvVar env = 2;
+}
+
+message AddPortRequest {
+  WorkspaceHandle handle = 1;
+  daft.sandboxctrl.v1.PortMapping port = 2;
+}
