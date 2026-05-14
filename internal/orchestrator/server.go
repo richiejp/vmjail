@@ -28,6 +28,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
 	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspacebroker"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 // Config holds everything the server needs to start up. Identity is
@@ -67,6 +68,12 @@ type Config struct {
 	// constructs a default registry if this is nil. Tests pass a
 	// pre-built registry to observe state directly.
 	SandboxRegistry *sandboxctrl.Registry
+
+	// WorkspaceCatalog is the orchestrator's store of Workspace
+	// records (PLAN.md Phase B). New constructs a default catalog
+	// if this is nil. The Connect-RPC service surface that exposes
+	// the catalog to clients lands in Slice B2.
+	WorkspaceCatalog *workspacecatalog.Store
 }
 
 // Server is the orchestrator's mTLS-gated control-plane listener.
@@ -75,12 +82,13 @@ type Config struct {
 // TraceService.ReportSpans, BrokerService, SandboxControlService)
 // plus a /debug/traces dump endpoint.
 type Server struct {
-	inner       *mtls.Server
-	tracer      *trace.Tracer
-	reaper      *trace.IngressReaper
-	matcher     *workspacebroker.Matcher
-	sandboxReg  *sandboxctrl.Registry
-	sandboxCtrl *SandboxControlHandler
+	inner            *mtls.Server
+	tracer           *trace.Tracer
+	reaper           *trace.IngressReaper
+	matcher          *workspacebroker.Matcher
+	sandboxReg       *sandboxctrl.Registry
+	sandboxCtrl      *SandboxControlHandler
+	workspaceCatalog *workspacecatalog.Store
 
 	reaperStart  sync.Once
 	reaperStop   sync.Once
@@ -101,6 +109,11 @@ func (s *Server) SandboxRegistry() *sandboxctrl.Registry { return s.sandboxReg }
 // handler. Exposed so operator tooling (and tests) can call
 // Dispatch on a live sandbox without a separate RPC client.
 func (s *Server) SandboxControl() *SandboxControlHandler { return s.sandboxCtrl }
+
+// WorkspaceCatalog returns the orchestrator's workspace catalog.
+// Exposed for tests that want to assert catalog state directly,
+// and (Slice B2) for the workspace-service handlers.
+func (s *Server) WorkspaceCatalog() *workspacecatalog.Store { return s.workspaceCatalog }
 
 // New builds a Server with the provided config. Returns an error if
 // Config.Identity or Config.Peers is missing or if the TLS template
@@ -127,6 +140,10 @@ func New(cfg Config) (*Server, error) {
 	sandboxReg := cfg.SandboxRegistry
 	if sandboxReg == nil {
 		sandboxReg = sandboxctrl.NewRegistry(nil)
+	}
+	workspaceCat := cfg.WorkspaceCatalog
+	if workspaceCat == nil {
+		workspaceCat = workspacecatalog.NewStore(nil)
 	}
 	sandboxCtrl, scErr := NewSandboxControlHandler(sandboxReg)
 	if scErr != nil {
@@ -164,12 +181,13 @@ func New(cfg Config) (*Server, error) {
 		reaper = trace.NewIngressReaper(tracer, component.Orchestrator)
 	}
 	return &Server{
-		inner:       inner,
-		tracer:      tracer,
-		reaper:      reaper,
-		matcher:     matcher,
-		sandboxReg:  sandboxReg,
-		sandboxCtrl: sandboxCtrl,
+		inner:            inner,
+		tracer:           tracer,
+		reaper:           reaper,
+		matcher:          matcher,
+		sandboxReg:       sandboxReg,
+		sandboxCtrl:      sandboxCtrl,
+		workspaceCatalog: workspaceCat,
 	}, nil
 }
 

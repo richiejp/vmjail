@@ -296,8 +296,20 @@ Phase A — **Sandboxd daemon mode**:
   breaks have a versioned escape hatch from day one.
 
 Phase B — **Workspace as a first-class orchestrator object**:
-- B1: `Workspace` proto + orchestrator-side store (in-memory
-  v1).
+- B1 (landed): `Workspace` proto +
+  orchestrator-side store. New
+  `proto/workspace/v1/catalog.proto` defines `Workspace` +
+  `WorkspaceStatus` enum (DRAFT/READY/RUNNING/FROZEN/STOPPED/
+  ARCHIVED), reusing `daft.sandboxctrl.v1` Mount/EnvVar/
+  PortMapping/GpuRequest/Isolation. New
+  `internal/workspacecatalog` package owns the Go-native store:
+  CRUD (Create/Get/Update/Delete/List), per-owner alias index
+  via (owner_fp, name), `Missing[]` recomputed on every mutation,
+  and a `CanTransition` adjacency table reserved for the Slice B4
+  state machine. Wired into `orchestrator.Config.WorkspaceCatalog`
+  with a `Server.WorkspaceCatalog()` accessor, mirroring the
+  SandboxRegistry pattern. Still in-memory only — persistence is
+  B5. No service surface yet — RPCs land in B2.
 - B2: `WorkspaceService`: Create, AddMount, RemoveMount,
   RemapMount, FlagMount, AddEnv, RemoveEnv, SetImage,
   AddPort, RemovePort, SetTarget, Validate, Launch, Stop,
