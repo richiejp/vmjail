@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -392,6 +393,48 @@ func dispatchUntilReady(
 		time.Sleep(20 * time.Millisecond)
 	}
 	return ErrSandboxNotConnected
+}
+
+// TestDispatchPanicsOnNilSpec pins the precondition assert — a
+// nil spec is a wiring bug and must panic loudly, not produce a
+// half-formed dispatch envelope.
+func TestDispatchPanicsOnNilSpec(t *testing.T) {
+	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+	if err != nil {
+		t.Fatalf("NewSandboxControlHandler: %v", err)
+	}
+	id := mustGenerate(t, identity.RoleSandboxHost)
+	defer func() {
+		got := recover()
+		if got == nil {
+			t.Fatal("Dispatch did not panic on nil spec")
+		}
+		msg, _ := got.(string)
+		if !strings.Contains(msg, "non-nil spec") {
+			t.Errorf("panic = %q, want substring 'non-nil spec'", msg)
+		}
+	}()
+	_ = h.Dispatch(id.Fingerprint(), "d-1", nil)
+}
+
+// TestDispatchPanicsOnEmptyID pins the dispatch_id assert.
+func TestDispatchPanicsOnEmptyID(t *testing.T) {
+	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+	if err != nil {
+		t.Fatalf("NewSandboxControlHandler: %v", err)
+	}
+	id := mustGenerate(t, identity.RoleSandboxHost)
+	defer func() {
+		got := recover()
+		if got == nil {
+			t.Fatal("Dispatch did not panic on empty id")
+		}
+		msg, _ := got.(string)
+		if !strings.Contains(msg, "non-empty dispatch_id") {
+			t.Errorf("panic = %q, want substring 'non-empty dispatch_id'", msg)
+		}
+	}()
+	_ = h.Dispatch(id.Fingerprint(), "", &sandboxctrlv1.SandboxSpec{})
 }
 
 // TestDispatchUnknownSandbox covers ErrSandboxNotConnected: no

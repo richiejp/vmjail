@@ -62,8 +62,9 @@ func (e *Executor) HandleDispatch(
 ) error {
 	assert.True(d != nil,
 		"DispatchHandler must never be called with a nil Dispatch — sandboxctrlclient filters them upstream")
-
 	spec := d.GetSpec()
+	assert.True(spec != nil,
+		"Dispatch event without a Spec is an orchestrator bug — the wire schema makes Spec optional, but every code path on the orchestrator side sets it before pushing")
 	ctx, span := trace.Start(ctx, "sandboxexec.dispatch",
 		trace.WithAttributes(
 			trace.KV{Key: "dispatch.id", Value: d.GetDispatchId()},

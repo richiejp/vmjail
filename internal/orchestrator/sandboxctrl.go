@@ -66,6 +66,10 @@ func (h *SandboxControlHandler) Dispatch(
 	dispatchID string,
 	spec *sandboxctrlv1.SandboxSpec,
 ) error {
+	assert.True(spec != nil,
+		"Dispatch requires a non-nil spec; a wiring bug here would push a nil envelope onto the stream and crash the sandboxd")
+	assert.True(dispatchID != "",
+		"Dispatch requires a non-empty dispatch_id; the orchestrator scheduler is the sole caller and must mint one before calling")
 	h.mu.Lock()
 	ch, ok := h.streams[fp]
 	h.mu.Unlock()

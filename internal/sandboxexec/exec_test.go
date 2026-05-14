@@ -98,6 +98,42 @@ func TestHandleDispatchLogsDispatchToStdout(t *testing.T) {
 	}
 }
 
+func TestHandleDispatchPanicsOnNilDispatch(t *testing.T) {
+	e, err := New(sandbox.Config{}, io.Discard, func(context.Context, io.Writer, sandbox.Config) error { return nil })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() {
+		got := recover()
+		if got == nil {
+			t.Fatal("HandleDispatch did not panic on nil Dispatch")
+		}
+		msg, _ := got.(string)
+		if !strings.Contains(msg, "nil Dispatch") {
+			t.Errorf("panic = %q, want substring 'nil Dispatch'", msg)
+		}
+	}()
+	_ = e.HandleDispatch(t.Context(), nil)
+}
+
+func TestHandleDispatchPanicsOnDispatchWithoutSpec(t *testing.T) {
+	e, err := New(sandbox.Config{}, io.Discard, func(context.Context, io.Writer, sandbox.Config) error { return nil })
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	defer func() {
+		got := recover()
+		if got == nil {
+			t.Fatal("HandleDispatch did not panic when Spec is nil")
+		}
+		msg, _ := got.(string)
+		if !strings.Contains(msg, "without a Spec") {
+			t.Errorf("panic = %q, want substring 'without a Spec'", msg)
+		}
+	}()
+	_ = e.HandleDispatch(t.Context(), &sandboxctrlv1.Dispatch{DispatchId: "d-1"})
+}
+
 func TestHandleDispatchSurfacesRunnerError(t *testing.T) {
 	want := errors.New("synthetic boot failure")
 	e, err := New(sandbox.Config{}, io.Discard, func(context.Context, io.Writer, sandbox.Config) error {
