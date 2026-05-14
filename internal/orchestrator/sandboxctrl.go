@@ -122,6 +122,17 @@ func (h *SandboxControlHandler) RegisterSandbox(
 			errors.New("orchestrator: no mTLS peer identity"))
 	}
 
+	// Wire-protocol negotiation runs before any state mutation so a
+	// wire-incompatible peer never appears in the live registry.
+	// Missing/zero ProtocolVersion is treated as major=0 and refused
+	// — every shipped client sets the field.
+	pv := req.Msg.GetProtocolVersion()
+	if err := sandboxctrl.CheckProtocolCompatibility(
+		pv.GetMajor(), pv.GetMinor(), pv.GetPatch(),
+	); err != nil {
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+
 	resources := resourcesFromProto(req.Msg.GetResources())
 	acceptedAt := h.reg.Register(fp, req.Msg.GetVersion(), resources)
 	defer h.reg.Forget(fp)
@@ -132,7 +143,8 @@ func (h *SandboxControlHandler) RegisterSandbox(
 	ready := &sandboxctrlv1.RegisterEvent{
 		Event: &sandboxctrlv1.RegisterEvent_Ready{
 			Ready: &sandboxctrlv1.SubscriptionReady{
-				AcceptedAt: timestamppb.New(acceptedAt),
+				AcceptedAt:      timestamppb.New(acceptedAt),
+				ProtocolVersion: localProtocolVersionProto(),
 			},
 		},
 	}
@@ -216,6 +228,16 @@ func resourcesFromProto(p *sandboxctrlv1.HostResources) sandboxctrl.Resources {
 	return sandboxctrl.Resources{
 		CPUs:        p.GetCpus(),
 		MemoryBytes: p.GetMemoryBytes(),
+	}
+}
+
+// localProtocolVersionProto builds the wire ProtocolVersion message
+// from this build's compiled-in constants.
+func localProtocolVersionProto() *sandboxctrlv1.ProtocolVersion {
+	return &sandboxctrlv1.ProtocolVersion{
+		Major: sandboxctrl.ProtocolVersionMajor,
+		Minor: sandboxctrl.ProtocolVersionMinor,
+		Patch: sandboxctrl.ProtocolVersionPatch,
 	}
 }
 

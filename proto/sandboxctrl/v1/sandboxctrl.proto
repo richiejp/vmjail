@@ -44,6 +44,21 @@ service SandboxControlService {
   rpc ListSandboxes(ListSandboxesRequest) returns (ListSandboxesResponse) {}
 }
 
+// ProtocolVersion is the wire-protocol version exchanged at
+// RegisterSandbox time. The major component is the wire-compat
+// boundary: a peer with a different major MUST be refused. Minor
+// and patch are informational for now; once we lock in a long-term
+// protocol they will gate optional feature paths.
+//
+// This is distinct from the build-version string echoed on
+// RegisterSandboxRequest.version — that one identifies the binary
+// for operator triage; this one gates the bytes on the wire.
+message ProtocolVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+  uint32 patch = 3;
+}
+
 // HostResources advertises what a sandbox-host can dispatch onto.
 // v1 carries CPU count and physical RAM only; GPU/PCI inventory
 // lands in Slice D1.
@@ -60,6 +75,10 @@ message RegisterSandboxRequest {
   string version = 1;
   // Host resource advertisement, captured at registration time.
   HostResources resources = 2;
+  // Wire-protocol version. Unset (nil) is treated as major=0 and
+  // refused — every shipped client sets this field. See
+  // ProtocolVersion's doc for the major/minor/patch policy.
+  ProtocolVersion protocol_version = 3;
 }
 
 // RegisterEvent is the envelope for events pushed on the
@@ -85,8 +104,14 @@ message Dispatch {
 // Sent once, as the first event on every RegisterSandbox stream.
 // Carries the orchestrator's monotonic accept time so the caller
 // can detect a re-register (e.g. after orchestrator restart).
+//
+// The orchestrator's own ProtocolVersion is echoed here so the
+// sandboxd can refuse to serve workloads if the orchestrator is
+// running a wire-incompatible build. The handshake is symmetric:
+// each side validates the other before any Dispatch flows.
 message SubscriptionReady {
   google.protobuf.Timestamp accepted_at = 1;
+  ProtocolVersion protocol_version = 2;
 }
 
 message HeartbeatRequest {

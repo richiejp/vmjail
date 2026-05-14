@@ -271,6 +271,16 @@ Phase A — **Sandboxd daemon mode**:
   …`. New `debug` parent holds the legacy / offline subcommands.
   Every invocation prints a stderr deprecation banner pointing
   users at orchestrator-driven dispatch.
+- A6 (landed): protocol-version handshake on the
+  `RegisterSandbox` stream. New `ProtocolVersion{major,minor,patch}`
+  message; `RegisterSandboxRequest.protocol_version` carries the
+  sandboxd's wire version, `SubscriptionReady.protocol_version`
+  echoes the orchestrator's. Both sides validate via
+  `sandboxctrl.CheckProtocolCompatibility` (major must match;
+  minor/patch informational). Local version pinned at 1.0.0 so a
+  peer omitting the field (proto3 zero ⇒ major=0) is rejected.
+  Deliberately landed before any field-deployment so future wire
+  breaks have a versioned escape hatch from day one.
 
 Phase B — **Workspace as a first-class orchestrator object**:
 - B1: `Workspace` proto + orchestrator-side store (in-memory

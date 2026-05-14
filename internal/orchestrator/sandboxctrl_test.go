@@ -211,8 +211,9 @@ func TestRegisterSandboxRecordsEntryAndForgetsOnDisconnect(t *testing.T) {
 
 	stream, err := rig.client.RegisterSandbox(ctx, connect.NewRequest(
 		&sandboxctrlv1.RegisterSandboxRequest{
-			Version:   "v0.0.0",
-			Resources: &sandboxctrlv1.HostResources{Cpus: 2, MemoryBytes: 1 << 30},
+			Version:         "v0.0.0",
+			Resources:       &sandboxctrlv1.HostResources{Cpus: 2, MemoryBytes: 1 << 30},
+			ProtocolVersion: testProtocolVersion(),
 		},
 	))
 	if err != nil {
@@ -341,7 +342,10 @@ func TestDispatchReachesActiveStream(t *testing.T) {
 	defer cancel()
 
 	stream, err := rig.client.RegisterSandbox(ctx, connect.NewRequest(
-		&sandboxctrlv1.RegisterSandboxRequest{Version: "v0"},
+		&sandboxctrlv1.RegisterSandboxRequest{
+			Version:         "v0",
+			ProtocolVersion: testProtocolVersion(),
+		},
 	))
 	if err != nil {
 		t.Fatalf("RegisterSandbox: %v", err)
@@ -448,6 +452,120 @@ func TestDispatchUnknownSandbox(t *testing.T) {
 	err = h.Dispatch(id.Fingerprint(), "d-1", &sandboxctrlv1.SandboxSpec{})
 	if !errors.Is(err, ErrSandboxNotConnected) {
 		t.Errorf("err = %v, want ErrSandboxNotConnected", err)
+	}
+}
+
+// testProtocolVersion returns a wire ProtocolVersion that matches
+// this build's local constants — the value every shipped client
+// sends. Tests use it so that adding a new field to the handshake
+// only changes one place.
+func testProtocolVersion() *sandboxctrlv1.ProtocolVersion {
+	return &sandboxctrlv1.ProtocolVersion{
+		Major: sandboxctrl.ProtocolVersionMajor,
+		Minor: sandboxctrl.ProtocolVersionMinor,
+		Patch: sandboxctrl.ProtocolVersionPatch,
+	}
+}
+
+// TestRegisterSandboxRejectsIncompatibleProtocolMajor pins the
+// server-side half of the version handshake: a peer reporting a
+// different major must be refused before any registry mutation.
+func TestRegisterSandboxRejectsIncompatibleProtocolMajor(t *testing.T) {
+	rig := newSandboxCtrlRig(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	stream, err := rig.client.RegisterSandbox(ctx, connect.NewRequest(
+		&sandboxctrlv1.RegisterSandboxRequest{
+			Version: "v0",
+			ProtocolVersion: &sandboxctrlv1.ProtocolVersion{
+				Major: sandboxctrl.ProtocolVersionMajor + 99,
+			},
+		},
+	))
+	if err != nil {
+		t.Fatalf("RegisterSandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	// The stream should close before any event is delivered, with
+	// a FailedPrecondition surfaced via stream.Err().
+	if stream.Receive() {
+		t.Fatalf("expected stream close, got event %+v", stream.Msg())
+	}
+	if code := connect.CodeOf(stream.Err()); code != connect.CodeFailedPrecondition {
+		t.Errorf("err code = %s, want FailedPrecondition (err=%v)", code, stream.Err())
+	}
+	if _, ok := rig.reg.Lookup(rig.sbID.Fingerprint()); ok {
+		t.Error("registry recorded a peer with incompatible protocol version")
+	}
+}
+
+// TestRegisterSandboxRejectsMissingProtocolVersion pins that the
+// zero value (omitted field) is treated as major=0, which never
+// matches our local major. Catches the "I forgot to set the field"
+// bug class.
+func TestRegisterSandboxRejectsMissingProtocolVersion(t *testing.T) {
+	rig := newSandboxCtrlRig(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	stream, err := rig.client.RegisterSandbox(ctx, connect.NewRequest(
+		&sandboxctrlv1.RegisterSandboxRequest{Version: "v0"},
+	))
+	if err != nil {
+		t.Fatalf("RegisterSandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if stream.Receive() {
+		t.Fatalf("expected stream close, got event %+v", stream.Msg())
+	}
+	if code := connect.CodeOf(stream.Err()); code != connect.CodeFailedPrecondition {
+		t.Errorf("err code = %s, want FailedPrecondition (err=%v)", code, stream.Err())
+	}
+}
+
+// TestSubscriptionReadyCarriesProtocolVersion pins that the
+// orchestrator echoes its own ProtocolVersion in the first event
+// so the sandboxd can check the other direction.
+func TestSubscriptionReadyCarriesProtocolVersion(t *testing.T) {
+	rig := newSandboxCtrlRig(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	stream, err := rig.client.RegisterSandbox(ctx, connect.NewRequest(
+		&sandboxctrlv1.RegisterSandboxRequest{
+			Version:         "v0",
+			ProtocolVersion: testProtocolVersion(),
+		},
+	))
+	if err != nil {
+		t.Fatalf("RegisterSandbox: %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if !stream.Receive() {
+		t.Fatalf("stream closed before Ready: %v", stream.Err())
+	}
+	ready := stream.Msg().GetReady()
+	if ready == nil {
+		t.Fatal("first event was not SubscriptionReady")
+	}
+	pv := ready.GetProtocolVersion()
+	if pv == nil {
+		t.Fatal("Ready.protocol_version not set")
+	}
+	if pv.GetMajor() != sandboxctrl.ProtocolVersionMajor ||
+		pv.GetMinor() != sandboxctrl.ProtocolVersionMinor ||
+		pv.GetPatch() != sandboxctrl.ProtocolVersionPatch {
+		t.Errorf(
+			"Ready.protocol_version = %d.%d.%d, want %d.%d.%d",
+			pv.GetMajor(), pv.GetMinor(), pv.GetPatch(),
+			sandboxctrl.ProtocolVersionMajor,
+			sandboxctrl.ProtocolVersionMinor,
+			sandboxctrl.ProtocolVersionPatch,
+		)
 	}
 }
 

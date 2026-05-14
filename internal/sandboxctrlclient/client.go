@@ -145,8 +145,9 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources sandboxctrl.Res
 
 	stream, err := c.ctrl.RegisterSandbox(ctx, connect.NewRequest(
 		&sandboxctrlv1.RegisterSandboxRequest{
-			Version:   c.cfg.Version,
-			Resources: resourcesToProto(resources),
+			Version:         c.cfg.Version,
+			Resources:       resourcesToProto(resources),
+			ProtocolVersion: localProtocolVersionProto(),
 		},
 	))
 	if err != nil {
@@ -159,8 +160,18 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources sandboxctrl.Res
 	if !stream.Receive() {
 		return fmt.Errorf("sandboxctrlclient: stream closed before Ready: %w", stream.Err())
 	}
-	if ev := stream.Msg().GetReady(); ev == nil {
+	ready := stream.Msg().GetReady()
+	if ready == nil {
 		return errors.New("sandboxctrlclient: first event was not SubscriptionReady")
+	}
+	// Server-side already validated us; now validate them. A
+	// wire-incompatible orchestrator must not be allowed to drive
+	// Dispatch into a sandboxd that can't decode the events.
+	pv := ready.GetProtocolVersion()
+	if err := sandboxctrl.CheckProtocolCompatibility(
+		pv.GetMajor(), pv.GetMinor(), pv.GetPatch(),
+	); err != nil {
+		return err
 	}
 
 	streamErr := make(chan error, 1)
@@ -225,5 +236,16 @@ func resourcesToProto(r sandboxctrl.Resources) *sandboxctrlv1.HostResources {
 	return &sandboxctrlv1.HostResources{
 		Cpus:        r.CPUs,
 		MemoryBytes: r.MemoryBytes,
+	}
+}
+
+// localProtocolVersionProto builds the wire ProtocolVersion message
+// from this build's compiled-in constants. Centralized so the value
+// is set identically on every outbound RegisterSandbox.
+func localProtocolVersionProto() *sandboxctrlv1.ProtocolVersion {
+	return &sandboxctrlv1.ProtocolVersion{
+		Major: sandboxctrl.ProtocolVersionMajor,
+		Minor: sandboxctrl.ProtocolVersionMinor,
+		Patch: sandboxctrl.ProtocolVersionPatch,
 	}
 }
