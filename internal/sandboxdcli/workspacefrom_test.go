@@ -227,7 +227,7 @@ func TestRunCmdRunsViaCobra(t *testing.T) {
 	t.Cleanup(func() { defaultRunDepsFn = prev })
 
 	cmd := NewRootCmd()
-	cmd.SetArgs([]string{"run", testImageRef})
+	cmd.SetArgs([]string{"debug", "run", testImageRef})
 	cmd.SetOut(io.Discard)
 	cmd.SetErr(io.Discard)
 	if err := cmd.Execute(); err != nil {

@@ -267,8 +267,10 @@ Phase A — **Sandboxd daemon mode**:
   when `spec.image_ref != ""` the assembler runs and the bundled
   config is fed to `sandbox.Hello`. Empty `image_ref` continues
   to boot the baseline Hello (smoke-test path).
-- A5b: `daft-sandboxd run …` → `daft-sandboxd debug run …` with a
-  deprecation banner. Keep for offline e2e.
+- A5b (landed): `daft-sandboxd run …` → `daft-sandboxd debug run
+  …`. New `debug` parent holds the legacy / offline subcommands.
+  Every invocation prints a stderr deprecation banner pointing
+  users at orchestrator-driven dispatch.
 
 Phase B — **Workspace as a first-class orchestrator object**:
 - B1: `Workspace` proto + orchestrator-side store (in-memory
@@ -1206,6 +1208,14 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
       orchestrator-allocated (workspace UUID or registered tag),
       not free-form host paths — adoption (Slice F1) is how
       user-host directories enter the namespace.
+- [x] Workflow reorientation Slice A5b — `daft-sandboxd run`
+      deprecation rename. The verb now lives at `daft-sandboxd
+      debug run` under a new `debug` parent for legacy / offline
+      subcommands. Each invocation prints a stderr banner
+      directing users at orchestrator-driven dispatch as the
+      production path. Phase A's loop is now closed end-to-end:
+      orchestrator dispatches a SandboxSpec → sandboxd pulls +
+      bundles + boots a container, with no CLI involvement.
 - [x] Workflow reorientation Slice A5a — sandbox-host executor
       consumes `spec.image_ref`. New `internal/sandboxboot`
       package factors the image-pull + bundle + lock + artefact-

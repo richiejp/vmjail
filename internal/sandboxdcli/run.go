@@ -62,6 +62,10 @@ func newRunCmd() *cobra.Command {
 		Args:          cobra.MinimumNArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			_, _ = fmt.Fprintln(cmd.ErrOrStderr(),
+				"daft-sandboxd debug run: this subcommand is deprecated. "+
+					"Production sandbox workloads arrive via orchestrator dispatch; "+
+					"`debug run` remains for offline reproduction only.")
 			opts.ref = args[0]
 			opts.cmdArgs = args[1:]
 			return runRun(cmd.Context(), cmd.OutOrStdout(), opts, defaultRunDepsFn())

@@ -13,20 +13,48 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 )
 
-func TestRunIsRegistered(t *testing.T) {
-	stdout, _, err := runCmd(t, "--help")
+func TestRunIsRegisteredUnderDebug(t *testing.T) {
+	rootHelp, _, err := runCmd(t, "--help")
 	if err != nil {
 		t.Fatalf("daft-sandboxd --help: %v", err)
 	}
-	if !strings.Contains(stdout, "run ") {
-		t.Errorf("root help missing run command:\n%s", stdout)
+	if !strings.Contains(rootHelp, "debug ") {
+		t.Errorf("root help missing debug parent:\n%s", rootHelp)
+	}
+	debugHelp, _, err := runCmd(t, "debug", "--help")
+	if err != nil {
+		t.Fatalf("daft-sandboxd debug --help: %v", err)
+	}
+	if !strings.Contains(debugHelp, "run ") {
+		t.Errorf("debug help missing run subcommand:\n%s", debugHelp)
 	}
 }
 
 func TestRunRequiresImageRef(t *testing.T) {
-	_, _, err := runCmd(t, "run")
+	_, _, err := runCmd(t, "debug", "run")
 	if err == nil {
 		t.Fatal("expected error when image ref is missing")
+	}
+}
+
+// TestRunEmitsDeprecationBanner pins the banner so removing it is
+// a deliberate act. Captures stderr from a runCmd invocation that
+// fails at validate() (no image ref) — the banner fires before
+// validation runs.
+func TestRunEmitsDeprecationBannerBeforeFailure(t *testing.T) {
+	// MinimumNArgs(1) trips before RunE, so we need a real ref.
+	// Use defaultRunDepsFn = a stub that fails at openStore so we
+	// don't dial a registry.
+	saved := defaultRunDepsFn
+	t.Cleanup(func() { defaultRunDepsFn = saved })
+	defaultRunDepsFn = func() runDeps {
+		base := saved()
+		base.openStore = func() (storeAPI, error) { return nil, errors.New("stub: no store") }
+		return base
+	}
+	_, stderr, _ := runCmd(t, "debug", "run", "alpine:3")
+	if !strings.Contains(stderr, "deprecated") {
+		t.Errorf("expected deprecation banner on stderr, got:\n%s", stderr)
 	}
 }
 
