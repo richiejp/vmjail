@@ -26,8 +26,10 @@ func stubBuildDispatcher(t *testing.T) {
 	saved := buildDispatcher
 	t.Cleanup(func() { buildDispatcher = saved })
 	buildDispatcher = func(w io.Writer) (*sandboxexec.Executor, error) {
-		return sandboxexec.New(sandbox.Config{}, w,
-			func(context.Context, io.Writer, sandbox.Config) error { return nil })
+		return sandboxexec.New(sandboxexec.Config{
+			Stdout: w,
+			Runner: func(context.Context, io.Writer, sandbox.Config) error { return nil },
+		})
 	}
 }
 

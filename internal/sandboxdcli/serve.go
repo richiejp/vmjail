@@ -12,7 +12,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/richiejp/darkaifactory/internal/bundled"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
 	"github.com/richiejp/darkaifactory/internal/sandboxctrlclient"
 	"github.com/richiejp/darkaifactory/internal/sandboxexec"
@@ -129,7 +131,9 @@ var runRegisterAndServe = func(
 // buildDispatcher resolves the sandbox.Config baseline from the
 // DAFT_* env vars and wires an Executor with it. The Executor is
 // the DispatchHandler the sandboxctrlclient invokes on every
-// Dispatch event from the orchestrator.
+// Dispatch event from the orchestrator. The production Assembler
+// pulls + bundles images via the local imagestore so dispatches
+// carrying a spec.image_ref actually run a container.
 //
 //nolint:gochecknoglobals // single test seam, not state.
 var buildDispatcher = func(stdout io.Writer) (*sandboxexec.Executor, error) {
@@ -137,7 +141,24 @@ var buildDispatcher = func(stdout io.Writer) (*sandboxexec.Executor, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sandboxexec.New(base, stdout, nil)
+	assembler := sandboxexec.ProductionAssembler(sandboxboot.Deps{
+		OpenStore: openSandboxbootStore,
+		CacheDir:  userCacheDir,
+		Extract:   bundled.Extract,
+	})
+	return sandboxexec.New(sandboxexec.Config{
+		Base:      base,
+		Stdout:    stdout,
+		Assembler: assembler,
+	})
+}
+
+// openSandboxbootStore is the production OpenStore — it returns
+// the same imagestore handle the legacy `run` command uses, but
+// typed against sandboxboot.Store so the executor doesn't have
+// to import imagestore directly.
+func openSandboxbootStore() (sandboxboot.Store, error) {
+	return openStore()
 }
 
 // formatBytes is a small KiB/MiB/GiB renderer for the startup

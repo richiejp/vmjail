@@ -258,7 +258,16 @@ Phase A — **Sandboxd daemon mode**:
   `mounts[]` are recorded in the trace span but do not yet drive an
   in-VM container — that path lands in Slice A5 alongside the
   `daft-sandboxd run` deprecation.
-- A5: `daft-sandboxd run …` → `daft-sandboxd debug run …` with a
+- A5a (landed): sandbox-host executor consumes `spec.image_ref`.
+  New `internal/sandboxboot` package wraps the image-pull + bundle
+  + lock + artefact-extract pipeline so both
+  `internal/sandboxdcli` (legacy `run` command) and
+  `internal/sandboxexec` (dispatch executor) can call into it.
+  `Executor` now takes a `Config` struct with an `Assembler` seam;
+  when `spec.image_ref != ""` the assembler runs and the bundled
+  config is fed to `sandbox.Hello`. Empty `image_ref` continues
+  to boot the baseline Hello (smoke-test path).
+- A5b: `daft-sandboxd run …` → `daft-sandboxd debug run …` with a
   deprecation banner. Keep for offline e2e.
 
 Phase B — **Workspace as a first-class orchestrator object**:
@@ -1197,6 +1206,19 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
       orchestrator-allocated (workspace UUID or registered tag),
       not free-form host paths — adoption (Slice F1) is how
       user-host directories enter the namespace.
+- [x] Workflow reorientation Slice A5a — sandbox-host executor
+      consumes `spec.image_ref`. New `internal/sandboxboot`
+      package factors the image-pull + bundle + lock + artefact-
+      extract glue into a `BuildBundleConfig` function with a
+      testable `Deps` struct. `internal/sandboxexec.Executor`
+      gains a `Config` struct and an `Assembler` seam:
+      `daft-sandboxd serve` wires the production assembler (which
+      calls `sandboxboot.BuildBundleConfig` against the local
+      imagestore + `bundled.Extract`), so dispatches carrying
+      `image_ref` now pull + bundle + boot a real container.
+      Empty `image_ref` still falls through to the bare Hello
+      baseline (smoke-test path). The legacy `daft-sandboxd run`
+      command is unchanged — A5b deprecates it.
 - [x] Workflow reorientation Slice A4b (minimal) — sandboxd-side
       executor. New `internal/sandboxexec` package: a
       `DispatchHandler` that, on every Dispatch event, runs
