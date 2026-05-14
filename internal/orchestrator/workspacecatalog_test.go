@@ -13,10 +13,14 @@ import (
 	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
-// testImageRef is the image ref used by every test that exercises
-// SetImage / image-missing paths. Extracted because goconst rightly
-// flags it as repeated.
-const testImageRef = "alpine:3"
+const (
+	// testImageRef is the image ref used by every test that exercises
+	// SetImage / image-missing paths.
+	testImageRef = "alpine:3"
+	// testMountTarget is the canonical in-VM mount target used
+	// across the Add/Remove mount tests.
+	testMountTarget = "/workspace"
+)
 
 // TestServerExposesWorkspaceCatalog mirrors
 // TestServerExposesSandboxRegistry — a configured catalog flows
@@ -118,6 +122,23 @@ func TestWorkspaceCatalogHandlerRejectsMissingPeerIdentity(t *testing.T) {
 		{"AddPort", func() error {
 			_, e := h.AddPort(t.Context(),
 				connect.NewRequest(&workspacev1.AddPortRequest{}))
+			return e
+		}},
+		{"RemoveMount", func() error {
+			_, e := h.RemoveMount(t.Context(),
+				connect.NewRequest(&workspacev1.RemoveMountRequest{Target: "/x"}))
+			return e
+		}},
+		{"RemoveEnv", func() error {
+			_, e := h.RemoveEnv(t.Context(),
+				connect.NewRequest(&workspacev1.RemoveEnvRequest{Name: "X"}))
+			return e
+		}},
+		{"RemovePort", func() error {
+			_, e := h.RemovePort(t.Context(),
+				connect.NewRequest(&workspacev1.RemovePortRequest{
+					ContainerPort: 80, Protocol: sandboxctrlv1.Protocol_PROTOCOL_TCP,
+				}))
 			return e
 		}},
 	}
@@ -360,7 +381,7 @@ func TestIncrementalAssemblyRetiresMissingFields(t *testing.T) {
 		&workspacev1.AddMountRequest{
 			Handle: handle,
 			Mount: &sandboxctrlv1.Mount{
-				Target: "/workspace",
+				Target: testMountTarget,
 				Source: "user-host-cwd",
 			},
 		},
@@ -445,7 +466,7 @@ func TestAddMountRejectsDuplicateTarget(t *testing.T) {
 	}
 	add := &workspacev1.AddMountRequest{
 		Handle: handle,
-		Mount:  &sandboxctrlv1.Mount{Target: "/workspace", Source: "a"},
+		Mount:  &sandboxctrlv1.Mount{Target: testMountTarget, Source: "a"},
 	}
 	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(add)); err != nil {
 		t.Fatalf("first AddMount: %v", err)
@@ -588,6 +609,244 @@ func TestSetImageClearsField(t *testing.T) {
 	if !hasMissing(cleared.Msg.GetWorkspace().GetMissing(), "image") {
 		t.Error("missing should re-include 'image' after clear")
 	}
+}
+
+// TestRemoveMountDropsTheTargetAndReReinstatesMissing pins the
+// symmetric "AddMount → RemoveMount" cycle: after AddMount removes
+// "mount" from Missing[], RemoveMount must put it back when the
+// last mount drops out.
+func TestRemoveMountDropsTheTargetAndReReinstatesMissing(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "rm-mount"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
+		&workspacev1.AddMountRequest{
+			Handle: handle,
+			Mount:  &sandboxctrlv1.Mount{Target: testMountTarget, Source: "src"},
+		},
+	)); err != nil {
+		t.Fatalf("AddMount: %v", err)
+	}
+	got, err := rig.client.RemoveMount(t.Context(), connect.NewRequest(
+		&workspacev1.RemoveMountRequest{Handle: handle, Target: testMountTarget},
+	))
+	if err != nil {
+		t.Fatalf("RemoveMount: %v", err)
+	}
+	if len(got.Msg.GetWorkspace().GetMounts()) != 0 {
+		t.Errorf("Mounts = %d, want 0", len(got.Msg.GetWorkspace().GetMounts()))
+	}
+	if !hasMissing(got.Msg.GetWorkspace().GetMissing(), "mount") {
+		t.Error("missing should include 'mount' after RemoveMount drops the last")
+	}
+}
+
+//nolint:dupl // Structurally parallel to the RemoveEnv / RemovePort unknown-key tests by design — each pins one RPC's missing-key error mapping.
+func TestRemoveMountUnknownTargetMapsToNotFound(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "missing-mount"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	_, err := rig.client.RemoveMount(t.Context(), connect.NewRequest(
+		&workspacev1.RemoveMountRequest{Handle: handle, Target: "/nope"},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeNotFound {
+		t.Errorf("code = %s, want NotFound", code)
+	}
+}
+
+func TestRemoveMountRejectsEmptyTarget(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "empty-target"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	_, err := rig.client.RemoveMount(t.Context(), connect.NewRequest(
+		&workspacev1.RemoveMountRequest{Handle: handle},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeInvalidArgument {
+		t.Errorf("code = %s, want InvalidArgument", code)
+	}
+}
+
+func TestRemoveMountMiddleEntryPreservesOthers(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "three-mounts"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	for _, target := range []string{"/a", "/b", "/c"} {
+		if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
+			&workspacev1.AddMountRequest{
+				Handle: handle,
+				Mount:  &sandboxctrlv1.Mount{Target: target, Source: "src"},
+			},
+		)); err != nil {
+			t.Fatalf("AddMount %s: %v", target, err)
+		}
+	}
+	got, err := rig.client.RemoveMount(t.Context(), connect.NewRequest(
+		&workspacev1.RemoveMountRequest{Handle: handle, Target: "/b"},
+	))
+	if err != nil {
+		t.Fatalf("RemoveMount: %v", err)
+	}
+	mounts := got.Msg.GetWorkspace().GetMounts()
+	if len(mounts) != 2 || mounts[0].GetTarget() != "/a" || mounts[1].GetTarget() != "/c" {
+		t.Errorf("mounts = %v, want [/a /c]", mountTargets(mounts))
+	}
+}
+
+func TestRemoveEnvDropsByName(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "rm-env"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	for _, name := range []string{"A", "B"} {
+		if _, err := rig.client.AddEnv(t.Context(), connect.NewRequest(
+			&workspacev1.AddEnvRequest{
+				Handle: handle,
+				Env:    &sandboxctrlv1.EnvVar{Name: name, Value: "v"},
+			},
+		)); err != nil {
+			t.Fatalf("AddEnv: %v", err)
+		}
+	}
+	got, err := rig.client.RemoveEnv(t.Context(), connect.NewRequest(
+		&workspacev1.RemoveEnvRequest{Handle: handle, Name: "A"},
+	))
+	if err != nil {
+		t.Fatalf("RemoveEnv: %v", err)
+	}
+	envs := got.Msg.GetWorkspace().GetEnv()
+	if len(envs) != 1 || envs[0].GetName() != "B" {
+		t.Errorf("env = %v, want [B]", envs)
+	}
+}
+
+//nolint:dupl // Structurally parallel to the RemoveMount / RemovePort unknown-key tests by design — each pins one RPC's missing-key error mapping.
+func TestRemoveEnvUnknownMapsToNotFound(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "nope-env"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	_, err := rig.client.RemoveEnv(t.Context(), connect.NewRequest(
+		&workspacev1.RemoveEnvRequest{Handle: handle, Name: "MISSING"},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeNotFound {
+		t.Errorf("code = %s, want NotFound", code)
+	}
+}
+
+func TestRemoveEnvRejectsEmptyName(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "empty-env"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	_, err := rig.client.RemoveEnv(t.Context(), connect.NewRequest(
+		&workspacev1.RemoveEnvRequest{Handle: handle},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeInvalidArgument {
+		t.Errorf("code = %s, want InvalidArgument", code)
+	}
+}
+
+// TestRemovePortKeyedByPortAndProtocol pins that the (port, proto)
+// pair is the key — removing 3000/TCP must leave 3000/UDP intact.
+func TestRemovePortKeyedByPortAndProtocol(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "rm-port"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	if _, err := rig.client.AddPort(t.Context(), connect.NewRequest(
+		&workspacev1.AddPortRequest{
+			Handle: handle,
+			Port: &sandboxctrlv1.PortMapping{
+				ContainerPort: 3000, Protocol: sandboxctrlv1.Protocol_PROTOCOL_TCP,
+			},
+		},
+	)); err != nil {
+		t.Fatalf("AddPort TCP: %v", err)
+	}
+	if _, err := rig.client.AddPort(t.Context(), connect.NewRequest(
+		&workspacev1.AddPortRequest{
+			Handle: handle,
+			Port: &sandboxctrlv1.PortMapping{
+				ContainerPort: 3000, Protocol: sandboxctrlv1.Protocol_PROTOCOL_UDP,
+			},
+		},
+	)); err != nil {
+		t.Fatalf("AddPort UDP: %v", err)
+	}
+	got, err := rig.client.RemovePort(t.Context(), connect.NewRequest(
+		&workspacev1.RemovePortRequest{
+			Handle: handle, ContainerPort: 3000,
+			Protocol: sandboxctrlv1.Protocol_PROTOCOL_TCP,
+		},
+	))
+	if err != nil {
+		t.Fatalf("RemovePort: %v", err)
+	}
+	ports := got.Msg.GetWorkspace().GetPorts()
+	if len(ports) != 1 || ports[0].GetProtocol() != sandboxctrlv1.Protocol_PROTOCOL_UDP {
+		t.Errorf("ports = %v, want [3000/UDP]", ports)
+	}
+}
+
+func TestRemovePortUnknownMapsToNotFound(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "nope-port"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	_, err := rig.client.RemovePort(t.Context(), connect.NewRequest(
+		&workspacev1.RemovePortRequest{
+			Handle: handle, ContainerPort: 9999,
+			Protocol: sandboxctrlv1.Protocol_PROTOCOL_TCP,
+		},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeNotFound {
+		t.Errorf("code = %s, want NotFound", code)
+	}
+}
+
+//nolint:dupl // Structurally parallel to the RemoveMount / RemoveEnv missing-input tests by design — pins one RPC's required-input error mapping.
+func TestRemovePortRejectsUnspecifiedProtocol(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "rm-port-bad"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	_, err := rig.client.RemovePort(t.Context(), connect.NewRequest(
+		&workspacev1.RemovePortRequest{Handle: handle, ContainerPort: 80},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeInvalidArgument {
+		t.Errorf("code = %s, want InvalidArgument", code)
+	}
+}
+
+// uuidHandle is a tiny constructor for the verbose uuid-form of
+// WorkspaceHandle. The remove tests do this 8+ times each; the
+// helper keeps the test body focused on what's actually under test.
+func uuidHandle(uuid string) *workspacev1.WorkspaceHandle {
+	return &workspacev1.WorkspaceHandle{
+		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: uuid},
+	}
+}
+
+func mountTargets(mounts []*sandboxctrlv1.Mount) []string {
+	out := make([]string, len(mounts))
+	for i, m := range mounts {
+		out[i] = m.GetTarget()
+	}
+	return out
 }
 
 func hasMissing(missing []string, want string) bool {

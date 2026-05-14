@@ -313,6 +313,99 @@ func (h *WorkspaceCatalogHandler) AddPort(
 	}), nil
 }
 
+// removeFirst returns s with the first element matching match
+// dropped, plus a bool indicating whether anything was removed.
+// Generic because the three Remove* handlers all need the same
+// "linear scan + splice" but over distinct slice types.
+func removeFirst[T any](s []T, match func(T) bool) ([]T, bool) {
+	for i := range s {
+		if match(s[i]) {
+			return append(s[:i], s[i+1:]...), true
+		}
+	}
+	return s, false
+}
+
+// RemoveMount drops the mount with matching target. NotFound when
+// no mount has that target — clients can distinguish a missing
+// workspace (also NotFound, but on the handle resolution) from a
+// missing mount by checking the error message.
+//
+//nolint:dupl // RemoveMount/RemoveEnv/RemovePort are structurally parallel by design; removeFirst factors the loop body, the residual frame is essential.
+func (h *WorkspaceCatalogHandler) RemoveMount(
+	_ context.Context,
+	req *connect.Request[workspacev1.RemoveMountRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	target := req.Msg.GetTarget()
+	if target == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("workspace: target is required"))
+	}
+	return h.mutate(req.Header(), req.Msg.GetHandle(),
+		func(w *workspacecatalog.Workspace) error {
+			next, ok := removeFirst(w.Mounts, func(m workspacecatalog.Mount) bool {
+				return m.Target == target
+			})
+			if !ok {
+				return connect.NewError(connect.CodeNotFound,
+					fmt.Errorf("workspace: no mount with target %q", target))
+			}
+			w.Mounts = next
+			return nil
+		})
+}
+
+// RemoveEnv drops the env var with the given name.
+//
+//nolint:dupl // RemoveMount/RemoveEnv/RemovePort are structurally parallel by design; removeFirst factors the loop body, the residual frame is essential.
+func (h *WorkspaceCatalogHandler) RemoveEnv(
+	_ context.Context,
+	req *connect.Request[workspacev1.RemoveEnvRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	name := req.Msg.GetName()
+	if name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("workspace: name is required"))
+	}
+	return h.mutate(req.Header(), req.Msg.GetHandle(),
+		func(w *workspacecatalog.Workspace) error {
+			next, ok := removeFirst(w.Env, func(e workspacecatalog.EnvVar) bool {
+				return e.Name == name
+			})
+			if !ok {
+				return connect.NewError(connect.CodeNotFound,
+					fmt.Errorf("workspace: no env %q", name))
+			}
+			w.Env = next
+			return nil
+		})
+}
+
+// RemovePort drops the (container_port, protocol) mapping.
+func (h *WorkspaceCatalogHandler) RemovePort(
+	_ context.Context,
+	req *connect.Request[workspacev1.RemovePortRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	if req.Msg.GetProtocol() == sandboxctrlv1.Protocol_PROTOCOL_UNSPECIFIED {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("workspace: protocol must be set"))
+	}
+	port := req.Msg.GetContainerPort()
+	proto := int32(req.Msg.GetProtocol())
+	return h.mutate(req.Header(), req.Msg.GetHandle(),
+		func(w *workspacecatalog.Workspace) error {
+			next, ok := removeFirst(w.Ports, func(p workspacecatalog.PortMapping) bool {
+				return p.ContainerPort == port && p.Protocol == proto
+			})
+			if !ok {
+				return connect.NewError(connect.CodeNotFound,
+					fmt.Errorf("workspace: no port %d/%s", port, req.Msg.GetProtocol()))
+			}
+			w.Ports = next
+			return nil
+		})
+}
+
 // resolveHandle turns a WorkspaceHandle into a workspace, scoping
 // name lookups to ownerFP. Returns Connect errors so callers can
 // surface them directly.

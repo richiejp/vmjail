@@ -85,6 +85,15 @@ const (
 	// WorkspaceCatalogServiceAddPortProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's AddPort RPC.
 	WorkspaceCatalogServiceAddPortProcedure = "/daft.workspace.v1.WorkspaceCatalogService/AddPort"
+	// WorkspaceCatalogServiceRemoveMountProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's RemoveMount RPC.
+	WorkspaceCatalogServiceRemoveMountProcedure = "/daft.workspace.v1.WorkspaceCatalogService/RemoveMount"
+	// WorkspaceCatalogServiceRemoveEnvProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's RemoveEnv RPC.
+	WorkspaceCatalogServiceRemoveEnvProcedure = "/daft.workspace.v1.WorkspaceCatalogService/RemoveEnv"
+	// WorkspaceCatalogServiceRemovePortProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's RemovePort RPC.
+	WorkspaceCatalogServiceRemovePortProcedure = "/daft.workspace.v1.WorkspaceCatalogService/RemovePort"
 )
 
 // WorkspaceCatalogServiceClient is a client for the daft.workspace.v1.WorkspaceCatalogService
@@ -122,6 +131,17 @@ type WorkspaceCatalogServiceClient interface {
 	// must be set explicitly; UNSPECIFIED protocol is rejected so
 	// the orchestrator's ingress (Phase C) can shape correctly.
 	AddPort(context.Context, *connect.Request[v1.AddPortRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// RemoveMount drops the mount whose target matches the request.
+	// Returns NotFound if no mount has that target. Symmetric to
+	// AddMount; the per-user-host RemapMount / FlagMount overrides
+	// live in WorkspaceAdoptionService (Phase F).
+	RemoveMount(context.Context, *connect.Request[v1.RemoveMountRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// RemoveEnv drops the env var with the given name. Returns
+	// NotFound if no env has that name.
+	RemoveEnv(context.Context, *connect.Request[v1.RemoveEnvRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// RemovePort drops the port mapping with the given (port,
+	// protocol). Returns NotFound if the pair is not present.
+	RemovePort(context.Context, *connect.Request[v1.RemovePortRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 }
 
 // NewWorkspaceCatalogServiceClient constructs a client for the
@@ -183,19 +203,40 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("AddPort")),
 			connect.WithClientOptions(opts...),
 		),
+		removeMount: connect.NewClient[v1.RemoveMountRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceRemoveMountProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("RemoveMount")),
+			connect.WithClientOptions(opts...),
+		),
+		removeEnv: connect.NewClient[v1.RemoveEnvRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceRemoveEnvProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("RemoveEnv")),
+			connect.WithClientOptions(opts...),
+		),
+		removePort: connect.NewClient[v1.RemovePortRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceRemovePortProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("RemovePort")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // workspaceCatalogServiceClient implements WorkspaceCatalogServiceClient.
 type workspaceCatalogServiceClient struct {
-	create    *connect.Client[v1.CreateWorkspaceRequest, v1.WorkspaceResponse]
-	get       *connect.Client[v1.GetWorkspaceRequest, v1.WorkspaceResponse]
-	list      *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
-	setImage  *connect.Client[v1.SetImageRequest, v1.WorkspaceResponse]
-	setTarget *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
-	addMount  *connect.Client[v1.AddMountRequest, v1.WorkspaceResponse]
-	addEnv    *connect.Client[v1.AddEnvRequest, v1.WorkspaceResponse]
-	addPort   *connect.Client[v1.AddPortRequest, v1.WorkspaceResponse]
+	create      *connect.Client[v1.CreateWorkspaceRequest, v1.WorkspaceResponse]
+	get         *connect.Client[v1.GetWorkspaceRequest, v1.WorkspaceResponse]
+	list        *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
+	setImage    *connect.Client[v1.SetImageRequest, v1.WorkspaceResponse]
+	setTarget   *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
+	addMount    *connect.Client[v1.AddMountRequest, v1.WorkspaceResponse]
+	addEnv      *connect.Client[v1.AddEnvRequest, v1.WorkspaceResponse]
+	addPort     *connect.Client[v1.AddPortRequest, v1.WorkspaceResponse]
+	removeMount *connect.Client[v1.RemoveMountRequest, v1.WorkspaceResponse]
+	removeEnv   *connect.Client[v1.RemoveEnvRequest, v1.WorkspaceResponse]
+	removePort  *connect.Client[v1.RemovePortRequest, v1.WorkspaceResponse]
 }
 
 // Create calls daft.workspace.v1.WorkspaceCatalogService.Create.
@@ -238,6 +279,21 @@ func (c *workspaceCatalogServiceClient) AddPort(ctx context.Context, req *connec
 	return c.addPort.CallUnary(ctx, req)
 }
 
+// RemoveMount calls daft.workspace.v1.WorkspaceCatalogService.RemoveMount.
+func (c *workspaceCatalogServiceClient) RemoveMount(ctx context.Context, req *connect.Request[v1.RemoveMountRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.removeMount.CallUnary(ctx, req)
+}
+
+// RemoveEnv calls daft.workspace.v1.WorkspaceCatalogService.RemoveEnv.
+func (c *workspaceCatalogServiceClient) RemoveEnv(ctx context.Context, req *connect.Request[v1.RemoveEnvRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.removeEnv.CallUnary(ctx, req)
+}
+
+// RemovePort calls daft.workspace.v1.WorkspaceCatalogService.RemovePort.
+func (c *workspaceCatalogServiceClient) RemovePort(ctx context.Context, req *connect.Request[v1.RemovePortRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.removePort.CallUnary(ctx, req)
+}
+
 // WorkspaceCatalogServiceHandler is an implementation of the
 // daft.workspace.v1.WorkspaceCatalogService service.
 type WorkspaceCatalogServiceHandler interface {
@@ -273,6 +329,17 @@ type WorkspaceCatalogServiceHandler interface {
 	// must be set explicitly; UNSPECIFIED protocol is rejected so
 	// the orchestrator's ingress (Phase C) can shape correctly.
 	AddPort(context.Context, *connect.Request[v1.AddPortRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// RemoveMount drops the mount whose target matches the request.
+	// Returns NotFound if no mount has that target. Symmetric to
+	// AddMount; the per-user-host RemapMount / FlagMount overrides
+	// live in WorkspaceAdoptionService (Phase F).
+	RemoveMount(context.Context, *connect.Request[v1.RemoveMountRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// RemoveEnv drops the env var with the given name. Returns
+	// NotFound if no env has that name.
+	RemoveEnv(context.Context, *connect.Request[v1.RemoveEnvRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// RemovePort drops the port mapping with the given (port,
+	// protocol). Returns NotFound if the pair is not present.
+	RemovePort(context.Context, *connect.Request[v1.RemovePortRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 }
 
 // NewWorkspaceCatalogServiceHandler builds an HTTP handler from the service implementation. It
@@ -330,6 +397,24 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("AddPort")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceRemoveMountHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceRemoveMountProcedure,
+		svc.RemoveMount,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("RemoveMount")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workspaceCatalogServiceRemoveEnvHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceRemoveEnvProcedure,
+		svc.RemoveEnv,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("RemoveEnv")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workspaceCatalogServiceRemovePortHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceRemovePortProcedure,
+		svc.RemovePort,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("RemovePort")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.workspace.v1.WorkspaceCatalogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkspaceCatalogServiceCreateProcedure:
@@ -348,6 +433,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceAddEnvHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceAddPortProcedure:
 			workspaceCatalogServiceAddPortHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceRemoveMountProcedure:
+			workspaceCatalogServiceRemoveMountHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceRemoveEnvProcedure:
+			workspaceCatalogServiceRemoveEnvHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceRemovePortProcedure:
+			workspaceCatalogServiceRemovePortHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -387,4 +478,16 @@ func (UnimplementedWorkspaceCatalogServiceHandler) AddEnv(context.Context, *conn
 
 func (UnimplementedWorkspaceCatalogServiceHandler) AddPort(context.Context, *connect.Request[v1.AddPortRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.AddPort is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) RemoveMount(context.Context, *connect.Request[v1.RemoveMountRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.RemoveMount is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) RemoveEnv(context.Context, *connect.Request[v1.RemoveEnvRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.RemoveEnv is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) RemovePort(context.Context, *connect.Request[v1.RemovePortRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.RemovePort is not implemented"))
 }

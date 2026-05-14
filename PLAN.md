@@ -325,8 +325,14 @@ Phase B — **Workspace as a first-class orchestrator object**:
   `internal/workspacecatalog.PortMapping` carries the wire
   protocol enum integer so the catalog stays the single source
   of truth for what's on the wire.
-- B2b: RemoveMount, RemapMount, FlagMount, RemoveEnv,
-  RemovePort.
+- B2b (landed): RemoveMount, RemoveEnv, RemovePort. The
+  symmetric "remove what AddX added" set. Each RPC takes a
+  WorkspaceHandle + the key (target / name / port+proto); a
+  missing key returns NotFound so clients can distinguish it from
+  a missing workspace. RemapMount / FlagMount move to Phase F
+  (adoption) because they are per-user-host overrides — not
+  edits to the global workspace spec — per architectural
+  implication #5.
 - B2c: Validate, Launch, Stop. Launch composes the workspace
   into a SandboxSpec and dispatches via the existing
   SandboxControlHandler.Dispatch path.

@@ -74,6 +74,20 @@ service WorkspaceCatalogService {
   // must be set explicitly; UNSPECIFIED protocol is rejected so
   // the orchestrator's ingress (Phase C) can shape correctly.
   rpc AddPort(AddPortRequest) returns (WorkspaceResponse) {}
+
+  // RemoveMount drops the mount whose target matches the request.
+  // Returns NotFound if no mount has that target. Symmetric to
+  // AddMount; the per-user-host RemapMount / FlagMount overrides
+  // live in WorkspaceAdoptionService (Phase F).
+  rpc RemoveMount(RemoveMountRequest) returns (WorkspaceResponse) {}
+
+  // RemoveEnv drops the env var with the given name. Returns
+  // NotFound if no env has that name.
+  rpc RemoveEnv(RemoveEnvRequest) returns (WorkspaceResponse) {}
+
+  // RemovePort drops the port mapping with the given (port,
+  // protocol). Returns NotFound if the pair is not present.
+  rpc RemovePort(RemovePortRequest) returns (WorkspaceResponse) {}
 }
 
 // WorkspaceHandle addresses a workspace by either its canonical
@@ -140,4 +154,25 @@ message AddEnvRequest {
 message AddPortRequest {
   WorkspaceHandle handle = 1;
   daft.sandboxctrl.v1.PortMapping port = 2;
+}
+
+message RemoveMountRequest {
+  WorkspaceHandle handle = 1;
+  // Absolute in-VM target of the mount to drop.
+  string target = 2;
+}
+
+message RemoveEnvRequest {
+  WorkspaceHandle handle = 1;
+  // Name of the env var to drop.
+  string name = 2;
+}
+
+message RemovePortRequest {
+  WorkspaceHandle handle = 1;
+  // Container port + protocol of the mapping to drop. The pair
+  // (not the port alone) is the key because the same container
+  // port can be bound on both TCP and UDP.
+  uint32 container_port = 2;
+  daft.sandboxctrl.v1.Protocol protocol = 3;
 }
