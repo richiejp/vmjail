@@ -218,6 +218,19 @@ The GPU-bound VM survives idle for $TTL between workspaces.
    registry, and rewrites the workspace's `image` field. No
    host-side docker required.
 
+9. **Two-way sync is delegated, not built.** The workspace mount
+   model is intentionally asymmetric (push, pull, or
+   stream-on-miss; writes surface back only on explicit `daft
+   workspace pull`). For users who want true bidi sync we expose
+   a Docker-API-compatible endpoint per workspace (Phase H) and
+   point them at their existing tooling — Mutagen primarily,
+   but also VS Code Dev Containers, JetBrains Gateway, plain
+   `docker cp`. The user's tool drops its agent into the
+   container and runs whatever sync mode it wants. This keeps
+   the daft-side filesystem story narrow and lets the
+   ecosystem's existing sync UX serve the case where bidi is
+   genuinely desired.
+
 ### Slice plan
 
 Phase A — **Sandboxd daemon mode**:
@@ -363,6 +376,64 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
   orchestrator sends `Thaw(workspace=<uuid>)` to the
   controller, which `cont`s the VM via QMP.
 
+Phase H — **Docker-API endpoint for third-party sync tools**:
+
+Rationale: rather than build our own two-way file-sync (with all
+the rsync-delta / 3-way-merge / conflict-resolution surface that
+implies), expose enough of the Docker Engine API at a known
+endpoint that an unmodified Mutagen client on the user-host can
+target a workspace as `docker://daft-<workspace>` and use its own
+agent for sync. The user gets full bidi-sync ergonomics from a
+tool they already know; we don't add a symmetric model that
+fights our "user-host is source of truth" stance everywhere else.
+This is also generic — anything that speaks docker (VS Code Dev
+Containers, JetBrains Gateway, plain `docker cp`) works through
+the same endpoint.
+
+- H1: Minimal Docker API surface on the orchestrator,
+  multiplexed per-workspace. The endpoint speaks just the
+  subset Mutagen and similar tools touch: `GET /containers/json`,
+  `GET /containers/{id}/json`, `POST /containers/{id}/exec`
+  (+ `start` + WebSocket attach), `PUT /containers/{id}/archive`,
+  `GET /containers/{id}/archive`. Backend is a forwarder over
+  the broker into the sandboxd, which exec's against the actual
+  container (crun) inside the VM. Auth: orchestrator's existing
+  mTLS; the user points `DOCKER_HOST` at
+  `https://<workspace>.<orchestrator>/docker` and supplies the
+  client cert.
+- H2: Mutagen-on-daft happy path: doc + integration test
+  demonstrating `mutagen sync create ~/myapp
+  docker://daft-<workspace>:/workspace` against a launched
+  workspace. Mutagen's docker transport will `docker cp` its
+  agent in and `docker exec` it; the agent then drives sync
+  through that long-lived exec session.
+- H3: Sync-direction guardrails. Two-way sync to an adversarial
+  sandbox violates our default trust model. Options to land
+  before H1 is broadly recommended: (a) refuse the exec if the
+  workspace's mount policy is `pull-only` for the targeted path,
+  forcing `mutagen sync create --mode one-way-replica`; (b)
+  expose a `daft workspace allow-bidi-sync <mount>` opt-in that
+  flips the per-mount policy explicitly. Default-deny on bidi.
+- H4: Optional convenience: `daft workspace docker-host
+  <workspace>` prints the `DOCKER_HOST=…` env line + cert paths
+  so the user doesn't have to remember the URL shape.
+- H5: Mutagen config import (small): `daft workspace import-mutagen
+  <yaml>` translates ignore patterns, `mode`, and per-path
+  overrides into mount-flag overrides on the workspace. Convenience
+  only — anyone with an existing mutagen project can keep using
+  the same `.mutagen.yml`.
+
+Notes:
+- We do NOT build symmetric / two-way / 3-way-merge file sync
+  in daft itself. Workspace mounts stay asymmetric (push-only
+  / pull-only / explicit `daft workspace pull`); users who want
+  bidi reach for Mutagen via H.
+- The Docker-API surface is intentionally minimum-viable —
+  enough for sync and exec, not a full re-implementation. Things
+  like `image build` stay daft-native (Phase E). If a tool
+  asks for an unsupported endpoint we 501 it with a pointer to
+  the daft equivalent.
+
 ### What survives, what moves
 
 - **Survives**: broker (relay), daft-fuse, overlayfs, mTLS
@@ -406,6 +477,16 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
   (`GH_TOKEN`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`) — what
   goes in, what doesn't? Conservative default + `--with-dev-
   defaults` opt-in; explicit catalog in CONTRIBUTING.
+- **Docker-API surface scope** (Phase H): which endpoints stay
+  501 vs implemented? Sync + exec are the must-haves; `logs`,
+  `stats`, `events` are useful but optional; `build`, `pull`,
+  `images` are explicit no-ops with a `daft …` pointer. Final
+  list belongs in H1 once we audit what Mutagen / Dev Containers
+  / JetBrains Gateway actually call.
+- **Bidi-sync default** (Phase H3): default-deny with an explicit
+  opt-in (`daft workspace allow-bidi-sync`) seems right, but
+  the UX hit on "I just want to use mutagen" is real. Re-evaluate
+  once H2 has an end-to-end demo.
 
 ## Status
 
