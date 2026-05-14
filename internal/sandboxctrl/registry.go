@@ -121,14 +121,17 @@ func (r *Registry) Forget(fp identity.Fingerprint) {
 }
 
 // Snapshot returns the current set of registrations, sorted by
-// fingerprint string for deterministic test output.
+// fingerprint string for deterministic test output. The mutex is
+// released before the sort — out is private to the caller's
+// goroutine, so the O(n log n) work doesn't need to block
+// concurrent Register / Heartbeat / Forget.
 func (r *Registry) Snapshot() []Entry {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	out := make([]Entry, 0, len(r.all))
 	for _, e := range r.all {
 		out = append(out, e)
 	}
+	r.mu.Unlock()
 	sortByFingerprint(out)
 	return out
 }

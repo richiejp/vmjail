@@ -16,18 +16,37 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandboxctrlclient"
 )
 
-// dispatchFn adapts a function to the DispatchHandler interface so
-// tests can use closures without declaring a struct.
-type dispatchFn func(context.Context, *sandboxctrlv1.Dispatch) error
-
-func (f dispatchFn) HandleDispatch(ctx context.Context, d *sandboxctrlv1.Dispatch) error {
-	return f(ctx, d)
-}
-
 const (
 	testListenAddr = "127.0.0.1:0"
 	testFixtureVer = "test-v0"
 )
+
+// dispatchUntilAttached retries Dispatch for up to 1s while the
+// orchestrator's RegisterSandbox handler is still racing to attach
+// its per-fingerprint stream. ErrSandboxNotConnected is the only
+// retryable error.
+func dispatchUntilAttached(
+	t *testing.T,
+	h *orchestrator.SandboxControlHandler,
+	fp identity.Fingerprint,
+	id string,
+	spec *sandboxctrlv1.SandboxSpec,
+) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	//daft:lint:disable=forloopbound reason="wall-clock bounded to 1s; exits on attach or transient retry exhaustion"
+	for time.Now().Before(deadline) {
+		err := h.Dispatch(fp, id, spec)
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, orchestrator.ErrSandboxNotConnected) {
+			t.Fatalf("Dispatch: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("orchestrator stream did not attach within 1s")
+}
 
 // e2eRig is an in-process orchestrator + a sandbox identity that
 // has been TOFU-approved on both sides. Tests use it to exercise
@@ -272,7 +291,7 @@ func TestRegisterAndServeDeliversDispatchToHandler(t *testing.T) {
 	rig := newE2ERig(t)
 
 	got := make(chan *sandboxctrlv1.Dispatch, 1)
-	handler := dispatchFn(func(_ context.Context, d *sandboxctrlv1.Dispatch) error {
+	handler := sandboxctrlclient.DispatchHandlerFunc(func(_ context.Context, d *sandboxctrlv1.Dispatch) error {
 		got <- d
 		return nil
 	})
@@ -295,22 +314,9 @@ func TestRegisterAndServeDeliversDispatchToHandler(t *testing.T) {
 		served <- client.RegisterAndServe(ctx, sandboxctrl.Resources{CPUs: 1})
 	}()
 
-	// Wait for registration to land before pushing — Dispatch
-	// before attachStream returns ErrSandboxNotConnected.
 	fp := rig.sbID.Fingerprint()
-	deadline := time.Now().Add(time.Second)
 	want := &sandboxctrlv1.SandboxSpec{ImageRef: "alpine:3", WorkspaceUuid: "ws-1"}
-	//daft:lint:disable=forloopbound reason="poll until the orchestrator sees the stream attach (≤1s)"
-	for time.Now().Before(deadline) {
-		err := rig.server.SandboxControl().Dispatch(fp, "d-1", want)
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, orchestrator.ErrSandboxNotConnected) {
-			t.Fatalf("Dispatch: %v", err)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	dispatchUntilAttached(t, rig.server.SandboxControl(), fp, "d-1", want)
 
 	select {
 	case d := <-got:
@@ -341,7 +347,7 @@ func TestRegisterAndServeDeliversDispatchToHandler(t *testing.T) {
 func TestRegisterAndServeSurfacesDispatchError(t *testing.T) {
 	rig := newE2ERig(t)
 	want := errors.New("synthetic handler failure")
-	handler := dispatchFn(func(context.Context, *sandboxctrlv1.Dispatch) error {
+	handler := sandboxctrlclient.DispatchHandlerFunc(func(context.Context, *sandboxctrlv1.Dispatch) error {
 		return want
 	})
 
@@ -365,18 +371,7 @@ func TestRegisterAndServeSurfacesDispatchError(t *testing.T) {
 	}()
 
 	fp := rig.sbID.Fingerprint()
-	deadline := time.Now().Add(time.Second)
-	//daft:lint:disable=forloopbound reason="poll until the stream attaches"
-	for time.Now().Before(deadline) {
-		err := rig.server.SandboxControl().Dispatch(fp, "d-bad", &sandboxctrlv1.SandboxSpec{})
-		if err == nil {
-			break
-		}
-		if !errors.Is(err, orchestrator.ErrSandboxNotConnected) {
-			t.Fatalf("Dispatch: %v", err)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	dispatchUntilAttached(t, rig.server.SandboxControl(), fp, "d-bad", &sandboxctrlv1.SandboxSpec{})
 
 	select {
 	case err := <-served:

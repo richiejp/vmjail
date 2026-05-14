@@ -3,11 +3,10 @@
 // SandboxControlService and runs the corresponding workload by
 // driving the existing internal/sandbox boot pipeline.
 //
-// Slice A4b lands the seam — every Dispatch boots a bare Hello
-// VM (the SandboxSpec's image_ref and mounts are recorded but do
-// not yet drive the in-VM container). Slice A5 will deprecate
-// `daft-sandboxd run` and route its image-pull + bundle-share
-// pipeline through this executor.
+// v1 boots a bare Hello VM on every Dispatch — image_ref and
+// mounts[] are recorded as span attributes but do not yet drive
+// an in-VM container. See PLAN.md for the route to image-pull +
+// bundle-share execution.
 package sandboxexec
 
 import (
@@ -54,8 +53,17 @@ func New(base sandbox.Config, stdout io.Writer, runner Runner) (*Executor, error
 // HandleDispatch is the DispatchHandler entrypoint. The spec
 // fields that don't yet have an executor consumer (image_ref,
 // mounts, env, ports, gpu_request, isolation) are recorded as
-// span attributes but otherwise ignored — Slice A5 will wire the
-// image-pull / container pipeline here.
+// span attributes but otherwise ignored — the image-pull /
+// container path lands alongside the deprecation of
+// `daft-sandboxd run` (see PLAN.md).
+//
+// v1 invokes sandbox.Hello synchronously, which blocks the
+// sandboxctrlclient receive loop for the duration of the VM boot
+// (~hundreds of ms warm, multiple seconds cold). The
+// DispatchHandler doc-comment claims the handler moves long work
+// off-thread; that becomes true once a real concurrency cap and a
+// DispatchAck RPC land. Until then, the orchestrator scheduler
+// must respect per-host load.
 func (e *Executor) HandleDispatch(
 	ctx context.Context,
 	d *sandboxctrlv1.Dispatch,

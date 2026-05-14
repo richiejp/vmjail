@@ -48,6 +48,17 @@ type DispatchHandler interface {
 	HandleDispatch(ctx context.Context, dispatch *sandboxctrlv1.Dispatch) error
 }
 
+// DispatchHandlerFunc adapts a plain function to the
+// DispatchHandler interface, mirroring net/http's HandlerFunc.
+// Useful for tests and for trivial handlers that don't carry
+// state.
+type DispatchHandlerFunc func(ctx context.Context, dispatch *sandboxctrlv1.Dispatch) error
+
+// HandleDispatch satisfies DispatchHandler.
+func (f DispatchHandlerFunc) HandleDispatch(ctx context.Context, d *sandboxctrlv1.Dispatch) error {
+	return f(ctx, d)
+}
+
 // Config is everything the client needs to dial the orchestrator
 // and keep a sandbox registration alive.
 type Config struct {
@@ -70,7 +81,7 @@ type Config struct {
 	// dropped silently — used when running sandboxd in pure
 	// register-and-heartbeat mode (e.g. operator inspecting a
 	// fleet). Production wiring sets this to an executor that
-	// drives the Hello / container pipeline (Slice A4b).
+	// drives the Hello / container pipeline.
 	Dispatch DispatchHandler
 }
 
