@@ -3,15 +3,33 @@ package sandboxdcli
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
 	"github.com/richiejp/darkaifactory/internal/sandboxctrlclient"
+	"github.com/richiejp/darkaifactory/internal/sandboxexec"
 )
+
+// stubBuildDispatcher swaps buildDispatcher with one that returns
+// an Executor whose runner is a no-op — exercises the same code
+// path as production without needing the DAFT_INITRAMFS env or a
+// real VM. Tests that drive runServe past the peer-store gate use
+// this.
+func stubBuildDispatcher(t *testing.T) {
+	t.Helper()
+	saved := buildDispatcher
+	t.Cleanup(func() { buildDispatcher = saved })
+	buildDispatcher = func(w io.Writer) (*sandboxexec.Executor, error) {
+		return sandboxexec.New(sandbox.Config{}, w,
+			func(context.Context, io.Writer, sandbox.Config) error { return nil })
+	}
+}
 
 func identityGenerateForTest() (*identity.Identity, error) {
 	return identity.Generate(identity.RoleSandboxHost)
@@ -33,6 +51,7 @@ func TestServeRequiresOrchestratorFlag(t *testing.T) {
 // client construction, and the call into RegisterAndServe — all
 // without dialing a real orchestrator.
 func TestRunServeRunsRegisterAndServe(t *testing.T) {
+	stubBuildDispatcher(t)
 	saved := runRegisterAndServe
 	t.Cleanup(func() { runRegisterAndServe = saved })
 
@@ -129,6 +148,7 @@ func TestRunServeBadPeerStore(t *testing.T) {
 }
 
 func TestRunServePropagatesRegisterError(t *testing.T) {
+	stubBuildDispatcher(t)
 	saved := runRegisterAndServe
 	t.Cleanup(func() { runRegisterAndServe = saved })
 
@@ -141,6 +161,51 @@ func TestRunServePropagatesRegisterError(t *testing.T) {
 	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", dir, time.Second)
 	if !errors.Is(err, want) {
 		t.Errorf("err = %v, want %v", err, want)
+	}
+}
+
+// TestRunServePropagatesBuildDispatcherError drives runServe past
+// the peer-store gate with a buildDispatcher that errors out — the
+// error must surface and the RegisterAndServe seam must not run.
+func TestRunServePropagatesBuildDispatcherError(t *testing.T) {
+	saved := buildDispatcher
+	t.Cleanup(func() { buildDispatcher = saved })
+	want := errors.New("synthetic dispatcher build failure")
+	buildDispatcher = func(io.Writer) (*sandboxexec.Executor, error) {
+		return nil, want
+	}
+	savedRun := runRegisterAndServe
+	t.Cleanup(func() { runRegisterAndServe = savedRun })
+	runRegisterAndServe = func(context.Context, *sandboxctrlclient.Client, sandboxctrl.Resources) error {
+		t.Error("RegisterAndServe should not run when buildDispatcher fails")
+		return nil
+	}
+	dir := t.TempDir()
+	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", dir, time.Second)
+	if !errors.Is(err, want) {
+		t.Errorf("err = %v, want %v", err, want)
+	}
+}
+
+// TestBuildDispatcherProductionSeam covers the production
+// `buildDispatcher` closure: with DAFT_INITRAMFS unset,
+// sandbox.ConfigFromEnv returns the expected error and the seam
+// surfaces it. With every required env set, the seam returns a
+// non-nil Executor.
+func TestBuildDispatcherProductionSeam(t *testing.T) {
+	t.Setenv("DAFT_CLOUD_HYPERVISOR", "/dev/null")
+	t.Setenv("DAFT_KERNEL", "/dev/null")
+	t.Setenv("DAFT_INITRAMFS", "")
+	if _, err := buildDispatcher(&noopWriter{}); err == nil {
+		t.Fatal("buildDispatcher with DAFT_INITRAMFS unset should fail")
+	}
+	t.Setenv("DAFT_INITRAMFS", "/dev/null")
+	d, err := buildDispatcher(&noopWriter{})
+	if err != nil {
+		t.Fatalf("buildDispatcher: %v", err)
+	}
+	if d == nil {
+		t.Fatal("buildDispatcher returned nil Executor")
 	}
 }
 

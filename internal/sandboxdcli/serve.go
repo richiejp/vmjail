@@ -12,8 +12,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
 	"github.com/richiejp/darkaifactory/internal/sandboxctrlclient"
+	"github.com/richiejp/darkaifactory/internal/sandboxexec"
 	"github.com/richiejp/darkaifactory/internal/version"
 )
 
@@ -85,12 +87,18 @@ func runServe(
 		return err
 	}
 
+	dispatcher, err := buildDispatcher(stdout)
+	if err != nil {
+		return err
+	}
+
 	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
 		URL:               orchestratorURL,
 		Identity:          id,
 		Peers:             peers,
 		Version:           version.Version,
 		HeartbeatInterval: heartbeatInterval,
+		Dispatch:          dispatcher,
 	})
 	if err != nil {
 		return err
@@ -116,6 +124,20 @@ var runRegisterAndServe = func(
 	res sandboxctrl.Resources,
 ) error {
 	return c.RegisterAndServe(ctx, res)
+}
+
+// buildDispatcher resolves the sandbox.Config baseline from the
+// DAFT_* env vars and wires an Executor with it. The Executor is
+// the DispatchHandler the sandboxctrlclient invokes on every
+// Dispatch event from the orchestrator.
+//
+//nolint:gochecknoglobals // single test seam, not state.
+var buildDispatcher = func(stdout io.Writer) (*sandboxexec.Executor, error) {
+	base, err := sandbox.ConfigFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	return sandboxexec.New(base, stdout, nil)
 }
 
 // formatBytes is a small KiB/MiB/GiB renderer for the startup

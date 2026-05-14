@@ -250,9 +250,14 @@ Phase A — **Sandboxd daemon mode**:
   forwards the channel to `stream.Send`. Sandboxd-side: a
   `DispatchHandler` seam on `sandboxctrlclient.Config` is invoked
   per Dispatch event; handler errors tear the registration down.
-- A4b: sandboxd-side executor wraps the current `Hello` pipeline
-  but driven by the dispatched `SandboxSpec` (image_ref, mounts[],
-  workspace_uuid, …) instead of CLI flags.
+- A4b (landed, minimal): sandboxd-side `internal/sandboxexec`
+  package implements `DispatchHandler`. On every Dispatch event it
+  logs the dispatch_id / workspace_uuid / image_ref and runs
+  `sandbox.Hello` with the baseline `sandbox.Config` resolved at
+  startup via `sandbox.ConfigFromEnv()`. The spec's `image_ref` and
+  `mounts[]` are recorded in the trace span but do not yet drive an
+  in-VM container — that path lands in Slice A5 alongside the
+  `daft-sandboxd run` deprecation.
 - A5: `daft-sandboxd run …` → `daft-sandboxd debug run …` with a
   deprecation banner. Keep for offline e2e.
 
@@ -1192,6 +1197,18 @@ Phase G — **Freeze-on-disconnect** (subsumes Slice 4c):
       orchestrator-allocated (workspace UUID or registered tag),
       not free-form host paths — adoption (Slice F1) is how
       user-host directories enter the namespace.
+- [x] Workflow reorientation Slice A4b (minimal) — sandboxd-side
+      executor. New `internal/sandboxexec` package: a
+      `DispatchHandler` that, on every Dispatch event, runs
+      `sandbox.Hello` with the baseline `sandbox.Config` resolved at
+      startup from the `DAFT_*` env vars. `daft-sandboxd serve` now
+      constructs the executor via a `buildDispatcher` test seam and
+      passes it to `sandboxctrlclient`. The spec's `image_ref` /
+      `mounts[]` / `workspace_uuid` are recorded as span attributes
+      and logged but do not yet drive a container — Slice A5 will
+      route the existing `daft-sandboxd run` image-pull + bundle
+      pipeline through this executor and deprecate the `run`
+      subcommand.
 - [x] Workflow reorientation Slice A4a — Dispatch wire path.
       `RegisterEvent` oneof gains a `Dispatch` variant
       (`dispatch_id` + `SandboxSpec`). Orchestrator-side handler
