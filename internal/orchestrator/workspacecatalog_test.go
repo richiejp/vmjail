@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -464,14 +465,16 @@ func TestAddMountRejectsDuplicateTarget(t *testing.T) {
 	handle := &workspacev1.WorkspaceHandle{
 		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetUuid()},
 	}
-	add := &workspacev1.AddMountRequest{
-		Handle: handle,
-		Mount:  &sandboxctrlv1.Mount{Target: testMountTarget, Source: "a"},
+	build := func() *workspacev1.AddMountRequest {
+		return &workspacev1.AddMountRequest{
+			Handle: handle,
+			Mount:  &sandboxctrlv1.Mount{Target: testMountTarget, Source: "a"},
+		}
 	}
-	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(add)); err != nil {
+	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(build())); err != nil {
 		t.Fatalf("first AddMount: %v", err)
 	}
-	_, err = rig.client.AddMount(t.Context(), connect.NewRequest(add))
+	_, err = rig.client.AddMount(t.Context(), connect.NewRequest(build()))
 	if code := connect.CodeOf(err); code != connect.CodeAlreadyExists {
 		t.Errorf("dup AddMount: code = %s, want AlreadyExists", code)
 	}
@@ -974,7 +977,7 @@ func TestWorkspaceToProtoCarriesLockExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	now := ws.CreatedAt.Add(60_000_000_000) // +60s
+	now := ws.CreatedAt.Add(60 * time.Second)
 	_, err = cat.Update(ws.UUID, func(w *workspacecatalog.Workspace) error {
 		w.LockExpiresAt = now
 		return nil

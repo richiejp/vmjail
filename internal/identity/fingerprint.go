@@ -42,6 +42,16 @@ func FingerprintCert(cert *x509.Certificate) Fingerprint {
 	return sha256.Sum256(cert.RawSubjectPublicKeyInfo)
 }
 
+// IsZero reports whether f is the zero Fingerprint — the value that
+// proto-decoded fields take when unset, or that callers can use to
+// mean "no owner / no lock holder". Distinguishing this from a real
+// fingerprint matters at every projection boundary; callers should
+// not String() the zero value (the result would be a valid-looking
+// hash of nothing).
+func (f Fingerprint) IsZero() bool {
+	return f == Fingerprint{}
+}
+
 // String renders the fingerprint as "sha256:AA:BB:CC:..." — uppercase
 // hex bytes separated by colons. The "sha256:" prefix is mandatory in
 // our wire format so that future digest changes can coexist (e.g.

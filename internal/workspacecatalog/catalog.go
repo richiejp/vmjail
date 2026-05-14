@@ -14,9 +14,10 @@
 package workspacecatalog
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -287,20 +288,23 @@ func (s *Store) Delete(uuid string) {
 	delete(s.byAlias, aliasKey{owner: prev.OwnerFingerprint, name: prev.Name})
 }
 
-// List returns every workspace, sorted by UUID for deterministic
-// test output. The mutex is released before sorting since the
-// returned slice is private to the caller's goroutine.
-func (s *Store) List() []Workspace {
+// List returns every workspace satisfying keep (or every workspace
+// if keep is nil), sorted by UUID. The mutex is released before
+// sorting since the returned slice is private to the caller. Push
+// the predicate into the store so we don't allocate copies of
+// records that the caller is about to discard.
+func (s *Store) List(keep func(*Workspace) bool) []Workspace {
 	s.mu.Lock()
 	out := make([]Workspace, 0, len(s.all))
-	// Indexed-style iteration via the map keyset to avoid the
-	// per-iteration value copy that ranging over the values would
-	// incur (Workspace is ~300 bytes today).
 	for uuid := range s.all {
-		out = append(out, s.all[uuid])
+		ws := s.all[uuid]
+		if keep != nil && !keep(&ws) {
+			continue
+		}
+		out = append(out, ws)
 	}
 	s.mu.Unlock()
-	sort.Slice(out, func(i, j int) bool { return out[i].UUID < out[j].UUID })
+	slices.SortFunc(out, func(a, b Workspace) int { return cmp.Compare(a.UUID, b.UUID) })
 	return out
 }
 

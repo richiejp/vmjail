@@ -302,7 +302,7 @@ func TestListReturnsSortedSnapshot(t *testing.T) {
 	if _, err := s.Create(CreateInput{UUID: uuidA, Name: "a", OwnerFingerprint: owner}); err != nil {
 		t.Fatalf("Create A: %v", err)
 	}
-	list := s.List()
+	list := s.List(nil)
 	if len(list) != 2 || list[0].UUID != uuidA || list[1].UUID != uuidB {
 		t.Errorf("List order = [%s, %s], want [%s, %s]",
 			list[0].UUID, list[1].UUID, uuidA, uuidB)

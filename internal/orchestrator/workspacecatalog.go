@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -94,9 +95,8 @@ func (h *WorkspaceCatalogHandler) Get(
 }
 
 // List returns the catalog snapshot, optionally filtered to the
-// caller's own workspaces. Filtering happens in the handler — the
-// store's List is unfiltered to keep persistence-layer (B5) reads
-// simple.
+// caller's own workspaces. The filter is pushed into Store.List so
+// records the caller can't see never get copied out.
 func (h *WorkspaceCatalogHandler) List(
 	_ context.Context,
 	req *connect.Request[workspacev1.ListWorkspacesRequest],
@@ -105,14 +105,14 @@ func (h *WorkspaceCatalogHandler) List(
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	all := h.store.List()
-	mineOnly := req.Msg.GetMineOnly()
-	out := make([]*workspacev1.Workspace, 0, len(all))
+	var keep func(*workspacecatalog.Workspace) bool
+	if req.Msg.GetMineOnly() {
+		keep = func(w *workspacecatalog.Workspace) bool { return w.OwnerFingerprint == fp }
+	}
+	all := h.store.List(keep)
+	out := make([]*workspacev1.Workspace, len(all))
 	for i := range all {
-		if mineOnly && all[i].OwnerFingerprint != fp {
-			continue
-		}
-		out = append(out, workspaceToProto(all[i]))
+		out[i] = workspaceToProto(all[i])
 	}
 	return connect.NewResponse(&workspacev1.ListWorkspacesResponse{
 		Workspaces: out,
@@ -147,11 +147,10 @@ func (h *WorkspaceCatalogHandler) SetTarget(
 		})
 }
 
-// mutate is the shared auth + resolve + Update + project plumbing
-// behind every per-field setter. Extracted so the simple setters
-// (SetImage, SetTarget) don't repeat the 10-line dance — the
-// add/append handlers keep their own bodies because they need
-// pre-resolve input validation that doesn't fit a generic helper.
+// mutate is the shared auth → resolve → Update → project plumbing
+// behind every per-field setter. Add* handlers don't use it because
+// they need pre-resolve input validation that doesn't fit a generic
+// helper.
 func (h *WorkspaceCatalogHandler) mutate(
 	header http.Header,
 	handle *workspacev1.WorkspaceHandle,
@@ -283,14 +282,9 @@ func (h *WorkspaceCatalogHandler) AddPort(
 	if err != nil {
 		return nil, err
 	}
-	// Wire-format port + protocol are preserved as-is on the
-	// workspace; SandboxSpec projection at Launch time (B2c) reads
-	// them back unchanged.
 	containerPort := port.GetContainerPort()
 	proto := int32(port.GetProtocol())
 	updated, err := h.store.Update(ws.UUID, func(w *workspacecatalog.Workspace) error {
-		// Duplicate detection uses (port, protocol) since the same
-		// container_port can legitimately be bound to TCP + UDP.
 		for i := range w.Ports {
 			if w.Ports[i].ContainerPort == containerPort &&
 				w.Ports[i].Protocol == proto {
@@ -313,17 +307,13 @@ func (h *WorkspaceCatalogHandler) AddPort(
 	}), nil
 }
 
-// removeFirst returns s with the first element matching match
-// dropped, plus a bool indicating whether anything was removed.
-// Generic because the three Remove* handlers all need the same
-// "linear scan + splice" but over distinct slice types.
-func removeFirst[T any](s []T, match func(T) bool) ([]T, bool) {
-	for i := range s {
-		if match(s[i]) {
-			return append(s[:i], s[i+1:]...), true
-		}
-	}
-	return s, false
+// removeMatching drops every element of s for which match returns
+// true, returning the new slice and whether anything changed.
+// Add* handlers enforce uniqueness so at most one element matches —
+// the "every" semantic from slices.DeleteFunc is safe.
+func removeMatching[T any](s []T, match func(T) bool) ([]T, bool) {
+	out := slices.DeleteFunc(s, match)
+	return out, len(out) != len(s)
 }
 
 // RemoveMount drops the mount with matching target. NotFound when
@@ -331,7 +321,7 @@ func removeFirst[T any](s []T, match func(T) bool) ([]T, bool) {
 // workspace (also NotFound, but on the handle resolution) from a
 // missing mount by checking the error message.
 //
-//nolint:dupl // RemoveMount/RemoveEnv/RemovePort are structurally parallel by design; removeFirst factors the loop body, the residual frame is essential.
+//nolint:dupl // RemoveMount/RemoveEnv/RemovePort are structurally parallel by design; removeMatching factors the loop body, the residual frame is essential.
 func (h *WorkspaceCatalogHandler) RemoveMount(
 	_ context.Context,
 	req *connect.Request[workspacev1.RemoveMountRequest],
@@ -343,7 +333,7 @@ func (h *WorkspaceCatalogHandler) RemoveMount(
 	}
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
-			next, ok := removeFirst(w.Mounts, func(m workspacecatalog.Mount) bool {
+			next, ok := removeMatching(w.Mounts, func(m workspacecatalog.Mount) bool {
 				return m.Target == target
 			})
 			if !ok {
@@ -357,7 +347,7 @@ func (h *WorkspaceCatalogHandler) RemoveMount(
 
 // RemoveEnv drops the env var with the given name.
 //
-//nolint:dupl // RemoveMount/RemoveEnv/RemovePort are structurally parallel by design; removeFirst factors the loop body, the residual frame is essential.
+//nolint:dupl // RemoveMount/RemoveEnv/RemovePort are structurally parallel by design; removeMatching factors the loop body, the residual frame is essential.
 func (h *WorkspaceCatalogHandler) RemoveEnv(
 	_ context.Context,
 	req *connect.Request[workspacev1.RemoveEnvRequest],
@@ -369,7 +359,7 @@ func (h *WorkspaceCatalogHandler) RemoveEnv(
 	}
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
-			next, ok := removeFirst(w.Env, func(e workspacecatalog.EnvVar) bool {
+			next, ok := removeMatching(w.Env, func(e workspacecatalog.EnvVar) bool {
 				return e.Name == name
 			})
 			if !ok {
@@ -394,7 +384,7 @@ func (h *WorkspaceCatalogHandler) RemovePort(
 	proto := int32(req.Msg.GetProtocol())
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
-			next, ok := removeFirst(w.Ports, func(p workspacecatalog.PortMapping) bool {
+			next, ok := removeMatching(w.Ports, func(p workspacecatalog.PortMapping) bool {
 				return p.ContainerPort == port && p.Protocol == proto
 			})
 			if !ok {
@@ -452,7 +442,6 @@ func mapCatalogErr(err error) error {
 	case errors.Is(err, workspacecatalog.ErrImmutableField):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	}
-	// Already-mapped Connect errors round-trip unchanged.
 	var ce *connect.Error
 	if errors.As(err, &ce) {
 		return ce
@@ -525,12 +514,11 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 }
 
 // fingerprintStringOrEmpty renders a Fingerprint as its hex string,
-// or "" when the value is the zero Fingerprint. Lets the wire form
-// distinguish "no owner / no lock holder" from a real fingerprint
-// without callers having to special-case the zero hash.
+// or "" when the value is zero. Thin wrapper because the catalog →
+// proto projection needs the empty form, but most other callers
+// rely on String() always returning a valid-looking hash.
 func fingerprintStringOrEmpty(fp identity.Fingerprint) string {
-	var zero identity.Fingerprint
-	if fp == zero {
+	if fp.IsZero() {
 		return ""
 	}
 	return fp.String()
