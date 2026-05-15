@@ -1,13 +1,13 @@
-// Package sandboxctrl is the orchestrator-side state for the
-// sandbox-control plane. It owns the live set of registered
-// sandboxes — keyed by mTLS fingerprint — and the rules for how
-// registrations expire when heartbeats stop.
+// Package nodectrl is the orchestrator-side state for the
+// node-control plane. It owns the live set of registered Nodes —
+// keyed by mTLS fingerprint — and the rules for how registrations
+// expire when heartbeats stop.
 //
 // The Connect-RPC adapter that drives this package lives in
-// internal/orchestrator/sandboxctrl.go; this split mirrors
+// internal/orchestrator/nodectrl.go; this split mirrors
 // workspacebroker / orchestrator/broker.go so the registry stays
 // independent of the wire format.
-package sandboxctrl
+package nodectrl
 
 import (
 	"errors"
@@ -18,13 +18,13 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
-// ErrUnknownSandbox is returned by Heartbeat when the caller's
+// ErrUnknownNode is returned by Heartbeat when the caller's
 // fingerprint has no live registration. Sandboxes that have been
 // forgotten (because their stream closed, or because they timed
 // out via Sweep) must re-register before heartbeats are accepted
 // again — otherwise the orchestrator could keep stale entries
 // alive indefinitely.
-var ErrUnknownSandbox = errors.New("sandboxctrl: no registration for caller")
+var ErrUnknownNode = errors.New("nodectrl: no registration for caller")
 
 // Resources is the host's reported capacity. Mirrors the proto
 // HostResources message but stays decoupled so the registry
@@ -36,7 +36,7 @@ type Resources struct {
 }
 
 // Entry is a single live registration. Snapshot returns a slice of
-// these; tests and the (Slice A2) ListSandboxes RPC read them.
+// these; tests and the (Slice A2) ListNodes RPC read them.
 type Entry struct {
 	Fingerprint  identity.Fingerprint
 	Version      string
@@ -94,14 +94,14 @@ func (r *Registry) Register(fp identity.Fingerprint, version string, res Resourc
 // Heartbeat refreshes the LastSeenAt timestamp for fp's entry.
 // res, if non-zero, updates the recorded capacity (the sandbox may
 // report shrunk free memory as load rises). Returns the recorded
-// time, or ErrUnknownSandbox if no entry exists for fp.
+// time, or ErrUnknownNode if no entry exists for fp.
 func (r *Registry) Heartbeat(fp identity.Fingerprint, res Resources) (time.Time, error) {
 	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	entry, ok := r.all[fp]
 	if !ok {
-		return time.Time{}, ErrUnknownSandbox
+		return time.Time{}, ErrUnknownNode
 	}
 	entry.LastSeenAt = now
 	if res != (Resources{}) {
@@ -112,7 +112,7 @@ func (r *Registry) Heartbeat(fp identity.Fingerprint, res Resources) (time.Time,
 }
 
 // Forget removes fp's registration if present. Called by the
-// RegisterSandbox handler in defer so a closed stream releases
+// RegisterNode handler in defer so a closed stream releases
 // the entry promptly. Idempotent.
 func (r *Registry) Forget(fp identity.Fingerprint) {
 	r.mu.Lock()

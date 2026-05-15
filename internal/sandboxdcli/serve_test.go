@@ -10,9 +10,9 @@ import (
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrlclient"
 	"github.com/richiejp/darkaifactory/internal/sandboxexec"
 )
 
@@ -58,8 +58,8 @@ func TestRunServeRunsRegisterAndServe(t *testing.T) {
 	t.Cleanup(func() { runRegisterAndServe = saved })
 
 	called := make(chan struct{}, 1)
-	var seenRes sandboxctrl.Resources
-	runRegisterAndServe = func(_ context.Context, _ *sandboxctrlclient.Client, res sandboxctrl.Resources) error {
+	var seenRes nodectrl.Resources
+	runRegisterAndServe = func(_ context.Context, _ *nodectrlclient.Client, res nodectrl.Resources) error {
 		seenRes = res
 		called <- struct{}{}
 		return nil
@@ -92,7 +92,7 @@ func TestRunServeRunsRegisterAndServe(t *testing.T) {
 func TestRunServeBadConfigDirResolve(t *testing.T) {
 	saved := runRegisterAndServe
 	t.Cleanup(func() { runRegisterAndServe = saved })
-	runRegisterAndServe = func(context.Context, *sandboxctrlclient.Client, sandboxctrl.Resources) error {
+	runRegisterAndServe = func(context.Context, *nodectrlclient.Client, nodectrl.Resources) error {
 		t.Error("RegisterAndServe should not run when config dir cannot be resolved")
 		return nil
 	}
@@ -107,7 +107,7 @@ func TestRunServeBadConfigDirResolve(t *testing.T) {
 func TestRunServeBadIdentityDir(t *testing.T) {
 	saved := runRegisterAndServe
 	t.Cleanup(func() { runRegisterAndServe = saved })
-	runRegisterAndServe = func(context.Context, *sandboxctrlclient.Client, sandboxctrl.Resources) error {
+	runRegisterAndServe = func(context.Context, *nodectrlclient.Client, nodectrl.Resources) error {
 		t.Error("RegisterAndServe should not run when identity load fails")
 		return nil
 	}
@@ -130,7 +130,7 @@ func TestRunServeBadIdentityDir(t *testing.T) {
 func TestRunServeBadPeerStore(t *testing.T) {
 	saved := runRegisterAndServe
 	t.Cleanup(func() { runRegisterAndServe = saved })
-	runRegisterAndServe = func(context.Context, *sandboxctrlclient.Client, sandboxctrl.Resources) error {
+	runRegisterAndServe = func(context.Context, *nodectrlclient.Client, nodectrl.Resources) error {
 		t.Error("RegisterAndServe should not run when peer store load fails")
 		return nil
 	}
@@ -155,7 +155,7 @@ func TestRunServePropagatesRegisterError(t *testing.T) {
 	t.Cleanup(func() { runRegisterAndServe = saved })
 
 	want := errors.New("synthetic register failure")
-	runRegisterAndServe = func(context.Context, *sandboxctrlclient.Client, sandboxctrl.Resources) error {
+	runRegisterAndServe = func(context.Context, *nodectrlclient.Client, nodectrl.Resources) error {
 		return want
 	}
 
@@ -178,7 +178,7 @@ func TestRunServePropagatesBuildDispatcherError(t *testing.T) {
 	}
 	savedRun := runRegisterAndServe
 	t.Cleanup(func() { runRegisterAndServe = savedRun })
-	runRegisterAndServe = func(context.Context, *sandboxctrlclient.Client, sandboxctrl.Resources) error {
+	runRegisterAndServe = func(context.Context, *nodectrlclient.Client, nodectrl.Resources) error {
 		t.Error("RegisterAndServe should not run when buildDispatcher fails")
 		return nil
 	}
@@ -221,7 +221,7 @@ func TestRunRegisterAndServeSeamCallsClient(t *testing.T) {
 	if err != nil {
 		t.Fatalf("identity generate: %v", err)
 	}
-	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+	client, err := nodectrlclient.New(nodectrlclient.Config{
 		URL:               "https://127.0.0.1:1",
 		Identity:          id,
 		Peers:             memoryPeerStore(),
@@ -233,7 +233,7 @@ func TestRunRegisterAndServeSeamCallsClient(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 	// We don't care about the error — the seam ran iff we got here.
-	_ = runRegisterAndServe(ctx, client, sandboxctrl.Resources{})
+	_ = runRegisterAndServe(ctx, client, nodectrl.Resources{})
 }
 
 func TestFormatBytes(t *testing.T) {

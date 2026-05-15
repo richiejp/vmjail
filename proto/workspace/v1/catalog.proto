@@ -5,7 +5,7 @@
 // orchestrator. Clients (`daft workspace …` from the user-host)
 // incrementally assemble one by issuing Add/Set/Remove operations;
 // at Launch time the orchestrator derives a one-shot SandboxSpec
-// (see daft.sandboxctrl.v1) and dispatches it to a sandbox-host.
+// (see daft.nodectrl.v1) and dispatches it to a Node.
 // The sandbox-host stores nothing across runs — the workspace is
 // the source of truth.
 //
@@ -16,7 +16,7 @@ syntax = "proto3";
 package daft.workspace.v1;
 
 import "google/protobuf/timestamp.proto";
-import "sandboxctrl/v1/sandboxctrl.proto";
+import "nodectrl/v1/nodectrl.proto";
 
 option go_package = "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1";
 
@@ -68,14 +68,14 @@ message Workspace {
   string owner_fingerprint = 3;
 
   // Filesystem mounts visible inside the VM. Reuses the
-  // sandboxctrl.v1 type so the spec→SandboxSpec projection at
+  // nodectrl.v1 type so the spec→SandboxSpec projection at
   // Launch time is a direct copy.
-  repeated daft.sandboxctrl.v1.Mount mounts = 4;
+  repeated daft.nodectrl.v1.Mount mounts = 4;
   // Environment variables for the container's entrypoint.
-  repeated daft.sandboxctrl.v1.EnvVar env = 5;
+  repeated daft.nodectrl.v1.EnvVar env = 5;
   // Container ports the workload binds. The orchestrator ingress
   // (Phase C) consumes this list at Launch time.
-  repeated daft.sandboxctrl.v1.PortMapping ports = 6;
+  repeated daft.nodectrl.v1.PortMapping ports = 6;
 
   // Image source. Exactly one of image_ref / pending_build_id is
   // set on a READY workspace. Both empty ⇒ DRAFT.
@@ -90,9 +90,9 @@ message Workspace {
   // scheduler picks at Launch time.
   string target_sandbox_fingerprint = 9;
   // GPU reservation. Unset ⇒ CPU-only.
-  daft.sandboxctrl.v1.GpuRequest gpu_request = 10;
+  daft.nodectrl.v1.GpuRequest gpu_request = 10;
   // Sharing policy. UNSPECIFIED ⇒ scheduler-default.
-  daft.sandboxctrl.v1.Isolation isolation = 11;
+  daft.nodectrl.v1.Isolation isolation = 11;
 
   // Write-lock owner fingerprint. Empty ⇒ unlocked. Mutations and
   // launches require holding the lock. Phase F3 lands the explicit

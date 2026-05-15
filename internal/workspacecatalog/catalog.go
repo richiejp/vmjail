@@ -6,7 +6,7 @@
 //
 // The wire/Connect-RPC adapter that drives this package will live
 // in internal/orchestrator/workspacecatalog.go (Slice B2). This
-// split mirrors sandboxctrl / orchestrator.sandboxctrl so the
+// split mirrors nodectrl / orchestrator.nodectrl so the
 // catalog stays independent of generated proto types.
 //
 // State is in-memory only; persistence (Badger or JSON-on-disk)
@@ -66,7 +66,7 @@ func (s Status) String() string {
 }
 
 // Mount is a workspace filesystem mount. Mirrors the proto Mount
-// from daft.sandboxctrl.v1 without depending on generated code.
+// from daft.nodectrl.v1 without depending on generated code.
 type Mount struct {
 	Target   string
 	Source   string
@@ -80,13 +80,13 @@ type EnvVar struct {
 }
 
 // PortMapping is one container port the workload binds. Mirrors
-// the proto PortMapping from daft.sandboxctrl.v1; Protocol is kept
+// the proto PortMapping from daft.nodectrl.v1; Protocol is kept
 // as the wire enum integer rather than its own Go enum so the
 // catalog stays single-source-of-truth for what's on the wire.
 type PortMapping struct {
 	ContainerPort uint32
 	// Protocol carries the wire integer from
-	// daft.sandboxctrl.v1.Protocol (TCP=1, UDP=2). Zero means
+	// daft.nodectrl.v1.Protocol (TCP=1, UDP=2). Zero means
 	// UNSPECIFIED and is refused by the Connect adapter. int32
 	// matches the proto enum's underlying type so handler-side
 	// casts are no-ops.

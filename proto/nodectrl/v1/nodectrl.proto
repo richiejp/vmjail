@@ -1,57 +1,56 @@
-// SandboxControlService is the orchestrator-side control plane for
-// `daft-sandboxd serve`. A sandbox-host opens a single outbound
-// mTLS connection to the orchestrator and:
+// NodeControlService is the orchestrator-side control plane for
+// `daft-sandboxd serve`. A Node opens a single outbound mTLS
+// connection to the orchestrator and:
 //
-//   1. calls RegisterSandbox with its host-resource advertisement,
+//   1. calls RegisterNode with its capacity advertisement,
 //      holding the server-streamed channel open for the lifetime
 //      of the sandboxd process. The first event is a SubscriptionReady;
-//      Slice A4 will reuse the stream for orchestrator → sandboxd
-//      Dispatch.
+//      subsequent events push Sandbox lifecycle changes down.
 //   2. emits Heartbeat unaries on a fixed interval so the
-//      orchestrator's registry can mark sandboxes dead when the
+//      orchestrator's registry can mark Nodes dead when the
 //      heartbeats stop.
 //
 // Caller identity for every RPC is the mTLS leaf-cert fingerprint
-// surfaced via withPeerMiddleware — there is no sandbox_id field;
+// surfaced via withPeerMiddleware — there is no node_id field;
 // the sandboxd's own identity is the identifier.
 //
-// See PLAN.md "Direction (2026-05-12)" Phase A.
+// See PLAN.md Phase A (registration) and Phase B4 (resource model).
 syntax = "proto3";
 
-package daft.sandboxctrl.v1;
+package daft.nodectrl.v1;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1;sandboxctrlv1";
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1;nodectrlv1";
 
-service SandboxControlService {
-  // RegisterSandbox advertises a sandbox-host's resources and holds
-  // the stream open for the orchestrator to push control events
-  // (initially just SubscriptionReady; Slice A4 adds Dispatch).
-  rpc RegisterSandbox(RegisterSandboxRequest) returns (stream RegisterEvent) {}
+service NodeControlService {
+  // RegisterNode advertises a Node's resources and holds the
+  // stream open for the orchestrator to push control events
+  // (SubscriptionReady plus Sandbox lifecycle events).
+  rpc RegisterNode(RegisterNodeRequest) returns (stream RegisterEvent) {}
 
-  // Heartbeat refreshes the sandbox's last-seen timestamp. The
-  // sandbox advertises current resource utilisation alongside the
-  // ping so the orchestrator scheduler has a fresh view without
-  // a separate RPC. Stateless and idempotent.
+  // Heartbeat refreshes the Node's last-seen timestamp. The Node
+  // advertises current resource utilisation alongside the ping so
+  // the orchestrator scheduler has a fresh view without a separate
+  // RPC. Stateless and idempotent.
   rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse) {}
 
-  // ListSandboxes returns a snapshot of every sandbox currently
+  // ListNodes returns a snapshot of every Node currently
   // registered with the orchestrator. Read-only, intended for
-  // operator tooling (`daft sandbox list`) and Slice A4's
-  // dispatcher. Snapshot ordering is stable (sorted by fingerprint)
-  // for deterministic test output.
-  rpc ListSandboxes(ListSandboxesRequest) returns (ListSandboxesResponse) {}
+  // operator tooling (`daft node list`) and the scheduler.
+  // Snapshot ordering is stable (sorted by fingerprint) for
+  // deterministic test output.
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse) {}
 }
 
 // ProtocolVersion is the wire-protocol version exchanged at
-// RegisterSandbox time. The major component is the wire-compat
+// RegisterNode time. The major component is the wire-compat
 // boundary: a peer with a different major MUST be refused. Minor
 // and patch are informational for now; once we lock in a long-term
 // protocol they will gate optional feature paths.
 //
 // This is distinct from the build-version string echoed on
-// RegisterSandboxRequest.version — that one identifies the binary
+// RegisterNodeRequest.version — that one identifies the binary
 // for operator triage; this one gates the bytes on the wire.
 message ProtocolVersion {
   uint32 major = 1;
@@ -59,8 +58,8 @@ message ProtocolVersion {
   uint32 patch = 3;
 }
 
-// HostResources advertises what a sandbox-host can dispatch onto.
-// v1 carries CPU count and physical RAM only; GPU/PCI inventory
+// HostResources advertises what a Node can dispatch onto. v1
+// carries CPU count and physical RAM only; GPU/PCI inventory
 // lands in Slice D1.
 message HostResources {
   // Logical CPU count (runtime.NumCPU).
@@ -69,9 +68,9 @@ message HostResources {
   uint64 memory_bytes = 2;
 }
 
-message RegisterSandboxRequest {
+message RegisterNodeRequest {
   // Sandboxd build version (matches `daft version`). Lets the
-  // orchestrator reject sandboxes too old to dispatch onto.
+  // orchestrator reject Nodes too old to dispatch onto.
   string version = 1;
   // Host resource advertisement, captured at registration time.
   HostResources resources = 2;
@@ -82,7 +81,7 @@ message RegisterSandboxRequest {
 }
 
 // RegisterEvent is the envelope for events pushed on the
-// RegisterSandbox stream.
+// RegisterNode stream.
 message RegisterEvent {
   oneof event {
     SubscriptionReady ready = 1;
@@ -90,23 +89,23 @@ message RegisterEvent {
   }
 }
 
-// Dispatch hands a workload to the registered sandbox-host.
-// The dispatch_id is opaque to the wire — a future ACK RPC (B-phase)
-// will reference it so the orchestrator can correlate completion
-// signals back to the originating Dispatch. For A4 the sandboxd
-// executor only needs to handle the spec.
+// Dispatch hands a workload to the registered Node. The
+// dispatch_id is opaque to the wire — a future ACK RPC will
+// reference it so the orchestrator can correlate completion
+// signals back to the originating Dispatch. B4b will replace
+// this with a SandboxWatchEvent carrying a full Sandbox resource.
 message Dispatch {
   string dispatch_id = 1;
   SandboxSpec spec = 2;
 }
 
 // SubscriptionReady confirms the registration was recorded.
-// Sent once, as the first event on every RegisterSandbox stream.
+// Sent once, as the first event on every RegisterNode stream.
 // Carries the orchestrator's monotonic accept time so the caller
 // can detect a re-register (e.g. after orchestrator restart).
 //
 // The orchestrator's own ProtocolVersion is echoed here so the
-// sandboxd can refuse to serve workloads if the orchestrator is
+// Node can refuse to serve workloads if the orchestrator is
 // running a wire-incompatible build. The handshake is symmetric:
 // each side validates the other before any Dispatch flows.
 message SubscriptionReady {
@@ -116,7 +115,7 @@ message SubscriptionReady {
 
 message HeartbeatRequest {
   // Optional updated resource snapshot. Allowed to be nil if the
-  // sandbox has nothing fresh to report.
+  // Node has nothing fresh to report.
   HostResources current = 1;
 }
 
@@ -126,40 +125,39 @@ message HeartbeatResponse {
   google.protobuf.Timestamp seen_at = 1;
 }
 
-// ListSandboxesRequest is empty in v1. A filter / pagination
-// surface will land alongside persistence in Slice B5.
-message ListSandboxesRequest {}
+// ListNodesRequest is empty in v1. A filter / pagination
+// surface will land alongside persistence in Slice B6.
+message ListNodesRequest {}
 
-// SandboxRegistration mirrors sandboxctrl.Entry on the wire.
-// Fingerprint is the orchestrator's canonical sandbox id.
-message SandboxRegistration {
+// Node mirrors nodectrl.Entry on the wire. Fingerprint is the
+// orchestrator's canonical Node id.
+message Node {
   // mTLS leaf-cert fingerprint of the sandboxd.
   string fingerprint = 1;
-  // Version advertised at RegisterSandbox time.
+  // Version advertised at RegisterNode time.
   string version = 2;
   // Last reported host capacity (updated on every Heartbeat).
   HostResources resources = 3;
   // When the orchestrator first accepted this registration.
   google.protobuf.Timestamp registered_at = 4;
-  // Most recent Heartbeat (or RegisterSandbox, whichever is later).
+  // Most recent Heartbeat (or RegisterNode, whichever is later).
   google.protobuf.Timestamp last_seen_at = 5;
 }
 
-message ListSandboxesResponse {
-  repeated SandboxRegistration sandboxes = 1;
+message ListNodesResponse {
+  repeated Node nodes = 1;
 }
 
 // SandboxSpec is one dispatchable workload. The orchestrator
 // composes a SandboxSpec from a Workspace + scheduler decision and
-// hands it to a sandbox-host over the RegisterSandbox stream via
-// Dispatch (Slice A4). A3 lands the proto only — there is no
-// Dispatch RPC yet, and no sandboxd-side executor consumes this
-// message.
+// hands it to a Node over the RegisterNode stream via Dispatch.
+// Slice B4b will promote this to the spec of a first-class Sandbox
+// resource.
 //
 // Wire compatibility: fields are added at the tail; never renumbered.
 message SandboxSpec {
   // OCI image reference (registry/repo:tag or @sha256:...).
-  // Resolved against the sandbox-host's imagestore on dispatch.
+  // Resolved against the Node's imagestore on dispatch.
   string image_ref = 1;
   // Filesystem mounts visible inside the VM. Order is irrelevant;
   // the executor may sort by target for deterministic mounting.
@@ -177,17 +175,17 @@ message SandboxSpec {
   // Sharing policy. UNSPECIFIED ⇒ scheduler-default (currently
   // shared-VM with other workspaces owned by the same identity).
   Isolation isolation = 6;
-  // Workspace this spec instantiates. The sandboxd executor uses
+  // Workspace this spec instantiates. The Node's executor uses
   // it to scope filesystem state, port labels, and teardown.
   string workspace_uuid = 7;
 }
 
-// Mount is one bind-style mount inside the sandbox VM.
+// Mount is one bind-style mount inside the VM.
 message Mount {
   // In-VM mount point, absolute (e.g. "/workspace"). The executor
   // rejects relative or empty targets.
   string target = 1;
-  // Logical source identifier. Resolution is sandbox-host policy:
+  // Logical source identifier. Resolution is Node policy:
   // a workspace UUID maps to the daft-fuse view of that workspace;
   // a registered host-path tag maps to a pre-approved bind source.
   // Free-form host paths are not accepted — adoption (Slice F1)
@@ -225,8 +223,8 @@ message PortMapping {
 }
 
 // GpuRequest is the GPU reservation attached to a SandboxSpec.
-// Wire-level placeholder for Slice D1 (sandboxd GPU advertisement
-// + scheduler); A3 just reserves the shape.
+// Wire-level placeholder for Slice D1 (Node GPU advertisement
+// + scheduler).
 message GpuRequest {
   // Number of logical GPUs required. Zero ⇒ no GPU.
   uint32 count = 1;

@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/orchestrator"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -22,29 +22,29 @@ import (
 // a constant so goconst stops flagging the duplicate literal.
 const loopbackAddrAny = "127.0.0.1:0"
 
-// runOrchestratorWithSandboxRegistry boots an in-process orchestrator
-// with an explicitly-supplied SandboxRegistry, runs seed against the
+// runOrchestratorWithNodeRegistry boots an in-process orchestrator
+// with an explicitly-supplied NodeRegistry, runs seed against the
 // live registry before serving starts, and returns the listening
 // address + its identity.
-func runOrchestratorWithSandboxRegistry(
+func runOrchestratorWithNodeRegistry(
 	t *testing.T,
 	srvStore *identity.PeerStore,
-	seed func(*sandboxctrl.Registry),
+	seed func(*nodectrl.Registry),
 ) (addr string, srvID *identity.Identity) {
 	t.Helper()
 	srvID, err := identity.Generate(identity.RoleOrchestrator)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	reg := sandboxctrl.NewRegistry(nil)
+	reg := nodectrl.NewRegistry(nil)
 	if seed != nil {
 		seed(reg)
 	}
 	srv, err := orchestrator.New(orchestrator.Config{
-		Identity:        srvID,
-		Peers:           srvStore,
-		Addr:            loopbackAddrAny,
-		SandboxRegistry: reg,
+		Identity:     srvID,
+		Peers:        srvStore,
+		Addr:         loopbackAddrAny,
+		NodeRegistry: reg,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -65,31 +65,31 @@ func runOrchestratorWithSandboxRegistry(
 	return srv.Addr(), srvID
 }
 
-// TestSandboxListSubcommandRegistered confirms the verb is wired
-// into the `daft sandbox` subtree.
-func TestSandboxListSubcommandRegistered(t *testing.T) {
-	stdout, _, err := runCmd(t, "sandbox", "--help")
+// TestNodeListSubcommandRegistered confirms the verb is wired
+// into the `daft node` subtree.
+func TestNodeListSubcommandRegistered(t *testing.T) {
+	stdout, _, err := runCmd(t, "node", "--help")
 	if err != nil {
-		t.Fatalf("daft sandbox --help: %v", err)
+		t.Fatalf("daft node --help: %v", err)
 	}
-	if !strings.Contains(stdout, sandboxListSubName) {
-		t.Errorf("`daft sandbox --help` should advertise %q, got:\n%s", sandboxListSubName, stdout)
+	if !strings.Contains(stdout, nodeListSubName) {
+		t.Errorf("`daft node --help` should advertise %q, got:\n%s", nodeListSubName, stdout)
 	}
 }
 
-// TestSandboxListRequiresOrchestratorFlag verifies the up-front guard
+// TestNodeListRequiresOrchestratorFlag verifies the up-front guard
 // — running without --orchestrator should fail fast, not dial.
-func TestSandboxListRequiresOrchestratorFlag(t *testing.T) {
-	_, _, err := runDaft(t, "sandbox", sandboxListSubName)
+func TestNodeListRequiresOrchestratorFlag(t *testing.T) {
+	_, _, err := runDaft(t, "node", nodeListSubName)
 	if err == nil || !strings.Contains(err.Error(), "--orchestrator is required") {
 		t.Errorf("err = %v, want --orchestrator required", err)
 	}
 }
 
-// TestSandboxListRoundTripsAgainstOrchestrator exercises the full
+// TestNodeListRoundTripsAgainstOrchestrator exercises the full
 // happy path: dial an in-process orchestrator over mTLS, hit
-// ListSandboxes, render the table.
-func TestSandboxListRoundTripsAgainstOrchestrator(t *testing.T) {
+// ListNodes, render the table.
+func TestNodeListRoundTripsAgainstOrchestrator(t *testing.T) {
 	clientDir := t.TempDir()
 	cliID, err := loadOrGenerateClient(clientDir)
 	if err != nil {
@@ -102,11 +102,11 @@ func TestSandboxListRoundTripsAgainstOrchestrator(t *testing.T) {
 	if err := srvStore.Add(identity.Peer{Fingerprint: cliID.Fingerprint()}); err != nil {
 		t.Fatalf("server Add: %v", err)
 	}
-	addr, srvID := runOrchestratorWithSandboxRegistry(t, srvStore, func(reg *sandboxctrl.Registry) {
+	addr, srvID := runOrchestratorWithNodeRegistry(t, srvStore, func(reg *nodectrl.Registry) {
 		reg.Register(
 			fakeFingerprintForList(t),
 			"v1.2.3",
-			sandboxctrl.Resources{CPUs: 4, MemoryBytes: 2 << 30},
+			nodectrl.Resources{CPUs: 4, MemoryBytes: 2 << 30},
 		)
 	})
 	if _, _, err := runDaft(t, authCmdName, "--config-dir", clientDir, "approve",
@@ -115,13 +115,13 @@ func TestSandboxListRoundTripsAgainstOrchestrator(t *testing.T) {
 	}
 
 	stdout, _, err := runDaft(
-		t, "sandbox", sandboxListSubName,
+		t, "node", nodeListSubName,
 		"--orchestrator", "https://"+addr,
 		"--config-dir", clientDir,
 		"--timeout", "3s",
 	)
 	if err != nil {
-		t.Fatalf("sandbox list: %v", err)
+		t.Fatalf("node list: %v", err)
 	}
 	if !strings.Contains(stdout, "FINGERPRINT") {
 		t.Errorf("output missing header row, got:\n%s", stdout)
@@ -134,38 +134,38 @@ func TestSandboxListRoundTripsAgainstOrchestrator(t *testing.T) {
 	}
 }
 
-// TestRunSandboxListPropagatesIdentityLoadError covers the
+// TestRunNodeListPropagatesIdentityLoadError covers the
 // loadOrGenerateClient failure branch — corrupt cert.pem aborts
 // before any dial.
-func TestRunSandboxListPropagatesIdentityLoadError(t *testing.T) {
+func TestRunNodeListPropagatesIdentityLoadError(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "cert.pem"), "garbage")
 	mustWrite(t, filepath.Join(dir, "key.pem"), "garbage")
 	var out bytes.Buffer
-	err := runSandboxList(context.Background(), &out, "https://127.0.0.1:1", dir, time.Now)
+	err := runNodeList(context.Background(), &out, "https://127.0.0.1:1", dir, time.Now)
 	if err == nil {
 		t.Fatal("expected error for corrupt identity")
 	}
 }
 
-// TestRunSandboxListPropagatesPeerStoreError covers the peer-store
+// TestRunNodeListPropagatesPeerStoreError covers the peer-store
 // load failure branch.
-func TestRunSandboxListPropagatesPeerStoreError(t *testing.T) {
+func TestRunNodeListPropagatesPeerStoreError(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := loadOrGenerateClient(dir); err != nil {
 		t.Fatalf("loadOrGenerateClient: %v", err)
 	}
 	mustWrite(t, filepath.Join(dir, peersFilename), "not json")
 	var out bytes.Buffer
-	err := runSandboxList(context.Background(), &out, "https://127.0.0.1:1", dir, time.Now)
+	err := runNodeList(context.Background(), &out, "https://127.0.0.1:1", dir, time.Now)
 	if err == nil {
 		t.Fatal("expected error for corrupt peer store")
 	}
 }
 
-// TestRunSandboxListPropagatesDialError covers the failure path
+// TestRunNodeListPropagatesDialError covers the failure path
 // when the orchestrator is unreachable.
-func TestRunSandboxListPropagatesDialError(t *testing.T) {
+func TestRunNodeListPropagatesDialError(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := loadOrGenerateClient(dir); err != nil {
 		t.Fatalf("loadOrGenerateClient: %v", err)
@@ -173,43 +173,43 @@ func TestRunSandboxListPropagatesDialError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	var out bytes.Buffer
-	err := runSandboxList(ctx, &out, "https://127.0.0.1:1", dir, time.Now)
+	err := runNodeList(ctx, &out, "https://127.0.0.1:1", dir, time.Now)
 	if err == nil {
 		t.Fatal("expected error dialing unreachable orchestrator")
 	}
 }
 
-// TestRunSandboxListPropagatesStdoutWriteError covers writeSandboxList
+// TestRunNodeListPropagatesStdoutWriteError covers writeNodeList
 // returning an io error on the table flush.
-func TestRunSandboxListPropagatesStdoutWriteError(t *testing.T) {
-	err := writeSandboxList(failingWriter{}, []*sandboxctrlv1.SandboxRegistration{
-		{Fingerprint: "fp", Version: "v0", Resources: &sandboxctrlv1.HostResources{Cpus: 1, MemoryBytes: 0}, LastSeenAt: timestamppb.New(time.Unix(0, 0))},
+func TestRunNodeListPropagatesStdoutWriteError(t *testing.T) {
+	err := writeNodeList(failingWriter{}, []*nodectrlv1.Node{
+		{Fingerprint: "fp", Version: "v0", Resources: &nodectrlv1.HostResources{Cpus: 1, MemoryBytes: 0}, LastSeenAt: timestamppb.New(time.Unix(0, 0))},
 	}, time.Unix(0, 0))
 	if err == nil {
 		t.Fatal("expected error from failing writer")
 	}
 }
 
-// TestWriteSandboxListRendersAllRows pins the projection from the
+// TestWriteNodeListRendersAllRows pins the projection from the
 // proto to the table.
-func TestWriteSandboxListRendersAllRows(t *testing.T) {
+func TestWriteNodeListRendersAllRows(t *testing.T) {
 	ref := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
-	rows := []*sandboxctrlv1.SandboxRegistration{
+	rows := []*nodectrlv1.Node{
 		{
 			Fingerprint: "aaa",
 			Version:     "v1",
-			Resources:   &sandboxctrlv1.HostResources{Cpus: 2, MemoryBytes: 512 << 20},
+			Resources:   &nodectrlv1.HostResources{Cpus: 2, MemoryBytes: 512 << 20},
 			LastSeenAt:  timestamppb.New(ref.Add(-90 * time.Second)),
 		},
 		{
 			// Empty version → "—"; zero LastSeenAt → "—".
 			Fingerprint: "bbb",
-			Resources:   &sandboxctrlv1.HostResources{Cpus: 1, MemoryBytes: 0},
+			Resources:   &nodectrlv1.HostResources{Cpus: 1, MemoryBytes: 0},
 		},
 	}
 	var buf bytes.Buffer
-	if err := writeSandboxList(&buf, rows, ref); err != nil {
-		t.Fatalf("writeSandboxList: %v", err)
+	if err := writeNodeList(&buf, rows, ref); err != nil {
+		t.Fatalf("writeNodeList: %v", err)
 	}
 	out := buf.String()
 	for _, want := range []string{"aaa", "bbb", "v1", "1m30s", "—", "512.0 MiB", "0 B"} {
@@ -274,7 +274,7 @@ func TestTrimURLSchemeStrips(t *testing.T) {
 
 // fakeFingerprintForList mints a fingerprint that doesn't have to
 // belong to a connected identity — the test only checks that the
-// row makes it through ListSandboxes onto stdout.
+// row makes it through ListNodes onto stdout.
 func fakeFingerprintForList(t *testing.T) identity.Fingerprint {
 	t.Helper()
 	id, err := identity.Generate(identity.RoleSandboxHost)

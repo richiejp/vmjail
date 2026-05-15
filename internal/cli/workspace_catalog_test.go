@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/orchestrator"
@@ -28,10 +28,10 @@ type catalogFakeDispatcher struct {
 type catalogDispatchCall struct {
 	fp         identity.Fingerprint
 	dispatchID string
-	spec       *sandboxctrlv1.SandboxSpec
+	spec       *nodectrlv1.SandboxSpec
 }
 
-func (f *catalogFakeDispatcher) Dispatch(fp identity.Fingerprint, dispatchID string, spec *sandboxctrlv1.SandboxSpec) error {
+func (f *catalogFakeDispatcher) Dispatch(fp identity.Fingerprint, dispatchID string, spec *nodectrlv1.SandboxSpec) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, catalogDispatchCall{fp: fp, dispatchID: dispatchID, spec: spec})
@@ -194,13 +194,13 @@ func TestParsePortSpecCoversTCPAndUDPDefaultsAndErrors(t *testing.T) {
 	cases := []struct {
 		in        string
 		wantPort  uint32
-		wantProto sandboxctrlv1.Protocol
+		wantProto nodectrlv1.Protocol
 		wantErr   bool
 	}{
-		{"3000", 3000, sandboxctrlv1.Protocol_PROTOCOL_TCP, false},
-		{"443/tcp", 443, sandboxctrlv1.Protocol_PROTOCOL_TCP, false},
-		{"53/udp", 53, sandboxctrlv1.Protocol_PROTOCOL_UDP, false},
-		{"80/TCP", 80, sandboxctrlv1.Protocol_PROTOCOL_TCP, false},
+		{"3000", 3000, nodectrlv1.Protocol_PROTOCOL_TCP, false},
+		{"443/tcp", 443, nodectrlv1.Protocol_PROTOCOL_TCP, false},
+		{"53/udp", 53, nodectrlv1.Protocol_PROTOCOL_UDP, false},
+		{"80/TCP", 80, nodectrlv1.Protocol_PROTOCOL_TCP, false},
 		{"80/sctp", 0, 0, true},
 		{"notanumber", 0, 0, true},
 		{"100000", 0, 0, true},
@@ -508,9 +508,9 @@ func TestWriteWorkspaceSummaryWithFullState(t *testing.T) {
 	var buf strings.Builder
 	err := writeWorkspaceSummary(&buf, &workspacev1.Workspace{
 		Uuid: testRenderUUID, Name: "ws", ImageRef: testCatalogImage,
-		Mounts:  []*sandboxctrlv1.Mount{{Target: "/x"}, {Target: "/y", ReadOnly: true}},
-		Env:     []*sandboxctrlv1.EnvVar{{Name: "K"}},
-		Ports:   []*sandboxctrlv1.PortMapping{{ContainerPort: 80, Protocol: sandboxctrlv1.Protocol_PROTOCOL_TCP}},
+		Mounts:  []*nodectrlv1.Mount{{Target: "/x"}, {Target: "/y", ReadOnly: true}},
+		Env:     []*nodectrlv1.EnvVar{{Name: "K"}},
+		Ports:   []*nodectrlv1.PortMapping{{ContainerPort: 80, Protocol: nodectrlv1.Protocol_PROTOCOL_TCP}},
 		Missing: []string{"target"},
 	})
 	if err != nil {

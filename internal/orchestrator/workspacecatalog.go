@@ -12,7 +12,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
@@ -27,10 +27,10 @@ var errUnauthenticated = connect.NewError(connect.CodeUnauthenticated,
 
 // Dispatcher is the orchestrator-side seam Launch uses to ship a
 // composed SandboxSpec to a sandbox-host. The production
-// implementation is *SandboxControlHandler; tests inject fakes that
+// implementation is *NodeControlHandler; tests inject fakes that
 // observe what Launch sent without needing a live sandbox stream.
 type Dispatcher interface {
-	Dispatch(fp identity.Fingerprint, dispatchID string, spec *sandboxctrlv1.SandboxSpec) error
+	Dispatch(fp identity.Fingerprint, dispatchID string, spec *nodectrlv1.SandboxSpec) error
 }
 
 // WorkspaceCatalogHandler adapts the workspacecatalog.Store to the
@@ -292,7 +292,7 @@ func (h *WorkspaceCatalogHandler) AddPort(
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			errors.New("workspace: port is required"))
 	}
-	if port.GetProtocol() == sandboxctrlv1.Protocol_PROTOCOL_UNSPECIFIED {
+	if port.GetProtocol() == nodectrlv1.Protocol_PROTOCOL_UNSPECIFIED {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			errors.New("workspace: port.protocol must be set"))
 	}
@@ -394,7 +394,7 @@ func (h *WorkspaceCatalogHandler) RemovePort(
 	_ context.Context,
 	req *connect.Request[workspacev1.RemovePortRequest],
 ) (*connect.Response[workspacev1.WorkspaceResponse], error) {
-	if req.Msg.GetProtocol() == sandboxctrlv1.Protocol_PROTOCOL_UNSPECIFIED {
+	if req.Msg.GetProtocol() == nodectrlv1.Protocol_PROTOCOL_UNSPECIFIED {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			errors.New("workspace: protocol must be set"))
 	}
@@ -569,28 +569,28 @@ func launchableStatus(s workspacecatalog.Status) bool {
 // -minted correlation token Launch echoes back via Workspace.
 // current_dispatch_id; SandboxSpec itself doesn't carry it
 // (the surrounding Dispatch envelope does).
-func workspaceToSandboxSpec(ws workspacecatalog.Workspace, _ string) *sandboxctrlv1.SandboxSpec {
-	spec := &sandboxctrlv1.SandboxSpec{
+func workspaceToSandboxSpec(ws workspacecatalog.Workspace, _ string) *nodectrlv1.SandboxSpec {
+	spec := &nodectrlv1.SandboxSpec{
 		ImageRef:      ws.ImageRef,
 		WorkspaceUuid: ws.UUID,
 	}
-	spec.Mounts = make([]*sandboxctrlv1.Mount, len(ws.Mounts))
+	spec.Mounts = make([]*nodectrlv1.Mount, len(ws.Mounts))
 	for i, m := range ws.Mounts {
-		spec.Mounts[i] = &sandboxctrlv1.Mount{
+		spec.Mounts[i] = &nodectrlv1.Mount{
 			Target:   m.Target,
 			Source:   m.Source,
 			ReadOnly: m.ReadOnly,
 		}
 	}
-	spec.Env = make([]*sandboxctrlv1.EnvVar, len(ws.Env))
+	spec.Env = make([]*nodectrlv1.EnvVar, len(ws.Env))
 	for i, e := range ws.Env {
-		spec.Env[i] = &sandboxctrlv1.EnvVar{Name: e.Name, Value: e.Value}
+		spec.Env[i] = &nodectrlv1.EnvVar{Name: e.Name, Value: e.Value}
 	}
-	spec.Ports = make([]*sandboxctrlv1.PortMapping, len(ws.Ports))
+	spec.Ports = make([]*nodectrlv1.PortMapping, len(ws.Ports))
 	for i, p := range ws.Ports {
-		spec.Ports[i] = &sandboxctrlv1.PortMapping{
+		spec.Ports[i] = &nodectrlv1.PortMapping{
 			ContainerPort: p.ContainerPort,
-			Protocol:      sandboxctrlv1.Protocol(p.Protocol),
+			Protocol:      nodectrlv1.Protocol(p.Protocol),
 		}
 	}
 	return spec
@@ -657,26 +657,26 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 	if !ws.LockExpiresAt.IsZero() {
 		out.LockExpiresAt = timestamppb.New(ws.LockExpiresAt)
 	}
-	out.Mounts = make([]*sandboxctrlv1.Mount, 0, len(ws.Mounts))
+	out.Mounts = make([]*nodectrlv1.Mount, 0, len(ws.Mounts))
 	for _, m := range ws.Mounts {
-		out.Mounts = append(out.Mounts, &sandboxctrlv1.Mount{
+		out.Mounts = append(out.Mounts, &nodectrlv1.Mount{
 			Target:   m.Target,
 			Source:   m.Source,
 			ReadOnly: m.ReadOnly,
 		})
 	}
-	out.Env = make([]*sandboxctrlv1.EnvVar, 0, len(ws.Env))
+	out.Env = make([]*nodectrlv1.EnvVar, 0, len(ws.Env))
 	for _, e := range ws.Env {
-		out.Env = append(out.Env, &sandboxctrlv1.EnvVar{
+		out.Env = append(out.Env, &nodectrlv1.EnvVar{
 			Name:  e.Name,
 			Value: e.Value,
 		})
 	}
-	out.Ports = make([]*sandboxctrlv1.PortMapping, 0, len(ws.Ports))
+	out.Ports = make([]*nodectrlv1.PortMapping, 0, len(ws.Ports))
 	for _, p := range ws.Ports {
-		out.Ports = append(out.Ports, &sandboxctrlv1.PortMapping{
+		out.Ports = append(out.Ports, &nodectrlv1.PortMapping{
 			ContainerPort: p.ContainerPort,
-			Protocol:      sandboxctrlv1.Protocol(p.Protocol),
+			Protocol:      nodectrlv1.Protocol(p.Protocol),
 		})
 	}
 	return out

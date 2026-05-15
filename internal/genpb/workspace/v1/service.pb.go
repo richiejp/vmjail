@@ -35,7 +35,7 @@
 package workspacev1
 
 import (
-	v1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
+	v1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -739,7 +739,7 @@ type RemovePortRequest struct {
 	// (not the port alone) is the key because the same container
 	// port can be bound on both TCP and UDP.
 	ContainerPort uint32      `protobuf:"varint,2,opt,name=container_port,json=containerPort,proto3" json:"container_port,omitempty"`
-	Protocol      v1.Protocol `protobuf:"varint,3,opt,name=protocol,proto3,enum=daft.sandboxctrl.v1.Protocol" json:"protocol,omitempty"`
+	Protocol      v1.Protocol `protobuf:"varint,3,opt,name=protocol,proto3,enum=daft.nodectrl.v1.Protocol" json:"protocol,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -931,7 +931,7 @@ var File_workspace_v1_service_proto protoreflect.FileDescriptor
 
 const file_workspace_v1_service_proto_rawDesc = "" +
 	"\n" +
-	"\x1aworkspace/v1/service.proto\x12\x11daft.workspace.v1\x1a sandboxctrl/v1/sandboxctrl.proto\x1a\x1aworkspace/v1/catalog.proto\"G\n" +
+	"\x1aworkspace/v1/service.proto\x12\x11daft.workspace.v1\x1a\x1anodectrl/v1/nodectrl.proto\x1a\x1aworkspace/v1/catalog.proto\"G\n" +
 	"\x0fWorkspaceHandle\x12\x14\n" +
 	"\x04uuid\x18\x01 \x01(\tH\x00R\x04uuid\x12\x14\n" +
 	"\x04name\x18\x02 \x01(\tH\x00R\x04nameB\b\n" +
@@ -953,26 +953,26 @@ const file_workspace_v1_service_proto_rawDesc = "" +
 	"\timage_ref\x18\x02 \x01(\tR\bimageRef\"\x7f\n" +
 	"\x10SetTargetRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12/\n" +
-	"\x13sandbox_fingerprint\x18\x02 \x01(\tR\x12sandboxFingerprint\"\x7f\n" +
+	"\x13sandbox_fingerprint\x18\x02 \x01(\tR\x12sandboxFingerprint\"|\n" +
 	"\x0fAddMountRequest\x12:\n" +
-	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x120\n" +
-	"\x05mount\x18\x02 \x01(\v2\x1a.daft.sandboxctrl.v1.MountR\x05mount\"z\n" +
-	"\rAddEnvRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12-\n" +
-	"\x03env\x18\x02 \x01(\v2\x1b.daft.sandboxctrl.v1.EnvVarR\x03env\"\x82\x01\n" +
+	"\x05mount\x18\x02 \x01(\v2\x17.daft.nodectrl.v1.MountR\x05mount\"w\n" +
+	"\rAddEnvRequest\x12:\n" +
+	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12*\n" +
+	"\x03env\x18\x02 \x01(\v2\x18.daft.nodectrl.v1.EnvVarR\x03env\"\x7f\n" +
 	"\x0eAddPortRequest\x12:\n" +
-	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x124\n" +
-	"\x04port\x18\x02 \x01(\v2 .daft.sandboxctrl.v1.PortMappingR\x04port\"h\n" +
+	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x121\n" +
+	"\x04port\x18\x02 \x01(\v2\x1d.daft.nodectrl.v1.PortMappingR\x04port\"h\n" +
 	"\x12RemoveMountRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12\x16\n" +
 	"\x06target\x18\x02 \x01(\tR\x06target\"b\n" +
 	"\x10RemoveEnvRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12\x12\n" +
-	"\x04name\x18\x02 \x01(\tR\x04name\"\xb1\x01\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"\xae\x01\n" +
 	"\x11RemovePortRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12%\n" +
-	"\x0econtainer_port\x18\x02 \x01(\rR\rcontainerPort\x129\n" +
-	"\bprotocol\x18\x03 \x01(\x0e2\x1d.daft.sandboxctrl.v1.ProtocolR\bprotocol\"M\n" +
+	"\x0econtainer_port\x18\x02 \x01(\rR\rcontainerPort\x126\n" +
+	"\bprotocol\x18\x03 \x01(\x0e2\x1a.daft.nodectrl.v1.ProtocolR\bprotocol\"M\n" +
 	"\x0fValidateRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\"K\n" +
 	"\rLaunchRequest\x12:\n" +
@@ -1028,10 +1028,10 @@ var file_workspace_v1_service_proto_goTypes = []any{
 	(*LaunchRequest)(nil),          // 15: daft.workspace.v1.LaunchRequest
 	(*StopRequest)(nil),            // 16: daft.workspace.v1.StopRequest
 	(*Workspace)(nil),              // 17: daft.workspace.v1.Workspace
-	(*v1.Mount)(nil),               // 18: daft.sandboxctrl.v1.Mount
-	(*v1.EnvVar)(nil),              // 19: daft.sandboxctrl.v1.EnvVar
-	(*v1.PortMapping)(nil),         // 20: daft.sandboxctrl.v1.PortMapping
-	(v1.Protocol)(0),               // 21: daft.sandboxctrl.v1.Protocol
+	(*v1.Mount)(nil),               // 18: daft.nodectrl.v1.Mount
+	(*v1.EnvVar)(nil),              // 19: daft.nodectrl.v1.EnvVar
+	(*v1.PortMapping)(nil),         // 20: daft.nodectrl.v1.PortMapping
+	(v1.Protocol)(0),               // 21: daft.nodectrl.v1.Protocol
 }
 var file_workspace_v1_service_proto_depIdxs = []int32{
 	17, // 0: daft.workspace.v1.WorkspaceResponse.workspace:type_name -> daft.workspace.v1.Workspace
@@ -1040,15 +1040,15 @@ var file_workspace_v1_service_proto_depIdxs = []int32{
 	0,  // 3: daft.workspace.v1.SetImageRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
 	0,  // 4: daft.workspace.v1.SetTargetRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
 	0,  // 5: daft.workspace.v1.AddMountRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	18, // 6: daft.workspace.v1.AddMountRequest.mount:type_name -> daft.sandboxctrl.v1.Mount
+	18, // 6: daft.workspace.v1.AddMountRequest.mount:type_name -> daft.nodectrl.v1.Mount
 	0,  // 7: daft.workspace.v1.AddEnvRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	19, // 8: daft.workspace.v1.AddEnvRequest.env:type_name -> daft.sandboxctrl.v1.EnvVar
+	19, // 8: daft.workspace.v1.AddEnvRequest.env:type_name -> daft.nodectrl.v1.EnvVar
 	0,  // 9: daft.workspace.v1.AddPortRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	20, // 10: daft.workspace.v1.AddPortRequest.port:type_name -> daft.sandboxctrl.v1.PortMapping
+	20, // 10: daft.workspace.v1.AddPortRequest.port:type_name -> daft.nodectrl.v1.PortMapping
 	0,  // 11: daft.workspace.v1.RemoveMountRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
 	0,  // 12: daft.workspace.v1.RemoveEnvRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
 	0,  // 13: daft.workspace.v1.RemovePortRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	21, // 14: daft.workspace.v1.RemovePortRequest.protocol:type_name -> daft.sandboxctrl.v1.Protocol
+	21, // 14: daft.workspace.v1.RemovePortRequest.protocol:type_name -> daft.nodectrl.v1.Protocol
 	0,  // 15: daft.workspace.v1.ValidateRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
 	0,  // 16: daft.workspace.v1.LaunchRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
 	0,  // 17: daft.workspace.v1.StopRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle

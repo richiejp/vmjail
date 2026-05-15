@@ -1,4 +1,4 @@
-package sandboxctrlclient_test
+package nodectrlclient_test
 
 import (
 	"context"
@@ -13,33 +13,33 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1/sandboxctrlv1connect"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrlclient"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
 )
 
-// badVersionHandler is a stub SandboxControlService that always
-// replies to RegisterSandbox with a SubscriptionReady carrying a
+// badVersionHandler is a stub NodeControlService that always
+// replies to RegisterNode with a SubscriptionReady carrying a
 // deliberately-incompatible ProtocolVersion. Used to verify the
 // client rejects a wire-incompatible orchestrator before any
 // Dispatch can flow.
 type badVersionHandler struct {
-	sandboxctrlv1connect.UnimplementedSandboxControlServiceHandler
+	nodectrlv1connect.UnimplementedNodeControlServiceHandler
 }
 
-func (badVersionHandler) RegisterSandbox(
+func (badVersionHandler) RegisterNode(
 	_ context.Context,
-	_ *connect.Request[sandboxctrlv1.RegisterSandboxRequest],
-	stream *connect.ServerStream[sandboxctrlv1.RegisterEvent],
+	_ *connect.Request[nodectrlv1.RegisterNodeRequest],
+	stream *connect.ServerStream[nodectrlv1.RegisterEvent],
 ) error {
-	return stream.Send(&sandboxctrlv1.RegisterEvent{
-		Event: &sandboxctrlv1.RegisterEvent_Ready{
-			Ready: &sandboxctrlv1.SubscriptionReady{
+	return stream.Send(&nodectrlv1.RegisterEvent{
+		Event: &nodectrlv1.RegisterEvent_Ready{
+			Ready: &nodectrlv1.SubscriptionReady{
 				AcceptedAt: timestamppb.Now(),
-				ProtocolVersion: &sandboxctrlv1.ProtocolVersion{
-					Major: sandboxctrl.ProtocolVersionMajor + 99,
+				ProtocolVersion: &nodectrlv1.ProtocolVersion{
+					Major: nodectrl.ProtocolVersionMajor + 99,
 				},
 			},
 		},
@@ -75,7 +75,7 @@ func TestRegisterAndServeRejectsIncompatibleServerProtocol(t *testing.T) {
 	srvTLS.NextProtos = []string{"h2", "http/1.1"}
 
 	mux := http.NewServeMux()
-	path, hh := sandboxctrlv1connect.NewSandboxControlServiceHandler(badVersionHandler{})
+	path, hh := nodectrlv1connect.NewNodeControlServiceHandler(badVersionHandler{})
 	mux.Handle(path, hh)
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", srvTLS)
 	if err != nil {
@@ -107,7 +107,7 @@ func TestRegisterAndServeRejectsIncompatibleServerProtocol(t *testing.T) {
 		t.Fatalf("sb approve srv: %v", err)
 	}
 
-	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+	client, err := nodectrlclient.New(nodectrlclient.Config{
 		URL:      "https://" + ln.Addr().String(),
 		Identity: id,
 		Peers:    sbPeers,
@@ -118,7 +118,7 @@ func TestRegisterAndServeRejectsIncompatibleServerProtocol(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	err = client.RegisterAndServe(ctx, sandboxctrl.Resources{})
+	err = client.RegisterAndServe(ctx, nodectrl.Resources{})
 	if err == nil {
 		t.Fatal("RegisterAndServe accepted an incompatible orchestrator")
 	}

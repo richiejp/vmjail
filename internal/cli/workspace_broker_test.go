@@ -123,10 +123,10 @@ func startServeBrokered(t *testing.T, clientDir, addr, src string) {
 
 // startAttachAndDial spawns the sandbox-side AttachAndDial half in a
 // goroutine and gives the orchestrator a beat to land its
-// RegisterSandbox subscription before returning. The sibling
+// RegisterNode subscription before returning. The sibling
 // `awaitAttach` collects the result with a fatal-on-timeout.
 //
-// The 200ms sleep is a stand-in for "the sandbox's RegisterSandbox
+// The 200ms sleep is a stand-in for "the sandbox's RegisterNode
 // has been picked up by the matcher"; a non-sleep alternative
 // requires lifting matcher introspection through runOrchestrator.
 func startAttachAndDial(

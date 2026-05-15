@@ -12,31 +12,31 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/net/http2"
 
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1/sandboxctrlv1connect"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
-// sandboxListSubName is the verb under `daft sandbox`. Promoted to a
+// nodeListSubName is the verb under `daft node`. Promoted to a
 // constant so tests reference the same string the command tree
 // registers.
-const sandboxListSubName = "list"
+const nodeListSubName = "list"
 
-// newSandboxListCmd returns `daft sandbox list --orchestrator <url>`:
+// newNodeListCmd returns `daft node list --orchestrator <url>`:
 // dial the orchestrator over mTLS and print the snapshot returned by
-// SandboxControlService.ListSandboxes.
-func newSandboxListCmd() *cobra.Command {
+// NodeControlService.ListNodes.
+func newNodeListCmd() *cobra.Command {
 	var (
 		orchestrator string
 		timeout      time.Duration
 		configDir    string
 	)
 	cmd := &cobra.Command{
-		Use:   sandboxListSubName,
-		Short: "List sandboxes currently registered with the orchestrator",
+		Use:   nodeListSubName,
+		Short: "List Nodes currently registered with the orchestrator",
 		Long: "Dial the orchestrator over HTTP/2 + mTLS using the local daft\n" +
-			"client identity and call SandboxControlService.ListSandboxes.\n" +
+			"client identity and call NodeControlService.ListNodes.\n" +
 			"Prints one row per live registration: fingerprint, version, CPUs,\n" +
 			"memory, and last-seen age.\n\n" +
 			"The orchestrator's fingerprint must already be approved with\n" +
@@ -45,11 +45,11 @@ func newSandboxListCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if orchestrator == "" {
-				return fmt.Errorf("daft sandbox list: --orchestrator is required")
+				return fmt.Errorf("daft node list: --orchestrator is required")
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
-			return runSandboxList(ctx, cmd.OutOrStdout(), orchestrator, configDir, time.Now)
+			return runNodeList(ctx, cmd.OutOrStdout(), orchestrator, configDir, time.Now)
 		},
 	}
 	cmd.Flags().StringVar(&orchestrator, "orchestrator", "",
@@ -61,9 +61,9 @@ func newSandboxListCmd() *cobra.Command {
 	return cmd
 }
 
-// runSandboxList is the testable core. now is injected so test output
+// runNodeList is the testable core. now is injected so test output
 // is deterministic for the "last seen" column.
-func runSandboxList(
+func runNodeList(
 	ctx context.Context,
 	stdout io.Writer,
 	orchestrator, configDirOverride string,
@@ -71,7 +71,7 @@ func runSandboxList(
 ) error {
 	tracer, owned := tracerForCommand(ctx)
 	ctx, span := tracer.Start(
-		ctx, "daft.sandbox.list",
+		ctx, "daft.node.list",
 		trace.WithAttributes(trace.KV{Key: "rpc.addr", Value: orchestrator}),
 	)
 	defer span.End()
@@ -87,35 +87,35 @@ func runSandboxList(
 
 	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
 	interceptor := connect.WithInterceptors(tracer.ClientInterceptor())
-	client := sandboxctrlv1connect.NewSandboxControlServiceClient(
+	client := nodectrlv1connect.NewNodeControlServiceClient(
 		httpc, orchestrator, interceptor,
 	)
 
-	resp, err := client.ListSandboxes(ctx, connect.NewRequest(&sandboxctrlv1.ListSandboxesRequest{}))
+	resp, err := client.ListNodes(ctx, connect.NewRequest(&nodectrlv1.ListNodesRequest{}))
 	if err != nil {
-		return trace.RecordError(ctx, fmt.Errorf("daft sandbox list: %w", err))
+		return trace.RecordError(ctx, fmt.Errorf("daft node list: %w", err))
 	}
 
-	if err := writeSandboxList(stdout, resp.Msg.GetSandboxes(), now()); err != nil {
+	if err := writeNodeList(stdout, resp.Msg.GetNodes(), now()); err != nil {
 		return trace.RecordError(ctx, err)
 	}
 	if owned {
 		// Strip the scheme so the trace exporter can reach the same
 		// host:port as the Connect client.
-		shipTraces(ctx, tracer, httpc, trimURLScheme(orchestrator), "daft sandbox list")
+		shipTraces(ctx, tracer, httpc, trimURLScheme(orchestrator), "daft node list")
 	}
 	return nil
 }
 
-// writeSandboxList renders the snapshot in a tab-aligned table.
+// writeNodeList renders the snapshot in a tab-aligned table.
 // Kept separate from the RPC plumbing so it's trivial to test with
 // hand-built protos.
-func writeSandboxList(w io.Writer, sandboxes []*sandboxctrlv1.SandboxRegistration, refNow time.Time) error {
+func writeNodeList(w io.Writer, nodes []*nodectrlv1.Node, refNow time.Time) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "FINGERPRINT\tVERSION\tCPUS\tMEMORY\tLAST SEEN"); err != nil {
 		return err
 	}
-	for _, s := range sandboxes {
+	for _, s := range nodes {
 		lastSeen := s.GetLastSeenAt().AsTime()
 		age := "—"
 		if !lastSeen.IsZero() {

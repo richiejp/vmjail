@@ -1,4 +1,4 @@
-package sandboxctrlclient
+package nodectrlclient
 
 import (
 	"bufio"
@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
 )
 
 // procMeminfoPath is the path the resource probe reads MemTotal
@@ -27,13 +27,13 @@ var procMeminfoPath = "/proc/meminfo"
 //
 // CPU count comes from runtime.NumCPU() so it honours
 // GOMAXPROCS / taskset / cgroup CPU sets.
-func DetectResources() (sandboxctrl.Resources, error) {
+func DetectResources() (nodectrl.Resources, error) {
 	memKB, err := readMemTotalKB(procMeminfoPath)
 	if err != nil {
-		return sandboxctrl.Resources{}, fmt.Errorf("sandboxctrlclient: detect memory: %w", err)
+		return nodectrl.Resources{}, fmt.Errorf("nodectrlclient: detect memory: %w", err)
 	}
 	cpus := max(runtime.NumCPU(), 0)
-	return sandboxctrl.Resources{
+	return nodectrl.Resources{
 		CPUs:        uint32(cpus), //nolint:gosec // NumCPU is non-negative; max(_,0) is the floor.
 		MemoryBytes: memKB * 1024,
 	}, nil
@@ -61,16 +61,16 @@ func readMemTotalKB(path string) (uint64, error) {
 		}
 		fields := strings.Fields(strings.TrimPrefix(line, prefix))
 		if len(fields) == 0 {
-			return 0, errors.New("sandboxctrlclient: empty MemTotal line")
+			return 0, errors.New("nodectrlclient: empty MemTotal line")
 		}
 		kb, err := strconv.ParseUint(fields[0], 10, 64)
 		if err != nil {
-			return 0, fmt.Errorf("sandboxctrlclient: parse MemTotal: %w", err)
+			return 0, fmt.Errorf("nodectrlclient: parse MemTotal: %w", err)
 		}
 		return kb, nil
 	}
 	if err := scanner.Err(); err != nil {
 		return 0, err
 	}
-	return 0, errors.New("sandboxctrlclient: no MemTotal entry")
+	return 0, errors.New("nodectrlclient: no MemTotal entry")
 }

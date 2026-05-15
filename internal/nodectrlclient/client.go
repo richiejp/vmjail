@@ -1,14 +1,14 @@
-// Package sandboxctrlclient is the sandbox-host side of the
-// orchestrator's SandboxControlService. It wraps the generated
+// Package nodectrlclient is the sandbox-host side of the
+// orchestrator's NodeControlService. It wraps the generated
 // Connect client with the outer mTLS transport, the
-// RegisterSandbox stream lifecycle, and a heartbeat ticker that
+// RegisterNode stream lifecycle, and a heartbeat ticker that
 // runs until the caller's context cancels.
 //
 // The package owns no domain state — it just speaks the wire
 // protocol on behalf of `daft-sandboxd serve`.
 //
 // See PLAN.md "Direction (2026-05-12)" Phase A.
-package sandboxctrlclient
+package nodectrlclient
 
 import (
 	"context"
@@ -21,10 +21,10 @@ import (
 	"golang.org/x/net/http2"
 
 	"github.com/richiejp/darkaifactory/internal/assert"
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1/sandboxctrlv1connect"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
 )
 
 // DefaultHeartbeatInterval is the cadence at which RegisterAndServe
@@ -36,7 +36,7 @@ import (
 const DefaultHeartbeatInterval = 5 * time.Second
 
 // DispatchHandler is invoked once per Dispatch event the
-// orchestrator pushes on the RegisterSandbox stream. Implementations
+// orchestrator pushes on the RegisterNode stream. Implementations
 // run on the stream's consumer goroutine; long-running work should
 // be moved off-thread by the handler itself.
 //
@@ -45,17 +45,17 @@ const DefaultHeartbeatInterval = 5 * time.Second
 // Forget` releases the entry. Non-error returns continue to drain
 // the stream.
 type DispatchHandler interface {
-	HandleDispatch(ctx context.Context, dispatch *sandboxctrlv1.Dispatch) error
+	HandleDispatch(ctx context.Context, dispatch *nodectrlv1.Dispatch) error
 }
 
 // DispatchHandlerFunc adapts a plain function to the
 // DispatchHandler interface, mirroring net/http's HandlerFunc.
 // Useful for tests and for trivial handlers that don't carry
 // state.
-type DispatchHandlerFunc func(ctx context.Context, dispatch *sandboxctrlv1.Dispatch) error
+type DispatchHandlerFunc func(ctx context.Context, dispatch *nodectrlv1.Dispatch) error
 
 // HandleDispatch satisfies DispatchHandler.
-func (f DispatchHandlerFunc) HandleDispatch(ctx context.Context, d *sandboxctrlv1.Dispatch) error {
+func (f DispatchHandlerFunc) HandleDispatch(ctx context.Context, d *nodectrlv1.Dispatch) error {
 	return f(ctx, d)
 }
 
@@ -85,45 +85,45 @@ type Config struct {
 	Dispatch DispatchHandler
 }
 
-// Client wraps a generated SandboxControlServiceClient with a
+// Client wraps a generated NodeControlServiceClient with a
 // preconfigured mTLS transport.
 type Client struct {
 	cfg   Config
 	httpc *http.Client
-	ctrl  sandboxctrlv1connect.SandboxControlServiceClient
+	ctrl  nodectrlv1connect.NodeControlServiceClient
 }
 
 // New builds a Client. Returns an error if cfg is missing required
 // fields or the TLS template can't be built.
 func New(cfg Config) (*Client, error) {
 	if cfg.URL == "" {
-		return nil, errors.New("sandboxctrlclient: empty URL")
+		return nil, errors.New("nodectrlclient: empty URL")
 	}
 	if cfg.Identity == nil {
-		return nil, errors.New("sandboxctrlclient: nil identity")
+		return nil, errors.New("nodectrlclient: nil identity")
 	}
 	if cfg.Peers == nil {
-		return nil, errors.New("sandboxctrlclient: nil peer store")
+		return nil, errors.New("nodectrlclient: nil peer store")
 	}
 	tlsCfg, err := identity.ClientTLSConfig(cfg.Identity, cfg.Peers, "")
 	if err != nil {
-		return nil, fmt.Errorf("sandboxctrlclient: build TLS config: %w", err)
+		return nil, fmt.Errorf("nodectrlclient: build TLS config: %w", err)
 	}
-	// No http.Client.Timeout: the RegisterSandbox stream lives for
+	// No http.Client.Timeout: the RegisterNode stream lives for
 	// the lifetime of the sandbox. Per-call cancellation is via
 	// context.Context on each RPC.
 	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
 	return &Client{
 		cfg:   cfg,
 		httpc: httpc,
-		ctrl:  sandboxctrlv1connect.NewSandboxControlServiceClient(httpc, cfg.URL),
+		ctrl:  nodectrlv1connect.NewNodeControlServiceClient(httpc, cfg.URL),
 	}, nil
 }
 
 // Identity returns the client's own identity.
 func (c *Client) Identity() *identity.Identity { return c.cfg.Identity }
 
-// RegisterAndServe opens the RegisterSandbox stream, blocks until
+// RegisterAndServe opens the RegisterNode stream, blocks until
 // the orchestrator's SubscriptionReady event lands, and then
 // drives a Heartbeat ticker until ctx cancels or the stream
 // errors. resources is what gets advertised at register time and
@@ -133,7 +133,7 @@ func (c *Client) Identity() *identity.Identity { return c.cfg.Identity }
 // for stream failures or heartbeat RPC errors. The registration
 // is released on the orchestrator side automatically when this
 // function returns (the handler's defer h.reg.Forget runs).
-func (c *Client) RegisterAndServe(ctx context.Context, resources sandboxctrl.Resources) error {
+func (c *Client) RegisterAndServe(ctx context.Context, resources nodectrl.Resources) error {
 	done := ctx.Done()
 	assert.True(done != nil,
 		"RegisterAndServe blocks indefinitely; pass a cancellable context (SIGTERM handler / test t.Context())")
@@ -143,32 +143,32 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources sandboxctrl.Res
 		interval = DefaultHeartbeatInterval
 	}
 
-	stream, err := c.ctrl.RegisterSandbox(ctx, connect.NewRequest(
-		&sandboxctrlv1.RegisterSandboxRequest{
+	stream, err := c.ctrl.RegisterNode(ctx, connect.NewRequest(
+		&nodectrlv1.RegisterNodeRequest{
 			Version:         c.cfg.Version,
 			Resources:       resourcesToProto(resources),
 			ProtocolVersion: localProtocolVersionProto(),
 		},
 	))
 	if err != nil {
-		return fmt.Errorf("sandboxctrlclient: RegisterSandbox: %w", err)
+		return fmt.Errorf("nodectrlclient: RegisterNode: %w", err)
 	}
 	defer func() { _ = stream.Close() }()
 
 	// First event must be SubscriptionReady — without it the
 	// orchestrator has not actually recorded our registration.
 	if !stream.Receive() {
-		return fmt.Errorf("sandboxctrlclient: stream closed before Ready: %w", stream.Err())
+		return fmt.Errorf("nodectrlclient: stream closed before Ready: %w", stream.Err())
 	}
 	ready := stream.Msg().GetReady()
 	if ready == nil {
-		return errors.New("sandboxctrlclient: first event was not SubscriptionReady")
+		return errors.New("nodectrlclient: first event was not SubscriptionReady")
 	}
 	// Server-side already validated us; now validate them. A
 	// wire-incompatible orchestrator must not be allowed to drive
 	// Dispatch into a sandboxd that can't decode the events.
 	pv := ready.GetProtocolVersion()
-	if err := sandboxctrl.CheckProtocolCompatibility(
+	if err := nodectrl.CheckProtocolCompatibility(
 		pv.GetMajor(), pv.GetMinor(), pv.GetPatch(),
 	); err != nil {
 		return err
@@ -187,9 +187,9 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources sandboxctrl.Res
 			return nil
 		case err := <-streamErr:
 			if err == nil {
-				return errors.New("sandboxctrlclient: registration stream closed by server")
+				return errors.New("nodectrlclient: registration stream closed by server")
 			}
-			return fmt.Errorf("sandboxctrlclient: registration stream: %w", err)
+			return fmt.Errorf("nodectrlclient: registration stream: %w", err)
 		case <-ticker.C:
 			if err := c.sendHeartbeat(ctx, resources); err != nil {
 				return err
@@ -198,13 +198,13 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources sandboxctrl.Res
 	}
 }
 
-// consumeStream drains the RegisterSandbox stream for the lifetime
+// consumeStream drains the RegisterNode stream for the lifetime
 // of the registration. Dispatch events go to handler when non-nil;
 // nil handler drops them silently (register-only mode). A handler
 // error tears the stream down by surfacing through errCh.
 func consumeStream(
 	ctx context.Context,
-	stream *connect.ServerStreamForClient[sandboxctrlv1.RegisterEvent],
+	stream *connect.ServerStreamForClient[nodectrlv1.RegisterEvent],
 	handler DispatchHandler,
 	errCh chan<- error,
 ) {
@@ -215,25 +215,25 @@ func consumeStream(
 			continue
 		}
 		if err := handler.HandleDispatch(ctx, d); err != nil {
-			errCh <- fmt.Errorf("sandboxctrlclient: dispatch handler: %w", err)
+			errCh <- fmt.Errorf("nodectrlclient: dispatch handler: %w", err)
 			return
 		}
 	}
 	errCh <- stream.Err()
 }
 
-func (c *Client) sendHeartbeat(ctx context.Context, resources sandboxctrl.Resources) error {
+func (c *Client) sendHeartbeat(ctx context.Context, resources nodectrl.Resources) error {
 	_, err := c.ctrl.Heartbeat(ctx, connect.NewRequest(
-		&sandboxctrlv1.HeartbeatRequest{Current: resourcesToProto(resources)},
+		&nodectrlv1.HeartbeatRequest{Current: resourcesToProto(resources)},
 	))
 	if err != nil {
-		return fmt.Errorf("sandboxctrlclient: Heartbeat: %w", err)
+		return fmt.Errorf("nodectrlclient: Heartbeat: %w", err)
 	}
 	return nil
 }
 
-func resourcesToProto(r sandboxctrl.Resources) *sandboxctrlv1.HostResources {
-	return &sandboxctrlv1.HostResources{
+func resourcesToProto(r nodectrl.Resources) *nodectrlv1.HostResources {
+	return &nodectrlv1.HostResources{
 		Cpus:        r.CPUs,
 		MemoryBytes: r.MemoryBytes,
 	}
@@ -241,11 +241,11 @@ func resourcesToProto(r sandboxctrl.Resources) *sandboxctrlv1.HostResources {
 
 // localProtocolVersionProto builds the wire ProtocolVersion message
 // from this build's compiled-in constants. Centralized so the value
-// is set identically on every outbound RegisterSandbox.
-func localProtocolVersionProto() *sandboxctrlv1.ProtocolVersion {
-	return &sandboxctrlv1.ProtocolVersion{
-		Major: sandboxctrl.ProtocolVersionMajor,
-		Minor: sandboxctrl.ProtocolVersionMinor,
-		Patch: sandboxctrl.ProtocolVersionPatch,
+// is set identically on every outbound RegisterNode.
+func localProtocolVersionProto() *nodectrlv1.ProtocolVersion {
+	return &nodectrlv1.ProtocolVersion{
+		Major: nodectrl.ProtocolVersionMajor,
+		Minor: nodectrl.ProtocolVersionMinor,
+		Patch: nodectrl.ProtocolVersionPatch,
 	}
 }

@@ -13,10 +13,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/richiejp/darkaifactory/internal/bundled"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrlclient"
 	"github.com/richiejp/darkaifactory/internal/sandboxexec"
 	"github.com/richiejp/darkaifactory/internal/version"
 )
@@ -54,7 +54,7 @@ func newServeCmd() *cobra.Command {
 		"orchestrator endpoint URL (e.g. https://orchestrator.example:8443)")
 	cmd.Flags().StringVar(&configDir, "config-dir", "", configDirFlagDesc)
 	cmd.Flags().DurationVar(&heartbeatInterval, "heartbeat-interval",
-		sandboxctrlclient.DefaultHeartbeatInterval,
+		nodectrlclient.DefaultHeartbeatInterval,
 		"how often to ping the orchestrator with a Heartbeat")
 	return cmd
 }
@@ -84,7 +84,7 @@ func runServe(
 		return err
 	}
 
-	resources, err := sandboxctrlclient.DetectResources()
+	resources, err := nodectrlclient.DetectResources()
 	if err != nil {
 		return err
 	}
@@ -94,7 +94,7 @@ func runServe(
 		return err
 	}
 
-	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+	client, err := nodectrlclient.New(nodectrlclient.Config{
 		URL:               orchestratorURL,
 		Identity:          id,
 		Peers:             peers,
@@ -122,15 +122,15 @@ func runServe(
 //nolint:gochecknoglobals // single test seam, not state.
 var runRegisterAndServe = func(
 	ctx context.Context,
-	c *sandboxctrlclient.Client,
-	res sandboxctrl.Resources,
+	c *nodectrlclient.Client,
+	res nodectrl.Resources,
 ) error {
 	return c.RegisterAndServe(ctx, res)
 }
 
 // buildDispatcher resolves the sandbox.Config baseline from the
 // DAFT_* env vars and wires an Executor with it. The Executor is
-// the DispatchHandler the sandboxctrlclient invokes on every
+// the DispatchHandler the nodectrlclient invokes on every
 // Dispatch event from the orchestrator. The production Assembler
 // pulls + bundles images via the local imagestore so dispatches
 // carrying a spec.image_ref actually run a container.

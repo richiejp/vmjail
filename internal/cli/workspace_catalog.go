@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/net/http2"
 
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
@@ -409,7 +409,7 @@ func newWorkspaceMountAddCmd() *cobra.Command {
 					resp, err := c.AddMount(ctx, connect.NewRequest(
 						&workspacev1.AddMountRequest{
 							Handle: h,
-							Mount: &sandboxctrlv1.Mount{
+							Mount: &nodectrlv1.Mount{
 								Target:   target,
 								Source:   source,
 								ReadOnly: readOnly,
@@ -486,7 +486,7 @@ func newWorkspaceEnvAddCmd() *cobra.Command {
 					resp, err := c.AddEnv(ctx, connect.NewRequest(
 						&workspacev1.AddEnvRequest{
 							Handle: h,
-							Env:    &sandboxctrlv1.EnvVar{Name: name, Value: value},
+							Env:    &nodectrlv1.EnvVar{Name: name, Value: value},
 						},
 					))
 					if err != nil {
@@ -553,7 +553,7 @@ func newWorkspacePortAddCmd() *cobra.Command {
 					resp, err := c.AddPort(ctx, connect.NewRequest(
 						&workspacev1.AddPortRequest{
 							Handle: h,
-							Port:   &sandboxctrlv1.PortMapping{ContainerPort: port, Protocol: proto},
+							Port:   &nodectrlv1.PortMapping{ContainerPort: port, Protocol: proto},
 						},
 					))
 					if err != nil {
@@ -598,16 +598,16 @@ func newWorkspacePortRmCmd() *cobra.Command {
 }
 
 // parsePortSpec parses "<port>[/tcp|/udp]". Protocol defaults to tcp.
-func parsePortSpec(spec string) (uint32, sandboxctrlv1.Protocol, error) {
+func parsePortSpec(spec string) (uint32, nodectrlv1.Protocol, error) {
 	portStr := spec
-	proto := sandboxctrlv1.Protocol_PROTOCOL_TCP
+	proto := nodectrlv1.Protocol_PROTOCOL_TCP
 	if i := strings.Index(spec, "/"); i >= 0 {
 		portStr = spec[:i]
 		switch strings.ToLower(spec[i+1:]) {
 		case "tcp":
-			proto = sandboxctrlv1.Protocol_PROTOCOL_TCP
+			proto = nodectrlv1.Protocol_PROTOCOL_TCP
 		case "udp":
-			proto = sandboxctrlv1.Protocol_PROTOCOL_UDP
+			proto = nodectrlv1.Protocol_PROTOCOL_UDP
 		default:
 			return 0, 0, fmt.Errorf("daft workspace: unknown protocol %q (want tcp or udp)", spec[i+1:])
 		}
@@ -758,7 +758,7 @@ func emptyOrDash(s string) string {
 	return s
 }
 
-func joinMounts(mounts []*sandboxctrlv1.Mount) string {
+func joinMounts(mounts []*nodectrlv1.Mount) string {
 	if len(mounts) == 0 {
 		return "—"
 	}
@@ -773,7 +773,7 @@ func joinMounts(mounts []*sandboxctrlv1.Mount) string {
 	return strings.Join(parts, ", ")
 }
 
-func joinEnv(env []*sandboxctrlv1.EnvVar) string {
+func joinEnv(env []*nodectrlv1.EnvVar) string {
 	if len(env) == 0 {
 		return "—"
 	}
@@ -784,7 +784,7 @@ func joinEnv(env []*sandboxctrlv1.EnvVar) string {
 	return strings.Join(parts, ", ")
 }
 
-func joinPorts(ports []*sandboxctrlv1.PortMapping) string {
+func joinPorts(ports []*nodectrlv1.PortMapping) string {
 	if len(ports) == 0 {
 		return "—"
 	}

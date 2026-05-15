@@ -20,13 +20,13 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/component"
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
-	"github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1/sandboxctrlv1connect"
+	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/mtls"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspacebroker"
 	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
@@ -64,11 +64,11 @@ type Config struct {
 	// Tests pass a pre-populated matcher to inspect state.
 	Matcher *workspacebroker.Matcher
 
-	// SandboxRegistry tracks live sandbox-host registrations
+	// NodeRegistry tracks live sandbox-host registrations
 	// (`daft-sandboxd serve` callers) and their heartbeats. New
 	// constructs a default registry if this is nil. Tests pass a
 	// pre-built registry to observe state directly.
-	SandboxRegistry *sandboxctrl.Registry
+	NodeRegistry *nodectrl.Registry
 
 	// WorkspaceCatalog is the orchestrator's store of Workspace
 	// records (PLAN.md Phase B). New constructs a default catalog
@@ -77,7 +77,7 @@ type Config struct {
 	WorkspaceCatalog *workspacecatalog.Store
 
 	// WorkspaceDispatcher backs WorkspaceCatalogService.Launch.
-	// Defaults to the orchestrator's own SandboxControlHandler so
+	// Defaults to the orchestrator's own NodeControlHandler so
 	// production wiring is implicit; tests inject a fake to
 	// observe the SandboxSpec without standing up a sandbox-host
 	// stream.
@@ -87,15 +87,15 @@ type Config struct {
 // Server is the orchestrator's mTLS-gated control-plane listener.
 // It's a thin wrapper around mtls.Server that registers the
 // orchestrator's Connect-RPC handlers (Health.Ping,
-// TraceService.ReportSpans, BrokerService, SandboxControlService)
+// TraceService.ReportSpans, BrokerService, NodeControlService)
 // plus a /debug/traces dump endpoint.
 type Server struct {
 	inner            *mtls.Server
 	tracer           *trace.Tracer
 	reaper           *trace.IngressReaper
 	matcher          *workspacebroker.Matcher
-	sandboxReg       *sandboxctrl.Registry
-	sandboxCtrl      *SandboxControlHandler
+	nodeReg          *nodectrl.Registry
+	sandboxCtrl      *NodeControlHandler
 	workspaceCatalog *workspacecatalog.Store
 
 	reaperStart  sync.Once
@@ -108,15 +108,15 @@ type Server struct {
 // Exposed for tests that want to assert matcher state directly.
 func (s *Server) Matcher() *workspacebroker.Matcher { return s.matcher }
 
-// SandboxRegistry returns the orchestrator's sandbox-control
+// NodeRegistry returns the orchestrator's sandbox-control
 // registry. Exposed for tests that want to assert registration
-// state directly, and (Slice A2) for ListSandboxes.
-func (s *Server) SandboxRegistry() *sandboxctrl.Registry { return s.sandboxReg }
+// state directly, and (Slice A2) for ListNodes.
+func (s *Server) NodeRegistry() *nodectrl.Registry { return s.nodeReg }
 
 // SandboxControl returns the orchestrator's sandbox-control
 // handler. Exposed so operator tooling (and tests) can call
 // Dispatch on a live sandbox without a separate RPC client.
-func (s *Server) SandboxControl() *SandboxControlHandler { return s.sandboxCtrl }
+func (s *Server) SandboxControl() *NodeControlHandler { return s.sandboxCtrl }
 
 // WorkspaceCatalog returns the orchestrator's workspace catalog.
 // Exposed for tests that want to assert catalog state directly,
@@ -145,15 +145,15 @@ func New(cfg Config) (*Server, error) {
 	if matcher == nil {
 		matcher = workspacebroker.New()
 	}
-	sandboxReg := cfg.SandboxRegistry
-	if sandboxReg == nil {
-		sandboxReg = sandboxctrl.NewRegistry(nil)
+	nodeReg := cfg.NodeRegistry
+	if nodeReg == nil {
+		nodeReg = nodectrl.NewRegistry(nil)
 	}
 	workspaceCat := cfg.WorkspaceCatalog
 	if workspaceCat == nil {
 		workspaceCat = workspacecatalog.NewStore(nil)
 	}
-	sandboxCtrl, scErr := NewSandboxControlHandler(sandboxReg)
+	sandboxCtrl, scErr := NewSandboxControlHandler(nodeReg)
 	if scErr != nil {
 		return nil, scErr
 	}
@@ -201,7 +201,7 @@ func New(cfg Config) (*Server, error) {
 		tracer:           tracer,
 		reaper:           reaper,
 		matcher:          matcher,
-		sandboxReg:       sandboxReg,
+		nodeReg:          nodeReg,
 		sandboxCtrl:      sandboxCtrl,
 		workspaceCatalog: workspaceCat,
 	}, nil
@@ -215,7 +215,7 @@ func registerServices(
 	interceptor connect.HandlerOption,
 	tracer *trace.Tracer,
 	matcher *workspacebroker.Matcher,
-	sandboxCtrl *SandboxControlHandler,
+	sandboxCtrl *NodeControlHandler,
 	workspaceCtrl *WorkspaceCatalogHandler,
 	relayEndpointFn func() string,
 ) error {
@@ -243,7 +243,7 @@ func registerServices(
 	)
 	mux.Handle(brokerPath, brokerConnectHandler)
 
-	sandboxCtrlPath, sandboxCtrlConnectHandler := sandboxctrlv1connect.NewSandboxControlServiceHandler(
+	sandboxCtrlPath, sandboxCtrlConnectHandler := nodectrlv1connect.NewNodeControlServiceHandler(
 		sandboxCtrl, interceptor,
 	)
 	mux.Handle(sandboxCtrlPath, sandboxCtrlConnectHandler)

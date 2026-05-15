@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 )
 
@@ -67,9 +67,9 @@ func TestHandleDispatchBareHelloPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &sandboxctrlv1.Dispatch{
+	d := &nodectrlv1.Dispatch{
 		DispatchId: "d-42",
-		Spec:       &sandboxctrlv1.SandboxSpec{WorkspaceUuid: "ws-1"},
+		Spec:       &nodectrlv1.SandboxSpec{WorkspaceUuid: "ws-1"},
 	}
 	if err := e.HandleDispatch(t.Context(), d); err != nil {
 		t.Fatalf("HandleDispatch: %v", err)
@@ -112,9 +112,9 @@ func TestHandleDispatchAssemblerPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &sandboxctrlv1.Dispatch{
+	d := &nodectrlv1.Dispatch{
 		DispatchId: "d-7",
-		Spec:       &sandboxctrlv1.SandboxSpec{ImageRef: testImageRef},
+		Spec:       &nodectrlv1.SandboxSpec{ImageRef: testImageRef},
 	}
 	if err := e.HandleDispatch(t.Context(), d); err != nil {
 		t.Fatalf("HandleDispatch: %v", err)
@@ -147,7 +147,7 @@ func TestHandleDispatchAssemblerError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &sandboxctrlv1.Dispatch{DispatchId: "d-bad", Spec: &sandboxctrlv1.SandboxSpec{ImageRef: testImageRef}}
+	d := &nodectrlv1.Dispatch{DispatchId: "d-bad", Spec: &nodectrlv1.SandboxSpec{ImageRef: testImageRef}}
 	got := e.HandleDispatch(t.Context(), d)
 	if !errors.Is(got, want) {
 		t.Errorf("err = %v, want wrapping %v", got, want)
@@ -176,9 +176,9 @@ func TestHandleDispatchNoAssemblerFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &sandboxctrlv1.Dispatch{
+	d := &nodectrlv1.Dispatch{
 		DispatchId: testDispatchID,
-		Spec:       &sandboxctrlv1.SandboxSpec{ImageRef: testImageRef},
+		Spec:       &nodectrlv1.SandboxSpec{ImageRef: testImageRef},
 	}
 	if err := e.HandleDispatch(t.Context(), d); err != nil {
 		t.Fatalf("HandleDispatch: %v", err)
@@ -194,9 +194,9 @@ func TestHandleDispatchLogsDispatchToStdout(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &sandboxctrlv1.Dispatch{
+	d := &nodectrlv1.Dispatch{
 		DispatchId: "d-99",
-		Spec: &sandboxctrlv1.SandboxSpec{
+		Spec: &nodectrlv1.SandboxSpec{
 			ImageRef:      testImageRef,
 			WorkspaceUuid: "ws-9",
 		},
@@ -245,7 +245,7 @@ func TestHandleDispatchPanicsOnDispatchWithoutSpec(t *testing.T) {
 			t.Errorf("panic = %q, want substring 'without a Spec'", msg)
 		}
 	}()
-	_ = e.HandleDispatch(t.Context(), &sandboxctrlv1.Dispatch{DispatchId: testDispatchID})
+	_ = e.HandleDispatch(t.Context(), &nodectrlv1.Dispatch{DispatchId: testDispatchID})
 }
 
 func TestHandleDispatchSurfacesRunnerError(t *testing.T) {
@@ -255,7 +255,7 @@ func TestHandleDispatchSurfacesRunnerError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &sandboxctrlv1.Dispatch{DispatchId: testDispatchID, Spec: &sandboxctrlv1.SandboxSpec{}}
+	d := &nodectrlv1.Dispatch{DispatchId: testDispatchID, Spec: &nodectrlv1.SandboxSpec{}}
 	got := e.HandleDispatch(t.Context(), d)
 	if !errors.Is(got, want) {
 		t.Errorf("err = %v, want wrapping %v", got, want)

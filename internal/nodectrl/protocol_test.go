@@ -1,4 +1,4 @@
-package sandboxctrl
+package nodectrl
 
 import (
 	"strings"

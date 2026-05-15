@@ -29,7 +29,7 @@ type orchTestEnv struct {
 // newOrchTestEnv brings up an orchestrator that accepts mTLS
 // connections from a freshly-generated caller of the given role.
 // cfg.Identity, cfg.Peers, and cfg.Addr are filled in by this
-// helper; tests pass any other Config fields (e.g. SandboxRegistry,
+// helper; tests pass any other Config fields (e.g. NodeRegistry,
 // WorkspaceCatalog) they need to observe.
 func newOrchTestEnv(t *testing.T, callerRole identity.Role, cfg Config) *orchTestEnv {
 	t.Helper()

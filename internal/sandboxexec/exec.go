@@ -1,6 +1,6 @@
 // Package sandboxexec is the sandbox-host-side executor: it
 // receives Dispatch events from the orchestrator's
-// SandboxControlService and runs the corresponding workload by
+// NodeControlService and runs the corresponding workload by
 // driving the existing internal/sandbox boot pipeline.
 //
 // When spec.image_ref is set, the executor pulls the image into
@@ -18,7 +18,7 @@ import (
 	"io"
 
 	"github.com/richiejp/darkaifactory/internal/assert"
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/trace"
@@ -36,7 +36,7 @@ type Assembler func(ctx context.Context, ref string) (sandbox.Config, func(), er
 // they don't need /dev/kvm.
 type Runner func(ctx context.Context, w io.Writer, cfg sandbox.Config) error
 
-// Executor implements sandboxctrlclient.DispatchHandler. One
+// Executor implements nodectrlclient.DispatchHandler. One
 // Executor per sandboxd process — concurrent dispatches share the
 // same baseline config and stdout writer.
 type Executor struct {
@@ -102,7 +102,7 @@ func ProductionAssembler(deps sandboxboot.Deps) Assembler {
 // later slices alongside Workspace + ingress.
 //
 // v1 invokes the runner synchronously, which blocks the
-// sandboxctrlclient receive loop for the duration of the VM boot
+// nodectrlclient receive loop for the duration of the VM boot
 // (~hundreds of ms warm, multiple seconds cold). The
 // DispatchHandler doc-comment claims the handler moves long work
 // off-thread; that becomes true once a real concurrency cap and a
@@ -110,10 +110,10 @@ func ProductionAssembler(deps sandboxboot.Deps) Assembler {
 // must respect per-host load.
 func (e *Executor) HandleDispatch(
 	ctx context.Context,
-	d *sandboxctrlv1.Dispatch,
+	d *nodectrlv1.Dispatch,
 ) error {
 	assert.True(d != nil,
-		"DispatchHandler must never be called with a nil Dispatch — sandboxctrlclient filters them upstream")
+		"DispatchHandler must never be called with a nil Dispatch — nodectrlclient filters them upstream")
 	spec := d.GetSpec()
 	assert.True(spec != nil,
 		"Dispatch event without a Spec is an orchestrator bug — the wire schema makes Spec optional, but every code path on the orchestrator side sets it before pushing")

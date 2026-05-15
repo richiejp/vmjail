@@ -9,10 +9,10 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/richiejp/darkaifactory/internal/assert"
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1/sandboxctrlv1connect"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
 )
 
 // dispatchBacklog is the per-stream Dispatch buffer depth. Bounded
@@ -22,7 +22,7 @@ import (
 const dispatchBacklog = 16
 
 // ErrSandboxNotConnected is returned by Dispatch when the addressed
-// fingerprint has no open RegisterSandbox stream. The caller must
+// fingerprint has no open RegisterNode stream. The caller must
 // pick a different sandbox or wait for the original to reconnect.
 var ErrSandboxNotConnected = errors.New("orchestrator: sandbox not connected")
 
@@ -32,39 +32,39 @@ var ErrSandboxNotConnected = errors.New("orchestrator: sandbox not connected")
 // this like a transient failure.
 var ErrDispatchBacklog = errors.New("orchestrator: dispatch backlog full")
 
-// SandboxControlHandler adapts the sandboxctrl.Registry to the
-// Connect-RPC SandboxControlService surface. Peer identity for
+// NodeControlHandler adapts the nodectrl.Registry to the
+// Connect-RPC NodeControlService surface. Peer identity for
 // every RPC is the mTLS leaf-cert fingerprint surfaced via
 // withPeerMiddleware — there is no in-band sandbox_id.
-type SandboxControlHandler struct {
-	sandboxctrlv1connect.UnimplementedSandboxControlServiceHandler
-	reg *sandboxctrl.Registry
+type NodeControlHandler struct {
+	nodectrlv1connect.UnimplementedNodeControlServiceHandler
+	reg *nodectrl.Registry
 
 	mu      sync.Mutex
-	streams map[identity.Fingerprint]chan *sandboxctrlv1.RegisterEvent
+	streams map[identity.Fingerprint]chan *nodectrlv1.RegisterEvent
 }
 
 // NewSandboxControlHandler returns a handler that records
 // registrations and heartbeats into reg. Returns an error if reg
 // is nil — the orchestrator's wiring would be malformed.
-func NewSandboxControlHandler(reg *sandboxctrl.Registry) (*SandboxControlHandler, error) {
+func NewSandboxControlHandler(reg *nodectrl.Registry) (*NodeControlHandler, error) {
 	if reg == nil {
-		return nil, errors.New("orchestrator: nil sandboxctrl registry")
+		return nil, errors.New("orchestrator: nil nodectrl registry")
 	}
-	return &SandboxControlHandler{
+	return &NodeControlHandler{
 		reg:     reg,
-		streams: map[identity.Fingerprint]chan *sandboxctrlv1.RegisterEvent{},
+		streams: map[identity.Fingerprint]chan *nodectrlv1.RegisterEvent{},
 	}, nil
 }
 
 // Dispatch pushes a Dispatch event to the addressed sandbox's
-// live RegisterSandbox stream. Returns ErrSandboxNotConnected if
+// live RegisterNode stream. Returns ErrSandboxNotConnected if
 // the sandbox has no open stream; ErrDispatchBacklog if the
 // per-stream buffer is full.
-func (h *SandboxControlHandler) Dispatch(
+func (h *NodeControlHandler) Dispatch(
 	fp identity.Fingerprint,
 	dispatchID string,
-	spec *sandboxctrlv1.SandboxSpec,
+	spec *nodectrlv1.SandboxSpec,
 ) error {
 	assert.True(spec != nil,
 		"Dispatch requires a non-nil spec; a wiring bug here would push a nil envelope onto the stream and crash the sandboxd")
@@ -76,9 +76,9 @@ func (h *SandboxControlHandler) Dispatch(
 	if !ok {
 		return ErrSandboxNotConnected
 	}
-	ev := &sandboxctrlv1.RegisterEvent{
-		Event: &sandboxctrlv1.RegisterEvent_Dispatch{
-			Dispatch: &sandboxctrlv1.Dispatch{
+	ev := &nodectrlv1.RegisterEvent{
+		Event: &nodectrlv1.RegisterEvent_Dispatch{
+			Dispatch: &nodectrlv1.Dispatch{
 				DispatchId: dispatchID,
 				Spec:       spec,
 			},
@@ -92,29 +92,29 @@ func (h *SandboxControlHandler) Dispatch(
 	}
 }
 
-func (h *SandboxControlHandler) attachStream(fp identity.Fingerprint) chan *sandboxctrlv1.RegisterEvent {
-	ch := make(chan *sandboxctrlv1.RegisterEvent, dispatchBacklog)
+func (h *NodeControlHandler) attachStream(fp identity.Fingerprint) chan *nodectrlv1.RegisterEvent {
+	ch := make(chan *nodectrlv1.RegisterEvent, dispatchBacklog)
 	h.mu.Lock()
 	h.streams[fp] = ch
 	h.mu.Unlock()
 	return ch
 }
 
-func (h *SandboxControlHandler) detachStream(fp identity.Fingerprint) {
+func (h *NodeControlHandler) detachStream(fp identity.Fingerprint) {
 	h.mu.Lock()
 	delete(h.streams, fp)
 	h.mu.Unlock()
 }
 
-// RegisterSandbox records the caller's host-resource advertisement
+// RegisterNode records the caller's host-resource advertisement
 // and holds the server-streamed channel open. The first event is
 // a SubscriptionReady carrying the accepted-at timestamp; further
 // events (Dispatch) land in Slice A4. The entry is released when
 // the stream closes (caller disconnect, ctx cancel).
-func (h *SandboxControlHandler) RegisterSandbox(
+func (h *NodeControlHandler) RegisterNode(
 	ctx context.Context,
-	req *connect.Request[sandboxctrlv1.RegisterSandboxRequest],
-	stream *connect.ServerStream[sandboxctrlv1.RegisterEvent],
+	req *connect.Request[nodectrlv1.RegisterNodeRequest],
+	stream *connect.ServerStream[nodectrlv1.RegisterEvent],
 ) error {
 	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
 	if !ok {
@@ -127,7 +127,7 @@ func (h *SandboxControlHandler) RegisterSandbox(
 	// Missing/zero ProtocolVersion is treated as major=0 and refused
 	// — every shipped client sets the field.
 	pv := req.Msg.GetProtocolVersion()
-	if err := sandboxctrl.CheckProtocolCompatibility(
+	if err := nodectrl.CheckProtocolCompatibility(
 		pv.GetMajor(), pv.GetMinor(), pv.GetPatch(),
 	); err != nil {
 		return connect.NewError(connect.CodeFailedPrecondition, err)
@@ -140,9 +140,9 @@ func (h *SandboxControlHandler) RegisterSandbox(
 	events := h.attachStream(fp)
 	defer h.detachStream(fp)
 
-	ready := &sandboxctrlv1.RegisterEvent{
-		Event: &sandboxctrlv1.RegisterEvent_Ready{
-			Ready: &sandboxctrlv1.SubscriptionReady{
+	ready := &nodectrlv1.RegisterEvent{
+		Event: &nodectrlv1.RegisterEvent_Ready{
+			Ready: &nodectrlv1.SubscriptionReady{
 				AcceptedAt:      timestamppb.New(acceptedAt),
 				ProtocolVersion: localProtocolVersionProto(),
 			},
@@ -157,7 +157,7 @@ func (h *SandboxControlHandler) RegisterSandbox(
 	// concurrent use, so this single goroutine is the only writer.
 	done := ctx.Done()
 	assert.True(done != nil,
-		"RegisterSandbox requires a cancellable context; Connect-RPC handlers always receive one — Background here means a wiring bug")
+		"RegisterNode requires a cancellable context; Connect-RPC handlers always receive one — Background here means a wiring bug")
 	//daft:lint:disable=forloopbound reason="exits on ctx.Done or stream.Send error"
 	for {
 		select {
@@ -172,19 +172,19 @@ func (h *SandboxControlHandler) RegisterSandbox(
 }
 
 // Heartbeat refreshes the caller's LastSeenAt and returns the
-// recorded time. ErrUnknownSandbox is mapped to FailedPrecondition
-// so the client can re-RegisterSandbox without retrying the
+// recorded time. ErrUnknownNode is mapped to FailedPrecondition
+// so the client can re-RegisterNode without retrying the
 // heartbeat blindly.
-func (h *SandboxControlHandler) Heartbeat(
+func (h *NodeControlHandler) Heartbeat(
 	_ context.Context,
-	req *connect.Request[sandboxctrlv1.HeartbeatRequest],
-) (*connect.Response[sandboxctrlv1.HeartbeatResponse], error) {
+	req *connect.Request[nodectrlv1.HeartbeatRequest],
+) (*connect.Response[nodectrlv1.HeartbeatResponse], error) {
 	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
 	if !ok {
 		return nil, connect.NewError(connect.CodeUnauthenticated,
 			errors.New("orchestrator: no mTLS peer identity"))
 	}
-	// Registry.Heartbeat returns only ErrUnknownSandbox or nil —
+	// Registry.Heartbeat returns only ErrUnknownNode or nil —
 	// the FailedPrecondition path is the only error mapping we
 	// need. Add explicit cases here when the registry grows new
 	// error sentinels.
@@ -192,40 +192,40 @@ func (h *SandboxControlHandler) Heartbeat(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
-	return connect.NewResponse(&sandboxctrlv1.HeartbeatResponse{
+	return connect.NewResponse(&nodectrlv1.HeartbeatResponse{
 		SeenAt: timestamppb.New(seenAt),
 	}), nil
 }
 
-// ListSandboxes returns a snapshot of every live registration in
+// ListNodes returns a snapshot of every live registration in
 // the orchestrator's registry. Read-only; the only side-effect is
 // the peer-identity check shared with the other RPCs on this
 // service.
-func (h *SandboxControlHandler) ListSandboxes(
+func (h *NodeControlHandler) ListNodes(
 	_ context.Context,
-	req *connect.Request[sandboxctrlv1.ListSandboxesRequest],
-) (*connect.Response[sandboxctrlv1.ListSandboxesResponse], error) {
+	req *connect.Request[nodectrlv1.ListNodesRequest],
+) (*connect.Response[nodectrlv1.ListNodesResponse], error) {
 	if _, ok := PeerFingerprintFromRequestHeader(req.Header()); !ok {
 		return nil, connect.NewError(connect.CodeUnauthenticated,
 			errors.New("orchestrator: no mTLS peer identity"))
 	}
 	entries := h.reg.Snapshot()
-	out := make([]*sandboxctrlv1.SandboxRegistration, len(entries))
+	out := make([]*nodectrlv1.Node, len(entries))
 	for i := range entries {
 		out[i] = entryToProto(entries[i])
 	}
-	return connect.NewResponse(&sandboxctrlv1.ListSandboxesResponse{
-		Sandboxes: out,
+	return connect.NewResponse(&nodectrlv1.ListNodesResponse{
+		Nodes: out,
 	}), nil
 }
 
 // resourcesFromProto converts a (possibly nil) wire HostResources
 // to the registry's native struct. nil → zero value.
-func resourcesFromProto(p *sandboxctrlv1.HostResources) sandboxctrl.Resources {
+func resourcesFromProto(p *nodectrlv1.HostResources) nodectrl.Resources {
 	if p == nil {
-		return sandboxctrl.Resources{}
+		return nodectrl.Resources{}
 	}
-	return sandboxctrl.Resources{
+	return nodectrl.Resources{
 		CPUs:        p.GetCpus(),
 		MemoryBytes: p.GetMemoryBytes(),
 	}
@@ -233,20 +233,20 @@ func resourcesFromProto(p *sandboxctrlv1.HostResources) sandboxctrl.Resources {
 
 // localProtocolVersionProto builds the wire ProtocolVersion message
 // from this build's compiled-in constants.
-func localProtocolVersionProto() *sandboxctrlv1.ProtocolVersion {
-	return &sandboxctrlv1.ProtocolVersion{
-		Major: sandboxctrl.ProtocolVersionMajor,
-		Minor: sandboxctrl.ProtocolVersionMinor,
-		Patch: sandboxctrl.ProtocolVersionPatch,
+func localProtocolVersionProto() *nodectrlv1.ProtocolVersion {
+	return &nodectrlv1.ProtocolVersion{
+		Major: nodectrl.ProtocolVersionMajor,
+		Minor: nodectrl.ProtocolVersionMinor,
+		Patch: nodectrl.ProtocolVersionPatch,
 	}
 }
 
 // entryToProto projects a registry Entry onto its wire form.
-func entryToProto(e sandboxctrl.Entry) *sandboxctrlv1.SandboxRegistration {
-	return &sandboxctrlv1.SandboxRegistration{
+func entryToProto(e nodectrl.Entry) *nodectrlv1.Node {
+	return &nodectrlv1.Node{
 		Fingerprint: e.Fingerprint.String(),
 		Version:     e.Version,
-		Resources: &sandboxctrlv1.HostResources{
+		Resources: &nodectrlv1.HostResources{
 			Cpus:        e.Resources.CPUs,
 			MemoryBytes: e.Resources.MemoryBytes,
 		},

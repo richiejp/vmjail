@@ -80,6 +80,7 @@ func NewRootCmd() *cobra.Command {
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newSandboxCmd())
+	root.AddCommand(newNodeCmd())
 	root.AddCommand(newAuthCmd())
 	root.AddCommand(newPingCmd())
 	root.AddCommand(newWorkspaceCmd())
@@ -91,18 +92,34 @@ func NewRootCmd() *cobra.Command {
 }
 
 // newSandboxCmd returns the `daft sandbox` parent command. Its sub-commands
-// drive sandbox VMs on the configured sandbox-host. Each sub-command
+// drive sandbox VMs directly (without a Workspace). Each sub-command
 // delegates to internal/sandbox so the CLI layer stays a thin wrapper.
+// Node-control operations (listing the registered fleet) live under
+// `daft node`.
 func newSandboxCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sandbox",
 		Short: "Manage sandbox VMs",
 		Long: "Sandbox sub-commands boot, inspect, and tear down sandbox VMs on the\n" +
-			"configured sandbox-host. The microVM stack and protocol details are\n" +
-			"described in PLAN.md.",
+			"configured Node. The microVM stack and protocol details are\n" +
+			"described in ARCHITECTURE.md.",
 	}
 	cmd.AddCommand(newSandboxHelloCmd())
-	cmd.AddCommand(newSandboxListCmd())
+	return cmd
+}
+
+// newNodeCmd returns the `daft node` parent command. Its sub-commands
+// inspect and manage the orchestrator's registered Node fleet (the
+// sandboxd processes the orchestrator knows about).
+func newNodeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "node",
+		Short: "Manage Nodes registered with the orchestrator",
+		Long: "Node sub-commands operate on the host-control plane: listing\n" +
+			"registered sandboxd processes, inspecting their advertised\n" +
+			"resources, and (later) draining or evicting them.",
+	}
+	cmd.AddCommand(newNodeListCmd())
 	return cmd
 }
 

@@ -1,4 +1,4 @@
-package sandboxctrl_test
+package nodectrl_test
 
 import (
 	"errors"
@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
 )
 
 func fp(b byte) identity.Fingerprint {
@@ -17,9 +17,9 @@ func fp(b byte) identity.Fingerprint {
 
 func TestRegisterRecordsEntry(t *testing.T) {
 	t0 := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
-	r := sandboxctrl.NewRegistry(func() time.Time { return t0 })
+	r := nodectrl.NewRegistry(func() time.Time { return t0 })
 
-	got := r.Register(fp(1), "v0.1.0", sandboxctrl.Resources{CPUs: 8, MemoryBytes: 16 << 30})
+	got := r.Register(fp(1), "v0.1.0", nodectrl.Resources{CPUs: 8, MemoryBytes: 16 << 30})
 	if !got.Equal(t0) {
 		t.Errorf("Register accepted_at = %v, want %v", got, t0)
 	}
@@ -43,11 +43,11 @@ func TestRegisterPreservesRegisteredAt(t *testing.T) {
 	t0 := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)
 	now := t0
-	r := sandboxctrl.NewRegistry(func() time.Time { return now })
+	r := nodectrl.NewRegistry(func() time.Time { return now })
 
-	r.Register(fp(1), "v0.1.0", sandboxctrl.Resources{CPUs: 4})
+	r.Register(fp(1), "v0.1.0", nodectrl.Resources{CPUs: 4})
 	now = t1
-	r.Register(fp(1), "v0.2.0", sandboxctrl.Resources{CPUs: 16})
+	r.Register(fp(1), "v0.2.0", nodectrl.Resources{CPUs: 16})
 
 	entry, _ := r.Lookup(fp(1))
 	if !entry.RegisteredAt.Equal(t0) {
@@ -65,12 +65,12 @@ func TestHeartbeatRefreshesLastSeen(t *testing.T) {
 	t0 := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(30 * time.Second)
 	now := t0
-	r := sandboxctrl.NewRegistry(func() time.Time { return now })
+	r := nodectrl.NewRegistry(func() time.Time { return now })
 
-	r.Register(fp(1), "v0.1.0", sandboxctrl.Resources{CPUs: 4, MemoryBytes: 1 << 30})
+	r.Register(fp(1), "v0.1.0", nodectrl.Resources{CPUs: 4, MemoryBytes: 1 << 30})
 	now = t1
 
-	seen, err := r.Heartbeat(fp(1), sandboxctrl.Resources{CPUs: 4, MemoryBytes: 512 << 20})
+	seen, err := r.Heartbeat(fp(1), nodectrl.Resources{CPUs: 4, MemoryBytes: 512 << 20})
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
@@ -88,10 +88,10 @@ func TestHeartbeatRefreshesLastSeen(t *testing.T) {
 }
 
 func TestHeartbeatZeroResourcesPreservesPrevious(t *testing.T) {
-	r := sandboxctrl.NewRegistry(nil)
-	r.Register(fp(1), "v0.1.0", sandboxctrl.Resources{CPUs: 4, MemoryBytes: 1 << 30})
+	r := nodectrl.NewRegistry(nil)
+	r.Register(fp(1), "v0.1.0", nodectrl.Resources{CPUs: 4, MemoryBytes: 1 << 30})
 
-	if _, err := r.Heartbeat(fp(1), sandboxctrl.Resources{}); err != nil {
+	if _, err := r.Heartbeat(fp(1), nodectrl.Resources{}); err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
 	entry, _ := r.Lookup(fp(1))
@@ -101,16 +101,16 @@ func TestHeartbeatZeroResourcesPreservesPrevious(t *testing.T) {
 }
 
 func TestHeartbeatUnknownSandbox(t *testing.T) {
-	r := sandboxctrl.NewRegistry(nil)
-	_, err := r.Heartbeat(fp(7), sandboxctrl.Resources{})
-	if !errors.Is(err, sandboxctrl.ErrUnknownSandbox) {
-		t.Errorf("err = %v, want ErrUnknownSandbox", err)
+	r := nodectrl.NewRegistry(nil)
+	_, err := r.Heartbeat(fp(7), nodectrl.Resources{})
+	if !errors.Is(err, nodectrl.ErrUnknownNode) {
+		t.Errorf("err = %v, want ErrUnknownNode", err)
 	}
 }
 
 func TestForgetReleasesEntry(t *testing.T) {
-	r := sandboxctrl.NewRegistry(nil)
-	r.Register(fp(1), "v0", sandboxctrl.Resources{CPUs: 1})
+	r := nodectrl.NewRegistry(nil)
+	r.Register(fp(1), "v0", nodectrl.Resources{CPUs: 1})
 	r.Forget(fp(1))
 	if _, ok := r.Lookup(fp(1)); ok {
 		t.Error("entry still present after Forget")
@@ -118,16 +118,16 @@ func TestForgetReleasesEntry(t *testing.T) {
 	// Idempotent — second Forget is a no-op.
 	r.Forget(fp(1))
 	// Heartbeat now fails.
-	if _, err := r.Heartbeat(fp(1), sandboxctrl.Resources{}); !errors.Is(err, sandboxctrl.ErrUnknownSandbox) {
-		t.Errorf("post-Forget Heartbeat err = %v, want ErrUnknownSandbox", err)
+	if _, err := r.Heartbeat(fp(1), nodectrl.Resources{}); !errors.Is(err, nodectrl.ErrUnknownNode) {
+		t.Errorf("post-Forget Heartbeat err = %v, want ErrUnknownNode", err)
 	}
 }
 
 func TestSnapshotIsSortedByFingerprint(t *testing.T) {
-	r := sandboxctrl.NewRegistry(nil)
-	r.Register(fp(3), "v0", sandboxctrl.Resources{CPUs: 3})
-	r.Register(fp(1), "v0", sandboxctrl.Resources{CPUs: 1})
-	r.Register(fp(2), "v0", sandboxctrl.Resources{CPUs: 2})
+	r := nodectrl.NewRegistry(nil)
+	r.Register(fp(3), "v0", nodectrl.Resources{CPUs: 3})
+	r.Register(fp(1), "v0", nodectrl.Resources{CPUs: 1})
+	r.Register(fp(2), "v0", nodectrl.Resources{CPUs: 2})
 
 	snap := r.Snapshot()
 	if len(snap) != 3 {
@@ -141,8 +141,8 @@ func TestSnapshotIsSortedByFingerprint(t *testing.T) {
 }
 
 func TestNewRegistryDefaultsClock(t *testing.T) {
-	r := sandboxctrl.NewRegistry(nil) // nil → time.Now
-	got := r.Register(fp(1), "v0", sandboxctrl.Resources{})
+	r := nodectrl.NewRegistry(nil) // nil → time.Now
+	got := r.Register(fp(1), "v0", nodectrl.Resources{})
 	if got.IsZero() {
 		t.Error("Register returned zero time with default clock")
 	}

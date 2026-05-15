@@ -1,9 +1,9 @@
-package sandboxctrl
+package nodectrl
 
 import "fmt"
 
 // ProtocolVersion{Major,Minor,Patch} is the wire-protocol version
-// this build speaks on the SandboxControlService stream. It is
+// this build speaks on the NodeControlService stream. It is
 // distinct from the binary's build version (which identifies the
 // release for operator triage) — this gates the bytes on the wire.
 //
@@ -34,7 +34,7 @@ const (
 func CheckProtocolCompatibility(major, minor, patch uint32) error {
 	if major != ProtocolVersionMajor {
 		return fmt.Errorf(
-			"sandboxctrl: incompatible protocol major version: peer=%d.%d.%d, local=%d.%d.%d",
+			"nodectrl: incompatible protocol major version: peer=%d.%d.%d, local=%d.%d.%d",
 			major, minor, patch,
 			ProtocolVersionMajor, ProtocolVersionMinor, ProtocolVersionPatch,
 		)

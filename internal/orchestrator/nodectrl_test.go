@@ -10,10 +10,10 @@ import (
 
 	"connectrpc.com/connect"
 
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1/sandboxctrlv1connect"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
 )
 
 // TestNewSandboxControlHandlerRejectsNilRegistry covers the
@@ -29,30 +29,30 @@ func TestNewSandboxControlHandlerRejectsNilRegistry(t *testing.T) {
 // X-Daft-Peer-Fingerprint header and verifies each one returns
 // Unauthenticated. Mirrors TestBrokerHandlerRejectsMissingPeerIdentity.
 func TestSandboxControlHandlerRejectsMissingPeerIdentity(t *testing.T) {
-	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
 	}
-	req := connect.NewRequest(&sandboxctrlv1.RegisterSandboxRequest{Version: "v0"})
-	if err := h.RegisterSandbox(t.Context(), req, nil); connect.CodeOf(err) != connect.CodeUnauthenticated {
-		t.Errorf("RegisterSandbox: code = %s, want Unauthenticated", connect.CodeOf(err))
+	req := connect.NewRequest(&nodectrlv1.RegisterNodeRequest{Version: "v0"})
+	if err := h.RegisterNode(t.Context(), req, nil); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Errorf("RegisterNode: code = %s, want Unauthenticated", connect.CodeOf(err))
 	}
-	req2 := connect.NewRequest(&sandboxctrlv1.HeartbeatRequest{})
+	req2 := connect.NewRequest(&nodectrlv1.HeartbeatRequest{})
 	if _, err := h.Heartbeat(t.Context(), req2); connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Errorf("Heartbeat: code = %s, want Unauthenticated", connect.CodeOf(err))
 	}
-	req3 := connect.NewRequest(&sandboxctrlv1.ListSandboxesRequest{})
-	if _, err := h.ListSandboxes(t.Context(), req3); connect.CodeOf(err) != connect.CodeUnauthenticated {
-		t.Errorf("ListSandboxes: code = %s, want Unauthenticated", connect.CodeOf(err))
+	req3 := connect.NewRequest(&nodectrlv1.ListNodesRequest{})
+	if _, err := h.ListNodes(t.Context(), req3); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Errorf("ListNodes: code = %s, want Unauthenticated", connect.CodeOf(err))
 	}
 }
 
-// TestListSandboxesReflectsRegistry pins the projection from the
-// registry snapshot onto the wire SandboxRegistration shape: every
+// TestListNodesReflectsRegistry pins the projection from the
+// registry snapshot onto the wire Node shape: every
 // registered entry shows up exactly once, sorted by fingerprint, with
 // version + resources + timestamps preserved.
-func TestListSandboxesReflectsRegistry(t *testing.T) {
-	reg := sandboxctrl.NewRegistry(nil)
+func TestListNodesReflectsRegistry(t *testing.T) {
+	reg := nodectrl.NewRegistry(nil)
 	h, err := NewSandboxControlHandler(reg)
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
@@ -60,16 +60,16 @@ func TestListSandboxesReflectsRegistry(t *testing.T) {
 	caller := mustGenerate(t, identity.RoleOrchestrator)
 	sandboxA := mustGenerate(t, identity.RoleSandboxHost)
 	sandboxB := mustGenerate(t, identity.RoleSandboxHost)
-	reg.Register(sandboxA.Fingerprint(), "v1.0.0", sandboxctrl.Resources{CPUs: 2, MemoryBytes: 1 << 30})
-	reg.Register(sandboxB.Fingerprint(), "v1.0.1", sandboxctrl.Resources{CPUs: 4, MemoryBytes: 4 << 30})
+	reg.Register(sandboxA.Fingerprint(), "v1.0.0", nodectrl.Resources{CPUs: 2, MemoryBytes: 1 << 30})
+	reg.Register(sandboxB.Fingerprint(), "v1.0.1", nodectrl.Resources{CPUs: 4, MemoryBytes: 4 << 30})
 
-	req := connect.NewRequest(&sandboxctrlv1.ListSandboxesRequest{})
+	req := connect.NewRequest(&nodectrlv1.ListNodesRequest{})
 	req.Header().Set(peerFingerprintHeader, caller.Fingerprint().String())
-	resp, err := h.ListSandboxes(t.Context(), req)
+	resp, err := h.ListNodes(t.Context(), req)
 	if err != nil {
-		t.Fatalf("ListSandboxes: %v", err)
+		t.Fatalf("ListNodes: %v", err)
 	}
-	got := resp.Msg.GetSandboxes()
+	got := resp.Msg.GetNodes()
 	if len(got) != 2 {
 		t.Fatalf("len(sandboxes) = %d, want 2", len(got))
 	}
@@ -85,7 +85,7 @@ func TestListSandboxesReflectsRegistry(t *testing.T) {
 			got[0].GetFingerprint(), got[1].GetFingerprint(), wantFirst, wantSecond)
 	}
 	// Spot-check the entry that maps to sandboxA.
-	var entryA *sandboxctrlv1.SandboxRegistration
+	var entryA *nodectrlv1.Node
 	for _, e := range got {
 		if e.GetFingerprint() == sandboxA.Fingerprint().String() {
 			entryA = e
@@ -105,23 +105,23 @@ func TestListSandboxesReflectsRegistry(t *testing.T) {
 	}
 }
 
-// TestListSandboxesEmpty exercises the zero-entry path explicitly.
+// TestListNodesEmpty exercises the zero-entry path explicitly.
 // Skipping it would leave the empty Registry projection uncovered
 // when the test above populates the registry first.
-func TestListSandboxesEmpty(t *testing.T) {
-	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+func TestListNodesEmpty(t *testing.T) {
+	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
 	}
 	caller := mustGenerate(t, identity.RoleOrchestrator)
-	req := connect.NewRequest(&sandboxctrlv1.ListSandboxesRequest{})
+	req := connect.NewRequest(&nodectrlv1.ListNodesRequest{})
 	req.Header().Set(peerFingerprintHeader, caller.Fingerprint().String())
-	resp, err := h.ListSandboxes(t.Context(), req)
+	resp, err := h.ListNodes(t.Context(), req)
 	if err != nil {
-		t.Fatalf("ListSandboxes: %v", err)
+		t.Fatalf("ListNodes: %v", err)
 	}
-	if len(resp.Msg.GetSandboxes()) != 0 {
-		t.Errorf("len(sandboxes) = %d, want 0", len(resp.Msg.GetSandboxes()))
+	if len(resp.Msg.GetNodes()) != 0 {
+		t.Errorf("len(sandboxes) = %d, want 0", len(resp.Msg.GetNodes()))
 	}
 }
 
@@ -130,11 +130,11 @@ func TestListSandboxesEmpty(t *testing.T) {
 // from a transport problem.
 func TestHeartbeatUnknownSandboxMapsToFailedPrecondition(t *testing.T) {
 	id := mustGenerate(t, identity.RoleSandboxHost)
-	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
 	}
-	req := connect.NewRequest(&sandboxctrlv1.HeartbeatRequest{})
+	req := connect.NewRequest(&nodectrlv1.HeartbeatRequest{})
 	req.Header().Set(peerFingerprintHeader, id.Fingerprint().String())
 	_, err = h.Heartbeat(t.Context(), req)
 	if connect.CodeOf(err) != connect.CodeFailedPrecondition {
@@ -144,46 +144,46 @@ func TestHeartbeatUnknownSandboxMapsToFailedPrecondition(t *testing.T) {
 
 // TestResourcesFromProtoNilHandling covers the nil-proto branch.
 func TestResourcesFromProtoNilHandling(t *testing.T) {
-	if got := resourcesFromProto(nil); got != (sandboxctrl.Resources{}) {
+	if got := resourcesFromProto(nil); got != (nodectrl.Resources{}) {
 		t.Errorf("nil → %+v, want zero", got)
 	}
-	got := resourcesFromProto(&sandboxctrlv1.HostResources{Cpus: 4, MemoryBytes: 1024})
-	want := sandboxctrl.Resources{CPUs: 4, MemoryBytes: 1024}
+	got := resourcesFromProto(&nodectrlv1.HostResources{Cpus: 4, MemoryBytes: 1024})
+	want := nodectrl.Resources{CPUs: 4, MemoryBytes: 1024}
 	if got != want {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
 
-// TestServerExposesSandboxRegistry verifies Config.SandboxRegistry
-// flows through and is exposed via Server.SandboxRegistry().
-func TestServerExposesSandboxRegistry(t *testing.T) {
+// TestServerExposesNodeRegistry verifies Config.NodeRegistry
+// flows through and is exposed via Server.NodeRegistry().
+func TestServerExposesNodeRegistry(t *testing.T) {
 	srvID := mustGenerate(t, identity.RoleOrchestrator)
 	store := mustOpenStoreForSandboxCtrl(t)
-	reg := sandboxctrl.NewRegistry(nil)
+	reg := nodectrl.NewRegistry(nil)
 	srv, err := New(Config{
-		Identity:        srvID,
-		Peers:           store,
-		SandboxRegistry: reg,
+		Identity:     srvID,
+		Peers:        store,
+		NodeRegistry: reg,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if srv.SandboxRegistry() != reg {
-		t.Error("SandboxRegistry() did not return the configured registry")
+	if srv.NodeRegistry() != reg {
+		t.Error("NodeRegistry() did not return the configured registry")
 	}
 }
 
-// TestServerCreatesDefaultSandboxRegistry verifies New mints a
-// default registry when Config.SandboxRegistry is nil.
-func TestServerCreatesDefaultSandboxRegistry(t *testing.T) {
+// TestServerCreatesDefaultNodeRegistry verifies New mints a
+// default registry when Config.NodeRegistry is nil.
+func TestServerCreatesDefaultNodeRegistry(t *testing.T) {
 	srvID := mustGenerate(t, identity.RoleOrchestrator)
 	store := mustOpenStoreForSandboxCtrl(t)
 	srv, err := New(Config{Identity: srvID, Peers: store})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if srv.SandboxRegistry() == nil {
-		t.Error("SandboxRegistry() = nil, want default")
+	if srv.NodeRegistry() == nil {
+		t.Error("NodeRegistry() = nil, want default")
 	}
 }
 
@@ -196,25 +196,25 @@ func mustOpenStoreForSandboxCtrl(t *testing.T) *identity.PeerStore {
 	return s
 }
 
-// TestRegisterSandboxRecordsEntryAndForgetsOnDisconnect exercises
-// the RegisterSandbox happy path end-to-end against a real Connect
+// TestRegisterNodeRecordsEntryAndForgetsOnDisconnect exercises
+// the RegisterNode happy path end-to-end against a real Connect
 // server (so the server-stream + ctx-cancel lifecycle is real).
-// Coverage-wise this is what lifts orchestrator/sandboxctrl.go
+// Coverage-wise this is what lifts orchestrator/nodectrl.go
 // above the per-file gate.
-func TestRegisterSandboxRecordsEntryAndForgetsOnDisconnect(t *testing.T) {
+func TestRegisterNodeRecordsEntryAndForgetsOnDisconnect(t *testing.T) {
 	rig := newSandboxCtrlRig(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	stream, err := rig.client.RegisterSandbox(ctx, connect.NewRequest(
-		&sandboxctrlv1.RegisterSandboxRequest{
+	stream, err := rig.client.RegisterNode(ctx, connect.NewRequest(
+		&nodectrlv1.RegisterNodeRequest{
 			Version:         "v0.0.0",
-			Resources:       &sandboxctrlv1.HostResources{Cpus: 2, MemoryBytes: 1 << 30},
+			Resources:       &nodectrlv1.HostResources{Cpus: 2, MemoryBytes: 1 << 30},
 			ProtocolVersion: testProtocolVersion(),
 		},
 	))
 	if err != nil {
-		t.Fatalf("RegisterSandbox: %v", err)
+		t.Fatalf("RegisterNode: %v", err)
 	}
 	t.Cleanup(func() { _ = stream.Close() })
 
@@ -235,7 +235,7 @@ func TestRegisterSandboxRecordsEntryAndForgetsOnDisconnect(t *testing.T) {
 
 	// Heartbeat over the same connection.
 	hbResp, err := rig.client.Heartbeat(ctx, connect.NewRequest(
-		&sandboxctrlv1.HeartbeatRequest{Current: &sandboxctrlv1.HostResources{Cpus: 2, MemoryBytes: 512 << 20}},
+		&nodectrlv1.HeartbeatRequest{Current: &nodectrlv1.HostResources{Cpus: 2, MemoryBytes: 512 << 20}},
 	))
 	if err != nil {
 		t.Fatalf("Heartbeat: %v", err)
@@ -258,21 +258,21 @@ func TestRegisterSandboxRecordsEntryAndForgetsOnDisconnect(t *testing.T) {
 }
 
 // sandboxCtrlRig wires an in-process orchestrator + a Connect
-// client for the SandboxControlService. Kept local to this test
+// client for the NodeControlService. Kept local to this test
 // file — exporting it would couple orchestrator's test surface to
 // internal layering decisions that are still in flux for Slice A.
 type sandboxCtrlRig struct {
 	server *Server
-	reg    *sandboxctrl.Registry
+	reg    *nodectrl.Registry
 	sbID   *identity.Identity
-	client sandboxctrlv1connect.SandboxControlServiceClient
+	client nodectrlv1connect.NodeControlServiceClient
 }
 
 func newSandboxCtrlRig(t *testing.T) *sandboxCtrlRig {
 	t.Helper()
-	reg := sandboxctrl.NewRegistry(nil)
-	env := newOrchTestEnv(t, identity.RoleSandboxHost, Config{SandboxRegistry: reg})
-	client := sandboxctrlv1connect.NewSandboxControlServiceClient(env.httpc, env.baseURL)
+	reg := nodectrl.NewRegistry(nil)
+	env := newOrchTestEnv(t, identity.RoleSandboxHost, Config{NodeRegistry: reg})
+	client := nodectrlv1connect.NewNodeControlServiceClient(env.httpc, env.baseURL)
 	return &sandboxCtrlRig{
 		server: env.server,
 		reg:    reg,
@@ -282,21 +282,21 @@ func newSandboxCtrlRig(t *testing.T) *sandboxCtrlRig {
 }
 
 // TestDispatchReachesActiveStream drives Dispatch end-to-end: open
-// a RegisterSandbox stream, push a Dispatch on the server side,
+// a RegisterNode stream, push a Dispatch on the server side,
 // receive the event over the wire, decode the spec.
 func TestDispatchReachesActiveStream(t *testing.T) {
 	rig := newSandboxCtrlRig(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	stream, err := rig.client.RegisterSandbox(ctx, connect.NewRequest(
-		&sandboxctrlv1.RegisterSandboxRequest{
+	stream, err := rig.client.RegisterNode(ctx, connect.NewRequest(
+		&nodectrlv1.RegisterNodeRequest{
 			Version:         "v0",
 			ProtocolVersion: testProtocolVersion(),
 		},
 	))
 	if err != nil {
-		t.Fatalf("RegisterSandbox: %v", err)
+		t.Fatalf("RegisterNode: %v", err)
 	}
 	t.Cleanup(func() { _ = stream.Close() })
 	if !stream.Receive() || stream.Msg().GetReady() == nil {
@@ -306,7 +306,7 @@ func TestDispatchReachesActiveStream(t *testing.T) {
 	// Wait briefly for the handler to install its sender; the
 	// Ready ack is sent before attachStream returns in the loop,
 	// so a direct Dispatch right after Receive may race.
-	want := &sandboxctrlv1.SandboxSpec{ImageRef: "alpine:3", WorkspaceUuid: "ws-1"}
+	want := &nodectrlv1.SandboxSpec{ImageRef: "alpine:3", WorkspaceUuid: "ws-1"}
 	if err := dispatchUntilReady(rig.server.SandboxControl(), rig.sbID.Fingerprint(), "d-1", want); err != nil {
 		t.Fatalf("Dispatch: %v", err)
 	}
@@ -330,10 +330,10 @@ func TestDispatchReachesActiveStream(t *testing.T) {
 // handler's attachStream call is still racing in. ErrSandboxNotConnected
 // is the only retryable error.
 func dispatchUntilReady(
-	h *SandboxControlHandler,
+	h *NodeControlHandler,
 	fp identity.Fingerprint,
 	id string,
-	spec *sandboxctrlv1.SandboxSpec,
+	spec *nodectrlv1.SandboxSpec,
 ) error {
 	deadline := time.Now().Add(time.Second)
 	//daft:lint:disable=forloopbound reason="wall-clock bounded to 1s while the handler's attachStream goroutine races with the client's first Receive"
@@ -351,7 +351,7 @@ func dispatchUntilReady(
 // nil spec is a wiring bug and must panic loudly, not produce a
 // half-formed dispatch envelope.
 func TestDispatchPanicsOnNilSpec(t *testing.T) {
-	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestDispatchPanicsOnNilSpec(t *testing.T) {
 
 // TestDispatchPanicsOnEmptyID pins the dispatch_id assert.
 func TestDispatchPanicsOnEmptyID(t *testing.T) {
-	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
 	}
@@ -386,18 +386,18 @@ func TestDispatchPanicsOnEmptyID(t *testing.T) {
 			t.Errorf("panic = %q, want substring 'non-empty dispatch_id'", msg)
 		}
 	}()
-	_ = h.Dispatch(id.Fingerprint(), "", &sandboxctrlv1.SandboxSpec{})
+	_ = h.Dispatch(id.Fingerprint(), "", &nodectrlv1.SandboxSpec{})
 }
 
 // TestDispatchUnknownSandbox covers ErrSandboxNotConnected: no
 // stream was ever opened, so the handler has no sender to push to.
 func TestDispatchUnknownSandbox(t *testing.T) {
-	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
 	}
 	id := mustGenerate(t, identity.RoleSandboxHost)
-	err = h.Dispatch(id.Fingerprint(), "d-1", &sandboxctrlv1.SandboxSpec{})
+	err = h.Dispatch(id.Fingerprint(), "d-1", &nodectrlv1.SandboxSpec{})
 	if !errors.Is(err, ErrSandboxNotConnected) {
 		t.Errorf("err = %v, want ErrSandboxNotConnected", err)
 	}
@@ -407,32 +407,32 @@ func TestDispatchUnknownSandbox(t *testing.T) {
 // this build's local constants — the value every shipped client
 // sends. Tests use it so that adding a new field to the handshake
 // only changes one place.
-func testProtocolVersion() *sandboxctrlv1.ProtocolVersion {
-	return &sandboxctrlv1.ProtocolVersion{
-		Major: sandboxctrl.ProtocolVersionMajor,
-		Minor: sandboxctrl.ProtocolVersionMinor,
-		Patch: sandboxctrl.ProtocolVersionPatch,
+func testProtocolVersion() *nodectrlv1.ProtocolVersion {
+	return &nodectrlv1.ProtocolVersion{
+		Major: nodectrl.ProtocolVersionMajor,
+		Minor: nodectrl.ProtocolVersionMinor,
+		Patch: nodectrl.ProtocolVersionPatch,
 	}
 }
 
-// TestRegisterSandboxRejectsIncompatibleProtocolMajor pins the
+// TestRegisterNodeRejectsIncompatibleProtocolMajor pins the
 // server-side half of the version handshake: a peer reporting a
 // different major must be refused before any registry mutation.
-func TestRegisterSandboxRejectsIncompatibleProtocolMajor(t *testing.T) {
+func TestRegisterNodeRejectsIncompatibleProtocolMajor(t *testing.T) {
 	rig := newSandboxCtrlRig(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	stream, err := rig.client.RegisterSandbox(ctx, connect.NewRequest(
-		&sandboxctrlv1.RegisterSandboxRequest{
+	stream, err := rig.client.RegisterNode(ctx, connect.NewRequest(
+		&nodectrlv1.RegisterNodeRequest{
 			Version: "v0",
-			ProtocolVersion: &sandboxctrlv1.ProtocolVersion{
-				Major: sandboxctrl.ProtocolVersionMajor + 99,
+			ProtocolVersion: &nodectrlv1.ProtocolVersion{
+				Major: nodectrl.ProtocolVersionMajor + 99,
 			},
 		},
 	))
 	if err != nil {
-		t.Fatalf("RegisterSandbox: %v", err)
+		t.Fatalf("RegisterNode: %v", err)
 	}
 	t.Cleanup(func() { _ = stream.Close() })
 
@@ -449,20 +449,20 @@ func TestRegisterSandboxRejectsIncompatibleProtocolMajor(t *testing.T) {
 	}
 }
 
-// TestRegisterSandboxRejectsMissingProtocolVersion pins that the
+// TestRegisterNodeRejectsMissingProtocolVersion pins that the
 // zero value (omitted field) is treated as major=0, which never
 // matches our local major. Catches the "I forgot to set the field"
 // bug class.
-func TestRegisterSandboxRejectsMissingProtocolVersion(t *testing.T) {
+func TestRegisterNodeRejectsMissingProtocolVersion(t *testing.T) {
 	rig := newSandboxCtrlRig(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	stream, err := rig.client.RegisterSandbox(ctx, connect.NewRequest(
-		&sandboxctrlv1.RegisterSandboxRequest{Version: "v0"},
+	stream, err := rig.client.RegisterNode(ctx, connect.NewRequest(
+		&nodectrlv1.RegisterNodeRequest{Version: "v0"},
 	))
 	if err != nil {
-		t.Fatalf("RegisterSandbox: %v", err)
+		t.Fatalf("RegisterNode: %v", err)
 	}
 	t.Cleanup(func() { _ = stream.Close() })
 
@@ -482,14 +482,14 @@ func TestSubscriptionReadyCarriesProtocolVersion(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	stream, err := rig.client.RegisterSandbox(ctx, connect.NewRequest(
-		&sandboxctrlv1.RegisterSandboxRequest{
+	stream, err := rig.client.RegisterNode(ctx, connect.NewRequest(
+		&nodectrlv1.RegisterNodeRequest{
 			Version:         "v0",
 			ProtocolVersion: testProtocolVersion(),
 		},
 	))
 	if err != nil {
-		t.Fatalf("RegisterSandbox: %v", err)
+		t.Fatalf("RegisterNode: %v", err)
 	}
 	t.Cleanup(func() { _ = stream.Close() })
 
@@ -504,15 +504,15 @@ func TestSubscriptionReadyCarriesProtocolVersion(t *testing.T) {
 	if pv == nil {
 		t.Fatal("Ready.protocol_version not set")
 	}
-	if pv.GetMajor() != sandboxctrl.ProtocolVersionMajor ||
-		pv.GetMinor() != sandboxctrl.ProtocolVersionMinor ||
-		pv.GetPatch() != sandboxctrl.ProtocolVersionPatch {
+	if pv.GetMajor() != nodectrl.ProtocolVersionMajor ||
+		pv.GetMinor() != nodectrl.ProtocolVersionMinor ||
+		pv.GetPatch() != nodectrl.ProtocolVersionPatch {
 		t.Errorf(
 			"Ready.protocol_version = %d.%d.%d, want %d.%d.%d",
 			pv.GetMajor(), pv.GetMinor(), pv.GetPatch(),
-			sandboxctrl.ProtocolVersionMajor,
-			sandboxctrl.ProtocolVersionMinor,
-			sandboxctrl.ProtocolVersionPatch,
+			nodectrl.ProtocolVersionMajor,
+			nodectrl.ProtocolVersionMinor,
+			nodectrl.ProtocolVersionPatch,
 		)
 	}
 }
@@ -522,7 +522,7 @@ func TestSubscriptionReadyCarriesProtocolVersion(t *testing.T) {
 // more. attachStream/detachStream are exercised directly so we
 // don't need a real client.
 func TestDispatchBacklogFull(t *testing.T) {
-	h, err := NewSandboxControlHandler(sandboxctrl.NewRegistry(nil))
+	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
 	}
@@ -532,11 +532,11 @@ func TestDispatchBacklogFull(t *testing.T) {
 	t.Cleanup(func() { h.detachStream(fp) })
 
 	for range dispatchBacklog {
-		if err := h.Dispatch(fp, "x", &sandboxctrlv1.SandboxSpec{}); err != nil {
+		if err := h.Dispatch(fp, "x", &nodectrlv1.SandboxSpec{}); err != nil {
 			t.Fatalf("Dispatch (fill): %v", err)
 		}
 	}
-	if err := h.Dispatch(fp, "x", &sandboxctrlv1.SandboxSpec{}); !errors.Is(err, ErrDispatchBacklog) {
+	if err := h.Dispatch(fp, "x", &nodectrlv1.SandboxSpec{}); !errors.Is(err, ErrDispatchBacklog) {
 		t.Errorf("err = %v, want ErrDispatchBacklog", err)
 	}
 }

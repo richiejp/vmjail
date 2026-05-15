@@ -1,4 +1,4 @@
-package sandboxctrlclient_test
+package nodectrlclient_test
 
 import (
 	"context"
@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	sandboxctrlv1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
 	"github.com/richiejp/darkaifactory/internal/orchestrator"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrl"
-	"github.com/richiejp/darkaifactory/internal/sandboxctrlclient"
 )
 
 const (
@@ -22,15 +22,15 @@ const (
 )
 
 // dispatchUntilAttached retries Dispatch for up to 1s while the
-// orchestrator's RegisterSandbox handler is still racing to attach
+// orchestrator's RegisterNode handler is still racing to attach
 // its per-fingerprint stream. ErrSandboxNotConnected is the only
 // retryable error.
 func dispatchUntilAttached(
 	t *testing.T,
-	h *orchestrator.SandboxControlHandler,
+	h *orchestrator.NodeControlHandler,
 	fp identity.Fingerprint,
 	id string,
-	spec *sandboxctrlv1.SandboxSpec,
+	spec *nodectrlv1.SandboxSpec,
 ) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -50,13 +50,13 @@ func dispatchUntilAttached(
 
 // e2eRig is an in-process orchestrator + a sandbox identity that
 // has been TOFU-approved on both sides. Tests use it to exercise
-// the real RegisterSandbox/Heartbeat path over mTLS.
+// the real RegisterNode/Heartbeat path over mTLS.
 type e2eRig struct {
 	server *orchestrator.Server
 	url    string
 	sbID   *identity.Identity
 	sbPeer *identity.PeerStore
-	reg    *sandboxctrl.Registry
+	reg    *nodectrl.Registry
 }
 
 func newE2ERig(t *testing.T) *e2eRig {
@@ -77,13 +77,13 @@ func newE2ERig(t *testing.T) *e2eRig {
 	if err := srvPeers.Add(identity.Peer{Fingerprint: sbID.Fingerprint()}); err != nil {
 		t.Fatalf("srv approve sb: %v", err)
 	}
-	reg := sandboxctrl.NewRegistry(nil)
+	reg := nodectrl.NewRegistry(nil)
 
 	srv, err := orchestrator.New(orchestrator.Config{
-		Identity:        srvID,
-		Peers:           srvPeers,
-		Addr:            testListenAddr,
-		SandboxRegistry: reg,
+		Identity:     srvID,
+		Peers:        srvPeers,
+		Addr:         testListenAddr,
+		NodeRegistry: reg,
 	})
 	if err != nil {
 		t.Fatalf("orchestrator.New: %v", err)
@@ -129,7 +129,7 @@ func newE2ERig(t *testing.T) *e2eRig {
 
 func TestRegisterAndServeRecordsRegistrationAndHeartbeat(t *testing.T) {
 	rig := newE2ERig(t)
-	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+	client, err := nodectrlclient.New(nodectrlclient.Config{
 		URL:               rig.url,
 		Identity:          rig.sbID,
 		Peers:             rig.sbPeer,
@@ -140,7 +140,7 @@ func TestRegisterAndServeRecordsRegistrationAndHeartbeat(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	advertised := sandboxctrl.Resources{CPUs: 8, MemoryBytes: 16 << 30}
+	advertised := nodectrl.Resources{CPUs: 8, MemoryBytes: 16 << 30}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
@@ -152,7 +152,7 @@ func TestRegisterAndServeRecordsRegistrationAndHeartbeat(t *testing.T) {
 	// least one heartbeat refresh visible (LastSeenAt > RegisteredAt).
 	fp := rig.sbID.Fingerprint()
 	deadline := time.Now().Add(time.Second)
-	var entry sandboxctrl.Entry
+	var entry nodectrl.Entry
 	var heartbeatObserved bool
 	//daft:lint:disable=forloopbound reason="exits on deadline timeout or once heartbeat refresh is observed; bounded by 1s wall clock"
 	for time.Now().Before(deadline) {
@@ -202,7 +202,7 @@ func TestRegisterAndServeRecordsRegistrationAndHeartbeat(t *testing.T) {
 }
 
 // TestRegisterAndServeFailsOnUnreachableOrchestrator covers the
-// dial-fail branch of RegisterAndServe (RegisterSandbox returns an
+// dial-fail branch of RegisterAndServe (RegisterNode returns an
 // error before any stream is opened).
 func TestRegisterAndServeFailsOnUnreachableOrchestrator(t *testing.T) {
 	id, err := identity.Generate(identity.RoleSandboxHost)
@@ -220,7 +220,7 @@ func TestRegisterAndServeFailsOnUnreachableOrchestrator(t *testing.T) {
 	if err := peers.Add(identity.Peer{Fingerprint: peer.Fingerprint()}); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+	client, err := nodectrlclient.New(nodectrlclient.Config{
 		URL:      "https://127.0.0.1:1", // closed port
 		Identity: id,
 		Peers:    peers,
@@ -231,7 +231,7 @@ func TestRegisterAndServeFailsOnUnreachableOrchestrator(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := client.RegisterAndServe(ctx, sandboxctrl.Resources{}); err == nil {
+	if err := client.RegisterAndServe(ctx, nodectrl.Resources{}); err == nil {
 		t.Fatal("RegisterAndServe succeeded against unreachable URL")
 	}
 }
@@ -242,7 +242,7 @@ func TestRegisterAndServeFailsOnUnreachableOrchestrator(t *testing.T) {
 // FailedPrecondition and RegisterAndServe must surface it.
 func TestRegisterAndServePropagatesHeartbeatError(t *testing.T) {
 	rig := newE2ERig(t)
-	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+	client, err := nodectrlclient.New(nodectrlclient.Config{
 		URL:               rig.url,
 		Identity:          rig.sbID,
 		Peers:             rig.sbPeer,
@@ -257,7 +257,7 @@ func TestRegisterAndServePropagatesHeartbeatError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
-		served <- client.RegisterAndServe(ctx, sandboxctrl.Resources{CPUs: 1})
+		served <- client.RegisterAndServe(ctx, nodectrl.Resources{CPUs: 1})
 	}()
 
 	// Wait for the registration to appear, then forcibly Forget so
@@ -285,18 +285,18 @@ func TestRegisterAndServePropagatesHeartbeatError(t *testing.T) {
 
 // TestRegisterAndServeDeliversDispatchToHandler exercises the
 // orchestrator → sandboxd Dispatch path end-to-end: orchestrator
-// pushes Dispatch on the stream; the sandboxctrlclient receives it
+// pushes Dispatch on the stream; the nodectrlclient receives it
 // and invokes the configured DispatchHandler with the spec.
 func TestRegisterAndServeDeliversDispatchToHandler(t *testing.T) {
 	rig := newE2ERig(t)
 
-	got := make(chan *sandboxctrlv1.Dispatch, 1)
-	handler := sandboxctrlclient.DispatchHandlerFunc(func(_ context.Context, d *sandboxctrlv1.Dispatch) error {
+	got := make(chan *nodectrlv1.Dispatch, 1)
+	handler := nodectrlclient.DispatchHandlerFunc(func(_ context.Context, d *nodectrlv1.Dispatch) error {
 		got <- d
 		return nil
 	})
 
-	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+	client, err := nodectrlclient.New(nodectrlclient.Config{
 		URL:               rig.url,
 		Identity:          rig.sbID,
 		Peers:             rig.sbPeer,
@@ -311,11 +311,11 @@ func TestRegisterAndServeDeliversDispatchToHandler(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	served := make(chan error, 1)
 	go func() {
-		served <- client.RegisterAndServe(ctx, sandboxctrl.Resources{CPUs: 1})
+		served <- client.RegisterAndServe(ctx, nodectrl.Resources{CPUs: 1})
 	}()
 
 	fp := rig.sbID.Fingerprint()
-	want := &sandboxctrlv1.SandboxSpec{ImageRef: "alpine:3", WorkspaceUuid: "ws-1"}
+	want := &nodectrlv1.SandboxSpec{ImageRef: "alpine:3", WorkspaceUuid: "ws-1"}
 	dispatchUntilAttached(t, rig.server.SandboxControl(), fp, "d-1", want)
 
 	select {
@@ -347,11 +347,11 @@ func TestRegisterAndServeDeliversDispatchToHandler(t *testing.T) {
 func TestRegisterAndServeSurfacesDispatchError(t *testing.T) {
 	rig := newE2ERig(t)
 	want := errors.New("synthetic handler failure")
-	handler := sandboxctrlclient.DispatchHandlerFunc(func(context.Context, *sandboxctrlv1.Dispatch) error {
+	handler := nodectrlclient.DispatchHandlerFunc(func(context.Context, *nodectrlv1.Dispatch) error {
 		return want
 	})
 
-	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+	client, err := nodectrlclient.New(nodectrlclient.Config{
 		URL:               rig.url,
 		Identity:          rig.sbID,
 		Peers:             rig.sbPeer,
@@ -367,11 +367,11 @@ func TestRegisterAndServeSurfacesDispatchError(t *testing.T) {
 	defer cancel()
 	served := make(chan error, 1)
 	go func() {
-		served <- client.RegisterAndServe(ctx, sandboxctrl.Resources{CPUs: 1})
+		served <- client.RegisterAndServe(ctx, nodectrl.Resources{CPUs: 1})
 	}()
 
 	fp := rig.sbID.Fingerprint()
-	dispatchUntilAttached(t, rig.server.SandboxControl(), fp, "d-bad", &sandboxctrlv1.SandboxSpec{})
+	dispatchUntilAttached(t, rig.server.SandboxControl(), fp, "d-bad", &nodectrlv1.SandboxSpec{})
 
 	select {
 	case err := <-served:
@@ -391,7 +391,7 @@ func TestRegisterAndServeRejectsUnapprovedPeer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	client, err := sandboxctrlclient.New(sandboxctrlclient.Config{
+	client, err := nodectrlclient.New(nodectrlclient.Config{
 		URL:      rig.url,
 		Identity: stranger,
 		Peers:    rig.sbPeer,
@@ -402,7 +402,7 @@ func TestRegisterAndServeRejectsUnapprovedPeer(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	if err := client.RegisterAndServe(ctx, sandboxctrl.Resources{}); err == nil {
+	if err := client.RegisterAndServe(ctx, nodectrl.Resources{}); err == nil {
 		t.Fatal("RegisterAndServe succeeded for unapproved peer; want TLS/auth error")
 	}
 }

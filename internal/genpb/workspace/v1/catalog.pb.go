@@ -5,7 +5,7 @@
 // orchestrator. Clients (`daft workspace …` from the user-host)
 // incrementally assemble one by issuing Add/Set/Remove operations;
 // at Launch time the orchestrator derives a one-shot SandboxSpec
-// (see daft.sandboxctrl.v1) and dispatches it to a sandbox-host.
+// (see daft.nodectrl.v1) and dispatches it to a Node.
 // The sandbox-host stores nothing across runs — the workspace is
 // the source of truth.
 //
@@ -21,7 +21,7 @@
 package workspacev1
 
 import (
-	v1 "github.com/richiejp/darkaifactory/internal/genpb/sandboxctrl/v1"
+	v1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
@@ -137,7 +137,7 @@ type Workspace struct {
 	// change this — it identifies the original owner.
 	OwnerFingerprint string `protobuf:"bytes,3,opt,name=owner_fingerprint,json=ownerFingerprint,proto3" json:"owner_fingerprint,omitempty"`
 	// Filesystem mounts visible inside the VM. Reuses the
-	// sandboxctrl.v1 type so the spec→SandboxSpec projection at
+	// nodectrl.v1 type so the spec→SandboxSpec projection at
 	// Launch time is a direct copy.
 	Mounts []*v1.Mount `protobuf:"bytes,4,rep,name=mounts,proto3" json:"mounts,omitempty"`
 	// Environment variables for the container's entrypoint.
@@ -159,7 +159,7 @@ type Workspace struct {
 	// GPU reservation. Unset ⇒ CPU-only.
 	GpuRequest *v1.GpuRequest `protobuf:"bytes,10,opt,name=gpu_request,json=gpuRequest,proto3" json:"gpu_request,omitempty"`
 	// Sharing policy. UNSPECIFIED ⇒ scheduler-default.
-	Isolation v1.Isolation `protobuf:"varint,11,opt,name=isolation,proto3,enum=daft.sandboxctrl.v1.Isolation" json:"isolation,omitempty"`
+	Isolation v1.Isolation `protobuf:"varint,11,opt,name=isolation,proto3,enum=daft.nodectrl.v1.Isolation" json:"isolation,omitempty"`
 	// Write-lock owner fingerprint. Empty ⇒ unlocked. Mutations and
 	// launches require holding the lock. Phase F3 lands the explicit
 	// Acquire / Release RPCs.
@@ -345,21 +345,21 @@ var File_workspace_v1_catalog_proto protoreflect.FileDescriptor
 
 const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\n" +
-	"\x1aworkspace/v1/catalog.proto\x12\x11daft.workspace.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a sandboxctrl/v1/sandboxctrl.proto\"\xf6\x06\n" +
+	"\x1aworkspace/v1/catalog.proto\x12\x11daft.workspace.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1anodectrl/v1/nodectrl.proto\"\xe7\x06\n" +
 	"\tWorkspace\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12+\n" +
-	"\x11owner_fingerprint\x18\x03 \x01(\tR\x10ownerFingerprint\x122\n" +
-	"\x06mounts\x18\x04 \x03(\v2\x1a.daft.sandboxctrl.v1.MountR\x06mounts\x12-\n" +
-	"\x03env\x18\x05 \x03(\v2\x1b.daft.sandboxctrl.v1.EnvVarR\x03env\x126\n" +
-	"\x05ports\x18\x06 \x03(\v2 .daft.sandboxctrl.v1.PortMappingR\x05ports\x12\x1b\n" +
+	"\x11owner_fingerprint\x18\x03 \x01(\tR\x10ownerFingerprint\x12/\n" +
+	"\x06mounts\x18\x04 \x03(\v2\x17.daft.nodectrl.v1.MountR\x06mounts\x12*\n" +
+	"\x03env\x18\x05 \x03(\v2\x18.daft.nodectrl.v1.EnvVarR\x03env\x123\n" +
+	"\x05ports\x18\x06 \x03(\v2\x1d.daft.nodectrl.v1.PortMappingR\x05ports\x12\x1b\n" +
 	"\timage_ref\x18\a \x01(\tR\bimageRef\x12(\n" +
 	"\x10pending_build_id\x18\b \x01(\tR\x0ependingBuildId\x12<\n" +
-	"\x1atarget_sandbox_fingerprint\x18\t \x01(\tR\x18targetSandboxFingerprint\x12@\n" +
+	"\x1atarget_sandbox_fingerprint\x18\t \x01(\tR\x18targetSandboxFingerprint\x12=\n" +
 	"\vgpu_request\x18\n" +
-	" \x01(\v2\x1f.daft.sandboxctrl.v1.GpuRequestR\n" +
-	"gpuRequest\x12<\n" +
-	"\tisolation\x18\v \x01(\x0e2\x1e.daft.sandboxctrl.v1.IsolationR\tisolation\x124\n" +
+	" \x01(\v2\x1c.daft.nodectrl.v1.GpuRequestR\n" +
+	"gpuRequest\x129\n" +
+	"\tisolation\x18\v \x01(\x0e2\x1b.daft.nodectrl.v1.IsolationR\tisolation\x124\n" +
 	"\x16lock_owner_fingerprint\x18\f \x01(\tR\x14lockOwnerFingerprint\x12B\n" +
 	"\x0flock_expires_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\rlockExpiresAt\x12:\n" +
 	"\x06status\x18\x0e \x01(\x0e2\".daft.workspace.v1.WorkspaceStatusR\x06status\x12\x18\n" +
@@ -395,19 +395,19 @@ var file_workspace_v1_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_workspace_v1_catalog_proto_goTypes = []any{
 	(WorkspaceStatus)(0),          // 0: daft.workspace.v1.WorkspaceStatus
 	(*Workspace)(nil),             // 1: daft.workspace.v1.Workspace
-	(*v1.Mount)(nil),              // 2: daft.sandboxctrl.v1.Mount
-	(*v1.EnvVar)(nil),             // 3: daft.sandboxctrl.v1.EnvVar
-	(*v1.PortMapping)(nil),        // 4: daft.sandboxctrl.v1.PortMapping
-	(*v1.GpuRequest)(nil),         // 5: daft.sandboxctrl.v1.GpuRequest
-	(v1.Isolation)(0),             // 6: daft.sandboxctrl.v1.Isolation
+	(*v1.Mount)(nil),              // 2: daft.nodectrl.v1.Mount
+	(*v1.EnvVar)(nil),             // 3: daft.nodectrl.v1.EnvVar
+	(*v1.PortMapping)(nil),        // 4: daft.nodectrl.v1.PortMapping
+	(*v1.GpuRequest)(nil),         // 5: daft.nodectrl.v1.GpuRequest
+	(v1.Isolation)(0),             // 6: daft.nodectrl.v1.Isolation
 	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
 }
 var file_workspace_v1_catalog_proto_depIdxs = []int32{
-	2, // 0: daft.workspace.v1.Workspace.mounts:type_name -> daft.sandboxctrl.v1.Mount
-	3, // 1: daft.workspace.v1.Workspace.env:type_name -> daft.sandboxctrl.v1.EnvVar
-	4, // 2: daft.workspace.v1.Workspace.ports:type_name -> daft.sandboxctrl.v1.PortMapping
-	5, // 3: daft.workspace.v1.Workspace.gpu_request:type_name -> daft.sandboxctrl.v1.GpuRequest
-	6, // 4: daft.workspace.v1.Workspace.isolation:type_name -> daft.sandboxctrl.v1.Isolation
+	2, // 0: daft.workspace.v1.Workspace.mounts:type_name -> daft.nodectrl.v1.Mount
+	3, // 1: daft.workspace.v1.Workspace.env:type_name -> daft.nodectrl.v1.EnvVar
+	4, // 2: daft.workspace.v1.Workspace.ports:type_name -> daft.nodectrl.v1.PortMapping
+	5, // 3: daft.workspace.v1.Workspace.gpu_request:type_name -> daft.nodectrl.v1.GpuRequest
+	6, // 4: daft.workspace.v1.Workspace.isolation:type_name -> daft.nodectrl.v1.Isolation
 	7, // 5: daft.workspace.v1.Workspace.lock_expires_at:type_name -> google.protobuf.Timestamp
 	0, // 6: daft.workspace.v1.Workspace.status:type_name -> daft.workspace.v1.WorkspaceStatus
 	7, // 7: daft.workspace.v1.Workspace.created_at:type_name -> google.protobuf.Timestamp
