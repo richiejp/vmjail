@@ -4,10 +4,9 @@
 // A Workspace is a persistent, mutable record owned by the
 // orchestrator. Clients (`daft workspace …` from the user-host)
 // incrementally assemble one by issuing Add/Set/Remove operations;
-// at Launch time the orchestrator derives a one-shot SandboxSpec
-// (see daft.nodectrl.v1) and dispatches it to a Node.
-// The sandbox-host stores nothing across runs — the workspace is
-// the source of truth.
+// at Launch time the orchestrator derives a Sandbox resource
+// (see daft.sandbox.v1) and binds it to a Node. The Node stores
+// nothing across runs — the workspace is the source of truth.
 //
 // This file declares the data shape only. The service surface
 // (WorkspaceCatalogService.* RPCs) lands in Slice B2.
@@ -16,7 +15,7 @@ syntax = "proto3";
 package daft.workspace.v1;
 
 import "google/protobuf/timestamp.proto";
-import "nodectrl/v1/nodectrl.proto";
+import "sandbox/v1/sandbox.proto";
 
 option go_package = "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1";
 
@@ -68,14 +67,14 @@ message Workspace {
   string owner_fingerprint = 3;
 
   // Filesystem mounts visible inside the VM. Reuses the
-  // nodectrl.v1 type so the spec→SandboxSpec projection at
+  // sandbox.v1 type so the spec→SandboxSpec projection at
   // Launch time is a direct copy.
-  repeated daft.nodectrl.v1.Mount mounts = 4;
+  repeated daft.sandbox.v1.Mount mounts = 4;
   // Environment variables for the container's entrypoint.
-  repeated daft.nodectrl.v1.EnvVar env = 5;
+  repeated daft.sandbox.v1.EnvVar env = 5;
   // Container ports the workload binds. The orchestrator ingress
   // (Phase C) consumes this list at Launch time.
-  repeated daft.nodectrl.v1.PortMapping ports = 6;
+  repeated daft.sandbox.v1.PortMapping ports = 6;
 
   // Image source. Exactly one of image_ref / pending_build_id is
   // set on a READY workspace. Both empty ⇒ DRAFT.
@@ -90,9 +89,9 @@ message Workspace {
   // scheduler picks at Launch time.
   string target_sandbox_fingerprint = 9;
   // GPU reservation. Unset ⇒ CPU-only.
-  daft.nodectrl.v1.GpuRequest gpu_request = 10;
+  daft.sandbox.v1.GpuRequest gpu_request = 10;
   // Sharing policy. UNSPECIFIED ⇒ scheduler-default.
-  daft.nodectrl.v1.Isolation isolation = 11;
+  daft.sandbox.v1.Isolation isolation = 11;
 
   // Write-lock owner fingerprint. Empty ⇒ unlocked. Mutations and
   // launches require holding the lock. Phase F3 lands the explicit
@@ -113,9 +112,10 @@ message Workspace {
   google.protobuf.Timestamp created_at = 16;
   google.protobuf.Timestamp updated_at = 17;
 
-  // Identifier of the in-flight (or most recent) Dispatch to a
-  // sandbox-host. Minted fresh on each Launch; cleared on Stop.
-  // Future RPCs (status streaming, log subscribe) will reference
-  // this to correlate sandbox-side state back to the workspace.
-  string current_dispatch_id = 18;
+  // Reference to the in-flight (or most recent) Sandbox derived
+  // from this Workspace. Minted fresh on each Launch; cleared on
+  // Stop. Replaces the prior opaque dispatch_id with a typed
+  // {uid, node} reference. Slice B4c moves this under a
+  // Workspace.status submessage.
+  daft.sandbox.v1.SandboxRef current_sandbox = 18;
 }

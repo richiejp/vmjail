@@ -10,6 +10,7 @@ import (
 	"time"
 
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
@@ -21,27 +22,26 @@ const (
 	testFixtureVer = "test-v0"
 )
 
-// dispatchUntilAttached retries Dispatch for up to 1s while the
-// orchestrator's RegisterNode handler is still racing to attach
-// its per-fingerprint stream. ErrSandboxNotConnected is the only
-// retryable error.
-func dispatchUntilAttached(
+// publishUntilAttached retries PublishSandboxEvent for up to 1s
+// while the orchestrator's RegisterNode handler is still racing to
+// attach its per-fingerprint stream. ErrNodeNotConnected is the
+// only retryable error.
+func publishUntilAttached(
 	t *testing.T,
 	h *orchestrator.NodeControlHandler,
 	fp identity.Fingerprint,
-	id string,
-	spec *nodectrlv1.SandboxSpec,
+	sandbox *sandboxv1.Sandbox,
 ) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	//daft:lint:disable=forloopbound reason="wall-clock bounded to 1s; exits on attach or transient retry exhaustion"
 	for time.Now().Before(deadline) {
-		err := h.Dispatch(fp, id, spec)
+		err := h.PublishSandboxEvent(fp, sandboxv1.EventType_EVENT_TYPE_ADDED, sandbox)
 		if err == nil {
 			return
 		}
-		if !errors.Is(err, orchestrator.ErrSandboxNotConnected) {
-			t.Fatalf("Dispatch: %v", err)
+		if !errors.Is(err, orchestrator.ErrNodeNotConnected) {
+			t.Fatalf("PublishSandboxEvent: %v", err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -283,16 +283,16 @@ func TestRegisterAndServePropagatesHeartbeatError(t *testing.T) {
 	}
 }
 
-// TestRegisterAndServeDeliversDispatchToHandler exercises the
-// orchestrator → sandboxd Dispatch path end-to-end: orchestrator
-// pushes Dispatch on the stream; the nodectrlclient receives it
-// and invokes the configured DispatchHandler with the spec.
-func TestRegisterAndServeDeliversDispatchToHandler(t *testing.T) {
+// TestRegisterAndServeDeliversSandboxEventToHandler exercises the
+// orchestrator → Node SandboxWatchEvent path end-to-end: orchestrator
+// pushes ADDED on the stream; the nodectrlclient receives it and
+// invokes the configured SandboxEventHandler with the payload.
+func TestRegisterAndServeDeliversSandboxEventToHandler(t *testing.T) {
 	rig := newE2ERig(t)
 
-	got := make(chan *nodectrlv1.Dispatch, 1)
-	handler := nodectrlclient.DispatchHandlerFunc(func(_ context.Context, d *nodectrlv1.Dispatch) error {
-		got <- d
+	got := make(chan *nodectrlv1.SandboxWatchEvent, 1)
+	handler := nodectrlclient.SandboxEventHandlerFunc(func(_ context.Context, evt *nodectrlv1.SandboxWatchEvent) error {
+		got <- evt
 		return nil
 	})
 
@@ -302,7 +302,7 @@ func TestRegisterAndServeDeliversDispatchToHandler(t *testing.T) {
 		Peers:             rig.sbPeer,
 		Version:           testFixtureVer,
 		HeartbeatInterval: 5 * time.Second,
-		Dispatch:          handler,
+		SandboxEvents:     handler,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -315,16 +315,23 @@ func TestRegisterAndServeDeliversDispatchToHandler(t *testing.T) {
 	}()
 
 	fp := rig.sbID.Fingerprint()
-	want := &nodectrlv1.SandboxSpec{ImageRef: "alpine:3", WorkspaceUuid: "ws-1"}
-	dispatchUntilAttached(t, rig.server.SandboxControl(), fp, "d-1", want)
+	want := &sandboxv1.Sandbox{
+		Metadata: &sandboxv1.SandboxMetadata{Uid: "sb-1"},
+		Spec:     &sandboxv1.SandboxSpec{ImageRef: "alpine:3", WorkspaceUuid: "ws-1"},
+	}
+	publishUntilAttached(t, rig.server.SandboxControl(), fp, want)
 
 	select {
-	case d := <-got:
-		if d.GetDispatchId() != "d-1" {
-			t.Errorf("dispatch_id = %q, want d-1", d.GetDispatchId())
+	case evt := <-got:
+		if evt.GetType() != sandboxv1.EventType_EVENT_TYPE_ADDED {
+			t.Errorf("type = %s, want ADDED", evt.GetType())
 		}
-		if d.GetSpec().GetImageRef() != "alpine:3" {
-			t.Errorf("image_ref = %q, want alpine:3", d.GetSpec().GetImageRef())
+		sb := evt.GetSandbox()
+		if sb.GetMetadata().GetUid() != "sb-1" {
+			t.Errorf("uid = %q, want sb-1", sb.GetMetadata().GetUid())
+		}
+		if sb.GetSpec().GetImageRef() != "alpine:3" {
+			t.Errorf("image_ref = %q, want alpine:3", sb.GetSpec().GetImageRef())
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("handler not invoked within 2s")
@@ -341,13 +348,13 @@ func TestRegisterAndServeDeliversDispatchToHandler(t *testing.T) {
 	}
 }
 
-// TestRegisterAndServeSurfacesDispatchError covers the failure
+// TestRegisterAndServeSurfacesSandboxEventError covers the failure
 // branch of consumeStream's handler call: a non-nil return tears
 // the registration down.
-func TestRegisterAndServeSurfacesDispatchError(t *testing.T) {
+func TestRegisterAndServeSurfacesSandboxEventError(t *testing.T) {
 	rig := newE2ERig(t)
 	want := errors.New("synthetic handler failure")
-	handler := nodectrlclient.DispatchHandlerFunc(func(context.Context, *nodectrlv1.Dispatch) error {
+	handler := nodectrlclient.SandboxEventHandlerFunc(func(context.Context, *nodectrlv1.SandboxWatchEvent) error {
 		return want
 	})
 
@@ -357,7 +364,7 @@ func TestRegisterAndServeSurfacesDispatchError(t *testing.T) {
 		Peers:             rig.sbPeer,
 		Version:           testFixtureVer,
 		HeartbeatInterval: 5 * time.Second,
-		Dispatch:          handler,
+		SandboxEvents:     handler,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -371,7 +378,10 @@ func TestRegisterAndServeSurfacesDispatchError(t *testing.T) {
 	}()
 
 	fp := rig.sbID.Fingerprint()
-	dispatchUntilAttached(t, rig.server.SandboxControl(), fp, "d-bad", &nodectrlv1.SandboxSpec{})
+	publishUntilAttached(t, rig.server.SandboxControl(), fp, &sandboxv1.Sandbox{
+		Metadata: &sandboxv1.SandboxMetadata{Uid: "sb-bad"},
+		Spec:     &sandboxv1.SandboxSpec{},
+	})
 
 	select {
 	case err := <-served:

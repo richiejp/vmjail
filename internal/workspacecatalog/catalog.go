@@ -121,11 +121,21 @@ type Workspace struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 
-	// CurrentDispatchID is the latest dispatch identifier issued by
-	// Launch. Empty when the workspace has never been launched or
-	// has been Stop'd. Future cross-workspace correlation (logs,
-	// status streams) will key on this.
-	CurrentDispatchID string
+	// CurrentSandbox references the Sandbox resource Launch minted
+	// for this workspace, plus the Node it was bound to. Nil when
+	// the workspace has never been launched or has been Stop'd.
+	// Replaces the prior opaque CurrentDispatchID; future cross-
+	// workspace correlation (logs, status streams) keys on
+	// CurrentSandbox.UID.
+	CurrentSandbox *SandboxRef
+}
+
+// SandboxRef is the Go-native mirror of daft.sandbox.v1.SandboxRef.
+// Carried on Workspace so the catalog package stays independent of
+// the wire types.
+type SandboxRef struct {
+	UID             string
+	NodeFingerprint identity.Fingerprint
 }
 
 // Sentinel errors. ErrAliasInUse lets the Connect adapter map a

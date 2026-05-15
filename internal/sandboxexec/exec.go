@@ -19,6 +19,7 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/assert"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/trace"
@@ -88,55 +89,64 @@ func ProductionAssembler(deps sandboxboot.Deps) Assembler {
 	}
 }
 
-// HandleDispatch is the DispatchHandler entrypoint. When
-// spec.image_ref is non-empty, the executor delegates to its
-// Assembler to pull the image and build the bootable
-// sandbox.Config, then runs the VM with that config. When
-// image_ref is empty (or no Assembler is configured), the
-// executor falls back to the bare baseline Hello — the
-// smoke-test path.
+// HandleSandboxEvent is the SandboxEventHandler entrypoint. ADDED
+// events trigger a VM boot for the embedded Sandbox.spec; other
+// types are ignored for now (MODIFIED is unused in v1 since Sandbox
+// specs are immutable; DELETED teardown wiring lands in B5).
 //
-// Spec fields that don't yet have an executor consumer
-// (mounts[], env, ports, gpu_request, isolation) are recorded
-// as span attributes but otherwise ignored. Wiring them lands in
-// later slices alongside Workspace + ingress.
+// When spec.image_ref is non-empty, the executor delegates to its
+// Assembler to pull the image and build the bootable sandbox.Config,
+// then runs the VM with that config. When image_ref is empty (or no
+// Assembler is configured), the executor falls back to the bare
+// baseline Hello — the smoke-test path.
+//
+// Spec fields that don't yet have an executor consumer (mounts[],
+// env, ports, gpu_request, isolation) are recorded as span
+// attributes but otherwise ignored. Wiring them lands in later
+// slices alongside Workspace + ingress.
 //
 // v1 invokes the runner synchronously, which blocks the
 // nodectrlclient receive loop for the duration of the VM boot
-// (~hundreds of ms warm, multiple seconds cold). The
-// DispatchHandler doc-comment claims the handler moves long work
-// off-thread; that becomes true once a real concurrency cap and a
-// DispatchAck RPC land. Until then, the orchestrator scheduler
-// must respect per-host load.
-func (e *Executor) HandleDispatch(
+// (~hundreds of ms warm, multiple seconds cold). Becomes
+// non-blocking once a real concurrency cap and the heartbeat-based
+// reconciler (B4d/B5) land.
+func (e *Executor) HandleSandboxEvent(
 	ctx context.Context,
-	d *nodectrlv1.Dispatch,
+	evt *nodectrlv1.SandboxWatchEvent,
 ) error {
-	assert.True(d != nil,
-		"DispatchHandler must never be called with a nil Dispatch — nodectrlclient filters them upstream")
-	spec := d.GetSpec()
+	assert.True(evt != nil,
+		"SandboxEventHandler must never be called with a nil event — nodectrlclient filters them upstream")
+	if evt.GetType() != sandboxv1.EventType_EVENT_TYPE_ADDED {
+		// MODIFIED/DELETED handling lands with the reconciler.
+		return nil
+	}
+	sb := evt.GetSandbox()
+	assert.True(sb != nil,
+		"SandboxWatchEvent ADDED without a Sandbox payload is an orchestrator bug — the wire schema makes the field optional, but every ADDED code path sets it")
+	uid := sb.GetMetadata().GetUid()
+	spec := sb.GetSpec()
 	assert.True(spec != nil,
-		"Dispatch event without a Spec is an orchestrator bug — the wire schema makes Spec optional, but every code path on the orchestrator side sets it before pushing")
-	ctx, span := trace.Start(ctx, "sandboxexec.dispatch",
+		"Sandbox without a Spec is an orchestrator bug — Launch always composes one before publishing")
+	ctx, span := trace.Start(ctx, "sandboxexec.sandbox_added",
 		trace.WithAttributes(
-			trace.KV{Key: "dispatch.id", Value: d.GetDispatchId()},
+			trace.KV{Key: "sandbox.uid", Value: uid},
 			trace.KV{Key: "spec.image_ref", Value: spec.GetImageRef()},
 			trace.KV{Key: "spec.workspace_uuid", Value: spec.GetWorkspaceUuid()},
 		))
 	defer span.End()
 
 	_, _ = fmt.Fprintf(e.stdout,
-		"daft-sandboxd: dispatch %s spec.workspace=%s image=%s\n",
-		d.GetDispatchId(), spec.GetWorkspaceUuid(), spec.GetImageRef())
+		"daft-sandboxd: sandbox %s spec.workspace=%s image=%s\n",
+		uid, spec.GetWorkspaceUuid(), spec.GetImageRef())
 
 	cfg, unlock, err := e.resolveBootConfig(ctx, spec.GetImageRef())
 	if err != nil {
-		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: dispatch %s: %w", d.GetDispatchId(), err))
+		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
 	}
 	defer unlock()
 
 	if err := e.run(ctx, e.stdout, cfg); err != nil {
-		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: dispatch %s: %w", d.GetDispatchId(), err))
+		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
 	}
 	return nil
 }

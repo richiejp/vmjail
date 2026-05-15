@@ -100,7 +100,7 @@ func runServe(
 		Peers:             peers,
 		Version:           version.Version,
 		HeartbeatInterval: heartbeatInterval,
-		Dispatch:          dispatcher,
+		SandboxEvents:     dispatcher,
 	})
 	if err != nil {
 		return err

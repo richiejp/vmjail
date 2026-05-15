@@ -12,7 +12,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
@@ -25,12 +25,12 @@ import (
 var errUnauthenticated = connect.NewError(connect.CodeUnauthenticated,
 	errors.New("orchestrator: no mTLS peer identity"))
 
-// Dispatcher is the orchestrator-side seam Launch uses to ship a
-// composed SandboxSpec to a sandbox-host. The production
-// implementation is *NodeControlHandler; tests inject fakes that
-// observe what Launch sent without needing a live sandbox stream.
+// Dispatcher is the orchestrator-side seam Launch uses to publish
+// a SandboxWatchEvent to a Node. The production implementation is
+// *NodeControlHandler; tests inject fakes that observe what Launch
+// sent without needing a live Node stream.
 type Dispatcher interface {
-	Dispatch(fp identity.Fingerprint, dispatchID string, spec *nodectrlv1.SandboxSpec) error
+	PublishSandboxEvent(fp identity.Fingerprint, eventType sandboxv1.EventType, sandbox *sandboxv1.Sandbox) error
 }
 
 // WorkspaceCatalogHandler adapts the workspacecatalog.Store to the
@@ -292,7 +292,7 @@ func (h *WorkspaceCatalogHandler) AddPort(
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			errors.New("workspace: port is required"))
 	}
-	if port.GetProtocol() == nodectrlv1.Protocol_PROTOCOL_UNSPECIFIED {
+	if port.GetProtocol() == sandboxv1.Protocol_PROTOCOL_UNSPECIFIED {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			errors.New("workspace: port.protocol must be set"))
 	}
@@ -394,7 +394,7 @@ func (h *WorkspaceCatalogHandler) RemovePort(
 	_ context.Context,
 	req *connect.Request[workspacev1.RemovePortRequest],
 ) (*connect.Response[workspacev1.WorkspaceResponse], error) {
-	if req.Msg.GetProtocol() == nodectrlv1.Protocol_PROTOCOL_UNSPECIFIED {
+	if req.Msg.GetProtocol() == sandboxv1.Protocol_PROTOCOL_UNSPECIFIED {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			errors.New("workspace: protocol must be set"))
 	}
@@ -512,21 +512,24 @@ func (h *WorkspaceCatalogHandler) Launch(
 			fmt.Errorf("workspace: invalid target fingerprint: %w", err))
 	}
 
-	dispatchID := mintWorkspaceUUID()
-	spec := workspaceToSandboxSpec(ws, dispatchID)
-	if dispatchErr := h.dispatcher.Dispatch(targetFP, dispatchID, spec); dispatchErr != nil {
+	sandboxUID := mintWorkspaceUUID()
+	sandbox := workspaceToSandbox(ws, sandboxUID, targetFP)
+	if pubErr := h.dispatcher.PublishSandboxEvent(targetFP, sandboxv1.EventType_EVENT_TYPE_ADDED, sandbox); pubErr != nil {
 		switch {
-		case errors.Is(dispatchErr, ErrSandboxNotConnected):
-			return nil, connect.NewError(connect.CodeFailedPrecondition, dispatchErr)
-		case errors.Is(dispatchErr, ErrDispatchBacklog):
-			return nil, connect.NewError(connect.CodeUnavailable, dispatchErr)
+		case errors.Is(pubErr, ErrNodeNotConnected):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, pubErr)
+		case errors.Is(pubErr, ErrSandboxEventBacklog):
+			return nil, connect.NewError(connect.CodeUnavailable, pubErr)
 		}
-		return nil, connect.NewError(connect.CodeInternal, dispatchErr)
+		return nil, connect.NewError(connect.CodeInternal, pubErr)
 	}
 
 	updated, err := h.store.Update(ws.UUID, func(w *workspacecatalog.Workspace) error {
 		w.Status = workspacecatalog.StatusRunning
-		w.CurrentDispatchID = dispatchID
+		w.CurrentSandbox = &workspacecatalog.SandboxRef{
+			UID:             sandboxUID,
+			NodeFingerprint: targetFP,
+		}
 		return nil
 	})
 	if err != nil {
@@ -538,8 +541,9 @@ func (h *WorkspaceCatalogHandler) Launch(
 }
 
 // Stop transitions a RUNNING or FROZEN workspace to STOPPED and
-// clears the dispatch_id. Catalog-only — the wire teardown signal
-// to the sandbox-host lands in a follow-up sub-slice.
+// clears the current_sandbox ref. Catalog-only — the wire teardown
+// signal to the Node (a SandboxWatchEvent DELETED) follows in B5
+// alongside the reconciler.
 func (h *WorkspaceCatalogHandler) Stop(
 	_ context.Context,
 	req *connect.Request[workspacev1.StopRequest],
@@ -552,7 +556,7 @@ func (h *WorkspaceCatalogHandler) Stop(
 					fmt.Errorf("workspace: cannot stop from status %s", w.Status))
 			}
 			w.Status = workspacecatalog.StatusStopped
-			w.CurrentDispatchID = ""
+			w.CurrentSandbox = nil
 			return nil
 		})
 }
@@ -564,37 +568,65 @@ func launchableStatus(s workspacecatalog.Status) bool {
 	return s == workspacecatalog.StatusReady || s == workspacecatalog.StatusStopped
 }
 
-// workspaceToSandboxSpec composes the wire spec that the sandbox-
-// host's executor consumes. The dispatch_id arg is the orchestrator
-// -minted correlation token Launch echoes back via Workspace.
-// current_dispatch_id; SandboxSpec itself doesn't carry it
-// (the surrounding Dispatch envelope does).
-func workspaceToSandboxSpec(ws workspacecatalog.Workspace, _ string) *nodectrlv1.SandboxSpec {
-	spec := &nodectrlv1.SandboxSpec{
+// workspaceToSandboxSpec composes the wire workload spec that the
+// Node's executor consumes. The caller wraps this in a Sandbox
+// resource (with metadata + status) via workspaceToSandbox.
+func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Fingerprint) *sandboxv1.SandboxSpec {
+	spec := &sandboxv1.SandboxSpec{
 		ImageRef:      ws.ImageRef,
 		WorkspaceUuid: ws.UUID,
+		Node:          &sandboxv1.NodeRef{Fingerprint: nodeFP.String()},
 	}
-	spec.Mounts = make([]*nodectrlv1.Mount, len(ws.Mounts))
+	spec.Mounts = make([]*sandboxv1.Mount, len(ws.Mounts))
 	for i, m := range ws.Mounts {
-		spec.Mounts[i] = &nodectrlv1.Mount{
+		spec.Mounts[i] = &sandboxv1.Mount{
 			Target:   m.Target,
 			Source:   m.Source,
 			ReadOnly: m.ReadOnly,
 		}
 	}
-	spec.Env = make([]*nodectrlv1.EnvVar, len(ws.Env))
+	spec.Env = make([]*sandboxv1.EnvVar, len(ws.Env))
 	for i, e := range ws.Env {
-		spec.Env[i] = &nodectrlv1.EnvVar{Name: e.Name, Value: e.Value}
+		spec.Env[i] = &sandboxv1.EnvVar{Name: e.Name, Value: e.Value}
 	}
-	spec.Ports = make([]*nodectrlv1.PortMapping, len(ws.Ports))
+	spec.Ports = make([]*sandboxv1.PortMapping, len(ws.Ports))
 	for i, p := range ws.Ports {
-		spec.Ports[i] = &nodectrlv1.PortMapping{
+		spec.Ports[i] = &sandboxv1.PortMapping{
 			ContainerPort: p.ContainerPort,
-			Protocol:      nodectrlv1.Protocol(p.Protocol),
+			Protocol:      sandboxv1.Protocol(p.Protocol),
 		}
 	}
 	return spec
 }
+
+// workspaceToSandbox composes the full Sandbox resource Launch
+// publishes to the Node. uid is the minted RFC-4122 v4; the
+// workspace ref + node ref + spec are populated from the workspace
+// snapshot. Initial status.phase is "Pending" — the Node will
+// transition it to Running once the VM boots (B4d).
+func workspaceToSandbox(ws workspacecatalog.Workspace, uid string, nodeFP identity.Fingerprint) *sandboxv1.Sandbox {
+	now := timestamppb.Now()
+	return &sandboxv1.Sandbox{
+		Metadata: &sandboxv1.SandboxMetadata{
+			Uid: uid,
+			Workspace: &sandboxv1.WorkspaceRef{
+				Uuid: ws.UUID,
+				Name: ws.Name,
+			},
+			CreatedAt: now,
+		},
+		Spec: workspaceToSandboxSpec(ws, nodeFP),
+		Status: &sandboxv1.SandboxStatus{
+			Phase:              sandboxPhasePending,
+			LastTransitionTime: now,
+		},
+	}
+}
+
+// sandboxPhasePending is the PascalCase phase token assigned when
+// the orchestrator mints a Sandbox before the Node has reported
+// liveness for it. See proto/sandbox/v1/sandbox.proto.
+const sandboxPhasePending = "Pending"
 
 // mapCatalogErr maps workspacecatalog sentinel errors to Connect
 // codes. Returns nil unchanged so handlers can use it
@@ -652,34 +684,47 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 		Missing:                  append([]string(nil), ws.Missing...),
 		CreatedAt:                timestamppb.New(ws.CreatedAt),
 		UpdatedAt:                timestamppb.New(ws.UpdatedAt),
-		CurrentDispatchId:        ws.CurrentDispatchID,
+		CurrentSandbox:           sandboxRefToProto(ws.CurrentSandbox),
 	}
 	if !ws.LockExpiresAt.IsZero() {
 		out.LockExpiresAt = timestamppb.New(ws.LockExpiresAt)
 	}
-	out.Mounts = make([]*nodectrlv1.Mount, 0, len(ws.Mounts))
+	out.Mounts = make([]*sandboxv1.Mount, 0, len(ws.Mounts))
 	for _, m := range ws.Mounts {
-		out.Mounts = append(out.Mounts, &nodectrlv1.Mount{
+		out.Mounts = append(out.Mounts, &sandboxv1.Mount{
 			Target:   m.Target,
 			Source:   m.Source,
 			ReadOnly: m.ReadOnly,
 		})
 	}
-	out.Env = make([]*nodectrlv1.EnvVar, 0, len(ws.Env))
+	out.Env = make([]*sandboxv1.EnvVar, 0, len(ws.Env))
 	for _, e := range ws.Env {
-		out.Env = append(out.Env, &nodectrlv1.EnvVar{
+		out.Env = append(out.Env, &sandboxv1.EnvVar{
 			Name:  e.Name,
 			Value: e.Value,
 		})
 	}
-	out.Ports = make([]*nodectrlv1.PortMapping, 0, len(ws.Ports))
+	out.Ports = make([]*sandboxv1.PortMapping, 0, len(ws.Ports))
 	for _, p := range ws.Ports {
-		out.Ports = append(out.Ports, &nodectrlv1.PortMapping{
+		out.Ports = append(out.Ports, &sandboxv1.PortMapping{
 			ContainerPort: p.ContainerPort,
-			Protocol:      nodectrlv1.Protocol(p.Protocol),
+			Protocol:      sandboxv1.Protocol(p.Protocol),
 		})
 	}
 	return out
+}
+
+// sandboxRefToProto projects a catalog SandboxRef onto the wire
+// shape. Nil maps to nil so a never-launched workspace serialises
+// with an unset current_sandbox field.
+func sandboxRefToProto(ref *workspacecatalog.SandboxRef) *sandboxv1.SandboxRef {
+	if ref == nil {
+		return nil
+	}
+	return &sandboxv1.SandboxRef{
+		Uid:  ref.UID,
+		Node: &sandboxv1.NodeRef{Fingerprint: ref.NodeFingerprint.String()},
+	}
 }
 
 // fingerprintStringOrEmpty renders a Fingerprint as its hex string,

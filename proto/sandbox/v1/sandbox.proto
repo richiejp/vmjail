@@ -1,0 +1,217 @@
+// Sandbox is one unit of execution: 1 VM × 1 container in
+// STRICT isolation; packed into a shared VM in SHARED isolation.
+// It is derived from a Workspace at Launch time and bound to a
+// single Node; lifecycle spans Pending → Running → Exited/Killed.
+//
+// Identity:
+//   - metadata.uid is the canonical, immutable id (minted at
+//     Launch time, RFC-4122 v4). Replaces the old dispatch_id.
+//   - metadata.workspace_ref back-points to the source Workspace.
+//   - spec.node_ref records the Node the scheduler picked.
+//
+// Wire compatibility: fields are added at the tail; never
+// renumbered. See ARCHITECTURE.md for the resource model and
+// PLAN.md Phase B4 for the slicing.
+syntax = "proto3";
+
+package daft.sandbox.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1;sandboxv1";
+
+// Sandbox is the orchestrator's record of one execution instance.
+message Sandbox {
+  SandboxMetadata metadata = 1;
+  SandboxSpec spec = 2;
+  SandboxStatus status = 3;
+}
+
+// SandboxMetadata is identity + auditing. Immutable after Launch
+// except for deletion_timestamp.
+message SandboxMetadata {
+  // Server-assigned, immutable. RFC-4122 v4. Replaces the old
+  // Dispatch.dispatch_id.
+  string uid = 1;
+  // The Workspace this Sandbox derives from.
+  WorkspaceRef workspace = 2;
+  // When Launch minted this Sandbox.
+  google.protobuf.Timestamp created_at = 3;
+  // Set when the orchestrator initiates teardown with a graceful
+  // window; the Sandbox is only removed once teardown completes.
+  // Unset for in-flight or already-terminated Sandboxes.
+  google.protobuf.Timestamp deletion_timestamp = 4;
+}
+
+// SandboxSpec is the dispatchable workload. The orchestrator
+// composes a SandboxSpec from a Workspace + scheduler decision
+// at Launch time. Immutable after creation — a Workspace edit
+// requires a fresh Launch / Sandbox.
+message SandboxSpec {
+  // OCI image reference (registry/repo:tag or @sha256:...).
+  // Resolved against the Node's imagestore on bring-up.
+  string image_ref = 1;
+  // Filesystem mounts visible inside the VM. Order is irrelevant;
+  // the executor may sort by target for deterministic mounting.
+  repeated Mount mounts = 2;
+  // Environment variables seen by the container's entrypoint.
+  // Last-write-wins on duplicate names (matches Docker/runc).
+  repeated EnvVar env = 3;
+  // Container TCP/UDP ports the workload binds. Phase C wires
+  // these back through the orchestrator's ingress.
+  repeated PortMapping ports = 4;
+  // Optional GPU reservation. Unset (or zero count) ⇒ CPU-only.
+  GpuRequest gpu_request = 5;
+  // Sharing policy. UNSPECIFIED ⇒ scheduler-default (currently
+  // SHARED with other Sandboxes owned by the same identity).
+  Isolation isolation = 6;
+  // The Node the scheduler bound this Sandbox to. Set at Launch
+  // time; never rebinds (a re-Launch creates a fresh Sandbox).
+  NodeRef node = 7;
+  // Workspace this Sandbox instantiates. Carried alongside the
+  // metadata.workspace ref for executor convenience (scoping
+  // filesystem state, port labels, teardown).
+  string workspace_uuid = 8;
+}
+
+// SandboxStatus is the orchestrator's observed runtime state.
+// Controller-owned; clients read but don't write.
+message SandboxStatus {
+  // PascalCase phase token. Reserved values:
+  //   "Pending"  — bound but not yet running on the Node.
+  //   "Running"  — Node reports the container as live.
+  //   "Exited"   — workload exited normally.
+  //   "Killed"   — workload was killed (OOM, signal, host crash).
+  //   "Unknown"  — Node has not reported recently.
+  // PascalCase string (not enum) for forward-compat: new phases
+  // don't break old readers.
+  string phase = 1;
+  // Set once phase ∈ {Exited, Killed}.
+  int32 exit_code = 2;
+  // Standard K8s-style condition array. Each entry is one
+  // dimension of "what is true about this Sandbox right now".
+  repeated Condition conditions = 3;
+  // Wall-clock time of the last phase or condition transition.
+  google.protobuf.Timestamp last_transition_time = 4;
+}
+
+// Mount is one bind-style mount inside the VM.
+message Mount {
+  // In-VM mount point, absolute (e.g. "/workspace"). The
+  // executor rejects relative or empty targets.
+  string target = 1;
+  // Logical source identifier. Resolution is Node policy:
+  // a workspace UUID maps to the daft-fuse view of that
+  // workspace; a registered host-path tag maps to a pre-
+  // approved bind source. Free-form host paths are not
+  // accepted — adoption (Phase F1) is how user-host
+  // directories enter the namespace.
+  string source = 2;
+  // Mount read-only. Defaults to false (read-write) on the wire.
+  bool read_only = 3;
+}
+
+// EnvVar is one name=value pair forwarded into the container.
+message EnvVar {
+  // Variable name. Empty names are rejected by the executor.
+  string name = 1;
+  // Variable value. Allowed to be empty; the variable is still set.
+  string value = 2;
+}
+
+// Protocol selects the transport for a PortMapping.
+enum Protocol {
+  PROTOCOL_UNSPECIFIED = 0;
+  PROTOCOL_TCP = 1;
+  PROTOCOL_UDP = 2;
+}
+
+// PortMapping declares a port the container listens on.
+// The reverse direction (host-port allocation) is owned by the
+// orchestrator's ingress (Phase C).
+message PortMapping {
+  // Container listen port. Zero means "any free port"; the
+  // ingress reports back the chosen value.
+  uint32 container_port = 1;
+  // Transport. UNSPECIFIED is rejected — every PortMapping must
+  // declare its protocol explicitly so ingress can shape correctly.
+  Protocol protocol = 2;
+}
+
+// GpuRequest is the GPU reservation attached to a SandboxSpec.
+// Wire-level placeholder for Slice D1 (Node GPU advertisement
+// + scheduler).
+message GpuRequest {
+  // Number of logical GPUs required. Zero ⇒ no GPU.
+  uint32 count = 1;
+  // Minimum VRAM per GPU, in bytes. Zero ⇒ no minimum.
+  uint64 min_vram_bytes = 2;
+}
+
+// Isolation is the per-Sandbox sharing policy.
+enum Isolation {
+  ISOLATION_UNSPECIFIED = 0;
+  // SHARED: pack into an existing compatible VM when one is
+  // available. Default for CPU-mode Sandboxes.
+  ISOLATION_SHARED = 1;
+  // STRICT: dedicate a fresh VM to this Sandbox. Required for
+  // GPU Sandboxes that don't opt in to sharing (Slice D4).
+  ISOLATION_STRICT = 2;
+}
+
+// WorkspaceRef points at a Workspace by its canonical UUID.
+// Denormalised name allowed for display; uuid is authoritative.
+message WorkspaceRef {
+  string uuid = 1;
+  string name = 2;
+}
+
+// NodeRef points at a Node by its mTLS leaf-cert fingerprint.
+message NodeRef {
+  string fingerprint = 1;
+}
+
+// SandboxRef points at a Sandbox by its uid and the Node it's
+// bound to. Used in Workspace.current_sandbox and elsewhere.
+message SandboxRef {
+  string uid = 1;
+  NodeRef node = 2;
+}
+
+// EventType is the K8s-style watch discriminator. Carried on
+// SandboxWatchEvent so a single stream replays creates / updates
+// / deletes with one envelope.
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_ADDED = 1;
+  EVENT_TYPE_MODIFIED = 2;
+  EVENT_TYPE_DELETED = 3;
+  // BOOKMARK advances a watcher's cursor without carrying a
+  // real change. Used for resumable streams.
+  EVENT_TYPE_BOOKMARK = 4;
+}
+
+// Condition is the standard K8s-style status entry. type +
+// reason are PascalCase machine-readable tokens; message is
+// human prose.
+message Condition {
+  // PascalCase type identifier. Sandbox condition types:
+  //   "Scheduled"   — bound to a Node.
+  //   "Started"     — container started inside the VM.
+  //   "Ready"       — container reports ready (e.g. probe pass).
+  //   "Reconciled"  — observed state matches spec.
+  // Readers ignore unknown types.
+  string type = 1;
+  ConditionStatus status = 2;
+  // PascalCase machine-readable reason for the current status.
+  string reason = 3;
+  string message = 4;
+  google.protobuf.Timestamp last_transition_time = 5;
+}
+
+enum ConditionStatus {
+  CONDITION_STATUS_UNSPECIFIED = 0;
+  CONDITION_STATUS_TRUE = 1;
+  CONDITION_STATUS_FALSE = 2;
+  CONDITION_STATUS_UNKNOWN = 3;
+}

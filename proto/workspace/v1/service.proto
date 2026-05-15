@@ -29,7 +29,7 @@ syntax = "proto3";
 
 package daft.workspace.v1;
 
-import "nodectrl/v1/nodectrl.proto";
+import "sandbox/v1/sandbox.proto";
 import "workspace/v1/catalog.proto";
 
 option go_package = "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1";
@@ -171,17 +171,17 @@ message SetTargetRequest {
 
 message AddMountRequest {
   WorkspaceHandle handle = 1;
-  daft.nodectrl.v1.Mount mount = 2;
+  daft.sandbox.v1.Mount mount = 2;
 }
 
 message AddEnvRequest {
   WorkspaceHandle handle = 1;
-  daft.nodectrl.v1.EnvVar env = 2;
+  daft.sandbox.v1.EnvVar env = 2;
 }
 
 message AddPortRequest {
   WorkspaceHandle handle = 1;
-  daft.nodectrl.v1.PortMapping port = 2;
+  daft.sandbox.v1.PortMapping port = 2;
 }
 
 message RemoveMountRequest {
@@ -202,7 +202,7 @@ message RemovePortRequest {
   // (not the port alone) is the key because the same container
   // port can be bound on both TCP and UDP.
   uint32 container_port = 2;
-  daft.nodectrl.v1.Protocol protocol = 3;
+  daft.sandbox.v1.Protocol protocol = 3;
 }
 
 message ValidateRequest {

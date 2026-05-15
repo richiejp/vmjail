@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/orchestrator"
@@ -26,15 +26,15 @@ type catalogFakeDispatcher struct {
 }
 
 type catalogDispatchCall struct {
-	fp         identity.Fingerprint
-	dispatchID string
-	spec       *nodectrlv1.SandboxSpec
+	fp        identity.Fingerprint
+	eventType sandboxv1.EventType
+	sandbox   *sandboxv1.Sandbox
 }
 
-func (f *catalogFakeDispatcher) Dispatch(fp identity.Fingerprint, dispatchID string, spec *nodectrlv1.SandboxSpec) error {
+func (f *catalogFakeDispatcher) PublishSandboxEvent(fp identity.Fingerprint, eventType sandboxv1.EventType, sandbox *sandboxv1.Sandbox) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, catalogDispatchCall{fp: fp, dispatchID: dispatchID, spec: spec})
+	f.calls = append(f.calls, catalogDispatchCall{fp: fp, eventType: eventType, sandbox: sandbox})
 	return nil
 }
 
@@ -194,13 +194,13 @@ func TestParsePortSpecCoversTCPAndUDPDefaultsAndErrors(t *testing.T) {
 	cases := []struct {
 		in        string
 		wantPort  uint32
-		wantProto nodectrlv1.Protocol
+		wantProto sandboxv1.Protocol
 		wantErr   bool
 	}{
-		{"3000", 3000, nodectrlv1.Protocol_PROTOCOL_TCP, false},
-		{"443/tcp", 443, nodectrlv1.Protocol_PROTOCOL_TCP, false},
-		{"53/udp", 53, nodectrlv1.Protocol_PROTOCOL_UDP, false},
-		{"80/TCP", 80, nodectrlv1.Protocol_PROTOCOL_TCP, false},
+		{"3000", 3000, sandboxv1.Protocol_PROTOCOL_TCP, false},
+		{"443/tcp", 443, sandboxv1.Protocol_PROTOCOL_TCP, false},
+		{"53/udp", 53, sandboxv1.Protocol_PROTOCOL_UDP, false},
+		{"80/TCP", 80, sandboxv1.Protocol_PROTOCOL_TCP, false},
 		{"80/sctp", 0, 0, true},
 		{"notanumber", 0, 0, true},
 		{"100000", 0, 0, true},
@@ -312,17 +312,17 @@ func (h *workspaceE2EHarness) assertLaunchAndDispatch() {
 	if !ok {
 		h.t.Fatal("fake dispatcher saw no calls")
 	}
-	if call.spec.GetImageRef() != testCatalogImage {
-		h.t.Errorf("spec.image_ref = %q, want %q", call.spec.GetImageRef(), testCatalogImage)
+	if call.sandbox.GetSpec().GetImageRef() != testCatalogImage {
+		h.t.Errorf("spec.image_ref = %q, want %q", call.sandbox.GetSpec().GetImageRef(), testCatalogImage)
 	}
-	if len(call.spec.GetMounts()) != 1 || call.spec.GetMounts()[0].GetTarget() != testE2EMountTarget {
-		h.t.Errorf("spec.mounts = %v, want [%s]", call.spec.GetMounts(), testE2EMountTarget)
+	if len(call.sandbox.GetSpec().GetMounts()) != 1 || call.sandbox.GetSpec().GetMounts()[0].GetTarget() != testE2EMountTarget {
+		h.t.Errorf("spec.mounts = %v, want [%s]", call.sandbox.GetSpec().GetMounts(), testE2EMountTarget)
 	}
-	if len(call.spec.GetEnv()) != 1 || call.spec.GetEnv()[0].GetName() != "NODE_ENV" {
-		h.t.Errorf("spec.env = %v, want [NODE_ENV]", call.spec.GetEnv())
+	if len(call.sandbox.GetSpec().GetEnv()) != 1 || call.sandbox.GetSpec().GetEnv()[0].GetName() != "NODE_ENV" {
+		h.t.Errorf("spec.env = %v, want [NODE_ENV]", call.sandbox.GetSpec().GetEnv())
 	}
-	if len(call.spec.GetPorts()) != 1 || call.spec.GetPorts()[0].GetContainerPort() != 3000 {
-		h.t.Errorf("spec.ports = %v, want [3000]", call.spec.GetPorts())
+	if len(call.sandbox.GetSpec().GetPorts()) != 1 || call.sandbox.GetSpec().GetPorts()[0].GetContainerPort() != 3000 {
+		h.t.Errorf("spec.ports = %v, want [3000]", call.sandbox.GetSpec().GetPorts())
 	}
 }
 
@@ -508,9 +508,9 @@ func TestWriteWorkspaceSummaryWithFullState(t *testing.T) {
 	var buf strings.Builder
 	err := writeWorkspaceSummary(&buf, &workspacev1.Workspace{
 		Uuid: testRenderUUID, Name: "ws", ImageRef: testCatalogImage,
-		Mounts:  []*nodectrlv1.Mount{{Target: "/x"}, {Target: "/y", ReadOnly: true}},
-		Env:     []*nodectrlv1.EnvVar{{Name: "K"}},
-		Ports:   []*nodectrlv1.PortMapping{{ContainerPort: 80, Protocol: nodectrlv1.Protocol_PROTOCOL_TCP}},
+		Mounts:  []*sandboxv1.Mount{{Target: "/x"}, {Target: "/y", ReadOnly: true}},
+		Env:     []*sandboxv1.EnvVar{{Name: "K"}},
+		Ports:   []*sandboxv1.PortMapping{{ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP}},
 		Missing: []string{"target"},
 	})
 	if err != nil {

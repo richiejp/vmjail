@@ -11,26 +11,38 @@ import (
 	"github.com/richiejp/darkaifactory/internal/assert"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
 )
 
-// dispatchBacklog is the per-stream Dispatch buffer depth. Bounded
-// so a stalled sandbox can't grow the orchestrator's memory; a
-// caller that overflows the buffer gets ErrDispatchBacklog and must
-// retry or pick another sandbox.
-const dispatchBacklog = 16
+// sandboxEventBacklog is the per-stream SandboxWatchEvent buffer
+// depth. Bounded so a stalled Node can't grow the orchestrator's
+// memory; a caller that overflows the buffer gets
+// ErrSandboxEventBacklog and must retry or pick another Node.
+const sandboxEventBacklog = 16
 
-// ErrSandboxNotConnected is returned by Dispatch when the addressed
-// fingerprint has no open RegisterNode stream. The caller must
-// pick a different sandbox or wait for the original to reconnect.
-var ErrSandboxNotConnected = errors.New("orchestrator: sandbox not connected")
+// ErrNodeNotConnected is returned by PublishSandboxEvent when the
+// addressed fingerprint has no open RegisterNode stream. The caller
+// must pick a different Node or wait for the original to reconnect.
+//
+// Aliased to ErrSandboxNotConnected for the duration of the B4
+// transition so callers can rename in their own time.
+var ErrNodeNotConnected = errors.New("orchestrator: node not connected")
 
-// ErrDispatchBacklog is returned by Dispatch when the sandbox's
-// stream send buffer is full — the sandboxd is alive but slower
-// than the dispatch rate. The orchestrator scheduler should treat
-// this like a transient failure.
-var ErrDispatchBacklog = errors.New("orchestrator: dispatch backlog full")
+// ErrSandboxNotConnected is the previous name of ErrNodeNotConnected.
+// Retained as an alias so call sites that haven't been swept yet
+// keep compiling. Remove in a future cleanup slice.
+var ErrSandboxNotConnected = ErrNodeNotConnected
+
+// ErrSandboxEventBacklog is returned by PublishSandboxEvent when
+// the Node's stream send buffer is full — the sandboxd is alive but
+// slower than the publish rate. Callers should treat this like a
+// transient failure.
+var ErrSandboxEventBacklog = errors.New("orchestrator: sandbox-event backlog full")
+
+// ErrDispatchBacklog is the previous name; alias retained.
+var ErrDispatchBacklog = ErrSandboxEventBacklog
 
 // NodeControlHandler adapts the nodectrl.Registry to the
 // Connect-RPC NodeControlService surface. Peer identity for
@@ -41,7 +53,7 @@ type NodeControlHandler struct {
 	reg *nodectrl.Registry
 
 	mu      sync.Mutex
-	streams map[identity.Fingerprint]chan *nodectrlv1.RegisterEvent
+	streams map[identity.Fingerprint]chan *nodectrlv1.NodeEvent
 }
 
 // NewSandboxControlHandler returns a handler that records
@@ -53,34 +65,35 @@ func NewSandboxControlHandler(reg *nodectrl.Registry) (*NodeControlHandler, erro
 	}
 	return &NodeControlHandler{
 		reg:     reg,
-		streams: map[identity.Fingerprint]chan *nodectrlv1.RegisterEvent{},
+		streams: map[identity.Fingerprint]chan *nodectrlv1.NodeEvent{},
 	}, nil
 }
 
-// Dispatch pushes a Dispatch event to the addressed sandbox's
-// live RegisterNode stream. Returns ErrSandboxNotConnected if
-// the sandbox has no open stream; ErrDispatchBacklog if the
+// PublishSandboxEvent pushes a SandboxWatchEvent to the addressed
+// Node's live RegisterNode stream. Returns ErrNodeNotConnected if
+// the Node has no open stream; ErrSandboxEventBacklog if the
 // per-stream buffer is full.
-func (h *NodeControlHandler) Dispatch(
+func (h *NodeControlHandler) PublishSandboxEvent(
 	fp identity.Fingerprint,
-	dispatchID string,
-	spec *nodectrlv1.SandboxSpec,
+	eventType sandboxv1.EventType,
+	sandbox *sandboxv1.Sandbox,
 ) error {
-	assert.True(spec != nil,
-		"Dispatch requires a non-nil spec; a wiring bug here would push a nil envelope onto the stream and crash the sandboxd")
-	assert.True(dispatchID != "",
-		"Dispatch requires a non-empty dispatch_id; the orchestrator scheduler is the sole caller and must mint one before calling")
+	assert.True(sandbox != nil,
+		"PublishSandboxEvent requires a non-nil Sandbox; a wiring bug here would push a nil envelope onto the stream and crash the sandboxd")
+	uid := sandbox.GetMetadata().GetUid()
+	assert.True(uid != "",
+		"PublishSandboxEvent requires a non-empty Sandbox.metadata.uid; the orchestrator scheduler is the sole caller and must mint one before calling")
 	h.mu.Lock()
 	ch, ok := h.streams[fp]
 	h.mu.Unlock()
 	if !ok {
-		return ErrSandboxNotConnected
+		return ErrNodeNotConnected
 	}
-	ev := &nodectrlv1.RegisterEvent{
-		Event: &nodectrlv1.RegisterEvent_Dispatch{
-			Dispatch: &nodectrlv1.Dispatch{
-				DispatchId: dispatchID,
-				Spec:       spec,
+	ev := &nodectrlv1.NodeEvent{
+		Event: &nodectrlv1.NodeEvent_Sandbox{
+			Sandbox: &nodectrlv1.SandboxWatchEvent{
+				Type:    eventType,
+				Sandbox: sandbox,
 			},
 		},
 	}
@@ -88,12 +101,12 @@ func (h *NodeControlHandler) Dispatch(
 	case ch <- ev:
 		return nil
 	default:
-		return ErrDispatchBacklog
+		return ErrSandboxEventBacklog
 	}
 }
 
-func (h *NodeControlHandler) attachStream(fp identity.Fingerprint) chan *nodectrlv1.RegisterEvent {
-	ch := make(chan *nodectrlv1.RegisterEvent, dispatchBacklog)
+func (h *NodeControlHandler) attachStream(fp identity.Fingerprint) chan *nodectrlv1.NodeEvent {
+	ch := make(chan *nodectrlv1.NodeEvent, sandboxEventBacklog)
 	h.mu.Lock()
 	h.streams[fp] = ch
 	h.mu.Unlock()
@@ -114,7 +127,7 @@ func (h *NodeControlHandler) detachStream(fp identity.Fingerprint) {
 func (h *NodeControlHandler) RegisterNode(
 	ctx context.Context,
 	req *connect.Request[nodectrlv1.RegisterNodeRequest],
-	stream *connect.ServerStream[nodectrlv1.RegisterEvent],
+	stream *connect.ServerStream[nodectrlv1.NodeEvent],
 ) error {
 	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
 	if !ok {
@@ -140,8 +153,8 @@ func (h *NodeControlHandler) RegisterNode(
 	events := h.attachStream(fp)
 	defer h.detachStream(fp)
 
-	ready := &nodectrlv1.RegisterEvent{
-		Event: &nodectrlv1.RegisterEvent_Ready{
+	ready := &nodectrlv1.NodeEvent{
+		Event: &nodectrlv1.NodeEvent_Ready{
 			Ready: &nodectrlv1.SubscriptionReady{
 				AcceptedAt:      timestamppb.New(acceptedAt),
 				ProtocolVersion: localProtocolVersionProto(),

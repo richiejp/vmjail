@@ -35,7 +35,7 @@ import (
 // enough to be invisible in the trace tail.
 const DefaultHeartbeatInterval = 5 * time.Second
 
-// DispatchHandler is invoked once per Dispatch event the
+// SandboxEventHandler is invoked once per SandboxWatchEvent the
 // orchestrator pushes on the RegisterNode stream. Implementations
 // run on the stream's consumer goroutine; long-running work should
 // be moved off-thread by the handler itself.
@@ -44,19 +44,18 @@ const DefaultHeartbeatInterval = 5 * time.Second
 // surfaces the error to its caller, and the orchestrator's `defer
 // Forget` releases the entry. Non-error returns continue to drain
 // the stream.
-type DispatchHandler interface {
-	HandleDispatch(ctx context.Context, dispatch *nodectrlv1.Dispatch) error
+type SandboxEventHandler interface {
+	HandleSandboxEvent(ctx context.Context, evt *nodectrlv1.SandboxWatchEvent) error
 }
 
-// DispatchHandlerFunc adapts a plain function to the
-// DispatchHandler interface, mirroring net/http's HandlerFunc.
-// Useful for tests and for trivial handlers that don't carry
-// state.
-type DispatchHandlerFunc func(ctx context.Context, dispatch *nodectrlv1.Dispatch) error
+// SandboxEventHandlerFunc adapts a plain function to the
+// SandboxEventHandler interface, mirroring net/http's HandlerFunc.
+// Useful for tests and for trivial handlers that don't carry state.
+type SandboxEventHandlerFunc func(ctx context.Context, evt *nodectrlv1.SandboxWatchEvent) error
 
-// HandleDispatch satisfies DispatchHandler.
-func (f DispatchHandlerFunc) HandleDispatch(ctx context.Context, d *nodectrlv1.Dispatch) error {
-	return f(ctx, d)
+// HandleSandboxEvent satisfies SandboxEventHandler.
+func (f SandboxEventHandlerFunc) HandleSandboxEvent(ctx context.Context, evt *nodectrlv1.SandboxWatchEvent) error {
+	return f(ctx, evt)
 }
 
 // Config is everything the client needs to dial the orchestrator
@@ -76,13 +75,13 @@ type Config struct {
 	// HeartbeatInterval is the ticker cadence. Zero ⇒
 	// DefaultHeartbeatInterval.
 	HeartbeatInterval time.Duration
-	// Dispatch is the seam invoked on every Dispatch event from the
-	// orchestrator. Nil ⇒ events are accepted off the wire and
-	// dropped silently — used when running sandboxd in pure
-	// register-and-heartbeat mode (e.g. operator inspecting a
+	// SandboxEvents is the seam invoked on every SandboxWatchEvent
+	// pushed by the orchestrator. Nil ⇒ events are drained off the
+	// wire and dropped silently — used when running sandboxd in
+	// pure register-and-heartbeat mode (e.g. operator inspecting a
 	// fleet). Production wiring sets this to an executor that
 	// drives the Hello / container pipeline.
-	Dispatch DispatchHandler
+	SandboxEvents SandboxEventHandler
 }
 
 // Client wraps a generated NodeControlServiceClient with a
@@ -175,7 +174,7 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources nodectrl.Resour
 	}
 
 	streamErr := make(chan error, 1)
-	go consumeStream(ctx, stream, c.cfg.Dispatch, streamErr)
+	go consumeStream(ctx, stream, c.cfg.SandboxEvents, streamErr)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -198,24 +197,24 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources nodectrl.Resour
 	}
 }
 
-// consumeStream drains the RegisterNode stream for the lifetime
-// of the registration. Dispatch events go to handler when non-nil;
+// consumeStream drains the RegisterNode stream for the lifetime of
+// the registration. SandboxWatchEvents go to handler when non-nil;
 // nil handler drops them silently (register-only mode). A handler
 // error tears the stream down by surfacing through errCh.
 func consumeStream(
 	ctx context.Context,
-	stream *connect.ServerStreamForClient[nodectrlv1.RegisterEvent],
-	handler DispatchHandler,
+	stream *connect.ServerStreamForClient[nodectrlv1.NodeEvent],
+	handler SandboxEventHandler,
 	errCh chan<- error,
 ) {
 	//daft:lint:disable=forloopbound reason="bounded by stream lifetime; Receive returns false when the server closes or ctx cancels the underlying connection"
 	for stream.Receive() {
-		d := stream.Msg().GetDispatch()
-		if d == nil || handler == nil {
+		evt := stream.Msg().GetSandbox()
+		if evt == nil || handler == nil {
 			continue
 		}
-		if err := handler.HandleDispatch(ctx, d); err != nil {
-			errCh <- fmt.Errorf("nodectrlclient: dispatch handler: %w", err)
+		if err := handler.HandleSandboxEvent(ctx, evt); err != nil {
+			errCh <- fmt.Errorf("nodectrlclient: sandbox-event handler: %w", err)
 			return
 		}
 	}

@@ -25,6 +25,7 @@
 package nodectrlv1
 
 import (
+	v1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
@@ -39,110 +40,6 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
-
-// Protocol selects the transport for a PortMapping.
-type Protocol int32
-
-const (
-	Protocol_PROTOCOL_UNSPECIFIED Protocol = 0
-	Protocol_PROTOCOL_TCP         Protocol = 1
-	Protocol_PROTOCOL_UDP         Protocol = 2
-)
-
-// Enum value maps for Protocol.
-var (
-	Protocol_name = map[int32]string{
-		0: "PROTOCOL_UNSPECIFIED",
-		1: "PROTOCOL_TCP",
-		2: "PROTOCOL_UDP",
-	}
-	Protocol_value = map[string]int32{
-		"PROTOCOL_UNSPECIFIED": 0,
-		"PROTOCOL_TCP":         1,
-		"PROTOCOL_UDP":         2,
-	}
-)
-
-func (x Protocol) Enum() *Protocol {
-	p := new(Protocol)
-	*p = x
-	return p
-}
-
-func (x Protocol) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (Protocol) Descriptor() protoreflect.EnumDescriptor {
-	return file_nodectrl_v1_nodectrl_proto_enumTypes[0].Descriptor()
-}
-
-func (Protocol) Type() protoreflect.EnumType {
-	return &file_nodectrl_v1_nodectrl_proto_enumTypes[0]
-}
-
-func (x Protocol) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use Protocol.Descriptor instead.
-func (Protocol) EnumDescriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{0}
-}
-
-// Isolation is the per-workspace sharing policy.
-type Isolation int32
-
-const (
-	Isolation_ISOLATION_UNSPECIFIED Isolation = 0
-	// SHARED: pack into an existing compatible VM when one is
-	// available. Default for CPU-mode workspaces.
-	Isolation_ISOLATION_SHARED Isolation = 1
-	// STRICT: dedicate a fresh VM to this workspace. Required for
-	// GPU workspaces that don't opt in to sharing (Slice D4).
-	Isolation_ISOLATION_STRICT Isolation = 2
-)
-
-// Enum value maps for Isolation.
-var (
-	Isolation_name = map[int32]string{
-		0: "ISOLATION_UNSPECIFIED",
-		1: "ISOLATION_SHARED",
-		2: "ISOLATION_STRICT",
-	}
-	Isolation_value = map[string]int32{
-		"ISOLATION_UNSPECIFIED": 0,
-		"ISOLATION_SHARED":      1,
-		"ISOLATION_STRICT":      2,
-	}
-)
-
-func (x Isolation) Enum() *Isolation {
-	p := new(Isolation)
-	*p = x
-	return p
-}
-
-func (x Isolation) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (Isolation) Descriptor() protoreflect.EnumDescriptor {
-	return file_nodectrl_v1_nodectrl_proto_enumTypes[1].Descriptor()
-}
-
-func (Isolation) Type() protoreflect.EnumType {
-	return &file_nodectrl_v1_nodectrl_proto_enumTypes[1]
-}
-
-func (x Isolation) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use Isolation.Descriptor instead.
-func (Isolation) EnumDescriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{1}
-}
 
 // ProtocolVersion is the wire-protocol version exchanged at
 // RegisterNode time. The major component is the wire-compat
@@ -336,33 +233,35 @@ func (x *RegisterNodeRequest) GetProtocolVersion() *ProtocolVersion {
 	return nil
 }
 
-// RegisterEvent is the envelope for events pushed on the
-// RegisterNode stream.
-type RegisterEvent struct {
+// NodeEvent is the envelope for events pushed on the RegisterNode
+// stream. K8s-style: one server-stream replays creates / updates
+// / deletes via a single watch envelope plus the K8s-shaped
+// SubscriptionReady ack on the first event.
+type NodeEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Event:
 	//
-	//	*RegisterEvent_Ready
-	//	*RegisterEvent_Dispatch
-	Event         isRegisterEvent_Event `protobuf_oneof:"event"`
+	//	*NodeEvent_Ready
+	//	*NodeEvent_Sandbox
+	Event         isNodeEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *RegisterEvent) Reset() {
-	*x = RegisterEvent{}
+func (x *NodeEvent) Reset() {
+	*x = NodeEvent{}
 	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *RegisterEvent) String() string {
+func (x *NodeEvent) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*RegisterEvent) ProtoMessage() {}
+func (*NodeEvent) ProtoMessage() {}
 
-func (x *RegisterEvent) ProtoReflect() protoreflect.Message {
+func (x *NodeEvent) ProtoReflect() protoreflect.Message {
 	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -374,79 +273,87 @@ func (x *RegisterEvent) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use RegisterEvent.ProtoReflect.Descriptor instead.
-func (*RegisterEvent) Descriptor() ([]byte, []int) {
+// Deprecated: Use NodeEvent.ProtoReflect.Descriptor instead.
+func (*NodeEvent) Descriptor() ([]byte, []int) {
 	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *RegisterEvent) GetEvent() isRegisterEvent_Event {
+func (x *NodeEvent) GetEvent() isNodeEvent_Event {
 	if x != nil {
 		return x.Event
 	}
 	return nil
 }
 
-func (x *RegisterEvent) GetReady() *SubscriptionReady {
+func (x *NodeEvent) GetReady() *SubscriptionReady {
 	if x != nil {
-		if x, ok := x.Event.(*RegisterEvent_Ready); ok {
+		if x, ok := x.Event.(*NodeEvent_Ready); ok {
 			return x.Ready
 		}
 	}
 	return nil
 }
 
-func (x *RegisterEvent) GetDispatch() *Dispatch {
+func (x *NodeEvent) GetSandbox() *SandboxWatchEvent {
 	if x != nil {
-		if x, ok := x.Event.(*RegisterEvent_Dispatch); ok {
-			return x.Dispatch
+		if x, ok := x.Event.(*NodeEvent_Sandbox); ok {
+			return x.Sandbox
 		}
 	}
 	return nil
 }
 
-type isRegisterEvent_Event interface {
-	isRegisterEvent_Event()
+type isNodeEvent_Event interface {
+	isNodeEvent_Event()
 }
 
-type RegisterEvent_Ready struct {
+type NodeEvent_Ready struct {
 	Ready *SubscriptionReady `protobuf:"bytes,1,opt,name=ready,proto3,oneof"`
 }
 
-type RegisterEvent_Dispatch struct {
-	Dispatch *Dispatch `protobuf:"bytes,2,opt,name=dispatch,proto3,oneof"`
+type NodeEvent_Sandbox struct {
+	Sandbox *SandboxWatchEvent `protobuf:"bytes,2,opt,name=sandbox,proto3,oneof"`
 }
 
-func (*RegisterEvent_Ready) isRegisterEvent_Event() {}
+func (*NodeEvent_Ready) isNodeEvent_Event() {}
 
-func (*RegisterEvent_Dispatch) isRegisterEvent_Event() {}
+func (*NodeEvent_Sandbox) isNodeEvent_Event() {}
 
-// Dispatch hands a workload to the registered Node. The
-// dispatch_id is opaque to the wire — a future ACK RPC will
-// reference it so the orchestrator can correlate completion
-// signals back to the originating Dispatch. B4b will replace
-// this with a SandboxWatchEvent carrying a full Sandbox resource.
-type Dispatch struct {
+// SandboxWatchEvent reports a Sandbox lifecycle transition the
+// Node should react to. The payload is the full Sandbox resource,
+// not a delta — the protocol is level-triggered, replay-safe, and
+// idempotent.
+//
+// Event types:
+//
+//	ADDED     — a new Sandbox bound to this Node; start it.
+//	MODIFIED  — desired state changed (rare in v1 since spec is
+//	            immutable after Launch; reserved for future
+//	            status-driven mutations).
+//	DELETED   — orchestrator wants this Sandbox torn down.
+//	BOOKMARK  — cursor advance without a real change.
+type SandboxWatchEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	DispatchId    string                 `protobuf:"bytes,1,opt,name=dispatch_id,json=dispatchId,proto3" json:"dispatch_id,omitempty"`
-	Spec          *SandboxSpec           `protobuf:"bytes,2,opt,name=spec,proto3" json:"spec,omitempty"`
+	Type          v1.EventType           `protobuf:"varint,1,opt,name=type,proto3,enum=daft.sandbox.v1.EventType" json:"type,omitempty"`
+	Sandbox       *v1.Sandbox            `protobuf:"bytes,2,opt,name=sandbox,proto3" json:"sandbox,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *Dispatch) Reset() {
-	*x = Dispatch{}
+func (x *SandboxWatchEvent) Reset() {
+	*x = SandboxWatchEvent{}
 	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *Dispatch) String() string {
+func (x *SandboxWatchEvent) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*Dispatch) ProtoMessage() {}
+func (*SandboxWatchEvent) ProtoMessage() {}
 
-func (x *Dispatch) ProtoReflect() protoreflect.Message {
+func (x *SandboxWatchEvent) ProtoReflect() protoreflect.Message {
 	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -458,21 +365,21 @@ func (x *Dispatch) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use Dispatch.ProtoReflect.Descriptor instead.
-func (*Dispatch) Descriptor() ([]byte, []int) {
+// Deprecated: Use SandboxWatchEvent.ProtoReflect.Descriptor instead.
+func (*SandboxWatchEvent) Descriptor() ([]byte, []int) {
 	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{4}
 }
 
-func (x *Dispatch) GetDispatchId() string {
+func (x *SandboxWatchEvent) GetType() v1.EventType {
 	if x != nil {
-		return x.DispatchId
+		return x.Type
 	}
-	return ""
+	return v1.EventType(0)
 }
 
-func (x *Dispatch) GetSpec() *SandboxSpec {
+func (x *SandboxWatchEvent) GetSandbox() *v1.Sandbox {
 	if x != nil {
-		return x.Spec
+		return x.Sandbox
 	}
 	return nil
 }
@@ -485,7 +392,7 @@ func (x *Dispatch) GetSpec() *SandboxSpec {
 // The orchestrator's own ProtocolVersion is echoed here so the
 // Node can refuse to serve workloads if the orchestrator is
 // running a wire-incompatible build. The handshake is symmetric:
-// each side validates the other before any Dispatch flows.
+// each side validates the other before any SandboxWatchEvent flows.
 type SubscriptionReady struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	AcceptedAt      *timestamppb.Timestamp `protobuf:"bytes,1,opt,name=accepted_at,json=acceptedAt,proto3" json:"accepted_at,omitempty"`
@@ -795,365 +702,11 @@ func (x *ListNodesResponse) GetNodes() []*Node {
 	return nil
 }
 
-// SandboxSpec is one dispatchable workload. The orchestrator
-// composes a SandboxSpec from a Workspace + scheduler decision and
-// hands it to a Node over the RegisterNode stream via Dispatch.
-// Slice B4b will promote this to the spec of a first-class Sandbox
-// resource.
-//
-// Wire compatibility: fields are added at the tail; never renumbered.
-type SandboxSpec struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// OCI image reference (registry/repo:tag or @sha256:...).
-	// Resolved against the Node's imagestore on dispatch.
-	ImageRef string `protobuf:"bytes,1,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
-	// Filesystem mounts visible inside the VM. Order is irrelevant;
-	// the executor may sort by target for deterministic mounting.
-	Mounts []*Mount `protobuf:"bytes,2,rep,name=mounts,proto3" json:"mounts,omitempty"`
-	// Environment variables seen by the container's entrypoint.
-	// No ordering guarantees; duplicate names resolve last-write-wins
-	// at the executor (matches Docker / runc behaviour).
-	Env []*EnvVar `protobuf:"bytes,3,rep,name=env,proto3" json:"env,omitempty"`
-	// Container TCP/UDP ports the workload binds. Slice C1 wires
-	// these back to the orchestrator's ingress; for A-phase this
-	// field is informational.
-	Ports []*PortMapping `protobuf:"bytes,4,rep,name=ports,proto3" json:"ports,omitempty"`
-	// Optional GPU reservation. Unset (or zero count) ⇒ CPU-only.
-	GpuRequest *GpuRequest `protobuf:"bytes,5,opt,name=gpu_request,json=gpuRequest,proto3" json:"gpu_request,omitempty"`
-	// Sharing policy. UNSPECIFIED ⇒ scheduler-default (currently
-	// shared-VM with other workspaces owned by the same identity).
-	Isolation Isolation `protobuf:"varint,6,opt,name=isolation,proto3,enum=daft.nodectrl.v1.Isolation" json:"isolation,omitempty"`
-	// Workspace this spec instantiates. The Node's executor uses
-	// it to scope filesystem state, port labels, and teardown.
-	WorkspaceUuid string `protobuf:"bytes,7,opt,name=workspace_uuid,json=workspaceUuid,proto3" json:"workspace_uuid,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SandboxSpec) Reset() {
-	*x = SandboxSpec{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[11]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SandboxSpec) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SandboxSpec) ProtoMessage() {}
-
-func (x *SandboxSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[11]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SandboxSpec.ProtoReflect.Descriptor instead.
-func (*SandboxSpec) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{11}
-}
-
-func (x *SandboxSpec) GetImageRef() string {
-	if x != nil {
-		return x.ImageRef
-	}
-	return ""
-}
-
-func (x *SandboxSpec) GetMounts() []*Mount {
-	if x != nil {
-		return x.Mounts
-	}
-	return nil
-}
-
-func (x *SandboxSpec) GetEnv() []*EnvVar {
-	if x != nil {
-		return x.Env
-	}
-	return nil
-}
-
-func (x *SandboxSpec) GetPorts() []*PortMapping {
-	if x != nil {
-		return x.Ports
-	}
-	return nil
-}
-
-func (x *SandboxSpec) GetGpuRequest() *GpuRequest {
-	if x != nil {
-		return x.GpuRequest
-	}
-	return nil
-}
-
-func (x *SandboxSpec) GetIsolation() Isolation {
-	if x != nil {
-		return x.Isolation
-	}
-	return Isolation_ISOLATION_UNSPECIFIED
-}
-
-func (x *SandboxSpec) GetWorkspaceUuid() string {
-	if x != nil {
-		return x.WorkspaceUuid
-	}
-	return ""
-}
-
-// Mount is one bind-style mount inside the VM.
-type Mount struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// In-VM mount point, absolute (e.g. "/workspace"). The executor
-	// rejects relative or empty targets.
-	Target string `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
-	// Logical source identifier. Resolution is Node policy:
-	// a workspace UUID maps to the daft-fuse view of that workspace;
-	// a registered host-path tag maps to a pre-approved bind source.
-	// Free-form host paths are not accepted — adoption (Slice F1)
-	// is how user-host directories enter the namespace.
-	Source string `protobuf:"bytes,2,opt,name=source,proto3" json:"source,omitempty"`
-	// Mount read-only. Defaults to false (read-write) on the wire.
-	ReadOnly      bool `protobuf:"varint,3,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Mount) Reset() {
-	*x = Mount{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[12]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Mount) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Mount) ProtoMessage() {}
-
-func (x *Mount) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[12]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Mount.ProtoReflect.Descriptor instead.
-func (*Mount) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{12}
-}
-
-func (x *Mount) GetTarget() string {
-	if x != nil {
-		return x.Target
-	}
-	return ""
-}
-
-func (x *Mount) GetSource() string {
-	if x != nil {
-		return x.Source
-	}
-	return ""
-}
-
-func (x *Mount) GetReadOnly() bool {
-	if x != nil {
-		return x.ReadOnly
-	}
-	return false
-}
-
-// EnvVar is one name=value pair forwarded into the container.
-type EnvVar struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Variable name. Empty names are rejected by the executor.
-	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	// Variable value. Allowed to be empty; the variable is still set.
-	Value         string `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *EnvVar) Reset() {
-	*x = EnvVar{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[13]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *EnvVar) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*EnvVar) ProtoMessage() {}
-
-func (x *EnvVar) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[13]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use EnvVar.ProtoReflect.Descriptor instead.
-func (*EnvVar) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{13}
-}
-
-func (x *EnvVar) GetName() string {
-	if x != nil {
-		return x.Name
-	}
-	return ""
-}
-
-func (x *EnvVar) GetValue() string {
-	if x != nil {
-		return x.Value
-	}
-	return ""
-}
-
-// PortMapping declares a port the container listens on.
-// The reverse direction (host-port allocation) is owned by the
-// orchestrator's ingress (Phase C).
-type PortMapping struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Container listen port. Zero means "any free port"; the
-	// ingress reports back the chosen value.
-	ContainerPort uint32 `protobuf:"varint,1,opt,name=container_port,json=containerPort,proto3" json:"container_port,omitempty"`
-	// Transport. UNSPECIFIED is rejected — every PortMapping must
-	// declare its protocol explicitly so ingress can shape correctly.
-	Protocol      Protocol `protobuf:"varint,2,opt,name=protocol,proto3,enum=daft.nodectrl.v1.Protocol" json:"protocol,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PortMapping) Reset() {
-	*x = PortMapping{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[14]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PortMapping) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PortMapping) ProtoMessage() {}
-
-func (x *PortMapping) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[14]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PortMapping.ProtoReflect.Descriptor instead.
-func (*PortMapping) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{14}
-}
-
-func (x *PortMapping) GetContainerPort() uint32 {
-	if x != nil {
-		return x.ContainerPort
-	}
-	return 0
-}
-
-func (x *PortMapping) GetProtocol() Protocol {
-	if x != nil {
-		return x.Protocol
-	}
-	return Protocol_PROTOCOL_UNSPECIFIED
-}
-
-// GpuRequest is the GPU reservation attached to a SandboxSpec.
-// Wire-level placeholder for Slice D1 (Node GPU advertisement
-// + scheduler).
-type GpuRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Number of logical GPUs required. Zero ⇒ no GPU.
-	Count uint32 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
-	// Minimum VRAM per GPU, in bytes. Zero ⇒ no minimum.
-	MinVramBytes  uint64 `protobuf:"varint,2,opt,name=min_vram_bytes,json=minVramBytes,proto3" json:"min_vram_bytes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GpuRequest) Reset() {
-	*x = GpuRequest{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[15]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GpuRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GpuRequest) ProtoMessage() {}
-
-func (x *GpuRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[15]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GpuRequest.ProtoReflect.Descriptor instead.
-func (*GpuRequest) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{15}
-}
-
-func (x *GpuRequest) GetCount() uint32 {
-	if x != nil {
-		return x.Count
-	}
-	return 0
-}
-
-func (x *GpuRequest) GetMinVramBytes() uint64 {
-	if x != nil {
-		return x.MinVramBytes
-	}
-	return 0
-}
-
 var File_nodectrl_v1_nodectrl_proto protoreflect.FileDescriptor
 
 const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\n" +
-	"\x1anodectrl/v1/nodectrl.proto\x12\x10daft.nodectrl.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"S\n" +
+	"\x1anodectrl/v1/nodectrl.proto\x12\x10daft.nodectrl.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x18sandbox/v1/sandbox.proto\"S\n" +
 	"\x0fProtocolVersion\x12\x14\n" +
 	"\x05major\x18\x01 \x01(\rR\x05major\x12\x14\n" +
 	"\x05minor\x18\x02 \x01(\rR\x05minor\x12\x14\n" +
@@ -1164,15 +717,14 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\x13RegisterNodeRequest\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12=\n" +
 	"\tresources\x18\x02 \x01(\v2\x1f.daft.nodectrl.v1.HostResourcesR\tresources\x12L\n" +
-	"\x10protocol_version\x18\x03 \x01(\v2!.daft.nodectrl.v1.ProtocolVersionR\x0fprotocolVersion\"\x8f\x01\n" +
-	"\rRegisterEvent\x12;\n" +
-	"\x05ready\x18\x01 \x01(\v2#.daft.nodectrl.v1.SubscriptionReadyH\x00R\x05ready\x128\n" +
-	"\bdispatch\x18\x02 \x01(\v2\x1a.daft.nodectrl.v1.DispatchH\x00R\bdispatchB\a\n" +
-	"\x05event\"^\n" +
-	"\bDispatch\x12\x1f\n" +
-	"\vdispatch_id\x18\x01 \x01(\tR\n" +
-	"dispatchId\x121\n" +
-	"\x04spec\x18\x02 \x01(\v2\x1d.daft.nodectrl.v1.SandboxSpecR\x04spec\"\x9e\x01\n" +
+	"\x10protocol_version\x18\x03 \x01(\v2!.daft.nodectrl.v1.ProtocolVersionR\x0fprotocolVersion\"\x92\x01\n" +
+	"\tNodeEvent\x12;\n" +
+	"\x05ready\x18\x01 \x01(\v2#.daft.nodectrl.v1.SubscriptionReadyH\x00R\x05ready\x12?\n" +
+	"\asandbox\x18\x02 \x01(\v2#.daft.nodectrl.v1.SandboxWatchEventH\x00R\asandboxB\a\n" +
+	"\x05event\"w\n" +
+	"\x11SandboxWatchEvent\x12.\n" +
+	"\x04type\x18\x01 \x01(\x0e2\x1a.daft.sandbox.v1.EventTypeR\x04type\x122\n" +
+	"\asandbox\x18\x02 \x01(\v2\x18.daft.sandbox.v1.SandboxR\asandbox\"\x9e\x01\n" +
 	"\x11SubscriptionReady\x12;\n" +
 	"\vaccepted_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"acceptedAt\x12L\n" +
@@ -1190,40 +742,9 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\flast_seen_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"lastSeenAt\"A\n" +
 	"\x11ListNodesResponse\x12,\n" +
-	"\x05nodes\x18\x01 \x03(\v2\x16.daft.nodectrl.v1.NodeR\x05nodes\"\xdd\x02\n" +
-	"\vSandboxSpec\x12\x1b\n" +
-	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12/\n" +
-	"\x06mounts\x18\x02 \x03(\v2\x17.daft.nodectrl.v1.MountR\x06mounts\x12*\n" +
-	"\x03env\x18\x03 \x03(\v2\x18.daft.nodectrl.v1.EnvVarR\x03env\x123\n" +
-	"\x05ports\x18\x04 \x03(\v2\x1d.daft.nodectrl.v1.PortMappingR\x05ports\x12=\n" +
-	"\vgpu_request\x18\x05 \x01(\v2\x1c.daft.nodectrl.v1.GpuRequestR\n" +
-	"gpuRequest\x129\n" +
-	"\tisolation\x18\x06 \x01(\x0e2\x1b.daft.nodectrl.v1.IsolationR\tisolation\x12%\n" +
-	"\x0eworkspace_uuid\x18\a \x01(\tR\rworkspaceUuid\"T\n" +
-	"\x05Mount\x12\x16\n" +
-	"\x06target\x18\x01 \x01(\tR\x06target\x12\x16\n" +
-	"\x06source\x18\x02 \x01(\tR\x06source\x12\x1b\n" +
-	"\tread_only\x18\x03 \x01(\bR\breadOnly\"2\n" +
-	"\x06EnvVar\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"l\n" +
-	"\vPortMapping\x12%\n" +
-	"\x0econtainer_port\x18\x01 \x01(\rR\rcontainerPort\x126\n" +
-	"\bprotocol\x18\x02 \x01(\x0e2\x1a.daft.nodectrl.v1.ProtocolR\bprotocol\"H\n" +
-	"\n" +
-	"GpuRequest\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\rR\x05count\x12$\n" +
-	"\x0emin_vram_bytes\x18\x02 \x01(\x04R\fminVramBytes*H\n" +
-	"\bProtocol\x12\x18\n" +
-	"\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\x10\n" +
-	"\fPROTOCOL_TCP\x10\x01\x12\x10\n" +
-	"\fPROTOCOL_UDP\x10\x02*R\n" +
-	"\tIsolation\x12\x19\n" +
-	"\x15ISOLATION_UNSPECIFIED\x10\x00\x12\x14\n" +
-	"\x10ISOLATION_SHARED\x10\x01\x12\x14\n" +
-	"\x10ISOLATION_STRICT\x10\x022\xa0\x02\n" +
-	"\x12NodeControlService\x12Z\n" +
-	"\fRegisterNode\x12%.daft.nodectrl.v1.RegisterNodeRequest\x1a\x1f.daft.nodectrl.v1.RegisterEvent\"\x000\x01\x12V\n" +
+	"\x05nodes\x18\x01 \x03(\v2\x16.daft.nodectrl.v1.NodeR\x05nodes2\x9c\x02\n" +
+	"\x12NodeControlService\x12V\n" +
+	"\fRegisterNode\x12%.daft.nodectrl.v1.RegisterNodeRequest\x1a\x1b.daft.nodectrl.v1.NodeEvent\"\x000\x01\x12V\n" +
 	"\tHeartbeat\x12\".daft.nodectrl.v1.HeartbeatRequest\x1a#.daft.nodectrl.v1.HeartbeatResponse\"\x00\x12V\n" +
 	"\tListNodes\x12\".daft.nodectrl.v1.ListNodesRequest\x1a#.daft.nodectrl.v1.ListNodesResponse\"\x00BIZGgithub.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1;nodectrlv1b\x06proto3"
 
@@ -1239,60 +760,49 @@ func file_nodectrl_v1_nodectrl_proto_rawDescGZIP() []byte {
 	return file_nodectrl_v1_nodectrl_proto_rawDescData
 }
 
-var file_nodectrl_v1_nodectrl_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_nodectrl_v1_nodectrl_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_nodectrl_v1_nodectrl_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_nodectrl_v1_nodectrl_proto_goTypes = []any{
-	(Protocol)(0),                 // 0: daft.nodectrl.v1.Protocol
-	(Isolation)(0),                // 1: daft.nodectrl.v1.Isolation
-	(*ProtocolVersion)(nil),       // 2: daft.nodectrl.v1.ProtocolVersion
-	(*HostResources)(nil),         // 3: daft.nodectrl.v1.HostResources
-	(*RegisterNodeRequest)(nil),   // 4: daft.nodectrl.v1.RegisterNodeRequest
-	(*RegisterEvent)(nil),         // 5: daft.nodectrl.v1.RegisterEvent
-	(*Dispatch)(nil),              // 6: daft.nodectrl.v1.Dispatch
-	(*SubscriptionReady)(nil),     // 7: daft.nodectrl.v1.SubscriptionReady
-	(*HeartbeatRequest)(nil),      // 8: daft.nodectrl.v1.HeartbeatRequest
-	(*HeartbeatResponse)(nil),     // 9: daft.nodectrl.v1.HeartbeatResponse
-	(*ListNodesRequest)(nil),      // 10: daft.nodectrl.v1.ListNodesRequest
-	(*Node)(nil),                  // 11: daft.nodectrl.v1.Node
-	(*ListNodesResponse)(nil),     // 12: daft.nodectrl.v1.ListNodesResponse
-	(*SandboxSpec)(nil),           // 13: daft.nodectrl.v1.SandboxSpec
-	(*Mount)(nil),                 // 14: daft.nodectrl.v1.Mount
-	(*EnvVar)(nil),                // 15: daft.nodectrl.v1.EnvVar
-	(*PortMapping)(nil),           // 16: daft.nodectrl.v1.PortMapping
-	(*GpuRequest)(nil),            // 17: daft.nodectrl.v1.GpuRequest
-	(*timestamppb.Timestamp)(nil), // 18: google.protobuf.Timestamp
+	(*ProtocolVersion)(nil),       // 0: daft.nodectrl.v1.ProtocolVersion
+	(*HostResources)(nil),         // 1: daft.nodectrl.v1.HostResources
+	(*RegisterNodeRequest)(nil),   // 2: daft.nodectrl.v1.RegisterNodeRequest
+	(*NodeEvent)(nil),             // 3: daft.nodectrl.v1.NodeEvent
+	(*SandboxWatchEvent)(nil),     // 4: daft.nodectrl.v1.SandboxWatchEvent
+	(*SubscriptionReady)(nil),     // 5: daft.nodectrl.v1.SubscriptionReady
+	(*HeartbeatRequest)(nil),      // 6: daft.nodectrl.v1.HeartbeatRequest
+	(*HeartbeatResponse)(nil),     // 7: daft.nodectrl.v1.HeartbeatResponse
+	(*ListNodesRequest)(nil),      // 8: daft.nodectrl.v1.ListNodesRequest
+	(*Node)(nil),                  // 9: daft.nodectrl.v1.Node
+	(*ListNodesResponse)(nil),     // 10: daft.nodectrl.v1.ListNodesResponse
+	(v1.EventType)(0),             // 11: daft.sandbox.v1.EventType
+	(*v1.Sandbox)(nil),            // 12: daft.sandbox.v1.Sandbox
+	(*timestamppb.Timestamp)(nil), // 13: google.protobuf.Timestamp
 }
 var file_nodectrl_v1_nodectrl_proto_depIdxs = []int32{
-	3,  // 0: daft.nodectrl.v1.RegisterNodeRequest.resources:type_name -> daft.nodectrl.v1.HostResources
-	2,  // 1: daft.nodectrl.v1.RegisterNodeRequest.protocol_version:type_name -> daft.nodectrl.v1.ProtocolVersion
-	7,  // 2: daft.nodectrl.v1.RegisterEvent.ready:type_name -> daft.nodectrl.v1.SubscriptionReady
-	6,  // 3: daft.nodectrl.v1.RegisterEvent.dispatch:type_name -> daft.nodectrl.v1.Dispatch
-	13, // 4: daft.nodectrl.v1.Dispatch.spec:type_name -> daft.nodectrl.v1.SandboxSpec
-	18, // 5: daft.nodectrl.v1.SubscriptionReady.accepted_at:type_name -> google.protobuf.Timestamp
-	2,  // 6: daft.nodectrl.v1.SubscriptionReady.protocol_version:type_name -> daft.nodectrl.v1.ProtocolVersion
-	3,  // 7: daft.nodectrl.v1.HeartbeatRequest.current:type_name -> daft.nodectrl.v1.HostResources
-	18, // 8: daft.nodectrl.v1.HeartbeatResponse.seen_at:type_name -> google.protobuf.Timestamp
-	3,  // 9: daft.nodectrl.v1.Node.resources:type_name -> daft.nodectrl.v1.HostResources
-	18, // 10: daft.nodectrl.v1.Node.registered_at:type_name -> google.protobuf.Timestamp
-	18, // 11: daft.nodectrl.v1.Node.last_seen_at:type_name -> google.protobuf.Timestamp
-	11, // 12: daft.nodectrl.v1.ListNodesResponse.nodes:type_name -> daft.nodectrl.v1.Node
-	14, // 13: daft.nodectrl.v1.SandboxSpec.mounts:type_name -> daft.nodectrl.v1.Mount
-	15, // 14: daft.nodectrl.v1.SandboxSpec.env:type_name -> daft.nodectrl.v1.EnvVar
-	16, // 15: daft.nodectrl.v1.SandboxSpec.ports:type_name -> daft.nodectrl.v1.PortMapping
-	17, // 16: daft.nodectrl.v1.SandboxSpec.gpu_request:type_name -> daft.nodectrl.v1.GpuRequest
-	1,  // 17: daft.nodectrl.v1.SandboxSpec.isolation:type_name -> daft.nodectrl.v1.Isolation
-	0,  // 18: daft.nodectrl.v1.PortMapping.protocol:type_name -> daft.nodectrl.v1.Protocol
-	4,  // 19: daft.nodectrl.v1.NodeControlService.RegisterNode:input_type -> daft.nodectrl.v1.RegisterNodeRequest
-	8,  // 20: daft.nodectrl.v1.NodeControlService.Heartbeat:input_type -> daft.nodectrl.v1.HeartbeatRequest
-	10, // 21: daft.nodectrl.v1.NodeControlService.ListNodes:input_type -> daft.nodectrl.v1.ListNodesRequest
-	5,  // 22: daft.nodectrl.v1.NodeControlService.RegisterNode:output_type -> daft.nodectrl.v1.RegisterEvent
-	9,  // 23: daft.nodectrl.v1.NodeControlService.Heartbeat:output_type -> daft.nodectrl.v1.HeartbeatResponse
-	12, // 24: daft.nodectrl.v1.NodeControlService.ListNodes:output_type -> daft.nodectrl.v1.ListNodesResponse
-	22, // [22:25] is the sub-list for method output_type
-	19, // [19:22] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	1,  // 0: daft.nodectrl.v1.RegisterNodeRequest.resources:type_name -> daft.nodectrl.v1.HostResources
+	0,  // 1: daft.nodectrl.v1.RegisterNodeRequest.protocol_version:type_name -> daft.nodectrl.v1.ProtocolVersion
+	5,  // 2: daft.nodectrl.v1.NodeEvent.ready:type_name -> daft.nodectrl.v1.SubscriptionReady
+	4,  // 3: daft.nodectrl.v1.NodeEvent.sandbox:type_name -> daft.nodectrl.v1.SandboxWatchEvent
+	11, // 4: daft.nodectrl.v1.SandboxWatchEvent.type:type_name -> daft.sandbox.v1.EventType
+	12, // 5: daft.nodectrl.v1.SandboxWatchEvent.sandbox:type_name -> daft.sandbox.v1.Sandbox
+	13, // 6: daft.nodectrl.v1.SubscriptionReady.accepted_at:type_name -> google.protobuf.Timestamp
+	0,  // 7: daft.nodectrl.v1.SubscriptionReady.protocol_version:type_name -> daft.nodectrl.v1.ProtocolVersion
+	1,  // 8: daft.nodectrl.v1.HeartbeatRequest.current:type_name -> daft.nodectrl.v1.HostResources
+	13, // 9: daft.nodectrl.v1.HeartbeatResponse.seen_at:type_name -> google.protobuf.Timestamp
+	1,  // 10: daft.nodectrl.v1.Node.resources:type_name -> daft.nodectrl.v1.HostResources
+	13, // 11: daft.nodectrl.v1.Node.registered_at:type_name -> google.protobuf.Timestamp
+	13, // 12: daft.nodectrl.v1.Node.last_seen_at:type_name -> google.protobuf.Timestamp
+	9,  // 13: daft.nodectrl.v1.ListNodesResponse.nodes:type_name -> daft.nodectrl.v1.Node
+	2,  // 14: daft.nodectrl.v1.NodeControlService.RegisterNode:input_type -> daft.nodectrl.v1.RegisterNodeRequest
+	6,  // 15: daft.nodectrl.v1.NodeControlService.Heartbeat:input_type -> daft.nodectrl.v1.HeartbeatRequest
+	8,  // 16: daft.nodectrl.v1.NodeControlService.ListNodes:input_type -> daft.nodectrl.v1.ListNodesRequest
+	3,  // 17: daft.nodectrl.v1.NodeControlService.RegisterNode:output_type -> daft.nodectrl.v1.NodeEvent
+	7,  // 18: daft.nodectrl.v1.NodeControlService.Heartbeat:output_type -> daft.nodectrl.v1.HeartbeatResponse
+	10, // 19: daft.nodectrl.v1.NodeControlService.ListNodes:output_type -> daft.nodectrl.v1.ListNodesResponse
+	17, // [17:20] is the sub-list for method output_type
+	14, // [14:17] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_nodectrl_v1_nodectrl_proto_init() }
@@ -1301,22 +811,21 @@ func file_nodectrl_v1_nodectrl_proto_init() {
 		return
 	}
 	file_nodectrl_v1_nodectrl_proto_msgTypes[3].OneofWrappers = []any{
-		(*RegisterEvent_Ready)(nil),
-		(*RegisterEvent_Dispatch)(nil),
+		(*NodeEvent_Ready)(nil),
+		(*NodeEvent_Sandbox)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nodectrl_v1_nodectrl_proto_rawDesc), len(file_nodectrl_v1_nodectrl_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   16,
+			NumEnums:      0,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_nodectrl_v1_nodectrl_proto_goTypes,
 		DependencyIndexes: file_nodectrl_v1_nodectrl_proto_depIdxs,
-		EnumInfos:         file_nodectrl_v1_nodectrl_proto_enumTypes,
 		MessageInfos:      file_nodectrl_v1_nodectrl_proto_msgTypes,
 	}.Build()
 	File_nodectrl_v1_nodectrl_proto = out.File

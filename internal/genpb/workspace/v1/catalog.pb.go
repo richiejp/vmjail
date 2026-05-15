@@ -4,10 +4,9 @@
 // A Workspace is a persistent, mutable record owned by the
 // orchestrator. Clients (`daft workspace …` from the user-host)
 // incrementally assemble one by issuing Add/Set/Remove operations;
-// at Launch time the orchestrator derives a one-shot SandboxSpec
-// (see daft.nodectrl.v1) and dispatches it to a Node.
-// The sandbox-host stores nothing across runs — the workspace is
-// the source of truth.
+// at Launch time the orchestrator derives a Sandbox resource
+// (see daft.sandbox.v1) and binds it to a Node. The Node stores
+// nothing across runs — the workspace is the source of truth.
 //
 // This file declares the data shape only. The service surface
 // (WorkspaceCatalogService.* RPCs) lands in Slice B2.
@@ -21,7 +20,7 @@
 package workspacev1
 
 import (
-	v1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	v1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
@@ -137,7 +136,7 @@ type Workspace struct {
 	// change this — it identifies the original owner.
 	OwnerFingerprint string `protobuf:"bytes,3,opt,name=owner_fingerprint,json=ownerFingerprint,proto3" json:"owner_fingerprint,omitempty"`
 	// Filesystem mounts visible inside the VM. Reuses the
-	// nodectrl.v1 type so the spec→SandboxSpec projection at
+	// sandbox.v1 type so the spec→SandboxSpec projection at
 	// Launch time is a direct copy.
 	Mounts []*v1.Mount `protobuf:"bytes,4,rep,name=mounts,proto3" json:"mounts,omitempty"`
 	// Environment variables for the container's entrypoint.
@@ -159,7 +158,7 @@ type Workspace struct {
 	// GPU reservation. Unset ⇒ CPU-only.
 	GpuRequest *v1.GpuRequest `protobuf:"bytes,10,opt,name=gpu_request,json=gpuRequest,proto3" json:"gpu_request,omitempty"`
 	// Sharing policy. UNSPECIFIED ⇒ scheduler-default.
-	Isolation v1.Isolation `protobuf:"varint,11,opt,name=isolation,proto3,enum=daft.nodectrl.v1.Isolation" json:"isolation,omitempty"`
+	Isolation v1.Isolation `protobuf:"varint,11,opt,name=isolation,proto3,enum=daft.sandbox.v1.Isolation" json:"isolation,omitempty"`
 	// Write-lock owner fingerprint. Empty ⇒ unlocked. Mutations and
 	// launches require holding the lock. Phase F3 lands the explicit
 	// Acquire / Release RPCs.
@@ -176,13 +175,14 @@ type Workspace struct {
 	// Audit timestamps. Immutable / monotonically advancing.
 	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// Identifier of the in-flight (or most recent) Dispatch to a
-	// sandbox-host. Minted fresh on each Launch; cleared on Stop.
-	// Future RPCs (status streaming, log subscribe) will reference
-	// this to correlate sandbox-side state back to the workspace.
-	CurrentDispatchId string `protobuf:"bytes,18,opt,name=current_dispatch_id,json=currentDispatchId,proto3" json:"current_dispatch_id,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Reference to the in-flight (or most recent) Sandbox derived
+	// from this Workspace. Minted fresh on each Launch; cleared on
+	// Stop. Replaces the prior opaque dispatch_id with a typed
+	// {uid, node} reference. Slice B4c moves this under a
+	// Workspace.status submessage.
+	CurrentSandbox *v1.SandboxRef `protobuf:"bytes,18,opt,name=current_sandbox,json=currentSandbox,proto3" json:"current_sandbox,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Workspace) Reset() {
@@ -334,32 +334,32 @@ func (x *Workspace) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
-func (x *Workspace) GetCurrentDispatchId() string {
+func (x *Workspace) GetCurrentSandbox() *v1.SandboxRef {
 	if x != nil {
-		return x.CurrentDispatchId
+		return x.CurrentSandbox
 	}
-	return ""
+	return nil
 }
 
 var File_workspace_v1_catalog_proto protoreflect.FileDescriptor
 
 const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\n" +
-	"\x1aworkspace/v1/catalog.proto\x12\x11daft.workspace.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1anodectrl/v1/nodectrl.proto\"\xe7\x06\n" +
+	"\x1aworkspace/v1/catalog.proto\x12\x11daft.workspace.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x18sandbox/v1/sandbox.proto\"\xf8\x06\n" +
 	"\tWorkspace\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12+\n" +
-	"\x11owner_fingerprint\x18\x03 \x01(\tR\x10ownerFingerprint\x12/\n" +
-	"\x06mounts\x18\x04 \x03(\v2\x17.daft.nodectrl.v1.MountR\x06mounts\x12*\n" +
-	"\x03env\x18\x05 \x03(\v2\x18.daft.nodectrl.v1.EnvVarR\x03env\x123\n" +
-	"\x05ports\x18\x06 \x03(\v2\x1d.daft.nodectrl.v1.PortMappingR\x05ports\x12\x1b\n" +
+	"\x11owner_fingerprint\x18\x03 \x01(\tR\x10ownerFingerprint\x12.\n" +
+	"\x06mounts\x18\x04 \x03(\v2\x16.daft.sandbox.v1.MountR\x06mounts\x12)\n" +
+	"\x03env\x18\x05 \x03(\v2\x17.daft.sandbox.v1.EnvVarR\x03env\x122\n" +
+	"\x05ports\x18\x06 \x03(\v2\x1c.daft.sandbox.v1.PortMappingR\x05ports\x12\x1b\n" +
 	"\timage_ref\x18\a \x01(\tR\bimageRef\x12(\n" +
 	"\x10pending_build_id\x18\b \x01(\tR\x0ependingBuildId\x12<\n" +
-	"\x1atarget_sandbox_fingerprint\x18\t \x01(\tR\x18targetSandboxFingerprint\x12=\n" +
+	"\x1atarget_sandbox_fingerprint\x18\t \x01(\tR\x18targetSandboxFingerprint\x12<\n" +
 	"\vgpu_request\x18\n" +
-	" \x01(\v2\x1c.daft.nodectrl.v1.GpuRequestR\n" +
-	"gpuRequest\x129\n" +
-	"\tisolation\x18\v \x01(\x0e2\x1b.daft.nodectrl.v1.IsolationR\tisolation\x124\n" +
+	" \x01(\v2\x1b.daft.sandbox.v1.GpuRequestR\n" +
+	"gpuRequest\x128\n" +
+	"\tisolation\x18\v \x01(\x0e2\x1a.daft.sandbox.v1.IsolationR\tisolation\x124\n" +
 	"\x16lock_owner_fingerprint\x18\f \x01(\tR\x14lockOwnerFingerprint\x12B\n" +
 	"\x0flock_expires_at\x18\r \x01(\v2\x1a.google.protobuf.TimestampR\rlockExpiresAt\x12:\n" +
 	"\x06status\x18\x0e \x01(\x0e2\".daft.workspace.v1.WorkspaceStatusR\x06status\x12\x18\n" +
@@ -367,8 +367,8 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12.\n" +
-	"\x13current_dispatch_id\x18\x12 \x01(\tR\x11currentDispatchId*\xe3\x01\n" +
+	"updated_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12D\n" +
+	"\x0fcurrent_sandbox\x18\x12 \x01(\v2\x1b.daft.sandbox.v1.SandboxRefR\x0ecurrentSandbox*\xe3\x01\n" +
 	"\x0fWorkspaceStatus\x12 \n" +
 	"\x1cWORKSPACE_STATUS_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16WORKSPACE_STATUS_DRAFT\x10\x01\x12\x1a\n" +
@@ -395,28 +395,30 @@ var file_workspace_v1_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_workspace_v1_catalog_proto_goTypes = []any{
 	(WorkspaceStatus)(0),          // 0: daft.workspace.v1.WorkspaceStatus
 	(*Workspace)(nil),             // 1: daft.workspace.v1.Workspace
-	(*v1.Mount)(nil),              // 2: daft.nodectrl.v1.Mount
-	(*v1.EnvVar)(nil),             // 3: daft.nodectrl.v1.EnvVar
-	(*v1.PortMapping)(nil),        // 4: daft.nodectrl.v1.PortMapping
-	(*v1.GpuRequest)(nil),         // 5: daft.nodectrl.v1.GpuRequest
-	(v1.Isolation)(0),             // 6: daft.nodectrl.v1.Isolation
+	(*v1.Mount)(nil),              // 2: daft.sandbox.v1.Mount
+	(*v1.EnvVar)(nil),             // 3: daft.sandbox.v1.EnvVar
+	(*v1.PortMapping)(nil),        // 4: daft.sandbox.v1.PortMapping
+	(*v1.GpuRequest)(nil),         // 5: daft.sandbox.v1.GpuRequest
+	(v1.Isolation)(0),             // 6: daft.sandbox.v1.Isolation
 	(*timestamppb.Timestamp)(nil), // 7: google.protobuf.Timestamp
+	(*v1.SandboxRef)(nil),         // 8: daft.sandbox.v1.SandboxRef
 }
 var file_workspace_v1_catalog_proto_depIdxs = []int32{
-	2, // 0: daft.workspace.v1.Workspace.mounts:type_name -> daft.nodectrl.v1.Mount
-	3, // 1: daft.workspace.v1.Workspace.env:type_name -> daft.nodectrl.v1.EnvVar
-	4, // 2: daft.workspace.v1.Workspace.ports:type_name -> daft.nodectrl.v1.PortMapping
-	5, // 3: daft.workspace.v1.Workspace.gpu_request:type_name -> daft.nodectrl.v1.GpuRequest
-	6, // 4: daft.workspace.v1.Workspace.isolation:type_name -> daft.nodectrl.v1.Isolation
-	7, // 5: daft.workspace.v1.Workspace.lock_expires_at:type_name -> google.protobuf.Timestamp
-	0, // 6: daft.workspace.v1.Workspace.status:type_name -> daft.workspace.v1.WorkspaceStatus
-	7, // 7: daft.workspace.v1.Workspace.created_at:type_name -> google.protobuf.Timestamp
-	7, // 8: daft.workspace.v1.Workspace.updated_at:type_name -> google.protobuf.Timestamp
-	9, // [9:9] is the sub-list for method output_type
-	9, // [9:9] is the sub-list for method input_type
-	9, // [9:9] is the sub-list for extension type_name
-	9, // [9:9] is the sub-list for extension extendee
-	0, // [0:9] is the sub-list for field type_name
+	2,  // 0: daft.workspace.v1.Workspace.mounts:type_name -> daft.sandbox.v1.Mount
+	3,  // 1: daft.workspace.v1.Workspace.env:type_name -> daft.sandbox.v1.EnvVar
+	4,  // 2: daft.workspace.v1.Workspace.ports:type_name -> daft.sandbox.v1.PortMapping
+	5,  // 3: daft.workspace.v1.Workspace.gpu_request:type_name -> daft.sandbox.v1.GpuRequest
+	6,  // 4: daft.workspace.v1.Workspace.isolation:type_name -> daft.sandbox.v1.Isolation
+	7,  // 5: daft.workspace.v1.Workspace.lock_expires_at:type_name -> google.protobuf.Timestamp
+	0,  // 6: daft.workspace.v1.Workspace.status:type_name -> daft.workspace.v1.WorkspaceStatus
+	7,  // 7: daft.workspace.v1.Workspace.created_at:type_name -> google.protobuf.Timestamp
+	7,  // 8: daft.workspace.v1.Workspace.updated_at:type_name -> google.protobuf.Timestamp
+	8,  // 9: daft.workspace.v1.Workspace.current_sandbox:type_name -> daft.sandbox.v1.SandboxRef
+	10, // [10:10] is the sub-list for method output_type
+	10, // [10:10] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_workspace_v1_catalog_proto_init() }

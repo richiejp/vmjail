@@ -12,6 +12,7 @@ import (
 
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
 )
@@ -305,52 +306,58 @@ func TestDispatchReachesActiveStream(t *testing.T) {
 
 	// Wait briefly for the handler to install its sender; the
 	// Ready ack is sent before attachStream returns in the loop,
-	// so a direct Dispatch right after Receive may race.
-	want := &nodectrlv1.SandboxSpec{ImageRef: "alpine:3", WorkspaceUuid: "ws-1"}
-	if err := dispatchUntilReady(rig.server.SandboxControl(), rig.sbID.Fingerprint(), "d-1", want); err != nil {
-		t.Fatalf("Dispatch: %v", err)
+	// so a direct publish right after Receive may race.
+	want := &sandboxv1.Sandbox{
+		Metadata: &sandboxv1.SandboxMetadata{Uid: testSandboxID},
+		Spec:     &sandboxv1.SandboxSpec{ImageRef: "alpine:3", WorkspaceUuid: "ws-1"},
+	}
+	if err := publishUntilReady(rig.server.SandboxControl(), rig.sbID.Fingerprint(), want); err != nil {
+		t.Fatalf("PublishSandboxEvent: %v", err)
 	}
 
 	if !stream.Receive() {
-		t.Fatalf("expected Dispatch, got err=%v", stream.Err())
+		t.Fatalf("expected SandboxWatchEvent, got err=%v", stream.Err())
 	}
-	d := stream.Msg().GetDispatch()
-	if d == nil {
-		t.Fatalf("event = %+v, want Dispatch", stream.Msg())
+	evt := stream.Msg().GetSandbox()
+	if evt == nil {
+		t.Fatalf("event = %+v, want SandboxWatchEvent", stream.Msg())
 	}
-	if d.GetDispatchId() != "d-1" {
-		t.Errorf("dispatch_id = %q, want d-1", d.GetDispatchId())
+	if evt.GetType() != sandboxv1.EventType_EVENT_TYPE_ADDED {
+		t.Errorf("type = %s, want ADDED", evt.GetType())
 	}
-	if d.GetSpec().GetImageRef() != "alpine:3" {
-		t.Errorf("image_ref = %q, want alpine:3", d.GetSpec().GetImageRef())
+	sb := evt.GetSandbox()
+	if sb.GetMetadata().GetUid() != testSandboxID {
+		t.Errorf("uid = %q, want sb-1", sb.GetMetadata().GetUid())
+	}
+	if sb.GetSpec().GetImageRef() != "alpine:3" {
+		t.Errorf("image_ref = %q, want alpine:3", sb.GetSpec().GetImageRef())
 	}
 }
 
-// dispatchUntilReady retries Dispatch for up to 1s while the
-// handler's attachStream call is still racing in. ErrSandboxNotConnected
-// is the only retryable error.
-func dispatchUntilReady(
+// publishUntilReady retries PublishSandboxEvent for up to 1s while
+// the handler's attachStream call is still racing in.
+// ErrNodeNotConnected is the only retryable error.
+func publishUntilReady(
 	h *NodeControlHandler,
 	fp identity.Fingerprint,
-	id string,
-	spec *nodectrlv1.SandboxSpec,
+	sandbox *sandboxv1.Sandbox,
 ) error {
 	deadline := time.Now().Add(time.Second)
 	//daft:lint:disable=forloopbound reason="wall-clock bounded to 1s while the handler's attachStream goroutine races with the client's first Receive"
 	for time.Now().Before(deadline) {
-		err := h.Dispatch(fp, id, spec)
-		if !errors.Is(err, ErrSandboxNotConnected) {
+		err := h.PublishSandboxEvent(fp, sandboxv1.EventType_EVENT_TYPE_ADDED, sandbox)
+		if !errors.Is(err, ErrNodeNotConnected) {
 			return err
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	return ErrSandboxNotConnected
+	return ErrNodeNotConnected
 }
 
-// TestDispatchPanicsOnNilSpec pins the precondition assert — a
-// nil spec is a wiring bug and must panic loudly, not produce a
-// half-formed dispatch envelope.
-func TestDispatchPanicsOnNilSpec(t *testing.T) {
+// TestPublishSandboxEventPanicsOnNilSandbox pins the precondition
+// assert — a nil sandbox is a wiring bug and must panic loudly, not
+// produce a half-formed envelope.
+func TestPublishSandboxEventPanicsOnNilSandbox(t *testing.T) {
 	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
@@ -359,18 +366,18 @@ func TestDispatchPanicsOnNilSpec(t *testing.T) {
 	defer func() {
 		got := recover()
 		if got == nil {
-			t.Fatal("Dispatch did not panic on nil spec")
+			t.Fatal("PublishSandboxEvent did not panic on nil Sandbox")
 		}
 		msg, _ := got.(string)
-		if !strings.Contains(msg, "non-nil spec") {
-			t.Errorf("panic = %q, want substring 'non-nil spec'", msg)
+		if !strings.Contains(msg, "non-nil Sandbox") {
+			t.Errorf("panic = %q, want substring 'non-nil Sandbox'", msg)
 		}
 	}()
-	_ = h.Dispatch(id.Fingerprint(), "d-1", nil)
+	_ = h.PublishSandboxEvent(id.Fingerprint(), sandboxv1.EventType_EVENT_TYPE_ADDED, nil)
 }
 
-// TestDispatchPanicsOnEmptyID pins the dispatch_id assert.
-func TestDispatchPanicsOnEmptyID(t *testing.T) {
+// TestPublishSandboxEventPanicsOnEmptyUID pins the uid assert.
+func TestPublishSandboxEventPanicsOnEmptyUID(t *testing.T) {
 	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
@@ -379,27 +386,29 @@ func TestDispatchPanicsOnEmptyID(t *testing.T) {
 	defer func() {
 		got := recover()
 		if got == nil {
-			t.Fatal("Dispatch did not panic on empty id")
+			t.Fatal("PublishSandboxEvent did not panic on empty uid")
 		}
 		msg, _ := got.(string)
-		if !strings.Contains(msg, "non-empty dispatch_id") {
-			t.Errorf("panic = %q, want substring 'non-empty dispatch_id'", msg)
+		if !strings.Contains(msg, "non-empty Sandbox.metadata.uid") {
+			t.Errorf("panic = %q, want substring 'non-empty Sandbox.metadata.uid'", msg)
 		}
 	}()
-	_ = h.Dispatch(id.Fingerprint(), "", &nodectrlv1.SandboxSpec{})
+	_ = h.PublishSandboxEvent(id.Fingerprint(), sandboxv1.EventType_EVENT_TYPE_ADDED,
+		&sandboxv1.Sandbox{Metadata: &sandboxv1.SandboxMetadata{}})
 }
 
-// TestDispatchUnknownSandbox covers ErrSandboxNotConnected: no
-// stream was ever opened, so the handler has no sender to push to.
-func TestDispatchUnknownSandbox(t *testing.T) {
+// TestPublishSandboxEventUnknownNode covers ErrNodeNotConnected:
+// no stream was ever opened, so the handler has no sender.
+func TestPublishSandboxEventUnknownNode(t *testing.T) {
 	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
 	}
 	id := mustGenerate(t, identity.RoleSandboxHost)
-	err = h.Dispatch(id.Fingerprint(), "d-1", &nodectrlv1.SandboxSpec{})
-	if !errors.Is(err, ErrSandboxNotConnected) {
-		t.Errorf("err = %v, want ErrSandboxNotConnected", err)
+	err = h.PublishSandboxEvent(id.Fingerprint(), sandboxv1.EventType_EVENT_TYPE_ADDED,
+		&sandboxv1.Sandbox{Metadata: &sandboxv1.SandboxMetadata{Uid: testSandboxID}})
+	if !errors.Is(err, ErrNodeNotConnected) {
+		t.Errorf("err = %v, want ErrNodeNotConnected", err)
 	}
 }
 
@@ -517,11 +526,11 @@ func TestSubscriptionReadyCarriesProtocolVersion(t *testing.T) {
 	}
 }
 
-// TestDispatchBacklogFull covers ErrDispatchBacklog: fill the
-// per-stream channel without anyone draining it, then push one
+// TestSandboxEventBacklogFull covers ErrSandboxEventBacklog: fill
+// the per-stream channel without anyone draining it, then push one
 // more. attachStream/detachStream are exercised directly so we
 // don't need a real client.
-func TestDispatchBacklogFull(t *testing.T) {
+func TestSandboxEventBacklogFull(t *testing.T) {
 	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
 		t.Fatalf("NewSandboxControlHandler: %v", err)
@@ -531,12 +540,13 @@ func TestDispatchBacklogFull(t *testing.T) {
 	h.attachStream(fp)
 	t.Cleanup(func() { h.detachStream(fp) })
 
-	for range dispatchBacklog {
-		if err := h.Dispatch(fp, "x", &nodectrlv1.SandboxSpec{}); err != nil {
-			t.Fatalf("Dispatch (fill): %v", err)
+	sb := &sandboxv1.Sandbox{Metadata: &sandboxv1.SandboxMetadata{Uid: "sb-x"}}
+	for range sandboxEventBacklog {
+		if err := h.PublishSandboxEvent(fp, sandboxv1.EventType_EVENT_TYPE_ADDED, sb); err != nil {
+			t.Fatalf("PublishSandboxEvent (fill): %v", err)
 		}
 	}
-	if err := h.Dispatch(fp, "x", &nodectrlv1.SandboxSpec{}); !errors.Is(err, ErrDispatchBacklog) {
-		t.Errorf("err = %v, want ErrDispatchBacklog", err)
+	if err := h.PublishSandboxEvent(fp, sandboxv1.EventType_EVENT_TYPE_ADDED, sb); !errors.Is(err, ErrSandboxEventBacklog) {
+		t.Errorf("err = %v, want ErrSandboxEventBacklog", err)
 	}
 }

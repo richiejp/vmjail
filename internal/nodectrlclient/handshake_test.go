@@ -32,10 +32,10 @@ type badVersionHandler struct {
 func (badVersionHandler) RegisterNode(
 	_ context.Context,
 	_ *connect.Request[nodectrlv1.RegisterNodeRequest],
-	stream *connect.ServerStream[nodectrlv1.RegisterEvent],
+	stream *connect.ServerStream[nodectrlv1.NodeEvent],
 ) error {
-	return stream.Send(&nodectrlv1.RegisterEvent{
-		Event: &nodectrlv1.RegisterEvent_Ready{
+	return stream.Send(&nodectrlv1.NodeEvent{
+		Event: &nodectrlv1.NodeEvent_Ready{
 			Ready: &nodectrlv1.SubscriptionReady{
 				AcceptedAt: timestamppb.Now(),
 				ProtocolVersion: &nodectrlv1.ProtocolVersion{

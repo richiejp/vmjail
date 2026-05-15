@@ -8,7 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
@@ -142,7 +142,7 @@ func TestWorkspaceCatalogHandlerRejectsMissingPeerIdentity(t *testing.T) {
 		{"RemovePort", func() error {
 			_, e := h.RemovePort(t.Context(),
 				connect.NewRequest(&workspacev1.RemovePortRequest{
-					ContainerPort: 80, Protocol: nodectrlv1.Protocol_PROTOCOL_TCP,
+					ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP,
 				}))
 			return e
 		}},
@@ -189,9 +189,10 @@ func newWorkspaceCatalogRigWith(t *testing.T, dispatcher *fakeDispatcher) *works
 	}
 }
 
-// fakeDispatcher records every Dispatch call. The next-error knob
-// lets tests cover the FailedPrecondition / Unavailable / Internal
-// mappings without going through a real sandbox-host stream.
+// fakeDispatcher records every PublishSandboxEvent call. The
+// next-error knob lets tests cover the FailedPrecondition /
+// Unavailable / Internal mappings without going through a real
+// Node stream.
 type fakeDispatcher struct {
 	mu        sync.Mutex
 	calls     []dispatchCall
@@ -199,12 +200,12 @@ type fakeDispatcher struct {
 }
 
 type dispatchCall struct {
-	fp         identity.Fingerprint
-	dispatchID string
-	spec       *nodectrlv1.SandboxSpec
+	fp        identity.Fingerprint
+	eventType sandboxv1.EventType
+	sandbox   *sandboxv1.Sandbox
 }
 
-func (f *fakeDispatcher) Dispatch(fp identity.Fingerprint, dispatchID string, spec *nodectrlv1.SandboxSpec) error {
+func (f *fakeDispatcher) PublishSandboxEvent(fp identity.Fingerprint, eventType sandboxv1.EventType, sandbox *sandboxv1.Sandbox) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.nextError != nil {
@@ -212,7 +213,7 @@ func (f *fakeDispatcher) Dispatch(fp identity.Fingerprint, dispatchID string, sp
 		f.nextError = nil
 		return err
 	}
-	f.calls = append(f.calls, dispatchCall{fp: fp, dispatchID: dispatchID, spec: spec})
+	f.calls = append(f.calls, dispatchCall{fp: fp, eventType: eventType, sandbox: sandbox})
 	return nil
 }
 
@@ -434,7 +435,7 @@ func TestIncrementalAssemblyRetiresMissingFields(t *testing.T) {
 	afterMount, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 		&workspacev1.AddMountRequest{
 			Handle: handle,
-			Mount: &nodectrlv1.Mount{
+			Mount: &sandboxv1.Mount{
 				Target: testMountTarget,
 				Source: "user-host-cwd",
 			},
@@ -494,7 +495,7 @@ func TestAddMountRejectsRelativeTarget(t *testing.T) {
 			_, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 				&workspacev1.AddMountRequest{
 					Handle: handle,
-					Mount:  &nodectrlv1.Mount{Target: tc.target},
+					Mount:  &sandboxv1.Mount{Target: tc.target},
 				},
 			))
 			if code := connect.CodeOf(err); code != connect.CodeInvalidArgument {
@@ -521,7 +522,7 @@ func TestAddMountRejectsDuplicateTarget(t *testing.T) {
 	build := func() *workspacev1.AddMountRequest {
 		return &workspacev1.AddMountRequest{
 			Handle: handle,
-			Mount:  &nodectrlv1.Mount{Target: testMountTarget, Source: "a"},
+			Mount:  &sandboxv1.Mount{Target: testMountTarget, Source: "a"},
 		}
 	}
 	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(build())); err != nil {
@@ -558,17 +559,17 @@ func TestAddEnvRejectsEmptyNameAndDuplicate(t *testing.T) {
 		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetUuid()},
 	}
 	if _, err := rig.client.AddEnv(t.Context(), connect.NewRequest(
-		&workspacev1.AddEnvRequest{Handle: handle, Env: &nodectrlv1.EnvVar{}},
+		&workspacev1.AddEnvRequest{Handle: handle, Env: &sandboxv1.EnvVar{}},
 	)); connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Errorf("empty name: code = %s, want InvalidArgument", connect.CodeOf(err))
 	}
 	if _, err := rig.client.AddEnv(t.Context(), connect.NewRequest(
-		&workspacev1.AddEnvRequest{Handle: handle, Env: &nodectrlv1.EnvVar{Name: "K", Value: "v"}},
+		&workspacev1.AddEnvRequest{Handle: handle, Env: &sandboxv1.EnvVar{Name: "K", Value: "v"}},
 	)); err != nil {
 		t.Fatalf("first AddEnv: %v", err)
 	}
 	if _, err := rig.client.AddEnv(t.Context(), connect.NewRequest(
-		&workspacev1.AddEnvRequest{Handle: handle, Env: &nodectrlv1.EnvVar{Name: "K", Value: "v2"}},
+		&workspacev1.AddEnvRequest{Handle: handle, Env: &sandboxv1.EnvVar{Name: "K", Value: "v2"}},
 	)); connect.CodeOf(err) != connect.CodeAlreadyExists {
 		t.Errorf("dup AddEnv: code = %s, want AlreadyExists", connect.CodeOf(err))
 	}
@@ -584,13 +585,13 @@ func TestAddPortRejectsUnspecifiedProtocol(t *testing.T) {
 	}
 	cases := []struct {
 		name string
-		port *nodectrlv1.PortMapping
+		port *sandboxv1.PortMapping
 		want connect.Code
 	}{
 		{"nil port", nil, connect.CodeInvalidArgument},
 		{
 			"unspecified proto",
-			&nodectrlv1.PortMapping{ContainerPort: 3000},
+			&sandboxv1.PortMapping{ContainerPort: 3000},
 			connect.CodeInvalidArgument,
 		},
 	}
@@ -617,7 +618,7 @@ func TestAddPortAllowsSamePortDifferentProtocol(t *testing.T) {
 	if _, err := rig.client.AddPort(t.Context(), connect.NewRequest(
 		&workspacev1.AddPortRequest{
 			Handle: handle,
-			Port:   &nodectrlv1.PortMapping{ContainerPort: 3000, Protocol: nodectrlv1.Protocol_PROTOCOL_TCP},
+			Port:   &sandboxv1.PortMapping{ContainerPort: 3000, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
 		},
 	)); err != nil {
 		t.Fatalf("first AddPort: %v", err)
@@ -625,7 +626,7 @@ func TestAddPortAllowsSamePortDifferentProtocol(t *testing.T) {
 	if _, err := rig.client.AddPort(t.Context(), connect.NewRequest(
 		&workspacev1.AddPortRequest{
 			Handle: handle,
-			Port:   &nodectrlv1.PortMapping{ContainerPort: 3000, Protocol: nodectrlv1.Protocol_PROTOCOL_UDP},
+			Port:   &sandboxv1.PortMapping{ContainerPort: 3000, Protocol: sandboxv1.Protocol_PROTOCOL_UDP},
 		},
 	)); err != nil {
 		t.Errorf("same-port-different-proto: %v, want nil", err)
@@ -633,7 +634,7 @@ func TestAddPortAllowsSamePortDifferentProtocol(t *testing.T) {
 	if _, err := rig.client.AddPort(t.Context(), connect.NewRequest(
 		&workspacev1.AddPortRequest{
 			Handle: handle,
-			Port:   &nodectrlv1.PortMapping{ContainerPort: 3000, Protocol: nodectrlv1.Protocol_PROTOCOL_TCP},
+			Port:   &sandboxv1.PortMapping{ContainerPort: 3000, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
 		},
 	)); connect.CodeOf(err) != connect.CodeAlreadyExists {
 		t.Errorf("dup port/proto: code = %s, want AlreadyExists", connect.CodeOf(err))
@@ -680,7 +681,7 @@ func TestRemoveMountDropsTheTargetAndReReinstatesMissing(t *testing.T) {
 	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 		&workspacev1.AddMountRequest{
 			Handle: handle,
-			Mount:  &nodectrlv1.Mount{Target: testMountTarget, Source: testMountSource},
+			Mount:  &sandboxv1.Mount{Target: testMountTarget, Source: testMountSource},
 		},
 	)); err != nil {
 		t.Fatalf("AddMount: %v", err)
@@ -738,7 +739,7 @@ func TestRemoveMountMiddleEntryPreservesOthers(t *testing.T) {
 		if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 			&workspacev1.AddMountRequest{
 				Handle: handle,
-				Mount:  &nodectrlv1.Mount{Target: target, Source: testMountSource},
+				Mount:  &sandboxv1.Mount{Target: target, Source: testMountSource},
 			},
 		)); err != nil {
 			t.Fatalf("AddMount %s: %v", target, err)
@@ -766,7 +767,7 @@ func TestRemoveEnvDropsByName(t *testing.T) {
 		if _, err := rig.client.AddEnv(t.Context(), connect.NewRequest(
 			&workspacev1.AddEnvRequest{
 				Handle: handle,
-				Env:    &nodectrlv1.EnvVar{Name: name, Value: "v"},
+				Env:    &sandboxv1.EnvVar{Name: name, Value: "v"},
 			},
 		)); err != nil {
 			t.Fatalf("AddEnv: %v", err)
@@ -824,8 +825,8 @@ func TestRemovePortKeyedByPortAndProtocol(t *testing.T) {
 	if _, err := rig.client.AddPort(t.Context(), connect.NewRequest(
 		&workspacev1.AddPortRequest{
 			Handle: handle,
-			Port: &nodectrlv1.PortMapping{
-				ContainerPort: 3000, Protocol: nodectrlv1.Protocol_PROTOCOL_TCP,
+			Port: &sandboxv1.PortMapping{
+				ContainerPort: 3000, Protocol: sandboxv1.Protocol_PROTOCOL_TCP,
 			},
 		},
 	)); err != nil {
@@ -834,8 +835,8 @@ func TestRemovePortKeyedByPortAndProtocol(t *testing.T) {
 	if _, err := rig.client.AddPort(t.Context(), connect.NewRequest(
 		&workspacev1.AddPortRequest{
 			Handle: handle,
-			Port: &nodectrlv1.PortMapping{
-				ContainerPort: 3000, Protocol: nodectrlv1.Protocol_PROTOCOL_UDP,
+			Port: &sandboxv1.PortMapping{
+				ContainerPort: 3000, Protocol: sandboxv1.Protocol_PROTOCOL_UDP,
 			},
 		},
 	)); err != nil {
@@ -844,14 +845,14 @@ func TestRemovePortKeyedByPortAndProtocol(t *testing.T) {
 	got, err := rig.client.RemovePort(t.Context(), connect.NewRequest(
 		&workspacev1.RemovePortRequest{
 			Handle: handle, ContainerPort: 3000,
-			Protocol: nodectrlv1.Protocol_PROTOCOL_TCP,
+			Protocol: sandboxv1.Protocol_PROTOCOL_TCP,
 		},
 	))
 	if err != nil {
 		t.Fatalf("RemovePort: %v", err)
 	}
 	ports := got.Msg.GetWorkspace().GetPorts()
-	if len(ports) != 1 || ports[0].GetProtocol() != nodectrlv1.Protocol_PROTOCOL_UDP {
+	if len(ports) != 1 || ports[0].GetProtocol() != sandboxv1.Protocol_PROTOCOL_UDP {
 		t.Errorf("ports = %v, want [3000/UDP]", ports)
 	}
 }
@@ -865,7 +866,7 @@ func TestRemovePortUnknownMapsToNotFound(t *testing.T) {
 	_, err := rig.client.RemovePort(t.Context(), connect.NewRequest(
 		&workspacev1.RemovePortRequest{
 			Handle: handle, ContainerPort: 9999,
-			Protocol: nodectrlv1.Protocol_PROTOCOL_TCP,
+			Protocol: sandboxv1.Protocol_PROTOCOL_TCP,
 		},
 	))
 	if code := connect.CodeOf(err); code != connect.CodeNotFound {
@@ -897,7 +898,7 @@ func uuidHandle(uuid string) *workspacev1.WorkspaceHandle {
 	}
 }
 
-func mountTargets(mounts []*nodectrlv1.Mount) []string {
+func mountTargets(mounts []*sandboxv1.Mount) []string {
 	out := make([]string, len(mounts))
 	for i, m := range mounts {
 		out[i] = m.GetTarget()
@@ -929,7 +930,7 @@ func readyWorkspace(t *testing.T, rig *workspaceCatalogRig, name, target string)
 	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 		&workspacev1.AddMountRequest{
 			Handle: handle,
-			Mount:  &nodectrlv1.Mount{Target: testMountTarget, Source: testMountSource},
+			Mount:  &sandboxv1.Mount{Target: testMountTarget, Source: testMountSource},
 		},
 	)); err != nil {
 		t.Fatalf("AddMount: %v", err)
@@ -1024,7 +1025,7 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	if _, err := rig.client.AddEnv(t.Context(), connect.NewRequest(
 		&workspacev1.AddEnvRequest{
 			Handle: uuidHandle(uuid),
-			Env:    &nodectrlv1.EnvVar{Name: "K", Value: "v"},
+			Env:    &sandboxv1.EnvVar{Name: "K", Value: "v"},
 		},
 	)); err != nil {
 		t.Fatalf("AddEnv: %v", err)
@@ -1044,8 +1045,8 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	if got.GetStatus() != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_RUNNING {
 		t.Errorf("status = %s, want RUNNING", got.GetStatus())
 	}
-	if got.GetCurrentDispatchId() == "" {
-		t.Error("current_dispatch_id not populated")
+	if got.GetCurrentSandbox().GetUid() == "" {
+		t.Error("current_sandbox.uid not populated")
 	}
 	call, ok := fake.last()
 	if !ok {
@@ -1054,20 +1055,20 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	if call.fp != targetID.Fingerprint() {
 		t.Errorf("dispatch target = %s, want %s", call.fp.String(), target)
 	}
-	if call.dispatchID != got.GetCurrentDispatchId() {
-		t.Errorf("dispatch_id = %q, want %q", call.dispatchID, got.GetCurrentDispatchId())
+	if call.sandbox.GetMetadata().GetUid() != got.GetCurrentSandbox().GetUid() {
+		t.Errorf("sandbox.uid = %q, want %q", call.sandbox.GetMetadata().GetUid(), got.GetCurrentSandbox().GetUid())
 	}
-	if call.spec.GetImageRef() != testImageRef {
-		t.Errorf("spec.image_ref = %q, want %q", call.spec.GetImageRef(), testImageRef)
+	if call.sandbox.GetSpec().GetImageRef() != testImageRef {
+		t.Errorf("spec.image_ref = %q, want %q", call.sandbox.GetSpec().GetImageRef(), testImageRef)
 	}
-	if call.spec.GetWorkspaceUuid() != uuid {
-		t.Errorf("spec.workspace_uuid = %q, want %q", call.spec.GetWorkspaceUuid(), uuid)
+	if call.sandbox.GetSpec().GetWorkspaceUuid() != uuid {
+		t.Errorf("spec.workspace_uuid = %q, want %q", call.sandbox.GetSpec().GetWorkspaceUuid(), uuid)
 	}
-	if len(call.spec.GetMounts()) != 1 || call.spec.GetMounts()[0].GetTarget() != testMountTarget {
-		t.Errorf("spec.mounts = %v, want [%s]", call.spec.GetMounts(), testMountTarget)
+	if len(call.sandbox.GetSpec().GetMounts()) != 1 || call.sandbox.GetSpec().GetMounts()[0].GetTarget() != testMountTarget {
+		t.Errorf("spec.mounts = %v, want [%s]", call.sandbox.GetSpec().GetMounts(), testMountTarget)
 	}
-	if len(call.spec.GetEnv()) != 1 || call.spec.GetEnv()[0].GetName() != "K" {
-		t.Errorf("spec.env = %v, want [K=v]", call.spec.GetEnv())
+	if len(call.sandbox.GetSpec().GetEnv()) != 1 || call.sandbox.GetSpec().GetEnv()[0].GetName() != "K" {
+		t.Errorf("spec.env = %v, want [K=v]", call.sandbox.GetSpec().GetEnv())
 	}
 }
 
@@ -1140,7 +1141,7 @@ func TestLaunchRefusesInvalidTargetFingerprint(t *testing.T) {
 	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 		&workspacev1.AddMountRequest{
 			Handle: uuidHandle(uuid),
-			Mount:  &nodectrlv1.Mount{Target: testMountTarget, Source: testMountSource},
+			Mount:  &sandboxv1.Mount{Target: testMountTarget, Source: testMountSource},
 		},
 	)); err != nil {
 		t.Fatalf("AddMount: %v", err)
@@ -1215,8 +1216,8 @@ func TestStopFromRunningTransitionsAndClearsDispatch(t *testing.T) {
 	if ws.GetStatus() != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_STOPPED {
 		t.Errorf("status = %s, want STOPPED", ws.GetStatus())
 	}
-	if ws.GetCurrentDispatchId() != "" {
-		t.Errorf("current_dispatch_id = %q, want empty after Stop", ws.GetCurrentDispatchId())
+	if ws.GetCurrentSandbox().GetUid() != "" {
+		t.Errorf("current_sandbox.uid = %q, want empty after Stop", ws.GetCurrentSandbox().GetUid())
 	}
 }
 

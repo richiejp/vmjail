@@ -9,16 +9,29 @@ import (
 	"testing"
 
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 )
 
 const (
-	testImageRef   = "alpine:3"
-	testDispatchID = "d-1"
+	testImageRef  = "alpine:3"
+	testSandboxID = "sb-1"
 )
 
 func noopRunner() Runner {
 	return func(context.Context, io.Writer, sandbox.Config) error { return nil }
+}
+
+// addedEvent wraps a SandboxSpec in a freshly-minted SandboxWatchEvent
+// of type ADDED for tests that exercise the executor's ADDED path.
+func addedEvent(uid string, spec *sandboxv1.SandboxSpec) *nodectrlv1.SandboxWatchEvent {
+	return &nodectrlv1.SandboxWatchEvent{
+		Type: sandboxv1.EventType_EVENT_TYPE_ADDED,
+		Sandbox: &sandboxv1.Sandbox{
+			Metadata: &sandboxv1.SandboxMetadata{Uid: uid},
+			Spec:     spec,
+		},
+	}
 }
 
 func TestNewRejectsNilStdout(t *testing.T) {
@@ -30,7 +43,7 @@ func TestNewRejectsNilStdout(t *testing.T) {
 
 func TestNewDefaultsRunnerToHello(t *testing.T) {
 	// Production callers pass Runner = nil; the constructor must
-	// substitute sandbox.Hello so HandleDispatch doesn't NPE.
+	// substitute sandbox.Hello so HandleSandboxEvent doesn't NPE.
 	e, err := New(Config{Stdout: io.Discard})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -40,10 +53,10 @@ func TestNewDefaultsRunnerToHello(t *testing.T) {
 	}
 }
 
-// TestHandleDispatchBareHelloPath covers the empty-image_ref branch:
+// TestHandleSandboxEventBareHelloPath covers the empty-image_ref branch:
 // the runner sees the executor's baseline config, no assembler is
 // consulted.
-func TestHandleDispatchBareHelloPath(t *testing.T) {
+func TestHandleSandboxEventBareHelloPath(t *testing.T) {
 	base := sandbox.Config{
 		CloudHypervisor: "/path/to/ch",
 		Kernel:          "/path/to/kernel",
@@ -67,12 +80,9 @@ func TestHandleDispatchBareHelloPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &nodectrlv1.Dispatch{
-		DispatchId: "d-42",
-		Spec:       &nodectrlv1.SandboxSpec{WorkspaceUuid: "ws-1"},
-	}
-	if err := e.HandleDispatch(t.Context(), d); err != nil {
-		t.Fatalf("HandleDispatch: %v", err)
+	evt := addedEvent("sb-42", &sandboxv1.SandboxSpec{WorkspaceUuid: "ws-1"})
+	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
 	}
 	if called != 1 {
 		t.Errorf("runner called %d times, want 1", called)
@@ -87,10 +97,10 @@ func TestHandleDispatchBareHelloPath(t *testing.T) {
 	}
 }
 
-// TestHandleDispatchAssemblerPath covers the image_ref-set branch:
+// TestHandleSandboxEventAssemblerPath covers the image_ref-set branch:
 // the assembler is consulted, the runner sees the bundled config,
 // and the unlock returned by the assembler runs after the boot.
-func TestHandleDispatchAssemblerPath(t *testing.T) {
+func TestHandleSandboxEventAssemblerPath(t *testing.T) {
 	bundled := sandbox.Config{
 		CloudHypervisor: "/from/assembler/ch",
 		Kernel:          "/from/assembler/kernel",
@@ -112,12 +122,9 @@ func TestHandleDispatchAssemblerPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &nodectrlv1.Dispatch{
-		DispatchId: "d-7",
-		Spec:       &nodectrlv1.SandboxSpec{ImageRef: testImageRef},
-	}
-	if err := e.HandleDispatch(t.Context(), d); err != nil {
-		t.Fatalf("HandleDispatch: %v", err)
+	evt := addedEvent("sb-7", &sandboxv1.SandboxSpec{ImageRef: testImageRef})
+	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
 	}
 	if seenRef != testImageRef {
 		t.Errorf("assembler saw ref %q, want %q", seenRef, testImageRef)
@@ -130,10 +137,10 @@ func TestHandleDispatchAssemblerPath(t *testing.T) {
 	}
 }
 
-// TestHandleDispatchAssemblerError pins the error path when the
+// TestHandleSandboxEventAssemblerError pins the error path when the
 // assembler fails — runner must not be invoked and the dispatch
 // id must appear in the wrapped error.
-func TestHandleDispatchAssemblerError(t *testing.T) {
+func TestHandleSandboxEventAssemblerError(t *testing.T) {
 	want := errors.New("synthetic pull failure")
 	asm := func(context.Context, string) (sandbox.Config, func(), error) {
 		return sandbox.Config{}, func() {}, want
@@ -147,25 +154,25 @@ func TestHandleDispatchAssemblerError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &nodectrlv1.Dispatch{DispatchId: "d-bad", Spec: &nodectrlv1.SandboxSpec{ImageRef: testImageRef}}
-	got := e.HandleDispatch(t.Context(), d)
+	evt := addedEvent("sb-bad", &sandboxv1.SandboxSpec{ImageRef: testImageRef})
+	got := e.HandleSandboxEvent(t.Context(), evt)
 	if !errors.Is(got, want) {
 		t.Errorf("err = %v, want wrapping %v", got, want)
 	}
 	if runCalls != 0 {
 		t.Error("runner was invoked despite assembler failure")
 	}
-	if !strings.Contains(got.Error(), "d-bad") {
-		t.Errorf("err message %q should mention dispatch id", got.Error())
+	if !strings.Contains(got.Error(), "sb-bad") {
+		t.Errorf("err message %q should mention sandbox uid", got.Error())
 	}
 }
 
-// TestHandleDispatchNoAssemblerFallback covers the production
+// TestHandleSandboxEventNoAssemblerFallback covers the production
 // safety net: image_ref is set but no Assembler is configured.
 // Expected behaviour is to fall back to the baseline config so
 // the dispatch still produces something observable; A4b/A5a
 // production wiring always sets an Assembler.
-func TestHandleDispatchNoAssemblerFallback(t *testing.T) {
+func TestHandleSandboxEventNoAssemblerFallback(t *testing.T) {
 	base := sandbox.Config{Kernel: "/baseline/kernel"}
 	var seen sandbox.Config
 	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
@@ -176,43 +183,37 @@ func TestHandleDispatchNoAssemblerFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &nodectrlv1.Dispatch{
-		DispatchId: testDispatchID,
-		Spec:       &nodectrlv1.SandboxSpec{ImageRef: testImageRef},
-	}
-	if err := e.HandleDispatch(t.Context(), d); err != nil {
-		t.Fatalf("HandleDispatch: %v", err)
+	evt := addedEvent(testSandboxID, &sandboxv1.SandboxSpec{ImageRef: testImageRef})
+	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
 	}
 	if seen.Kernel != base.Kernel {
 		t.Errorf("runner saw cfg %+v, want baseline (assembler absent)", seen)
 	}
 }
 
-func TestHandleDispatchLogsDispatchToStdout(t *testing.T) {
+func TestHandleSandboxEventLogsToStdout(t *testing.T) {
 	var buf bytes.Buffer
 	e, err := New(Config{Stdout: &buf, Runner: noopRunner()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &nodectrlv1.Dispatch{
-		DispatchId: "d-99",
-		Spec: &nodectrlv1.SandboxSpec{
-			ImageRef:      testImageRef,
-			WorkspaceUuid: "ws-9",
-		},
-	}
-	if err := e.HandleDispatch(t.Context(), d); err != nil {
-		t.Fatalf("HandleDispatch: %v", err)
+	evt := addedEvent("sb-99", &sandboxv1.SandboxSpec{
+		ImageRef:      testImageRef,
+		WorkspaceUuid: "ws-9",
+	})
+	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"d-99", "ws-9", testImageRef} {
+	for _, want := range []string{"sb-99", "ws-9", testImageRef} {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout missing %q, got:\n%s", want, out)
 		}
 	}
 }
 
-func TestHandleDispatchPanicsOnNilDispatch(t *testing.T) {
+func TestHandleSandboxEventPanicsOnNilEvent(t *testing.T) {
 	e, err := New(Config{Stdout: io.Discard, Runner: noopRunner()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -220,17 +221,17 @@ func TestHandleDispatchPanicsOnNilDispatch(t *testing.T) {
 	defer func() {
 		got := recover()
 		if got == nil {
-			t.Fatal("HandleDispatch did not panic on nil Dispatch")
+			t.Fatal("HandleSandboxEvent did not panic on nil event")
 		}
 		msg, _ := got.(string)
-		if !strings.Contains(msg, "nil Dispatch") {
-			t.Errorf("panic = %q, want substring 'nil Dispatch'", msg)
+		if !strings.Contains(msg, "nil event") {
+			t.Errorf("panic = %q, want substring 'nil event'", msg)
 		}
 	}()
-	_ = e.HandleDispatch(t.Context(), nil)
+	_ = e.HandleSandboxEvent(t.Context(), nil)
 }
 
-func TestHandleDispatchPanicsOnDispatchWithoutSpec(t *testing.T) {
+func TestHandleSandboxEventPanicsWithoutSpec(t *testing.T) {
 	e, err := New(Config{Stdout: io.Discard, Runner: noopRunner()})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -238,29 +239,32 @@ func TestHandleDispatchPanicsOnDispatchWithoutSpec(t *testing.T) {
 	defer func() {
 		got := recover()
 		if got == nil {
-			t.Fatal("HandleDispatch did not panic when Spec is nil")
+			t.Fatal("HandleSandboxEvent did not panic when Spec is nil")
 		}
 		msg, _ := got.(string)
 		if !strings.Contains(msg, "without a Spec") {
 			t.Errorf("panic = %q, want substring 'without a Spec'", msg)
 		}
 	}()
-	_ = e.HandleDispatch(t.Context(), &nodectrlv1.Dispatch{DispatchId: testDispatchID})
+	_ = e.HandleSandboxEvent(t.Context(), &nodectrlv1.SandboxWatchEvent{
+		Type:    sandboxv1.EventType_EVENT_TYPE_ADDED,
+		Sandbox: &sandboxv1.Sandbox{Metadata: &sandboxv1.SandboxMetadata{Uid: testSandboxID}},
+	})
 }
 
-func TestHandleDispatchSurfacesRunnerError(t *testing.T) {
+func TestHandleSandboxEventSurfacesRunnerError(t *testing.T) {
 	want := errors.New("synthetic boot failure")
 	runner := func(context.Context, io.Writer, sandbox.Config) error { return want }
 	e, err := New(Config{Stdout: io.Discard, Runner: runner})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	d := &nodectrlv1.Dispatch{DispatchId: testDispatchID, Spec: &nodectrlv1.SandboxSpec{}}
-	got := e.HandleDispatch(t.Context(), d)
+	evt := addedEvent(testSandboxID, &sandboxv1.SandboxSpec{})
+	got := e.HandleSandboxEvent(t.Context(), evt)
 	if !errors.Is(got, want) {
 		t.Errorf("err = %v, want wrapping %v", got, want)
 	}
-	if !strings.Contains(got.Error(), testDispatchID) {
-		t.Errorf("err message %q should mention dispatch id", got.Error())
+	if !strings.Contains(got.Error(), testSandboxID) {
+		t.Errorf("err message %q should mention sandbox uid", got.Error())
 	}
 }

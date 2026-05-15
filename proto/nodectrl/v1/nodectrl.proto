@@ -20,6 +20,7 @@ syntax = "proto3";
 package daft.nodectrl.v1;
 
 import "google/protobuf/timestamp.proto";
+import "sandbox/v1/sandbox.proto";
 
 option go_package = "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1;nodectrlv1";
 
@@ -27,7 +28,7 @@ service NodeControlService {
   // RegisterNode advertises a Node's resources and holds the
   // stream open for the orchestrator to push control events
   // (SubscriptionReady plus Sandbox lifecycle events).
-  rpc RegisterNode(RegisterNodeRequest) returns (stream RegisterEvent) {}
+  rpc RegisterNode(RegisterNodeRequest) returns (stream NodeEvent) {}
 
   // Heartbeat refreshes the Node's last-seen timestamp. The Node
   // advertises current resource utilisation alongside the ping so
@@ -80,23 +81,32 @@ message RegisterNodeRequest {
   ProtocolVersion protocol_version = 3;
 }
 
-// RegisterEvent is the envelope for events pushed on the
-// RegisterNode stream.
-message RegisterEvent {
+// NodeEvent is the envelope for events pushed on the RegisterNode
+// stream. K8s-style: one server-stream replays creates / updates
+// / deletes via a single watch envelope plus the K8s-shaped
+// SubscriptionReady ack on the first event.
+message NodeEvent {
   oneof event {
     SubscriptionReady ready = 1;
-    Dispatch dispatch = 2;
+    SandboxWatchEvent sandbox = 2;
   }
 }
 
-// Dispatch hands a workload to the registered Node. The
-// dispatch_id is opaque to the wire — a future ACK RPC will
-// reference it so the orchestrator can correlate completion
-// signals back to the originating Dispatch. B4b will replace
-// this with a SandboxWatchEvent carrying a full Sandbox resource.
-message Dispatch {
-  string dispatch_id = 1;
-  SandboxSpec spec = 2;
+// SandboxWatchEvent reports a Sandbox lifecycle transition the
+// Node should react to. The payload is the full Sandbox resource,
+// not a delta — the protocol is level-triggered, replay-safe, and
+// idempotent.
+//
+// Event types:
+//   ADDED     — a new Sandbox bound to this Node; start it.
+//   MODIFIED  — desired state changed (rare in v1 since spec is
+//               immutable after Launch; reserved for future
+//               status-driven mutations).
+//   DELETED   — orchestrator wants this Sandbox torn down.
+//   BOOKMARK  — cursor advance without a real change.
+message SandboxWatchEvent {
+  daft.sandbox.v1.EventType type = 1;
+  daft.sandbox.v1.Sandbox sandbox = 2;
 }
 
 // SubscriptionReady confirms the registration was recorded.
@@ -107,7 +117,7 @@ message Dispatch {
 // The orchestrator's own ProtocolVersion is echoed here so the
 // Node can refuse to serve workloads if the orchestrator is
 // running a wire-incompatible build. The handshake is symmetric:
-// each side validates the other before any Dispatch flows.
+// each side validates the other before any SandboxWatchEvent flows.
 message SubscriptionReady {
   google.protobuf.Timestamp accepted_at = 1;
   ProtocolVersion protocol_version = 2;
@@ -146,99 +156,4 @@ message Node {
 
 message ListNodesResponse {
   repeated Node nodes = 1;
-}
-
-// SandboxSpec is one dispatchable workload. The orchestrator
-// composes a SandboxSpec from a Workspace + scheduler decision and
-// hands it to a Node over the RegisterNode stream via Dispatch.
-// Slice B4b will promote this to the spec of a first-class Sandbox
-// resource.
-//
-// Wire compatibility: fields are added at the tail; never renumbered.
-message SandboxSpec {
-  // OCI image reference (registry/repo:tag or @sha256:...).
-  // Resolved against the Node's imagestore on dispatch.
-  string image_ref = 1;
-  // Filesystem mounts visible inside the VM. Order is irrelevant;
-  // the executor may sort by target for deterministic mounting.
-  repeated Mount mounts = 2;
-  // Environment variables seen by the container's entrypoint.
-  // No ordering guarantees; duplicate names resolve last-write-wins
-  // at the executor (matches Docker / runc behaviour).
-  repeated EnvVar env = 3;
-  // Container TCP/UDP ports the workload binds. Slice C1 wires
-  // these back to the orchestrator's ingress; for A-phase this
-  // field is informational.
-  repeated PortMapping ports = 4;
-  // Optional GPU reservation. Unset (or zero count) ⇒ CPU-only.
-  GpuRequest gpu_request = 5;
-  // Sharing policy. UNSPECIFIED ⇒ scheduler-default (currently
-  // shared-VM with other workspaces owned by the same identity).
-  Isolation isolation = 6;
-  // Workspace this spec instantiates. The Node's executor uses
-  // it to scope filesystem state, port labels, and teardown.
-  string workspace_uuid = 7;
-}
-
-// Mount is one bind-style mount inside the VM.
-message Mount {
-  // In-VM mount point, absolute (e.g. "/workspace"). The executor
-  // rejects relative or empty targets.
-  string target = 1;
-  // Logical source identifier. Resolution is Node policy:
-  // a workspace UUID maps to the daft-fuse view of that workspace;
-  // a registered host-path tag maps to a pre-approved bind source.
-  // Free-form host paths are not accepted — adoption (Slice F1)
-  // is how user-host directories enter the namespace.
-  string source = 2;
-  // Mount read-only. Defaults to false (read-write) on the wire.
-  bool read_only = 3;
-}
-
-// EnvVar is one name=value pair forwarded into the container.
-message EnvVar {
-  // Variable name. Empty names are rejected by the executor.
-  string name = 1;
-  // Variable value. Allowed to be empty; the variable is still set.
-  string value = 2;
-}
-
-// Protocol selects the transport for a PortMapping.
-enum Protocol {
-  PROTOCOL_UNSPECIFIED = 0;
-  PROTOCOL_TCP = 1;
-  PROTOCOL_UDP = 2;
-}
-
-// PortMapping declares a port the container listens on.
-// The reverse direction (host-port allocation) is owned by the
-// orchestrator's ingress (Phase C).
-message PortMapping {
-  // Container listen port. Zero means "any free port"; the
-  // ingress reports back the chosen value.
-  uint32 container_port = 1;
-  // Transport. UNSPECIFIED is rejected — every PortMapping must
-  // declare its protocol explicitly so ingress can shape correctly.
-  Protocol protocol = 2;
-}
-
-// GpuRequest is the GPU reservation attached to a SandboxSpec.
-// Wire-level placeholder for Slice D1 (Node GPU advertisement
-// + scheduler).
-message GpuRequest {
-  // Number of logical GPUs required. Zero ⇒ no GPU.
-  uint32 count = 1;
-  // Minimum VRAM per GPU, in bytes. Zero ⇒ no minimum.
-  uint64 min_vram_bytes = 2;
-}
-
-// Isolation is the per-workspace sharing policy.
-enum Isolation {
-  ISOLATION_UNSPECIFIED = 0;
-  // SHARED: pack into an existing compatible VM when one is
-  // available. Default for CPU-mode workspaces.
-  ISOLATION_SHARED = 1;
-  // STRICT: dedicate a fresh VM to this workspace. Required for
-  // GPU workspaces that don't opt in to sharing (Slice D4).
-  ISOLATION_STRICT = 2;
 }

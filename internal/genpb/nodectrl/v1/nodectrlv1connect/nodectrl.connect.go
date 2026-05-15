@@ -67,7 +67,7 @@ type NodeControlServiceClient interface {
 	// RegisterNode advertises a Node's resources and holds the
 	// stream open for the orchestrator to push control events
 	// (SubscriptionReady plus Sandbox lifecycle events).
-	RegisterNode(context.Context, *connect.Request[v1.RegisterNodeRequest]) (*connect.ServerStreamForClient[v1.RegisterEvent], error)
+	RegisterNode(context.Context, *connect.Request[v1.RegisterNodeRequest]) (*connect.ServerStreamForClient[v1.NodeEvent], error)
 	// Heartbeat refreshes the Node's last-seen timestamp. The Node
 	// advertises current resource utilisation alongside the ping so
 	// the orchestrator scheduler has a fresh view without a separate
@@ -92,7 +92,7 @@ func NewNodeControlServiceClient(httpClient connect.HTTPClient, baseURL string, 
 	baseURL = strings.TrimRight(baseURL, "/")
 	nodeControlServiceMethods := v1.File_nodectrl_v1_nodectrl_proto.Services().ByName("NodeControlService").Methods()
 	return &nodeControlServiceClient{
-		registerNode: connect.NewClient[v1.RegisterNodeRequest, v1.RegisterEvent](
+		registerNode: connect.NewClient[v1.RegisterNodeRequest, v1.NodeEvent](
 			httpClient,
 			baseURL+NodeControlServiceRegisterNodeProcedure,
 			connect.WithSchema(nodeControlServiceMethods.ByName("RegisterNode")),
@@ -115,13 +115,13 @@ func NewNodeControlServiceClient(httpClient connect.HTTPClient, baseURL string, 
 
 // nodeControlServiceClient implements NodeControlServiceClient.
 type nodeControlServiceClient struct {
-	registerNode *connect.Client[v1.RegisterNodeRequest, v1.RegisterEvent]
+	registerNode *connect.Client[v1.RegisterNodeRequest, v1.NodeEvent]
 	heartbeat    *connect.Client[v1.HeartbeatRequest, v1.HeartbeatResponse]
 	listNodes    *connect.Client[v1.ListNodesRequest, v1.ListNodesResponse]
 }
 
 // RegisterNode calls daft.nodectrl.v1.NodeControlService.RegisterNode.
-func (c *nodeControlServiceClient) RegisterNode(ctx context.Context, req *connect.Request[v1.RegisterNodeRequest]) (*connect.ServerStreamForClient[v1.RegisterEvent], error) {
+func (c *nodeControlServiceClient) RegisterNode(ctx context.Context, req *connect.Request[v1.RegisterNodeRequest]) (*connect.ServerStreamForClient[v1.NodeEvent], error) {
 	return c.registerNode.CallServerStream(ctx, req)
 }
 
@@ -141,7 +141,7 @@ type NodeControlServiceHandler interface {
 	// RegisterNode advertises a Node's resources and holds the
 	// stream open for the orchestrator to push control events
 	// (SubscriptionReady plus Sandbox lifecycle events).
-	RegisterNode(context.Context, *connect.Request[v1.RegisterNodeRequest], *connect.ServerStream[v1.RegisterEvent]) error
+	RegisterNode(context.Context, *connect.Request[v1.RegisterNodeRequest], *connect.ServerStream[v1.NodeEvent]) error
 	// Heartbeat refreshes the Node's last-seen timestamp. The Node
 	// advertises current resource utilisation alongside the ping so
 	// the orchestrator scheduler has a fresh view without a separate
@@ -197,7 +197,7 @@ func NewNodeControlServiceHandler(svc NodeControlServiceHandler, opts ...connect
 // UnimplementedNodeControlServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedNodeControlServiceHandler struct{}
 
-func (UnimplementedNodeControlServiceHandler) RegisterNode(context.Context, *connect.Request[v1.RegisterNodeRequest], *connect.ServerStream[v1.RegisterEvent]) error {
+func (UnimplementedNodeControlServiceHandler) RegisterNode(context.Context, *connect.Request[v1.RegisterNodeRequest], *connect.ServerStream[v1.NodeEvent]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("daft.nodectrl.v1.NodeControlService.RegisterNode is not implemented"))
 }
 
