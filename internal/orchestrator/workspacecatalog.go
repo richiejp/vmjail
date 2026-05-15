@@ -207,6 +207,14 @@ func (h *WorkspaceCatalogHandler) AddMount(
 	if err != nil {
 		return nil, err
 	}
+	source := mount.GetSource()
+	if source == "" {
+		// Empty Source defaults to the workspace's own UUID — the
+		// daft-fuse view of the workspace itself. Default applied
+		// server-side so the client doesn't need an extra Get RPC
+		// (and a TOCTOU window) just to learn its own UUID.
+		source = ws.UUID
+	}
 	updated, err := h.store.Update(ws.UUID, func(w *workspacecatalog.Workspace) error {
 		for i := range w.Mounts {
 			if w.Mounts[i].Target == target {
@@ -216,7 +224,7 @@ func (h *WorkspaceCatalogHandler) AddMount(
 		}
 		w.Mounts = append(w.Mounts, workspacecatalog.Mount{
 			Target:   target,
-			Source:   mount.GetSource(),
+			Source:   source,
 			ReadOnly: mount.GetReadOnly(),
 		})
 		return nil

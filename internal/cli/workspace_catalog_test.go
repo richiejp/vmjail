@@ -18,10 +18,8 @@ import (
 	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
-// catalogFakeDispatcher mirrors the in-orchestrator fake used by
-// the catalog-handler tests; redeclared here because cli is a
-// separate package and the orchestrator test-helper isn't
-// importable.
+// catalogFakeDispatcher mirrors the in-orchestrator fake (which
+// can't be imported across package boundaries).
 type catalogFakeDispatcher struct {
 	mu    sync.Mutex
 	calls []catalogDispatchCall
@@ -236,10 +234,8 @@ const testE2EWorkspaceName = "e2e"
 
 const testE2EMountTarget = "/workspace"
 
-// workspaceE2EHarness is the wiring TestWorkspaceEndToEndCPUFlow
-// builds once and threads through every step. Hoisted into its own
-// type so the test reads as a sequence of named steps rather than a
-// 60-line setup → assertion blob.
+// workspaceE2EHarness threads the in-process orchestrator + caller
+// identity through the multi-step E2E test below.
 type workspaceE2EHarness struct {
 	t          *testing.T
 	clientDir  string
@@ -490,18 +486,6 @@ func TestWorkspaceNameForCreateFallsBackToCwd(t *testing.T) {
 	}
 }
 
-// TestDefaultMountSourceWithOverrideShortCircuits pins that the
-// override is returned without an RPC dial; nil c proves it.
-func TestDefaultMountSourceWithOverrideShortCircuits(t *testing.T) {
-	got, err := defaultMountSource(context.Background(), nil, nil, "explicit-src")
-	if err != nil {
-		t.Fatalf("defaultMountSource: %v", err)
-	}
-	if got != "explicit-src" {
-		t.Errorf("got %q, want explicit-src", got)
-	}
-}
-
 // TestWriteWorkspaceListWithEntries exercises the row-rendering
 // path that the empty-list test doesn't reach.
 func TestWriteWorkspaceListWithEntries(t *testing.T) {
@@ -547,12 +531,5 @@ func TestWriteWorkspaceListEmpty(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "NAME") {
 		t.Errorf("empty list should still emit header, got:\n%s", buf.String())
-	}
-}
-
-func TestReadSingleArgEmpty(t *testing.T) {
-	got, err := readSingleArg(nil, "x")
-	if err != nil || got != "" {
-		t.Errorf("readSingleArg(nil) = (%q, %v), want (\"\", nil)", got, err)
 	}
 }

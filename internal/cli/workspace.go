@@ -316,7 +316,7 @@ func runWorkspacePull(
 	ctx, span := tracer.Start(ctx, "daft.workspace.pull",
 		trace.WithAttributes(
 			trace.KV{Key: "from", Value: from},
-			trace.KV{Key: workspaceCmdName, Value: workspaceName},
+			trace.KV{Key: workspaceAttrKey, Value: workspaceName},
 			trace.KV{Key: "dest", Value: dest},
 			trace.KV{Key: "preserve_mtime", Value: strconv.FormatBool(preserveTime)},
 		))

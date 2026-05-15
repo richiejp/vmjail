@@ -24,15 +24,16 @@ import (
 	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
-// orchestratorFlag is the long form of --orchestrator. Shared with
-// the sandbox-list / ping commands by convention but kept local
-// here so renaming this command's flag doesn't require touching
-// unrelated subtrees.
 const orchestratorFlag = "orchestrator"
 
-// rpcAddrAttrKey is the span attribute key the catalog commands
-// stamp with the orchestrator URL.
-const rpcAddrAttrKey = "rpc.addr"
+// rpcAddrAttrKey / workspaceAttrKey are span attribute keys.
+// workspaceAttrKey is intentionally distinct from workspaceCmdName
+// despite the shared literal — one is the cobra verb, the other is
+// the value tag we stamp on spans.
+const (
+	rpcAddrAttrKey   = "rpc.addr"
+	workspaceAttrKey = "workspace"
+)
 
 // Subcommand verb names. Promoted to constants so the cobra Use
 // fields, span names, and tests reference the same string.
@@ -51,8 +52,6 @@ const (
 	rmSubName       = "rm"
 )
 
-// errOrchestratorRequired surfaces the up-front guard that every
-// catalog subcommand applies before any RPC plumbing.
 var errOrchestratorRequired = errors.New("daft workspace: --orchestrator is required")
 
 // workspaceClientOpts is the shared flag set every catalog
@@ -94,18 +93,31 @@ func (o workspaceClientOpts) resolveHandle() (*workspacev1.WorkspaceHandle, erro
 	}
 	name := o.name
 	if name == "" {
-		cwd, err := os.Getwd()
+		derived, err := deriveWorkspaceNameFromCwd()
 		if err != nil {
-			return nil, fmt.Errorf("daft workspace: getwd: %w", err)
+			return nil, err
 		}
-		name = filepath.Base(cwd)
-	}
-	if name == "" || name == "." || name == "/" {
-		return nil, errors.New("daft workspace: could not derive workspace name; pass --name explicitly")
+		name = derived
 	}
 	return &workspacev1.WorkspaceHandle{
 		Handle: &workspacev1.WorkspaceHandle_Name{Name: name},
 	}, nil
+}
+
+// deriveWorkspaceNameFromCwd returns basename($PWD), rejecting the
+// degenerate cases ("", ".", "/") with a clear "pass --name"
+// message. Shared by resolveHandle and workspaceNameForCreate so
+// the error wording doesn't drift.
+func deriveWorkspaceNameFromCwd() (string, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("daft workspace: getwd: %w", err)
+	}
+	name := filepath.Base(cwd)
+	if name == "" || name == "." || name == "/" {
+		return "", errors.New("daft workspace: cannot derive name from cwd; pass --name explicitly")
+	}
+	return name, nil
 }
 
 // dialWorkspaceCatalog builds the Connect client over the local
@@ -130,43 +142,69 @@ func dialWorkspaceCatalog(
 	return client, httpc, nil
 }
 
-// catalogFunc is the per-command body. The handle is pre-resolved;
-// commands that take no handle (Create, List) receive a nil one.
-type catalogFunc func(
-	ctx context.Context,
-	client workspacev1connect.WorkspaceCatalogServiceClient,
-	handle *workspacev1.WorkspaceHandle,
-) error
+// spanName returns the OpenTelemetry span name for a catalog
+// subcommand verb. Centralizes the "daft.workspace." prefix.
+func spanName(verb string) string { return "daft.workspace." + verb }
 
-// runCatalogCmd is the boilerplate every catalog subcommand reuses:
-// flag-guard → handle-resolve → trace span → dial → fn → trace
-// shipping. needHandle=false skips the basename-derivation for
-// commands that operate on the whole catalog (Create, List).
+type (
+	// catalogFunc is the body of a handle-bearing subcommand.
+	catalogFunc func(
+		ctx context.Context,
+		client workspacev1connect.WorkspaceCatalogServiceClient,
+		handle *workspacev1.WorkspaceHandle,
+	) error
+	// catalogFuncNoHandle is the body of catalog-wide subcommands
+	// (Create, List) — no per-workspace handle.
+	catalogFuncNoHandle func(
+		ctx context.Context,
+		client workspacev1connect.WorkspaceCatalogServiceClient,
+	) error
+)
+
+// runCatalogCmd handles a per-workspace subcommand: flag-guard →
+// handle-resolve → trace span → dial → fn → trace ship.
 func runCatalogCmd(
 	cmd *cobra.Command,
 	opts workspaceClientOpts,
-	span string,
-	needHandle bool,
+	verb string,
 	fn catalogFunc,
+) error {
+	handle, err := opts.resolveHandle()
+	if err != nil {
+		return err
+	}
+	return runWithCatalogClient(cmd, opts, verb,
+		func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient) error {
+			return fn(ctx, c, handle)
+		})
+}
+
+// runCatalogCmdNoHandle is the catalog-wide analogue: no handle
+// resolution, no basename derivation.
+func runCatalogCmdNoHandle(
+	cmd *cobra.Command,
+	opts workspaceClientOpts,
+	verb string,
+	fn catalogFuncNoHandle,
+) error {
+	return runWithCatalogClient(cmd, opts, verb, fn)
+}
+
+func runWithCatalogClient(
+	cmd *cobra.Command,
+	opts workspaceClientOpts,
+	verb string,
+	fn catalogFuncNoHandle,
 ) error {
 	if opts.orchestrator == "" {
 		return errOrchestratorRequired
 	}
-	var handle *workspacev1.WorkspaceHandle
-	if needHandle {
-		h, err := opts.resolveHandle()
-		if err != nil {
-			return err
-		}
-		handle = h
-	}
-
 	ctx, cancel := context.WithTimeout(cmd.Context(), opts.timeout)
 	defer cancel()
 
 	tracer, owned := tracerForCommand(ctx)
 	ctx, sp := tracer.Start(
-		ctx, span,
+		ctx, spanName(verb),
 		trace.WithAttributes(trace.KV{Key: rpcAddrAttrKey, Value: opts.orchestrator}),
 	)
 	defer sp.End()
@@ -175,19 +213,17 @@ func runCatalogCmd(
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	if err := fn(ctx, client, handle); err != nil {
+	if err := fn(ctx, client); err != nil {
 		return trace.RecordError(ctx, err)
 	}
 	if owned {
-		shipTraces(ctx, tracer, httpc, trimURLScheme(opts.orchestrator), span)
+		shipTraces(ctx, tracer, httpc, trimURLScheme(opts.orchestrator), spanName(verb))
 	}
 	return nil
 }
 
 // newWorkspaceCatalogSubcommands returns every B3 verb wired under
-// `daft workspace`. Exposed so newWorkspaceCmd can mix them with
-// the existing deprecated chunk-sync subcommands without those
-// files importing the catalog plumbing.
+// `daft workspace`.
 func newWorkspaceCatalogSubcommands() []*cobra.Command {
 	return []*cobra.Command{
 		newWorkspaceCreateCmd(),
@@ -212,12 +248,12 @@ func newWorkspaceCreateCmd() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runCatalogCmd(cmd, opts, "daft.workspace."+createSubName, false,
-				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, _ *workspacev1.WorkspaceHandle) error {
-					name, err := workspaceNameForCreate(opts)
-					if err != nil {
-						return err
-					}
+			name, err := workspaceNameForCreate(opts)
+			if err != nil {
+				return err
+			}
+			return runCatalogCmdNoHandle(cmd, opts, createSubName,
+				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient) error {
 					resp, err := c.Create(ctx, connect.NewRequest(
 						&workspacev1.CreateWorkspaceRequest{Name: name},
 					))
@@ -241,15 +277,7 @@ func workspaceNameForCreate(opts workspaceClientOpts) (string, error) {
 	if opts.name != "" {
 		return opts.name, nil
 	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("daft workspace create: getwd: %w", err)
-	}
-	name := filepath.Base(cwd)
-	if name == "" || name == "." || name == "/" {
-		return "", errors.New("daft workspace create: cannot derive a name; pass --name")
-	}
-	return name, nil
+	return deriveWorkspaceNameFromCwd()
 }
 
 //nolint:dupl // catalog subcommands are structurally parallel by design — runCatalogCmd factors the body.
@@ -261,7 +289,7 @@ func newWorkspaceStatusCmd() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runCatalogCmd(cmd, opts, "daft.workspace."+statusSubName, true,
+			return runCatalogCmd(cmd, opts, statusSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.Get(ctx, connect.NewRequest(
 						&workspacev1.GetWorkspaceRequest{Handle: h},
@@ -287,8 +315,8 @@ func newWorkspaceListCmd() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runCatalogCmd(cmd, opts, "daft.workspace."+listSubName, false,
-				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, _ *workspacev1.WorkspaceHandle) error {
+			return runCatalogCmdNoHandle(cmd, opts, listSubName,
+				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient) error {
 					resp, err := c.List(ctx, connect.NewRequest(
 						&workspacev1.ListWorkspacesRequest{MineOnly: mineOnly},
 					))
@@ -313,11 +341,11 @@ func newWorkspaceImageCmd() *cobra.Command {
 		Args:          cobra.MaximumNArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ref, err := readSingleArg(args, "image ref")
-			if err != nil {
-				return err
+			var ref string
+			if len(args) > 0 {
+				ref = args[0]
 			}
-			return runCatalogCmd(cmd, opts, "daft.workspace."+imageSubName, true,
+			return runCatalogCmd(cmd, opts, imageSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.SetImage(ctx, connect.NewRequest(
 						&workspacev1.SetImageRequest{Handle: h, ImageRef: ref},
@@ -342,11 +370,11 @@ func newWorkspaceTargetCmd() *cobra.Command {
 		Args:          cobra.MaximumNArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fp, err := readSingleArg(args, "sandbox fingerprint")
-			if err != nil {
-				return err
+			var fp string
+			if len(args) > 0 {
+				fp = args[0]
 			}
-			return runCatalogCmd(cmd, opts, "daft.workspace."+targetSubName, true,
+			return runCatalogCmd(cmd, opts, targetSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.SetTarget(ctx, connect.NewRequest(
 						&workspacev1.SetTargetRequest{Handle: h, SandboxFingerprint: fp},
@@ -384,18 +412,17 @@ func newWorkspaceMountAddCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
-			return runCatalogCmd(cmd, opts, "daft.workspace."+mountSubName+"."+addSubName, true,
+			return runCatalogCmd(cmd, opts, mountSubName+"."+addSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
-					resolvedSource, err := defaultMountSource(ctx, c, h, source)
-					if err != nil {
-						return err
-					}
+					// Empty Source on the wire tells the catalog
+					// handler to default to the workspace's UUID,
+					// saving an extra Get round-trip from the client.
 					resp, err := c.AddMount(ctx, connect.NewRequest(
 						&workspacev1.AddMountRequest{
 							Handle: h,
 							Mount: &sandboxctrlv1.Mount{
 								Target:   target,
-								Source:   resolvedSource,
+								Source:   source,
 								ReadOnly: readOnly,
 							},
 						},
@@ -409,30 +436,9 @@ func newWorkspaceMountAddCmd() *cobra.Command {
 	}
 	bindWorkspaceClientFlags(cmd, &opts)
 	cmd.Flags().StringVar(&source, "source", "",
-		"logical source identifier (default: workspace UUID)")
+		"logical source identifier (default: workspace UUID, resolved server-side)")
 	cmd.Flags().BoolVar(&readOnly, "read-only", false, "mount read-only")
 	return cmd
-}
-
-// defaultMountSource picks the right Source value when the caller
-// didn't pass --source. The catalog rejects free-form host paths
-// today (Phase F adoption is where those land), so we default to
-// the workspace's own UUID — which the sandbox-host resolves to
-// the daft-fuse view of the workspace.
-func defaultMountSource(
-	ctx context.Context,
-	c workspacev1connect.WorkspaceCatalogServiceClient,
-	handle *workspacev1.WorkspaceHandle,
-	override string,
-) (string, error) {
-	if override != "" {
-		return override, nil
-	}
-	resp, err := c.Get(ctx, connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: handle}))
-	if err != nil {
-		return "", fmt.Errorf("daft workspace mount add: resolve workspace: %w", err)
-	}
-	return resp.Msg.GetWorkspace().GetUuid(), nil
 }
 
 //nolint:dupl // catalog subcommands are structurally parallel by design — runCatalogCmd factors the body.
@@ -445,7 +451,7 @@ func newWorkspaceMountRmCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
-			return runCatalogCmd(cmd, opts, "daft.workspace."+mountSubName+"."+rmSubName, true,
+			return runCatalogCmd(cmd, opts, mountSubName+"."+rmSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.RemoveMount(ctx, connect.NewRequest(
 						&workspacev1.RemoveMountRequest{Handle: h, Target: target},
@@ -486,7 +492,7 @@ func newWorkspaceEnvAddCmd() *cobra.Command {
 			if name == "" {
 				return errors.New("daft workspace env add: empty NAME")
 			}
-			return runCatalogCmd(cmd, opts, "daft.workspace."+envSubName+"."+addSubName, true,
+			return runCatalogCmd(cmd, opts, envSubName+"."+addSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.AddEnv(ctx, connect.NewRequest(
 						&workspacev1.AddEnvRequest{
@@ -515,7 +521,7 @@ func newWorkspaceEnvRmCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			return runCatalogCmd(cmd, opts, "daft.workspace."+envSubName+"."+rmSubName, true,
+			return runCatalogCmd(cmd, opts, envSubName+"."+rmSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.RemoveEnv(ctx, connect.NewRequest(
 						&workspacev1.RemoveEnvRequest{Handle: h, Name: name},
@@ -553,7 +559,7 @@ func newWorkspacePortAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runCatalogCmd(cmd, opts, "daft.workspace."+portSubName+"."+addSubName, true,
+			return runCatalogCmd(cmd, opts, portSubName+"."+addSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.AddPort(ctx, connect.NewRequest(
 						&workspacev1.AddPortRequest{
@@ -584,7 +590,7 @@ func newWorkspacePortRmCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runCatalogCmd(cmd, opts, "daft.workspace."+portSubName+"."+rmSubName, true,
+			return runCatalogCmd(cmd, opts, portSubName+"."+rmSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.RemovePort(ctx, connect.NewRequest(
 						&workspacev1.RemovePortRequest{
@@ -633,7 +639,7 @@ func newWorkspaceValidateCmd() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runCatalogCmd(cmd, opts, "daft.workspace."+validateSubName, true,
+			return runCatalogCmd(cmd, opts, validateSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.Validate(ctx, connect.NewRequest(
 						&workspacev1.ValidateRequest{Handle: h},
@@ -658,7 +664,7 @@ func newWorkspaceLaunchCmd() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runCatalogCmd(cmd, opts, "daft.workspace."+launchSubName, true,
+			return runCatalogCmd(cmd, opts, launchSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.Launch(ctx, connect.NewRequest(
 						&workspacev1.LaunchRequest{Handle: h},
@@ -683,7 +689,7 @@ func newWorkspaceStopCmd() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runCatalogCmd(cmd, opts, "daft.workspace."+stopSubName, true,
+			return runCatalogCmd(cmd, opts, stopSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.Stop(ctx, connect.NewRequest(
 						&workspacev1.StopRequest{Handle: h},
@@ -697,15 +703,6 @@ func newWorkspaceStopCmd() *cobra.Command {
 	}
 	bindWorkspaceClientFlags(cmd, &opts)
 	return cmd
-}
-
-// readSingleArg returns args[0] for set-or-clear commands that take
-// an optional value. Empty (no arg) means "clear".
-func readSingleArg(args []string, _ string) (string, error) {
-	if len(args) == 0 {
-		return "", nil
-	}
-	return args[0], nil
 }
 
 // writeWorkspaceSummary renders the workspace as a key-value block.
