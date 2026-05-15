@@ -572,31 +572,48 @@ func launchableStatus(s workspacecatalog.Status) bool {
 // Node's executor consumes. The caller wraps this in a Sandbox
 // resource (with metadata + status) via workspaceToSandbox.
 func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Fingerprint) *sandboxv1.SandboxSpec {
-	spec := &sandboxv1.SandboxSpec{
+	return &sandboxv1.SandboxSpec{
 		ImageRef:      ws.ImageRef,
 		WorkspaceUuid: ws.UUID,
 		Node:          &sandboxv1.NodeRef{Fingerprint: nodeFP.String()},
+		Mounts:        mountsToProto(ws.Mounts),
+		Env:           envToProto(ws.Env),
+		Ports:         portsToProto(ws.Ports),
 	}
-	spec.Mounts = make([]*sandboxv1.Mount, len(ws.Mounts))
-	for i, m := range ws.Mounts {
-		spec.Mounts[i] = &sandboxv1.Mount{
+}
+
+// mountsToProto / envToProto / portsToProto project the catalog's
+// Go-native slices onto their wire forms. Shared by workspaceToProto
+// (catalog → CLI) and workspaceToSandboxSpec (catalog → Node).
+func mountsToProto(in []workspacecatalog.Mount) []*sandboxv1.Mount {
+	out := make([]*sandboxv1.Mount, len(in))
+	for i, m := range in {
+		out[i] = &sandboxv1.Mount{
 			Target:   m.Target,
 			Source:   m.Source,
 			ReadOnly: m.ReadOnly,
 		}
 	}
-	spec.Env = make([]*sandboxv1.EnvVar, len(ws.Env))
-	for i, e := range ws.Env {
-		spec.Env[i] = &sandboxv1.EnvVar{Name: e.Name, Value: e.Value}
+	return out
+}
+
+func envToProto(in []workspacecatalog.EnvVar) []*sandboxv1.EnvVar {
+	out := make([]*sandboxv1.EnvVar, len(in))
+	for i, e := range in {
+		out[i] = &sandboxv1.EnvVar{Name: e.Name, Value: e.Value}
 	}
-	spec.Ports = make([]*sandboxv1.PortMapping, len(ws.Ports))
-	for i, p := range ws.Ports {
-		spec.Ports[i] = &sandboxv1.PortMapping{
+	return out
+}
+
+func portsToProto(in []workspacecatalog.PortMapping) []*sandboxv1.PortMapping {
+	out := make([]*sandboxv1.PortMapping, len(in))
+	for i, p := range in {
+		out[i] = &sandboxv1.PortMapping{
 			ContainerPort: p.ContainerPort,
 			Protocol:      sandboxv1.Protocol(p.Protocol),
 		}
 	}
-	return spec
+	return out
 }
 
 // workspaceToSandbox composes the full Sandbox resource Launch
@@ -689,28 +706,9 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 	if !ws.LockExpiresAt.IsZero() {
 		out.LockExpiresAt = timestamppb.New(ws.LockExpiresAt)
 	}
-	out.Mounts = make([]*sandboxv1.Mount, 0, len(ws.Mounts))
-	for _, m := range ws.Mounts {
-		out.Mounts = append(out.Mounts, &sandboxv1.Mount{
-			Target:   m.Target,
-			Source:   m.Source,
-			ReadOnly: m.ReadOnly,
-		})
-	}
-	out.Env = make([]*sandboxv1.EnvVar, 0, len(ws.Env))
-	for _, e := range ws.Env {
-		out.Env = append(out.Env, &sandboxv1.EnvVar{
-			Name:  e.Name,
-			Value: e.Value,
-		})
-	}
-	out.Ports = make([]*sandboxv1.PortMapping, 0, len(ws.Ports))
-	for _, p := range ws.Ports {
-		out.Ports = append(out.Ports, &sandboxv1.PortMapping{
-			ContainerPort: p.ContainerPort,
-			Protocol:      sandboxv1.Protocol(p.Protocol),
-		})
-	}
+	out.Mounts = mountsToProto(ws.Mounts)
+	out.Env = envToProto(ws.Env)
+	out.Ports = portsToProto(ws.Ports)
 	return out
 }
 

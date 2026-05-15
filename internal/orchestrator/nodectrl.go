@@ -56,10 +56,10 @@ type NodeControlHandler struct {
 	streams map[identity.Fingerprint]chan *nodectrlv1.NodeEvent
 }
 
-// NewSandboxControlHandler returns a handler that records
-// registrations and heartbeats into reg. Returns an error if reg
-// is nil — the orchestrator's wiring would be malformed.
-func NewSandboxControlHandler(reg *nodectrl.Registry) (*NodeControlHandler, error) {
+// NewNodeControlHandler returns a handler that records registrations
+// and heartbeats into reg. Returns an error if reg is nil — the
+// orchestrator's wiring would be malformed.
+func NewNodeControlHandler(reg *nodectrl.Registry) (*NodeControlHandler, error) {
 	if reg == nil {
 		return nil, errors.New("orchestrator: nil nodectrl registry")
 	}
@@ -121,9 +121,10 @@ func (h *NodeControlHandler) detachStream(fp identity.Fingerprint) {
 
 // RegisterNode records the caller's host-resource advertisement
 // and holds the server-streamed channel open. The first event is
-// a SubscriptionReady carrying the accepted-at timestamp; further
-// events (Dispatch) land in Slice A4. The entry is released when
-// the stream closes (caller disconnect, ctx cancel).
+// a SubscriptionReady carrying the accepted-at timestamp; subsequent
+// events are SandboxWatchEvents (ADDED on Launch, DELETED on Stop
+// once B5 wires teardown). The entry is released when the stream
+// closes (caller disconnect, ctx cancel).
 func (h *NodeControlHandler) RegisterNode(
 	ctx context.Context,
 	req *connect.Request[nodectrlv1.RegisterNodeRequest],
@@ -165,9 +166,10 @@ func (h *NodeControlHandler) RegisterNode(
 		return err
 	}
 
-	// Stream loop: forward Dispatch events from the per-stream
-	// channel until ctx fires. stream.Send is not safe for
-	// concurrent use, so this single goroutine is the only writer.
+	// Stream loop: forward NodeEvents (SandboxWatchEvents from
+	// PublishSandboxEvent) from the per-stream channel until ctx
+	// fires. stream.Send is not safe for concurrent use, so this
+	// single goroutine is the only writer.
 	done := ctx.Done()
 	assert.True(done != nil,
 		"RegisterNode requires a cancellable context; Connect-RPC handlers always receive one — Background here means a wiring bug")

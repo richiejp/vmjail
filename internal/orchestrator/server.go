@@ -153,7 +153,7 @@ func New(cfg Config) (*Server, error) {
 	if workspaceCat == nil {
 		workspaceCat = workspacecatalog.NewStore(nil)
 	}
-	sandboxCtrl, scErr := NewSandboxControlHandler(nodeReg)
+	sandboxCtrl, scErr := NewNodeControlHandler(nodeReg)
 	if scErr != nil {
 		return nil, scErr
 	}

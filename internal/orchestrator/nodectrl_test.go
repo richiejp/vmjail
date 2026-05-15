@@ -17,22 +17,22 @@ import (
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
 )
 
-// TestNewSandboxControlHandlerRejectsNilRegistry covers the
+// TestNewNodeControlHandlerRejectsNilRegistry covers the
 // constructor's input guard.
-func TestNewSandboxControlHandlerRejectsNilRegistry(t *testing.T) {
-	if _, err := NewSandboxControlHandler(nil); err == nil {
+func TestNewNodeControlHandlerRejectsNilRegistry(t *testing.T) {
+	if _, err := NewNodeControlHandler(nil); err == nil {
 		t.Error("expected error for nil registry")
 	}
 }
 
-// TestSandboxControlHandlerRejectsMissingPeerIdentity drives the
+// TestNodeControlHandlerRejectsMissingPeerIdentity drives the
 // handler methods with a Connect request that lacks the
 // X-Daft-Peer-Fingerprint header and verifies each one returns
 // Unauthenticated. Mirrors TestBrokerHandlerRejectsMissingPeerIdentity.
-func TestSandboxControlHandlerRejectsMissingPeerIdentity(t *testing.T) {
-	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
+func TestNodeControlHandlerRejectsMissingPeerIdentity(t *testing.T) {
+	h, err := NewNodeControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
-		t.Fatalf("NewSandboxControlHandler: %v", err)
+		t.Fatalf("NewNodeControlHandler: %v", err)
 	}
 	req := connect.NewRequest(&nodectrlv1.RegisterNodeRequest{Version: "v0"})
 	if err := h.RegisterNode(t.Context(), req, nil); connect.CodeOf(err) != connect.CodeUnauthenticated {
@@ -54,9 +54,9 @@ func TestSandboxControlHandlerRejectsMissingPeerIdentity(t *testing.T) {
 // version + resources + timestamps preserved.
 func TestListNodesReflectsRegistry(t *testing.T) {
 	reg := nodectrl.NewRegistry(nil)
-	h, err := NewSandboxControlHandler(reg)
+	h, err := NewNodeControlHandler(reg)
 	if err != nil {
-		t.Fatalf("NewSandboxControlHandler: %v", err)
+		t.Fatalf("NewNodeControlHandler: %v", err)
 	}
 	caller := mustGenerate(t, identity.RoleOrchestrator)
 	sandboxA := mustGenerate(t, identity.RoleSandboxHost)
@@ -110,9 +110,9 @@ func TestListNodesReflectsRegistry(t *testing.T) {
 // Skipping it would leave the empty Registry projection uncovered
 // when the test above populates the registry first.
 func TestListNodesEmpty(t *testing.T) {
-	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
+	h, err := NewNodeControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
-		t.Fatalf("NewSandboxControlHandler: %v", err)
+		t.Fatalf("NewNodeControlHandler: %v", err)
 	}
 	caller := mustGenerate(t, identity.RoleOrchestrator)
 	req := connect.NewRequest(&nodectrlv1.ListNodesRequest{})
@@ -126,14 +126,14 @@ func TestListNodesEmpty(t *testing.T) {
 	}
 }
 
-// TestHeartbeatUnknownSandboxMapsToFailedPrecondition pins the
+// TestHeartbeatUnknownNodeMapsToFailedPrecondition pins the
 // error mapping so a client can tell "I'm not registered" apart
 // from a transport problem.
-func TestHeartbeatUnknownSandboxMapsToFailedPrecondition(t *testing.T) {
+func TestHeartbeatUnknownNodeMapsToFailedPrecondition(t *testing.T) {
 	id := mustGenerate(t, identity.RoleSandboxHost)
-	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
+	h, err := NewNodeControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
-		t.Fatalf("NewSandboxControlHandler: %v", err)
+		t.Fatalf("NewNodeControlHandler: %v", err)
 	}
 	req := connect.NewRequest(&nodectrlv1.HeartbeatRequest{})
 	req.Header().Set(peerFingerprintHeader, id.Fingerprint().String())
@@ -358,9 +358,9 @@ func publishUntilReady(
 // assert — a nil sandbox is a wiring bug and must panic loudly, not
 // produce a half-formed envelope.
 func TestPublishSandboxEventPanicsOnNilSandbox(t *testing.T) {
-	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
+	h, err := NewNodeControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
-		t.Fatalf("NewSandboxControlHandler: %v", err)
+		t.Fatalf("NewNodeControlHandler: %v", err)
 	}
 	id := mustGenerate(t, identity.RoleSandboxHost)
 	defer func() {
@@ -378,9 +378,9 @@ func TestPublishSandboxEventPanicsOnNilSandbox(t *testing.T) {
 
 // TestPublishSandboxEventPanicsOnEmptyUID pins the uid assert.
 func TestPublishSandboxEventPanicsOnEmptyUID(t *testing.T) {
-	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
+	h, err := NewNodeControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
-		t.Fatalf("NewSandboxControlHandler: %v", err)
+		t.Fatalf("NewNodeControlHandler: %v", err)
 	}
 	id := mustGenerate(t, identity.RoleSandboxHost)
 	defer func() {
@@ -400,9 +400,9 @@ func TestPublishSandboxEventPanicsOnEmptyUID(t *testing.T) {
 // TestPublishSandboxEventUnknownNode covers ErrNodeNotConnected:
 // no stream was ever opened, so the handler has no sender.
 func TestPublishSandboxEventUnknownNode(t *testing.T) {
-	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
+	h, err := NewNodeControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
-		t.Fatalf("NewSandboxControlHandler: %v", err)
+		t.Fatalf("NewNodeControlHandler: %v", err)
 	}
 	id := mustGenerate(t, identity.RoleSandboxHost)
 	err = h.PublishSandboxEvent(id.Fingerprint(), sandboxv1.EventType_EVENT_TYPE_ADDED,
@@ -531,9 +531,9 @@ func TestSubscriptionReadyCarriesProtocolVersion(t *testing.T) {
 // more. attachStream/detachStream are exercised directly so we
 // don't need a real client.
 func TestSandboxEventBacklogFull(t *testing.T) {
-	h, err := NewSandboxControlHandler(nodectrl.NewRegistry(nil))
+	h, err := NewNodeControlHandler(nodectrl.NewRegistry(nil))
 	if err != nil {
-		t.Fatalf("NewSandboxControlHandler: %v", err)
+		t.Fatalf("NewNodeControlHandler: %v", err)
 	}
 	id := mustGenerate(t, identity.RoleSandboxHost)
 	fp := id.Fingerprint()
