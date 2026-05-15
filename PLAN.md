@@ -347,9 +347,21 @@ Phase B — **Workspace as a first-class orchestrator object**:
   follows in B2c'.
 - B2d: Lock, Unlock, Adopt. Per-owner write-lock enforcement
   gates the B2a/B2b/B2c mutators retroactively.
-- B3: Client CLI surface — `daft workspace <create|mount|env|
-  image|port|target|status|launch|stop|adopt|list>`. Each
-  subcommand has `--with-dev-defaults` where it makes sense.
+- B3 (landed): Client CLI surface for the catalog. New file
+  `internal/cli/workspace_catalog.go` ships
+  `daft workspace <create|status|list|image|target|
+  mount add|mount rm|env add|env rm|port add|port rm|
+  validate|launch|stop>`. Shared `workspaceClientOpts` binds
+  `--orchestrator / --config-dir / --timeout / --name / --uuid`;
+  workspace name defaults to basename($PWD). The deprecated
+  chunk-sync subcommands (serve/pull/attach/diff) coexist at the
+  top level and will move under `daft workspace debug` in a
+  follow-up. `--with-dev-defaults` and `daft workspace adopt`
+  defer to Phase F (per-user-host overrides). E2E test
+  `TestWorkspaceEndToEndCPUFlow` drives the full
+  create→image→target→mount→env→port→validate→launch→stop
+  sequence and asserts the fake dispatcher saw the composed
+  SandboxSpec.
 - B4: Workspace state machine: Draft → Ready → Running →
   Frozen → Stopped → Archived. `status` is one cobra subcommand
   showing both state and `missing[]`.

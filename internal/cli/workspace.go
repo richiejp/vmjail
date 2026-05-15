@@ -51,6 +51,9 @@ func newWorkspaceCmd() *cobra.Command {
 			"$XDG_CONFIG_HOME/daft/client/. See `daft auth show` to find\n" +
 			"this peer's fingerprint.",
 	}
+	for _, sub := range newWorkspaceCatalogSubcommands() {
+		cmd.AddCommand(sub)
+	}
 	cmd.AddCommand(newWorkspaceServeCmd())
 	cmd.AddCommand(newWorkspacePullCmd())
 	cmd.AddCommand(newWorkspaceAttachCmd())
@@ -313,7 +316,7 @@ func runWorkspacePull(
 	ctx, span := tracer.Start(ctx, "daft.workspace.pull",
 		trace.WithAttributes(
 			trace.KV{Key: "from", Value: from},
-			trace.KV{Key: "workspace", Value: workspaceName},
+			trace.KV{Key: workspaceCmdName, Value: workspaceName},
 			trace.KV{Key: "dest", Value: dest},
 			trace.KV{Key: "preserve_mtime", Value: strconv.FormatBool(preserveTime)},
 		))
