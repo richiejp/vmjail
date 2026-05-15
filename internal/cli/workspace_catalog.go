@@ -173,24 +173,16 @@ func runCatalogCmd(
 	if err != nil {
 		return err
 	}
-	return runWithCatalogClient(cmd, opts, verb,
+	return runCatalogCmdNoHandle(cmd, opts, verb,
 		func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient) error {
 			return fn(ctx, c, handle)
 		})
 }
 
-// runCatalogCmdNoHandle is the catalog-wide analogue: no handle
-// resolution, no basename derivation.
+// runCatalogCmdNoHandle is the catalog-wide variant: no handle
+// resolution, no basename derivation. Also the workhorse that
+// runCatalogCmd delegates to.
 func runCatalogCmdNoHandle(
-	cmd *cobra.Command,
-	opts workspaceClientOpts,
-	verb string,
-	fn catalogFuncNoHandle,
-) error {
-	return runWithCatalogClient(cmd, opts, verb, fn)
-}
-
-func runWithCatalogClient(
 	cmd *cobra.Command,
 	opts workspaceClientOpts,
 	verb string,
@@ -414,9 +406,6 @@ func newWorkspaceMountAddCmd() *cobra.Command {
 			target := args[0]
 			return runCatalogCmd(cmd, opts, mountSubName+"."+addSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
-					// Empty Source on the wire tells the catalog
-					// handler to default to the workspace's UUID,
-					// saving an extra Get round-trip from the client.
 					resp, err := c.AddMount(ctx, connect.NewRequest(
 						&workspacev1.AddMountRequest{
 							Handle: h,
