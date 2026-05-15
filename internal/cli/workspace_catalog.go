@@ -698,23 +698,30 @@ func newWorkspaceStopCmd() *cobra.Command {
 // Used by every command that returns a single Workspace.
 func writeWorkspaceSummary(w io.Writer, ws *workspacev1.Workspace) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	md := ws.GetMetadata()
+	spec := ws.GetSpec()
+	status := ws.GetStatus()
 	rows := [][2]string{
-		{"UUID", ws.GetUuid()},
-		{"Name", ws.GetName()},
-		{"Status", trimStatusPrefix(ws.GetStatus().String())},
-		{"Owner", ws.GetOwnerFingerprint()},
-		{"Image", emptyOrDash(ws.GetImageRef())},
-		{"Target", emptyOrDash(ws.GetTargetSandboxFingerprint())},
-		{"Sandbox", emptyOrDash(ws.GetCurrentSandbox().GetUid())},
+		{"UUID", md.GetUuid()},
+		{"Name", md.GetName()},
+		{"Status", summariseConditions(status)},
+		{"Owner", md.GetOwnerFingerprint()},
+		{"Image", emptyOrDash(spec.GetImageRef())},
+		{"Target", emptyOrDash(spec.GetTargetSandboxFingerprint())},
+		{"Sandbox", emptyOrDash(status.GetCurrentSandbox().GetUid())},
 	}
-	if len(ws.GetMissing()) > 0 {
-		rows = append(rows, [2]string{"Missing", strings.Join(ws.GetMissing(), ", ")})
+	if editPending(md, status) {
+		rows = append(rows, [2]string{"Edit", fmt.Sprintf("pending (gen %d, observed %d)",
+			md.GetGeneration(), status.GetObservedGeneration())})
+	}
+	if len(status.GetMissing()) > 0 {
+		rows = append(rows, [2]string{"Missing", strings.Join(status.GetMissing(), ", ")})
 	}
 	rows = append(
 		rows,
-		[2]string{"Mounts", joinMounts(ws.GetMounts())},
-		[2]string{"Env", joinEnv(ws.GetEnv())},
-		[2]string{"Ports", joinPorts(ws.GetPorts())},
+		[2]string{"Mounts", joinMounts(spec.GetMounts())},
+		[2]string{"Env", joinEnv(spec.GetEnv())},
+		[2]string{"Ports", joinPorts(spec.GetPorts())},
 	)
 	for _, row := range rows {
 		if _, err := fmt.Fprintf(tw, "%s:\t%s\n", row[0], row[1]); err != nil {
@@ -733,13 +740,15 @@ func writeWorkspaceList(w io.Writer, all []*workspacev1.Workspace) error {
 		return err
 	}
 	for _, ws := range all {
+		md := ws.GetMetadata()
+		spec := ws.GetSpec()
 		if _, err := fmt.Fprintf(
 			tw, "%s\t%s\t%s\t%s\t%s\n",
-			ws.GetName(),
-			ws.GetUuid(),
-			trimStatusPrefix(ws.GetStatus().String()),
-			emptyOrDash(ws.GetImageRef()),
-			emptyOrDash(ws.GetTargetSandboxFingerprint()),
+			md.GetName(),
+			md.GetUuid(),
+			summariseConditions(ws.GetStatus()),
+			emptyOrDash(spec.GetImageRef()),
+			emptyOrDash(spec.GetTargetSandboxFingerprint()),
 		); err != nil {
 			return err
 		}
@@ -747,8 +756,44 @@ func writeWorkspaceList(w io.Writer, all []*workspacev1.Workspace) error {
 	return tw.Flush()
 }
 
-func trimStatusPrefix(s string) string {
-	return strings.TrimPrefix(s, "WORKSPACE_STATUS_")
+// summariseConditions renders a single status token for table
+// columns and the summary block: Dispatched > Ready > NotReady.
+// Mirrors the prior enum's user-visible vocabulary at a glance
+// while delegating the truth to the conditions array.
+func summariseConditions(status *workspacev1.WorkspaceStatus) string {
+	dispatched, ready := false, false
+	for _, c := range status.GetConditions() {
+		if c.GetStatus() != sandboxv1.ConditionStatus_CONDITION_STATUS_TRUE {
+			continue
+		}
+		switch c.GetType() {
+		case "Dispatched":
+			dispatched = true
+		case "Ready":
+			ready = true
+		}
+	}
+	switch {
+	case dispatched:
+		return "Dispatched"
+	case ready:
+		return "Ready"
+	default:
+		return "NotReady"
+	}
+}
+
+// editPending reports whether the workspace has spec edits the
+// running Sandbox hasn't picked up yet. Mirrors the K8s
+// "observedGeneration < generation" idiom — see ARCHITECTURE.md.
+// Observed=0 (never reconciled) only counts as pending when a
+// Sandbox is actually in flight; otherwise it's the natural state
+// of a freshly-created workspace and would be noisy.
+func editPending(md *workspacev1.WorkspaceMetadata, status *workspacev1.WorkspaceStatus) bool {
+	if status.GetCurrentSandbox() == nil {
+		return false
+	}
+	return status.GetObservedGeneration() < md.GetGeneration()
 }
 
 func emptyOrDash(s string) string {

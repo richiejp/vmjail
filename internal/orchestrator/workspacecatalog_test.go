@@ -217,6 +217,30 @@ func (f *fakeDispatcher) PublishSandboxEvent(fp identity.Fingerprint, eventType 
 	return nil
 }
 
+// conditionIsTrue is the test-side mirror of
+// workspacecatalog.Status.IsTrue. Returns true iff a condition
+// with the given Type exists and reports CONDITION_STATUS_TRUE.
+func conditionIsTrue(status *workspacev1.WorkspaceStatus, typ string) bool {
+	for _, c := range status.GetConditions() {
+		if c.GetType() == typ && c.GetStatus() == sandboxv1.ConditionStatus_CONDITION_STATUS_TRUE {
+			return true
+		}
+	}
+	return false
+}
+
+// conditionReason returns the Reason field of the condition with
+// the given Type, or "" if it doesn't exist. Useful when the test
+// wants to assert *why* a condition is False.
+func conditionReason(status *workspacev1.WorkspaceStatus, typ string) string {
+	for _, c := range status.GetConditions() {
+		if c.GetType() == typ {
+			return c.GetReason()
+		}
+	}
+	return ""
+}
+
 func (f *fakeDispatcher) last() (dispatchCall, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -239,20 +263,26 @@ func TestCreateMintsUUIDAndStampsOwner(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	ws := resp.Msg.GetWorkspace()
-	if ws.GetUuid() == "" {
+	if ws.GetMetadata().GetUuid() == "" {
 		t.Error("Workspace.uuid is empty")
 	}
-	if ws.GetName() != "myapp" {
-		t.Errorf("Workspace.name = %q, want %q", ws.GetName(), "myapp")
+	if ws.GetMetadata().GetName() != "myapp" {
+		t.Errorf("Workspace.name = %q, want %q", ws.GetMetadata().GetName(), "myapp")
 	}
-	if ws.GetOwnerFingerprint() != rig.callerID.Fingerprint().String() {
-		t.Errorf("Workspace.owner_fingerprint = %q, want caller's", ws.GetOwnerFingerprint())
+	if ws.GetMetadata().GetOwnerFingerprint() != rig.callerID.Fingerprint().String() {
+		t.Errorf("Workspace.owner_fingerprint = %q, want caller's", ws.GetMetadata().GetOwnerFingerprint())
 	}
-	if ws.GetStatus() != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_DRAFT {
-		t.Errorf("Workspace.status = %s, want DRAFT", ws.GetStatus())
+	if conditionIsTrue(ws.GetStatus(), "Ready") {
+		t.Errorf("fresh workspace should not be Ready; conditions=%v", ws.GetStatus().GetConditions())
 	}
-	if len(ws.GetMissing()) == 0 {
+	if reason := conditionReason(ws.GetStatus(), "Ready"); reason != "MissingFields" {
+		t.Errorf("Ready.reason = %q, want MissingFields", reason)
+	}
+	if len(ws.GetStatus().GetMissing()) == 0 {
 		t.Error("Workspace.missing is empty; expected at least mount/image/target")
+	}
+	if ws.GetMetadata().GetGeneration() != 1 {
+		t.Errorf("generation = %d, want 1 on Create", ws.GetMetadata().GetGeneration())
 	}
 }
 
@@ -291,7 +321,7 @@ func TestGetByUUIDAndByNameAgree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	uuid := created.Msg.GetWorkspace().GetUuid()
+	uuid := created.Msg.GetWorkspace().GetMetadata().GetUuid()
 
 	byUUID, err := rig.client.Get(t.Context(), connect.NewRequest(
 		&workspacev1.GetWorkspaceRequest{
@@ -313,10 +343,10 @@ func TestGetByUUIDAndByNameAgree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get by name: %v", err)
 	}
-	if byUUID.Msg.GetWorkspace().GetUuid() != byName.Msg.GetWorkspace().GetUuid() {
+	if byUUID.Msg.GetWorkspace().GetMetadata().GetUuid() != byName.Msg.GetWorkspace().GetMetadata().GetUuid() {
 		t.Errorf("uuid mismatch: byUUID=%q byName=%q",
-			byUUID.Msg.GetWorkspace().GetUuid(),
-			byName.Msg.GetWorkspace().GetUuid())
+			byUUID.Msg.GetWorkspace().GetMetadata().GetUuid(),
+			byName.Msg.GetWorkspace().GetMetadata().GetUuid())
 	}
 }
 
@@ -410,8 +440,8 @@ func TestListMineOnlyFiltersByOwner(t *testing.T) {
 	if got := len(mine.Msg.GetWorkspaces()); got != 1 {
 		t.Errorf("List mine = %d, want 1", got)
 	}
-	if mine.Msg.GetWorkspaces()[0].GetName() != "mine" {
-		t.Errorf("List mine[0].name = %q, want mine", mine.Msg.GetWorkspaces()[0].GetName())
+	if mine.Msg.GetWorkspaces()[0].GetMetadata().GetName() != "mine" {
+		t.Errorf("List mine[0].name = %q, want mine", mine.Msg.GetWorkspaces()[0].GetMetadata().GetName())
 	}
 }
 
@@ -429,7 +459,7 @@ func TestIncrementalAssemblyRetiresMissingFields(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	handle := &workspacev1.WorkspaceHandle{
-		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetUuid()},
+		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetMetadata().GetUuid()},
 	}
 
 	afterMount, err := rig.client.AddMount(t.Context(), connect.NewRequest(
@@ -444,7 +474,7 @@ func TestIncrementalAssemblyRetiresMissingFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddMount: %v", err)
 	}
-	if hasMissing(afterMount.Msg.GetWorkspace().GetMissing(), "mount") {
+	if hasMissing(afterMount.Msg.GetWorkspace().GetStatus().GetMissing(), "mount") {
 		t.Error("missing still contains 'mount' after AddMount")
 	}
 
@@ -454,7 +484,7 @@ func TestIncrementalAssemblyRetiresMissingFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetImage: %v", err)
 	}
-	if hasMissing(afterImg.Msg.GetWorkspace().GetMissing(), "image") {
+	if hasMissing(afterImg.Msg.GetWorkspace().GetStatus().GetMissing(), "image") {
 		t.Error("missing still contains 'image' after SetImage")
 	}
 
@@ -464,8 +494,8 @@ func TestIncrementalAssemblyRetiresMissingFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetTarget: %v", err)
 	}
-	if got := len(final.Msg.GetWorkspace().GetMissing()); got != 0 {
-		t.Errorf("missing = %v, want empty", final.Msg.GetWorkspace().GetMissing())
+	if got := len(final.Msg.GetWorkspace().GetStatus().GetMissing()); got != 0 {
+		t.Errorf("missing = %v, want empty", final.Msg.GetWorkspace().GetStatus().GetMissing())
 	}
 }
 
@@ -480,7 +510,7 @@ func TestAddMountRejectsRelativeTarget(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	handle := &workspacev1.WorkspaceHandle{
-		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetUuid()},
+		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetMetadata().GetUuid()},
 	}
 	cases := []struct {
 		name   string
@@ -517,7 +547,7 @@ func TestAddMountRejectsDuplicateTarget(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	handle := &workspacev1.WorkspaceHandle{
-		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetUuid()},
+		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetMetadata().GetUuid()},
 	}
 	build := func() *workspacev1.AddMountRequest {
 		return &workspacev1.AddMountRequest{
@@ -540,7 +570,7 @@ func TestAddMountRejectsNilMount(t *testing.T) {
 		&workspacev1.CreateWorkspaceRequest{Name: "nm"},
 	))
 	handle := &workspacev1.WorkspaceHandle{
-		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetUuid()},
+		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetMetadata().GetUuid()},
 	}
 	_, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 		&workspacev1.AddMountRequest{Handle: handle},
@@ -556,7 +586,7 @@ func TestAddEnvRejectsEmptyNameAndDuplicate(t *testing.T) {
 		&workspacev1.CreateWorkspaceRequest{Name: "env"},
 	))
 	handle := &workspacev1.WorkspaceHandle{
-		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetUuid()},
+		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetMetadata().GetUuid()},
 	}
 	if _, err := rig.client.AddEnv(t.Context(), connect.NewRequest(
 		&workspacev1.AddEnvRequest{Handle: handle, Env: &sandboxv1.EnvVar{}},
@@ -581,7 +611,7 @@ func TestAddPortRejectsUnspecifiedProtocol(t *testing.T) {
 		&workspacev1.CreateWorkspaceRequest{Name: "port"},
 	))
 	handle := &workspacev1.WorkspaceHandle{
-		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetUuid()},
+		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetMetadata().GetUuid()},
 	}
 	cases := []struct {
 		name string
@@ -613,7 +643,7 @@ func TestAddPortAllowsSamePortDifferentProtocol(t *testing.T) {
 		&workspacev1.CreateWorkspaceRequest{Name: "pp"},
 	))
 	handle := &workspacev1.WorkspaceHandle{
-		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetUuid()},
+		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetMetadata().GetUuid()},
 	}
 	if _, err := rig.client.AddPort(t.Context(), connect.NewRequest(
 		&workspacev1.AddPortRequest{
@@ -647,7 +677,7 @@ func TestSetImageClearsField(t *testing.T) {
 		&workspacev1.CreateWorkspaceRequest{Name: "img"},
 	))
 	handle := &workspacev1.WorkspaceHandle{
-		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetUuid()},
+		Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: created.Msg.GetWorkspace().GetMetadata().GetUuid()},
 	}
 	if _, err := rig.client.SetImage(t.Context(), connect.NewRequest(
 		&workspacev1.SetImageRequest{Handle: handle, ImageRef: testImageRef},
@@ -660,10 +690,10 @@ func TestSetImageClearsField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SetImage clear: %v", err)
 	}
-	if cleared.Msg.GetWorkspace().GetImageRef() != "" {
-		t.Errorf("image_ref = %q, want empty after clear", cleared.Msg.GetWorkspace().GetImageRef())
+	if cleared.Msg.GetWorkspace().GetSpec().GetImageRef() != "" {
+		t.Errorf("image_ref = %q, want empty after clear", cleared.Msg.GetWorkspace().GetSpec().GetImageRef())
 	}
-	if !hasMissing(cleared.Msg.GetWorkspace().GetMissing(), "image") {
+	if !hasMissing(cleared.Msg.GetWorkspace().GetStatus().GetMissing(), "image") {
 		t.Error("missing should re-include 'image' after clear")
 	}
 }
@@ -677,7 +707,7 @@ func TestRemoveMountDropsTheTargetAndReReinstatesMissing(t *testing.T) {
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "rm-mount"},
 	))
-	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 		&workspacev1.AddMountRequest{
 			Handle: handle,
@@ -692,10 +722,10 @@ func TestRemoveMountDropsTheTargetAndReReinstatesMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoveMount: %v", err)
 	}
-	if len(got.Msg.GetWorkspace().GetMounts()) != 0 {
-		t.Errorf("Mounts = %d, want 0", len(got.Msg.GetWorkspace().GetMounts()))
+	if len(got.Msg.GetWorkspace().GetSpec().GetMounts()) != 0 {
+		t.Errorf("Mounts = %d, want 0", len(got.Msg.GetWorkspace().GetSpec().GetMounts()))
 	}
-	if !hasMissing(got.Msg.GetWorkspace().GetMissing(), "mount") {
+	if !hasMissing(got.Msg.GetWorkspace().GetStatus().GetMissing(), "mount") {
 		t.Error("missing should include 'mount' after RemoveMount drops the last")
 	}
 }
@@ -706,7 +736,7 @@ func TestRemoveMountUnknownTargetMapsToNotFound(t *testing.T) {
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "missing-mount"},
 	))
-	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 	_, err := rig.client.RemoveMount(t.Context(), connect.NewRequest(
 		&workspacev1.RemoveMountRequest{Handle: handle, Target: "/nope"},
 	))
@@ -720,7 +750,7 @@ func TestRemoveMountRejectsEmptyTarget(t *testing.T) {
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "empty-target"},
 	))
-	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 	_, err := rig.client.RemoveMount(t.Context(), connect.NewRequest(
 		&workspacev1.RemoveMountRequest{Handle: handle},
 	))
@@ -734,7 +764,7 @@ func TestRemoveMountMiddleEntryPreservesOthers(t *testing.T) {
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "three-mounts"},
 	))
-	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 	for _, target := range []string{"/a", "/b", "/c"} {
 		if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 			&workspacev1.AddMountRequest{
@@ -751,7 +781,7 @@ func TestRemoveMountMiddleEntryPreservesOthers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoveMount: %v", err)
 	}
-	mounts := got.Msg.GetWorkspace().GetMounts()
+	mounts := got.Msg.GetWorkspace().GetSpec().GetMounts()
 	if len(mounts) != 2 || mounts[0].GetTarget() != "/a" || mounts[1].GetTarget() != "/c" {
 		t.Errorf("mounts = %v, want [/a /c]", mountTargets(mounts))
 	}
@@ -762,7 +792,7 @@ func TestRemoveEnvDropsByName(t *testing.T) {
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "rm-env"},
 	))
-	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 	for _, name := range []string{"A", "B"} {
 		if _, err := rig.client.AddEnv(t.Context(), connect.NewRequest(
 			&workspacev1.AddEnvRequest{
@@ -779,7 +809,7 @@ func TestRemoveEnvDropsByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemoveEnv: %v", err)
 	}
-	envs := got.Msg.GetWorkspace().GetEnv()
+	envs := got.Msg.GetWorkspace().GetSpec().GetEnv()
 	if len(envs) != 1 || envs[0].GetName() != "B" {
 		t.Errorf("env = %v, want [B]", envs)
 	}
@@ -791,7 +821,7 @@ func TestRemoveEnvUnknownMapsToNotFound(t *testing.T) {
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "nope-env"},
 	))
-	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 	_, err := rig.client.RemoveEnv(t.Context(), connect.NewRequest(
 		&workspacev1.RemoveEnvRequest{Handle: handle, Name: "MISSING"},
 	))
@@ -805,7 +835,7 @@ func TestRemoveEnvRejectsEmptyName(t *testing.T) {
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "empty-env"},
 	))
-	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 	_, err := rig.client.RemoveEnv(t.Context(), connect.NewRequest(
 		&workspacev1.RemoveEnvRequest{Handle: handle},
 	))
@@ -821,7 +851,7 @@ func TestRemovePortKeyedByPortAndProtocol(t *testing.T) {
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "rm-port"},
 	))
-	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 	if _, err := rig.client.AddPort(t.Context(), connect.NewRequest(
 		&workspacev1.AddPortRequest{
 			Handle: handle,
@@ -851,7 +881,7 @@ func TestRemovePortKeyedByPortAndProtocol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RemovePort: %v", err)
 	}
-	ports := got.Msg.GetWorkspace().GetPorts()
+	ports := got.Msg.GetWorkspace().GetSpec().GetPorts()
 	if len(ports) != 1 || ports[0].GetProtocol() != sandboxv1.Protocol_PROTOCOL_UDP {
 		t.Errorf("ports = %v, want [3000/UDP]", ports)
 	}
@@ -862,7 +892,7 @@ func TestRemovePortUnknownMapsToNotFound(t *testing.T) {
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "nope-port"},
 	))
-	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 	_, err := rig.client.RemovePort(t.Context(), connect.NewRequest(
 		&workspacev1.RemovePortRequest{
 			Handle: handle, ContainerPort: 9999,
@@ -880,7 +910,7 @@ func TestRemovePortRejectsUnspecifiedProtocol(t *testing.T) {
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "rm-port-bad"},
 	))
-	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 	_, err := rig.client.RemovePort(t.Context(), connect.NewRequest(
 		&workspacev1.RemovePortRequest{Handle: handle, ContainerPort: 80},
 	))
@@ -926,7 +956,7 @@ func readyWorkspace(t *testing.T, rig *workspaceCatalogRig, name, target string)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 		&workspacev1.AddMountRequest{
 			Handle: handle,
@@ -945,7 +975,7 @@ func readyWorkspace(t *testing.T, rig *workspaceCatalogRig, name, target string)
 	)); err != nil {
 		t.Fatalf("SetTarget: %v", err)
 	}
-	return created.Msg.GetWorkspace().GetUuid()
+	return created.Msg.GetWorkspace().GetMetadata().GetUuid()
 }
 
 // TestValidatePromotesDraftToReady pins the "ready means missing[]
@@ -961,32 +991,33 @@ func TestValidatePromotesDraftToReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if got := resp.Msg.GetWorkspace().GetStatus(); got != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_READY {
-		t.Errorf("status = %s, want READY", got)
+	if !conditionIsTrue(resp.Msg.GetWorkspace().GetStatus(), "Ready") {
+		t.Errorf("Ready not True after spec satisfied; conditions=%v", resp.Msg.GetWorkspace().GetStatus().GetConditions())
 	}
 }
 
-// TestValidateKeepsIncompleteAsDraft pins the negative half — a
-// workspace still missing a field stays DRAFT.
-func TestValidateKeepsIncompleteAsDraft(t *testing.T) {
+// TestValidateKeepsIncompleteAsNotReady pins the negative half —
+// a workspace still missing a field stays Ready=False after
+// Validate.
+func TestValidateKeepsIncompleteAsNotReady(t *testing.T) {
 	rig := newWorkspaceCatalogRig(t)
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "incomplete"},
 	))
 	resp, err := rig.client.Validate(t.Context(), connect.NewRequest(
-		&workspacev1.ValidateRequest{Handle: uuidHandle(created.Msg.GetWorkspace().GetUuid())},
+		&workspacev1.ValidateRequest{Handle: uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())},
 	))
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if got := resp.Msg.GetWorkspace().GetStatus(); got != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_DRAFT {
-		t.Errorf("status = %s, want DRAFT", got)
+	if conditionIsTrue(resp.Msg.GetWorkspace().GetStatus(), "Ready") {
+		t.Errorf("Ready should be False on incomplete spec; conditions=%v", resp.Msg.GetWorkspace().GetStatus().GetConditions())
 	}
 }
 
 // TestValidateDemotesReadyOnDrift pins that a workspace that was
-// READY but has since lost a required field flips back to DRAFT
-// when Validate runs.
+// Ready=True but has since lost a required field flips back to
+// Ready=False on the next mutation.
 func TestValidateDemotesReadyOnDrift(t *testing.T) {
 	rig := newWorkspaceCatalogRig(t)
 	target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
@@ -1007,8 +1038,8 @@ func TestValidateDemotesReadyOnDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate down: %v", err)
 	}
-	if got := resp.Msg.GetWorkspace().GetStatus(); got != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_DRAFT {
-		t.Errorf("status = %s, want DRAFT after drift", got)
+	if conditionIsTrue(resp.Msg.GetWorkspace().GetStatus(), "Ready") {
+		t.Errorf("Ready should be False after drift; conditions=%v", resp.Msg.GetWorkspace().GetStatus().GetConditions())
 	}
 }
 
@@ -1042,10 +1073,10 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 		t.Fatalf("Launch: %v", err)
 	}
 	got := resp.Msg.GetWorkspace()
-	if got.GetStatus() != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_RUNNING {
-		t.Errorf("status = %s, want RUNNING", got.GetStatus())
+	if !conditionIsTrue(got.GetStatus(), "Dispatched") {
+		t.Errorf("Dispatched not True after Launch; conditions=%v", got.GetStatus().GetConditions())
 	}
-	if got.GetCurrentSandbox().GetUid() == "" {
+	if got.GetStatus().GetCurrentSandbox().GetUid() == "" {
 		t.Error("current_sandbox.uid not populated")
 	}
 	call, ok := fake.last()
@@ -1055,8 +1086,8 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	if call.fp != targetID.Fingerprint() {
 		t.Errorf("dispatch target = %s, want %s", call.fp.String(), target)
 	}
-	if call.sandbox.GetMetadata().GetUid() != got.GetCurrentSandbox().GetUid() {
-		t.Errorf("sandbox.uid = %q, want %q", call.sandbox.GetMetadata().GetUid(), got.GetCurrentSandbox().GetUid())
+	if call.sandbox.GetMetadata().GetUid() != got.GetStatus().GetCurrentSandbox().GetUid() {
+		t.Errorf("sandbox.uid = %q, want %q", call.sandbox.GetMetadata().GetUid(), got.GetStatus().GetCurrentSandbox().GetUid())
 	}
 	if call.sandbox.GetSpec().GetImageRef() != testImageRef {
 		t.Errorf("spec.image_ref = %q, want %q", call.sandbox.GetSpec().GetImageRef(), testImageRef)
@@ -1082,7 +1113,7 @@ func TestLaunchRejectsDraftAndMissing(t *testing.T) {
 		&workspacev1.CreateWorkspaceRequest{Name: "draft"},
 	))
 	_, err := rig.client.Launch(t.Context(), connect.NewRequest(
-		&workspacev1.LaunchRequest{Handle: uuidHandle(created.Msg.GetWorkspace().GetUuid())},
+		&workspacev1.LaunchRequest{Handle: uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())},
 	))
 	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
 		t.Errorf("code = %s, want FailedPrecondition", code)
@@ -1137,7 +1168,7 @@ func TestLaunchRefusesInvalidTargetFingerprint(t *testing.T) {
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "bad-target"},
 	))
-	uuid := created.Msg.GetWorkspace().GetUuid()
+	uuid := created.Msg.GetWorkspace().GetMetadata().GetUuid()
 	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 		&workspacev1.AddMountRequest{
 			Handle: uuidHandle(uuid),
@@ -1213,52 +1244,27 @@ func TestStopFromRunningTransitionsAndClearsDispatch(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 	ws := resp.Msg.GetWorkspace()
-	if ws.GetStatus() != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_STOPPED {
-		t.Errorf("status = %s, want STOPPED", ws.GetStatus())
+	if conditionIsTrue(ws.GetStatus(), "Dispatched") {
+		t.Errorf("Dispatched should be False after Stop; conditions=%v", ws.GetStatus().GetConditions())
 	}
-	if ws.GetCurrentSandbox().GetUid() != "" {
-		t.Errorf("current_sandbox.uid = %q, want empty after Stop", ws.GetCurrentSandbox().GetUid())
+	if ws.GetStatus().GetCurrentSandbox().GetUid() != "" {
+		t.Errorf("current_sandbox.uid = %q, want empty after Stop", ws.GetStatus().GetCurrentSandbox().GetUid())
 	}
 }
 
-// TestStopFromDraftIsRejected pins that Stop is RUNNING/FROZEN-only.
-func TestStopFromDraftIsRejected(t *testing.T) {
+// TestStopWithoutLaunchIsRejected pins that Stop requires
+// Dispatched=True; calling it on a workspace that's never been
+// launched returns FailedPrecondition.
+func TestStopWithoutLaunchIsRejected(t *testing.T) {
 	rig := newWorkspaceCatalogRig(t)
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
-		&workspacev1.CreateWorkspaceRequest{Name: "stop-draft"},
+		&workspacev1.CreateWorkspaceRequest{Name: "stop-fresh"},
 	))
 	_, err := rig.client.Stop(t.Context(), connect.NewRequest(
-		&workspacev1.StopRequest{Handle: uuidHandle(created.Msg.GetWorkspace().GetUuid())},
+		&workspacev1.StopRequest{Handle: uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())},
 	))
 	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
 		t.Errorf("code = %s, want FailedPrecondition", code)
-	}
-}
-
-// TestStatusToProtoCoversAllValues exercises every catalog Status →
-// proto enum mapping. The wire surface only hits a subset of these
-// today (Create produces DRAFT, mutators don't transition), so a
-// direct test keeps the projection honest for B4 when the state
-// machine starts firing transitions in earnest.
-func TestStatusToProtoCoversAllValues(t *testing.T) {
-	cases := []struct {
-		in   workspacecatalog.Status
-		want workspacev1.WorkspaceStatus
-	}{
-		{workspacecatalog.StatusUnspecified, workspacev1.WorkspaceStatus_WORKSPACE_STATUS_UNSPECIFIED},
-		{workspacecatalog.StatusDraft, workspacev1.WorkspaceStatus_WORKSPACE_STATUS_DRAFT},
-		{workspacecatalog.StatusReady, workspacev1.WorkspaceStatus_WORKSPACE_STATUS_READY},
-		{workspacecatalog.StatusRunning, workspacev1.WorkspaceStatus_WORKSPACE_STATUS_RUNNING},
-		{workspacecatalog.StatusFrozen, workspacev1.WorkspaceStatus_WORKSPACE_STATUS_FROZEN},
-		{workspacecatalog.StatusStopped, workspacev1.WorkspaceStatus_WORKSPACE_STATUS_STOPPED},
-		{workspacecatalog.StatusArchived, workspacev1.WorkspaceStatus_WORKSPACE_STATUS_ARCHIVED},
-		// Out-of-range value falls through to UNSPECIFIED.
-		{workspacecatalog.Status(99), workspacev1.WorkspaceStatus_WORKSPACE_STATUS_UNSPECIFIED},
-	}
-	for _, tc := range cases {
-		if got := statusToProto(tc.in); got != tc.want {
-			t.Errorf("statusToProto(%s) = %s, want %s", tc.in, got, tc.want)
-		}
 	}
 }
 
@@ -1336,32 +1342,41 @@ type workspacecatalogTestErr string
 
 func (e workspacecatalogTestErr) Error() string { return string(e) }
 
-// TestWorkspaceToProtoCarriesLockExpiry pins the lock-expiry
-// projection branch — workspaceToProto only stamps LockExpiresAt
-// when the catalog value is non-zero, so we have to construct a
-// catalog Workspace with a lock manually since the B2a wire
-// surface can't set one yet.
-func TestWorkspaceToProtoCarriesLockExpiry(t *testing.T) {
+// TestWorkspaceToProtoCarriesLock pins the lock-projection branch:
+// workspaceToProto only emits the Lock message when the catalog
+// value is held (owner fingerprint non-zero). The B2a wire surface
+// can't set a lock yet (Phase F3), so write through the store
+// directly.
+func TestWorkspaceToProtoCarriesLock(t *testing.T) {
 	rig := newWorkspaceCatalogRig(t)
 	cat := rig.catalog
+	owner := mustGenerate(t, identity.RoleClient).Fingerprint()
 	ws, err := cat.Create(workspacecatalog.CreateInput{
-		UUID: "fffffff0-1111-4111-8111-aaaaaaaaaaaa",
-		Name: "locked",
+		UUID:             "fffffff0-1111-4111-8111-aaaaaaaaaaaa",
+		Name:             "locked",
+		OwnerFingerprint: owner,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	now := ws.CreatedAt.Add(60 * time.Second)
-	_, err = cat.Update(ws.UUID, func(w *workspacecatalog.Workspace) error {
-		w.LockExpiresAt = now
+	expiry := ws.Metadata.CreatedAt.Add(60 * time.Second)
+	_, err = cat.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
+		w.Status.Lock = workspacecatalog.Lock{OwnerFingerprint: owner, ExpiresAt: expiry}
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	updated, _ := cat.Get(ws.UUID)
+	updated, _ := cat.Get(ws.Metadata.UUID)
 	proto := workspaceToProto(updated)
-	if proto.GetLockExpiresAt() == nil || !proto.GetLockExpiresAt().IsValid() {
-		t.Error("LockExpiresAt should be populated")
+	lock := proto.GetStatus().GetLock()
+	if lock == nil {
+		t.Fatal("Lock should be populated when owner is set")
+	}
+	if lock.GetOwnerFingerprint() == "" {
+		t.Error("Lock.owner_fingerprint is empty")
+	}
+	if !lock.GetExpiresAt().IsValid() {
+		t.Error("Lock.expires_at should be populated")
 	}
 }

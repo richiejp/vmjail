@@ -301,12 +301,12 @@ func (h *workspaceE2EHarness) assemble() {
 func (h *workspaceE2EHarness) assertLaunchAndDispatch() {
 	h.t.Helper()
 	validateOut := h.run(append([]string{validateSubName}, h.commonArgs...)...)
-	if !strings.Contains(validateOut, "READY") {
-		h.t.Errorf("validate did not promote to READY:\n%s", validateOut)
+	if !strings.Contains(validateOut, "Ready") {
+		h.t.Errorf("validate did not flip Ready=True:\n%s", validateOut)
 	}
 	launchOut := h.run(append([]string{launchSubName}, h.commonArgs...)...)
-	if !strings.Contains(launchOut, "RUNNING") {
-		h.t.Errorf("launch did not transition to RUNNING:\n%s", launchOut)
+	if !strings.Contains(launchOut, "Dispatched") {
+		h.t.Errorf("launch did not flip Dispatched=True:\n%s", launchOut)
 	}
 	call, ok := h.fake.last()
 	if !ok {
@@ -329,8 +329,8 @@ func (h *workspaceE2EHarness) assertLaunchAndDispatch() {
 func (h *workspaceE2EHarness) assertStopAndRemovals() {
 	h.t.Helper()
 	stopOut := h.run(append([]string{stopSubName}, h.commonArgs...)...)
-	if !strings.Contains(stopOut, "STOPPED") {
-		h.t.Errorf("stop did not transition to STOPPED:\n%s", stopOut)
+	if !strings.Contains(stopOut, "Ready") || strings.Contains(stopOut, "Dispatched") {
+		h.t.Errorf("stop did not clear Dispatched (expect Ready, no Dispatched):\n%s", stopOut)
 	}
 	h.run(append([]string{portSubName, rmSubName, "3000"}, h.commonArgs...)...)
 	h.run(append([]string{envSubName, rmSubName, "NODE_ENV"}, h.commonArgs...)...)
@@ -491,8 +491,14 @@ func TestWorkspaceNameForCreateFallsBackToCwd(t *testing.T) {
 func TestWriteWorkspaceListWithEntries(t *testing.T) {
 	var buf strings.Builder
 	if err := writeWorkspaceList(&buf, []*workspacev1.Workspace{
-		{Uuid: testRenderUUID, Name: "ws-a", ImageRef: testCatalogImage},
-		{Uuid: "u-2", Name: "ws-b"},
+		{
+			Metadata: &workspacev1.WorkspaceMetadata{Uuid: testRenderUUID, Name: "ws-a"},
+			Spec:     &workspacev1.WorkspaceSpec{ImageRef: testCatalogImage},
+		},
+		{
+			Metadata: &workspacev1.WorkspaceMetadata{Uuid: "u-2", Name: "ws-b"},
+			Spec:     &workspacev1.WorkspaceSpec{},
+		},
 	}); err != nil {
 		t.Fatalf("writeWorkspaceList: %v", err)
 	}
@@ -507,11 +513,16 @@ func TestWriteWorkspaceListWithEntries(t *testing.T) {
 func TestWriteWorkspaceSummaryWithFullState(t *testing.T) {
 	var buf strings.Builder
 	err := writeWorkspaceSummary(&buf, &workspacev1.Workspace{
-		Uuid: testRenderUUID, Name: "ws", ImageRef: testCatalogImage,
-		Mounts:  []*sandboxv1.Mount{{Target: "/x"}, {Target: "/y", ReadOnly: true}},
-		Env:     []*sandboxv1.EnvVar{{Name: "K"}},
-		Ports:   []*sandboxv1.PortMapping{{ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP}},
-		Missing: []string{"target"},
+		Metadata: &workspacev1.WorkspaceMetadata{Uuid: testRenderUUID, Name: "ws"},
+		Spec: &workspacev1.WorkspaceSpec{
+			ImageRef: testCatalogImage,
+			Mounts:   []*sandboxv1.Mount{{Target: "/x"}, {Target: "/y", ReadOnly: true}},
+			Env:      []*sandboxv1.EnvVar{{Name: "K"}},
+			Ports:    []*sandboxv1.PortMapping{{ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP}},
+		},
+		Status: &workspacev1.WorkspaceStatus{
+			Missing: []string{"target"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("writeWorkspaceSummary: %v", err)

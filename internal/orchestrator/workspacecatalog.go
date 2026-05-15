@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
+	"time"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -117,7 +118,7 @@ func (h *WorkspaceCatalogHandler) List(
 	}
 	var keep func(*workspacecatalog.Workspace) bool
 	if req.Msg.GetMineOnly() {
-		keep = func(w *workspacecatalog.Workspace) bool { return w.OwnerFingerprint == fp }
+		keep = func(w *workspacecatalog.Workspace) bool { return w.Metadata.OwnerFingerprint == fp }
 	}
 	all := h.store.List(keep)
 	out := make([]*workspacev1.Workspace, len(all))
@@ -138,7 +139,7 @@ func (h *WorkspaceCatalogHandler) SetImage(
 	ref := req.Msg.GetImageRef()
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
-			w.ImageRef = ref
+			w.Spec.ImageRef = ref
 			return nil
 		})
 }
@@ -152,18 +153,31 @@ func (h *WorkspaceCatalogHandler) SetTarget(
 	target := req.Msg.GetSandboxFingerprint()
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
-			w.TargetSandboxFingerprint = target
+			w.Spec.TargetSandboxFingerprint = target
 			return nil
 		})
 }
 
 // mutate is the shared auth → resolve → Update → project plumbing
-// behind every per-field setter. Add* handlers don't use it because
-// they need pre-resolve input validation that doesn't fit a generic
-// helper.
+// behind every per-field setter. Defaults to MutateSpec (bumps
+// generation + recomputes Missing/Ready). Add* handlers don't use
+// it because they need pre-resolve input validation that doesn't
+// fit a generic helper.
 func (h *WorkspaceCatalogHandler) mutate(
 	header http.Header,
 	handle *workspacev1.WorkspaceHandle,
+	mut func(*workspacecatalog.Workspace) error,
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	return h.mutateKind(header, handle, workspacecatalog.MutateSpec, mut)
+}
+
+// mutateKind is mutate with an explicit MutateKind so handlers
+// touching Status (Launch, Stop) don't accidentally bump the
+// workspace's spec generation.
+func (h *WorkspaceCatalogHandler) mutateKind(
+	header http.Header,
+	handle *workspacev1.WorkspaceHandle,
+	kind workspacecatalog.MutateKind,
 	mut func(*workspacecatalog.Workspace) error,
 ) (*connect.Response[workspacev1.WorkspaceResponse], error) {
 	fp, ok := PeerFingerprintFromRequestHeader(header)
@@ -174,7 +188,7 @@ func (h *WorkspaceCatalogHandler) mutate(
 	if err != nil {
 		return nil, err
 	}
-	updated, err := h.store.Update(ws.UUID, mut)
+	updated, err := h.store.Update(ws.Metadata.UUID, kind, mut)
 	if err != nil {
 		return nil, mapCatalogErr(err)
 	}
@@ -213,16 +227,16 @@ func (h *WorkspaceCatalogHandler) AddMount(
 		// daft-fuse view of the workspace itself. Default applied
 		// server-side so the client doesn't need an extra Get RPC
 		// (and a TOCTOU window) just to learn its own UUID.
-		source = ws.UUID
+		source = ws.Metadata.UUID
 	}
-	updated, err := h.store.Update(ws.UUID, func(w *workspacecatalog.Workspace) error {
-		for i := range w.Mounts {
-			if w.Mounts[i].Target == target {
+	updated, err := h.store.Update(ws.Metadata.UUID, workspacecatalog.MutateSpec, func(w *workspacecatalog.Workspace) error {
+		for i := range w.Spec.Mounts {
+			if w.Spec.Mounts[i].Target == target {
 				return connect.NewError(connect.CodeAlreadyExists,
 					fmt.Errorf("workspace: mount target %q already present", target))
 			}
 		}
-		w.Mounts = append(w.Mounts, workspacecatalog.Mount{
+		w.Spec.Mounts = append(w.Spec.Mounts, workspacecatalog.Mount{
 			Target:   target,
 			Source:   source,
 			ReadOnly: mount.GetReadOnly(),
@@ -256,14 +270,14 @@ func (h *WorkspaceCatalogHandler) AddEnv(
 		return nil, err
 	}
 	name := env.GetName()
-	updated, err := h.store.Update(ws.UUID, func(w *workspacecatalog.Workspace) error {
-		for i := range w.Env {
-			if w.Env[i].Name == name {
+	updated, err := h.store.Update(ws.Metadata.UUID, workspacecatalog.MutateSpec, func(w *workspacecatalog.Workspace) error {
+		for i := range w.Spec.Env {
+			if w.Spec.Env[i].Name == name {
 				return connect.NewError(connect.CodeAlreadyExists,
 					fmt.Errorf("workspace: env %q already set", name))
 			}
 		}
-		w.Env = append(w.Env, workspacecatalog.EnvVar{
+		w.Spec.Env = append(w.Spec.Env, workspacecatalog.EnvVar{
 			Name:  name,
 			Value: env.GetValue(),
 		})
@@ -302,16 +316,16 @@ func (h *WorkspaceCatalogHandler) AddPort(
 	}
 	containerPort := port.GetContainerPort()
 	proto := int32(port.GetProtocol())
-	updated, err := h.store.Update(ws.UUID, func(w *workspacecatalog.Workspace) error {
-		for i := range w.Ports {
-			if w.Ports[i].ContainerPort == containerPort &&
-				w.Ports[i].Protocol == proto {
+	updated, err := h.store.Update(ws.Metadata.UUID, workspacecatalog.MutateSpec, func(w *workspacecatalog.Workspace) error {
+		for i := range w.Spec.Ports {
+			if w.Spec.Ports[i].ContainerPort == containerPort &&
+				w.Spec.Ports[i].Protocol == proto {
 				return connect.NewError(connect.CodeAlreadyExists,
 					fmt.Errorf("workspace: port %d/%s already mapped",
 						containerPort, port.GetProtocol()))
 			}
 		}
-		w.Ports = append(w.Ports, workspacecatalog.PortMapping{
+		w.Spec.Ports = append(w.Spec.Ports, workspacecatalog.PortMapping{
 			ContainerPort: containerPort,
 			Protocol:      proto,
 		})
@@ -351,14 +365,14 @@ func (h *WorkspaceCatalogHandler) RemoveMount(
 	}
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
-			next, ok := removeMatching(w.Mounts, func(m workspacecatalog.Mount) bool {
+			next, ok := removeMatching(w.Spec.Mounts, func(m workspacecatalog.Mount) bool {
 				return m.Target == target
 			})
 			if !ok {
 				return connect.NewError(connect.CodeNotFound,
 					fmt.Errorf("workspace: no mount with target %q", target))
 			}
-			w.Mounts = next
+			w.Spec.Mounts = next
 			return nil
 		})
 }
@@ -377,14 +391,14 @@ func (h *WorkspaceCatalogHandler) RemoveEnv(
 	}
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
-			next, ok := removeMatching(w.Env, func(e workspacecatalog.EnvVar) bool {
+			next, ok := removeMatching(w.Spec.Env, func(e workspacecatalog.EnvVar) bool {
 				return e.Name == name
 			})
 			if !ok {
 				return connect.NewError(connect.CodeNotFound,
 					fmt.Errorf("workspace: no env %q", name))
 			}
-			w.Env = next
+			w.Spec.Env = next
 			return nil
 		})
 }
@@ -402,14 +416,14 @@ func (h *WorkspaceCatalogHandler) RemovePort(
 	proto := int32(req.Msg.GetProtocol())
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
-			next, ok := removeMatching(w.Ports, func(p workspacecatalog.PortMapping) bool {
+			next, ok := removeMatching(w.Spec.Ports, func(p workspacecatalog.PortMapping) bool {
 				return p.ContainerPort == port && p.Protocol == proto
 			})
 			if !ok {
 				return connect.NewError(connect.CodeNotFound,
 					fmt.Errorf("workspace: no port %d/%s", port, req.Msg.GetProtocol()))
 			}
-			w.Ports = next
+			w.Spec.Ports = next
 			return nil
 		})
 }
@@ -446,38 +460,27 @@ func (h *WorkspaceCatalogHandler) resolveHandle(
 	}
 }
 
-// Validate recomputes readiness and auto-transitions DRAFT↔READY.
-// Other statuses are left untouched.
+// Validate is a no-op trigger for the Store's spec-derivation
+// pass — Store.Update with MutateSpec recomputes Missing and
+// refreshes the Ready condition on every mutation, so Validate
+// just round-trips the workspace and returns the projection. Kept
+// as a distinct RPC so the CLI surface stays explicit ("did I miss
+// anything?") rather than relying on the user noticing missing[]
+// in a setter's response.
 func (h *WorkspaceCatalogHandler) Validate(
 	_ context.Context,
 	req *connect.Request[workspacev1.ValidateRequest],
 ) (*connect.Response[workspacev1.WorkspaceResponse], error) {
-	return h.mutate(req.Header(), req.Msg.GetHandle(),
-		func(w *workspacecatalog.Workspace) error {
-			// Store.Update recomputes Missing[] before we see this
-			// closure return, so the readiness flip can read straight
-			// off the current field values.
-			ready := w.ImageRef != "" || w.PendingBuildID != ""
-			ready = ready && w.TargetSandboxFingerprint != "" && len(w.Mounts) > 0
-			switch w.Status {
-			case workspacecatalog.StatusDraft:
-				if ready {
-					w.Status = workspacecatalog.StatusReady
-				}
-			case workspacecatalog.StatusReady:
-				if !ready {
-					w.Status = workspacecatalog.StatusDraft
-				}
-			}
-			return nil
-		})
+	return h.mutate(req.Header(), req.Msg.GetHandle(), func(*workspacecatalog.Workspace) error {
+		return nil
+	})
 }
 
-// Launch composes a SandboxSpec from the workspace and ships it via
-// the configured Dispatcher. Returns FailedPrecondition for state-
-// machine / readiness violations; Unavailable when the sandbox is
-// momentarily backlogged; Unimplemented when no dispatcher is
-// wired (catalog-only test rigs).
+// Launch composes a Sandbox resource from the workspace and ships
+// it via the configured Dispatcher. Returns FailedPrecondition for
+// readiness / already-dispatched violations; Unavailable when the
+// Node is momentarily backlogged; Unimplemented when no dispatcher
+// is wired (catalog-only test rigs).
 func (h *WorkspaceCatalogHandler) Launch(
 	_ context.Context,
 	req *connect.Request[workspacev1.LaunchRequest],
@@ -494,19 +497,15 @@ func (h *WorkspaceCatalogHandler) Launch(
 	if err != nil {
 		return nil, err
 	}
-	if !launchableStatus(ws.Status) {
+	if !ws.Status.IsTrue(workspacecatalog.ConditionReady) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("workspace: cannot launch from status %s", ws.Status))
+			fmt.Errorf("workspace: not ready, missing: %v", ws.Status.Missing))
 	}
-	if len(ws.Missing) > 0 {
+	if ws.Status.IsTrue(workspacecatalog.ConditionDispatched) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("workspace: not ready, missing: %v", ws.Missing))
+			errors.New("workspace: already dispatched; Stop before relaunching"))
 	}
-	if ws.TargetSandboxFingerprint == "" {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			errors.New("workspace: target_sandbox_fingerprint required for Launch"))
-	}
-	targetFP, err := identity.ParseFingerprint(ws.TargetSandboxFingerprint)
+	targetFP, err := identity.ParseFingerprint(ws.Spec.TargetSandboxFingerprint)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("workspace: invalid target fingerprint: %w", err))
@@ -524,12 +523,18 @@ func (h *WorkspaceCatalogHandler) Launch(
 		return nil, connect.NewError(connect.CodeInternal, pubErr)
 	}
 
-	updated, err := h.store.Update(ws.UUID, func(w *workspacecatalog.Workspace) error {
-		w.Status = workspacecatalog.StatusRunning
-		w.CurrentSandbox = &workspacecatalog.SandboxRef{
+	now := time.Now()
+	updated, err := h.store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
+		w.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
 			UID:             sandboxUID,
 			NodeFingerprint: targetFP,
 		}
+		w.Status.SetCondition(
+			workspacecatalog.ConditionDispatched,
+			workspacecatalog.ConditionStatusTrue,
+			"Launched", "",
+			now,
+		)
 		return nil
 	})
 	if err != nil {
@@ -540,32 +545,29 @@ func (h *WorkspaceCatalogHandler) Launch(
 	}), nil
 }
 
-// Stop transitions a RUNNING or FROZEN workspace to STOPPED and
-// clears the current_sandbox ref. Catalog-only — the wire teardown
-// signal to the Node (a SandboxWatchEvent DELETED) follows in B5
-// alongside the reconciler.
+// Stop clears the current_sandbox ref and flips the Dispatched
+// condition to False. Catalog-only — the wire teardown signal to
+// the Node (a SandboxWatchEvent DELETED) follows in B5 alongside
+// the reconciler.
 func (h *WorkspaceCatalogHandler) Stop(
 	_ context.Context,
 	req *connect.Request[workspacev1.StopRequest],
 ) (*connect.Response[workspacev1.WorkspaceResponse], error) {
-	return h.mutate(req.Header(), req.Msg.GetHandle(),
+	return h.mutateKind(req.Header(), req.Msg.GetHandle(), workspacecatalog.MutateStatus,
 		func(w *workspacecatalog.Workspace) error {
-			if w.Status != workspacecatalog.StatusRunning &&
-				w.Status != workspacecatalog.StatusFrozen {
+			if !w.Status.IsTrue(workspacecatalog.ConditionDispatched) {
 				return connect.NewError(connect.CodeFailedPrecondition,
-					fmt.Errorf("workspace: cannot stop from status %s", w.Status))
+					errors.New("workspace: not dispatched; nothing to stop"))
 			}
-			w.Status = workspacecatalog.StatusStopped
-			w.CurrentSandbox = nil
+			w.Status.CurrentSandbox = nil
+			w.Status.SetCondition(
+				workspacecatalog.ConditionDispatched,
+				workspacecatalog.ConditionStatusFalse,
+				"Stopped", "",
+				time.Now(),
+			)
 			return nil
 		})
-}
-
-// launchableStatus reports whether a workspace's current status
-// admits a Launch (READY or STOPPED). DRAFT requires Validate
-// first; RUNNING/FROZEN are already-running; ARCHIVED is terminal.
-func launchableStatus(s workspacecatalog.Status) bool {
-	return s == workspacecatalog.StatusReady || s == workspacecatalog.StatusStopped
 }
 
 // workspaceToSandboxSpec composes the wire workload spec that the
@@ -573,12 +575,12 @@ func launchableStatus(s workspacecatalog.Status) bool {
 // resource (with metadata + status) via workspaceToSandbox.
 func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Fingerprint) *sandboxv1.SandboxSpec {
 	return &sandboxv1.SandboxSpec{
-		ImageRef:      ws.ImageRef,
-		WorkspaceUuid: ws.UUID,
+		ImageRef:      ws.Spec.ImageRef,
+		WorkspaceUuid: ws.Metadata.UUID,
 		Node:          &sandboxv1.NodeRef{Fingerprint: nodeFP.String()},
-		Mounts:        mountsToProto(ws.Mounts),
-		Env:           envToProto(ws.Env),
-		Ports:         portsToProto(ws.Ports),
+		Mounts:        mountsToProto(ws.Spec.Mounts),
+		Env:           envToProto(ws.Spec.Env),
+		Ports:         portsToProto(ws.Spec.Ports),
 	}
 }
 
@@ -627,8 +629,8 @@ func workspaceToSandbox(ws workspacecatalog.Workspace, uid string, nodeFP identi
 		Metadata: &sandboxv1.SandboxMetadata{
 			Uid: uid,
 			Workspace: &sandboxv1.WorkspaceRef{
-				Uuid: ws.UUID,
-				Name: ws.Name,
+				Uuid: ws.Metadata.UUID,
+				Name: ws.Metadata.Name,
 			},
 			CreatedAt: now,
 		},
@@ -687,29 +689,94 @@ func mintWorkspaceUUID() string {
 	return hexStr[0:8] + "-" + hexStr[8:12] + "-" + hexStr[12:16] + "-" + hexStr[16:20] + "-" + hexStr[20:32]
 }
 
-// workspaceToProto projects a catalog Workspace onto its wire form.
+// workspaceToProto projects a catalog Workspace onto its wire
+// triple (metadata + spec + status). The projection is mechanical:
+// each Go-native sub-struct maps to the matching proto message.
 func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
-	out := &workspacev1.Workspace{
-		Uuid:                     ws.UUID,
-		Name:                     ws.Name,
-		OwnerFingerprint:         fingerprintStringOrEmpty(ws.OwnerFingerprint),
-		ImageRef:                 ws.ImageRef,
-		PendingBuildId:           ws.PendingBuildID,
-		TargetSandboxFingerprint: ws.TargetSandboxFingerprint,
-		LockOwnerFingerprint:     fingerprintStringOrEmpty(ws.LockOwnerFingerprint),
-		Status:                   statusToProto(ws.Status),
-		Missing:                  append([]string(nil), ws.Missing...),
-		CreatedAt:                timestamppb.New(ws.CreatedAt),
-		UpdatedAt:                timestamppb.New(ws.UpdatedAt),
-		CurrentSandbox:           sandboxRefToProto(ws.CurrentSandbox),
+	return &workspacev1.Workspace{
+		Metadata: &workspacev1.WorkspaceMetadata{
+			Uuid:             ws.Metadata.UUID,
+			Name:             ws.Metadata.Name,
+			OwnerFingerprint: fingerprintStringOrEmpty(ws.Metadata.OwnerFingerprint),
+			Generation:       ws.Metadata.Generation,
+			CreatedAt:        timestamppb.New(ws.Metadata.CreatedAt),
+			UpdatedAt:        timestamppb.New(ws.Metadata.UpdatedAt),
+		},
+		Spec: &workspacev1.WorkspaceSpec{
+			ImageRef:                 ws.Spec.ImageRef,
+			PendingBuildId:           ws.Spec.PendingBuildID,
+			Mounts:                   mountsToProto(ws.Spec.Mounts),
+			Env:                      envToProto(ws.Spec.Env),
+			Ports:                    portsToProto(ws.Spec.Ports),
+			TargetSandboxFingerprint: ws.Spec.TargetSandboxFingerprint,
+			GpuRequest:               gpuRequestToProto(ws.Spec),
+			Isolation:                sandboxv1.Isolation(ws.Spec.Isolation),
+		},
+		Status: &workspacev1.WorkspaceStatus{
+			ObservedGeneration: ws.Status.ObservedGeneration,
+			Conditions:         conditionsToProto(ws.Status.Conditions),
+			CurrentSandbox:     sandboxRefToProto(ws.Status.CurrentSandbox),
+			Missing:            append([]string(nil), ws.Status.Missing...),
+			Lock:               lockToProto(ws.Status.Lock),
+		},
 	}
-	if !ws.LockExpiresAt.IsZero() {
-		out.LockExpiresAt = timestamppb.New(ws.LockExpiresAt)
+}
+
+// conditionsToProto maps the Go-native condition slice onto the
+// wire shape. Shared by workspaceToProto so the Connect adapter
+// stays the only place that knows the proto types.
+func conditionsToProto(in []workspacecatalog.Condition) []*sandboxv1.Condition {
+	out := make([]*sandboxv1.Condition, len(in))
+	for i, c := range in {
+		out[i] = &sandboxv1.Condition{
+			Type:               c.Type,
+			Status:             conditionStatusToProto(c.Status),
+			Reason:             c.Reason,
+			Message:            c.Message,
+			LastTransitionTime: timestamppb.New(c.LastTransitionTime),
+		}
 	}
-	out.Mounts = mountsToProto(ws.Mounts)
-	out.Env = envToProto(ws.Env)
-	out.Ports = portsToProto(ws.Ports)
 	return out
+}
+
+func conditionStatusToProto(s workspacecatalog.ConditionStatus) sandboxv1.ConditionStatus {
+	switch s {
+	case workspacecatalog.ConditionStatusTrue:
+		return sandboxv1.ConditionStatus_CONDITION_STATUS_TRUE
+	case workspacecatalog.ConditionStatusFalse:
+		return sandboxv1.ConditionStatus_CONDITION_STATUS_FALSE
+	case workspacecatalog.ConditionStatusUnknown:
+		return sandboxv1.ConditionStatus_CONDITION_STATUS_UNKNOWN
+	}
+	return sandboxv1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED
+}
+
+// lockToProto projects the catalog Lock onto the wire Lock. Zero
+// (unheld) lock maps to nil so the wire field is omitted.
+func lockToProto(l workspacecatalog.Lock) *workspacev1.Lock {
+	if !l.IsHeld() {
+		return nil
+	}
+	out := &workspacev1.Lock{
+		OwnerFingerprint: fingerprintStringOrEmpty(l.OwnerFingerprint),
+	}
+	if !l.ExpiresAt.IsZero() {
+		out.ExpiresAt = timestamppb.New(l.ExpiresAt)
+	}
+	return out
+}
+
+// gpuRequestToProto returns nil when no GPU is requested so the
+// wire field stays unset. count==0 and min_vram==0 both indicate
+// "no GPU"; only emit the message when at least one is non-zero.
+func gpuRequestToProto(spec workspacecatalog.Spec) *sandboxv1.GpuRequest {
+	if spec.GpuCount == 0 && spec.GpuMinVRAM == 0 {
+		return nil
+	}
+	return &sandboxv1.GpuRequest{
+		Count:        spec.GpuCount,
+		MinVramBytes: spec.GpuMinVRAM,
+	}
 }
 
 // sandboxRefToProto projects a catalog SandboxRef onto the wire
@@ -734,26 +801,4 @@ func fingerprintStringOrEmpty(fp identity.Fingerprint) string {
 		return ""
 	}
 	return fp.String()
-}
-
-// statusToProto maps the catalog's Go status enum onto the proto
-// WorkspaceStatus values. The two are intentionally kept distinct
-// (see the workspacecatalog package doc) so the catalog isn't
-// coupled to generated code.
-func statusToProto(s workspacecatalog.Status) workspacev1.WorkspaceStatus {
-	switch s {
-	case workspacecatalog.StatusDraft:
-		return workspacev1.WorkspaceStatus_WORKSPACE_STATUS_DRAFT
-	case workspacecatalog.StatusReady:
-		return workspacev1.WorkspaceStatus_WORKSPACE_STATUS_READY
-	case workspacecatalog.StatusRunning:
-		return workspacev1.WorkspaceStatus_WORKSPACE_STATUS_RUNNING
-	case workspacecatalog.StatusFrozen:
-		return workspacev1.WorkspaceStatus_WORKSPACE_STATUS_FROZEN
-	case workspacecatalog.StatusStopped:
-		return workspacev1.WorkspaceStatus_WORKSPACE_STATUS_STOPPED
-	case workspacecatalog.StatusArchived:
-		return workspacev1.WorkspaceStatus_WORKSPACE_STATUS_ARCHIVED
-	}
-	return workspacev1.WorkspaceStatus_WORKSPACE_STATUS_UNSPECIFIED
 }

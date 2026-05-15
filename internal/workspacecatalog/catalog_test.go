@@ -47,32 +47,36 @@ func TestNewStoreDefaultsClock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if ws.CreatedAt.IsZero() {
+	if ws.Metadata.CreatedAt.IsZero() {
 		t.Error("default clock did not produce a non-zero CreatedAt")
 	}
 }
 
-func TestCreateInsertsDraftWithMissingFields(t *testing.T) {
+func TestCreateInsertsNotReadyWithMissingFields(t *testing.T) {
 	s := NewStore(fixedClock(t))
 	owner := mustOwner(t)
 	ws, err := s.Create(CreateInput{UUID: uuidA, Name: "ws", OwnerFingerprint: owner})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if ws.Status != StatusDraft {
-		t.Errorf("Status = %s, want DRAFT", ws.Status)
+	if ws.Status.IsTrue(ConditionReady) {
+		t.Errorf("fresh workspace should not be Ready, conditions=%+v", ws.Status.Conditions)
+	}
+	if ws.Metadata.Generation != 1 {
+		t.Errorf("Generation = %d, want 1 on Create", ws.Metadata.Generation)
 	}
 	want := []string{"mount", "image", "target"}
-	if len(ws.Missing) != len(want) {
-		t.Fatalf("Missing = %v, want %v", ws.Missing, want)
+	if len(ws.Status.Missing) != len(want) {
+		t.Fatalf("Missing = %v, want %v", ws.Status.Missing, want)
 	}
-	for i, m := range ws.Missing {
+	for i, m := range ws.Status.Missing {
 		if m != want[i] {
 			t.Errorf("Missing[%d] = %q, want %q", i, m, want[i])
 		}
 	}
-	if !ws.CreatedAt.Equal(ws.UpdatedAt) {
-		t.Errorf("CreatedAt %v != UpdatedAt %v on fresh workspace", ws.CreatedAt, ws.UpdatedAt)
+	if !ws.Metadata.CreatedAt.Equal(ws.Metadata.UpdatedAt) {
+		t.Errorf("CreatedAt %v != UpdatedAt %v on fresh workspace",
+			ws.Metadata.CreatedAt, ws.Metadata.UpdatedAt)
 	}
 }
 
@@ -132,44 +136,80 @@ func TestLookupByAliasResolvesToTheSameRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LookupByAlias: %v", err)
 	}
-	if got.UUID != created.UUID {
-		t.Errorf("LookupByAlias.UUID = %q, want %q", got.UUID, created.UUID)
+	if got.Metadata.UUID != created.Metadata.UUID {
+		t.Errorf("LookupByAlias.UUID = %q, want %q", got.Metadata.UUID, created.Metadata.UUID)
 	}
 	if _, err := s.LookupByAlias(owner, "missing"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing alias: err = %v, want ErrNotFound", err)
 	}
 }
 
-// TestUpdatePopulatesMissingAndBumpsStatus pins the
+// TestSpecUpdatePopulatesMissingAndBumpsGeneration pins the
 // Missing-recompute path: an Update that adds an image / mount /
-// target empties Missing[] one entry at a time. Status doesn't
-// auto-transition (that's B4); the test asserts only the catalog's
-// invariant that Missing reflects current state.
-func TestUpdatePopulatesMissingAndBumpsStatus(t *testing.T) {
+// target empties Missing[] one entry at a time. Generation
+// increments per MutateSpec call; the Ready condition flips True
+// once Missing is empty.
+func TestSpecUpdatePopulatesMissingAndBumpsGeneration(t *testing.T) {
 	s := NewStore(fixedClock(t))
 	if _, err := s.Create(CreateInput{UUID: uuidA, Name: "ws"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	after, err := s.Update(uuidA, func(ws *Workspace) error {
-		ws.Mounts = []Mount{{Target: "/workspace", Source: uuidA}}
-		ws.ImageRef = "alpine:3"
+	after, err := s.Update(uuidA, MutateSpec, func(ws *Workspace) error {
+		ws.Spec.Mounts = []Mount{{Target: "/workspace", Source: uuidA}}
+		ws.Spec.ImageRef = "alpine:3"
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if len(after.Missing) != 1 || after.Missing[0] != "target" {
-		t.Errorf("Missing = %v, want [target]", after.Missing)
+	if len(after.Status.Missing) != 1 || after.Status.Missing[0] != "target" {
+		t.Errorf("Missing = %v, want [target]", after.Status.Missing)
 	}
-	last, err := s.Update(uuidA, func(ws *Workspace) error {
-		ws.TargetSandboxFingerprint = "sha256:abc"
+	if after.Metadata.Generation != 2 {
+		t.Errorf("Generation = %d, want 2 after spec edit", after.Metadata.Generation)
+	}
+	last, err := s.Update(uuidA, MutateSpec, func(ws *Workspace) error {
+		ws.Spec.TargetSandboxFingerprint = "sha256:abc"
 		return nil
 	})
 	if err != nil {
 		t.Fatalf("Update (target): %v", err)
 	}
-	if len(last.Missing) != 0 {
-		t.Errorf("Missing = %v, want empty", last.Missing)
+	if len(last.Status.Missing) != 0 {
+		t.Errorf("Missing = %v, want empty", last.Status.Missing)
+	}
+	if !last.Status.IsTrue(ConditionReady) {
+		t.Errorf("Ready not True after all fields populated, conditions=%+v", last.Status.Conditions)
+	}
+	if last.Metadata.Generation != 3 {
+		t.Errorf("Generation = %d, want 3 after two spec edits", last.Metadata.Generation)
+	}
+}
+
+// TestStatusUpdateDoesNotBumpGeneration pins the MutateStatus
+// branch: Launch/Stop touch Status only and must NOT increment
+// generation (otherwise the running Sandbox's spec snapshot would
+// be flagged as stale on every dispatch tick).
+func TestStatusUpdateDoesNotBumpGeneration(t *testing.T) {
+	s := NewStore(fixedClock(t))
+	created, err := s.Create(CreateInput{UUID: uuidA, Name: "ws"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	gen := created.Metadata.Generation
+	now := created.Metadata.CreatedAt
+	after, err := s.Update(uuidA, MutateStatus, func(ws *Workspace) error {
+		ws.Status.SetCondition(ConditionDispatched, ConditionStatusTrue, "Launched", "", now)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if after.Metadata.Generation != gen {
+		t.Errorf("Generation moved %d→%d on MutateStatus", gen, after.Metadata.Generation)
+	}
+	if !after.Status.IsTrue(ConditionDispatched) {
+		t.Errorf("Dispatched not True after SetCondition, conditions=%+v", after.Status.Conditions)
 	}
 }
 
@@ -178,8 +218,8 @@ func TestUpdateRefusesIdentityMutation(t *testing.T) {
 	if _, err := s.Create(CreateInput{UUID: uuidA, Name: "ws"}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	_, err := s.Update(uuidA, func(ws *Workspace) error {
-		ws.UUID = "tampered"
+	_, err := s.Update(uuidA, MutateSpec, func(ws *Workspace) error {
+		ws.Metadata.UUID = "tampered"
 		return nil
 	})
 	if !errors.Is(err, ErrImmutableField) {
@@ -199,18 +239,18 @@ func TestUpdateRenameRefusesCollision(t *testing.T) {
 	if _, err := s.Create(CreateInput{UUID: uuidB, Name: "b", OwnerFingerprint: owner}); err != nil {
 		t.Fatalf("Create b: %v", err)
 	}
-	_, err := s.Update(uuidB, func(ws *Workspace) error {
-		ws.Name = "a"
+	_, err := s.Update(uuidB, MutateMetadata, func(ws *Workspace) error {
+		ws.Metadata.Name = "a"
 		return nil
 	})
 	if !errors.Is(err, ErrAliasInUse) {
 		t.Errorf("err = %v, want ErrAliasInUse", err)
 	}
 	// Original aliases must still resolve cleanly.
-	if got, err := s.LookupByAlias(owner, "a"); err != nil || got.UUID != uuidA {
+	if got, err := s.LookupByAlias(owner, "a"); err != nil || got.Metadata.UUID != uuidA {
 		t.Errorf("alias 'a' after failed rename: got=%+v err=%v", got, err)
 	}
-	if got, err := s.LookupByAlias(owner, "b"); err != nil || got.UUID != uuidB {
+	if got, err := s.LookupByAlias(owner, "b"); err != nil || got.Metadata.UUID != uuidB {
 		t.Errorf("alias 'b' after failed rename: got=%+v err=%v", got, err)
 	}
 }
@@ -221,8 +261,8 @@ func TestUpdateRenameAdjustsAliasIndex(t *testing.T) {
 	if _, err := s.Create(CreateInput{UUID: uuidA, Name: "old", OwnerFingerprint: owner}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if _, err := s.Update(uuidA, func(ws *Workspace) error {
-		ws.Name = "new"
+	if _, err := s.Update(uuidA, MutateMetadata, func(ws *Workspace) error {
+		ws.Metadata.Name = "new"
 		return nil
 	}); err != nil {
 		t.Fatalf("Update rename: %v", err)
@@ -241,7 +281,7 @@ func TestUpdatePropagatesFnError(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	want := errors.New("synthetic")
-	_, err := s.Update(uuidA, func(*Workspace) error { return want })
+	_, err := s.Update(uuidA, MutateSpec, func(*Workspace) error { return want })
 	if !errors.Is(err, want) {
 		t.Errorf("err = %v, want wrapping %v", err, want)
 	}
@@ -252,7 +292,7 @@ func TestUpdatePropagatesFnError(t *testing.T) {
 // future refactor can't conflate them.
 func TestUpdateOnMissingUUIDReportsNotFound(t *testing.T) {
 	s := NewStore(fixedClock(t))
-	_, err := s.Update(uuidA, func(*Workspace) error { return nil })
+	_, err := s.Update(uuidA, MutateSpec, func(*Workspace) error { return nil })
 	if !errors.Is(err, ErrNotFound) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
@@ -267,13 +307,13 @@ func TestUpdateNilFnTouchesUpdatedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	before := ws.UpdatedAt
-	after, err := s.Update(uuidA, nil)
+	before := ws.Metadata.UpdatedAt
+	after, err := s.Update(uuidA, MutateMetadata, nil)
 	if err != nil {
 		t.Fatalf("Update(nil): %v", err)
 	}
-	if !after.UpdatedAt.After(before) {
-		t.Errorf("UpdatedAt %v not advanced past %v", after.UpdatedAt, before)
+	if !after.Metadata.UpdatedAt.After(before) {
+		t.Errorf("UpdatedAt %v not advanced past %v", after.Metadata.UpdatedAt, before)
 	}
 }
 
@@ -303,67 +343,48 @@ func TestListReturnsSortedSnapshot(t *testing.T) {
 		t.Fatalf("Create A: %v", err)
 	}
 	list := s.List(nil)
-	if len(list) != 2 || list[0].UUID != uuidA || list[1].UUID != uuidB {
+	if len(list) != 2 || list[0].Metadata.UUID != uuidA || list[1].Metadata.UUID != uuidB {
 		t.Errorf("List order = [%s, %s], want [%s, %s]",
-			list[0].UUID, list[1].UUID, uuidA, uuidB)
+			list[0].Metadata.UUID, list[1].Metadata.UUID, uuidA, uuidB)
 	}
 }
 
-// TestCanTransitionCoversFullStateMachine pins every allowed edge
-// in the lifecycle and one rejected edge per starting state. The
-// adjacency table here is the contract for Slice B4's actual
-// state-machine wiring; mutating it without bumping B4 should
-// fail this test loudly.
-func TestCanTransitionCoversFullStateMachine(t *testing.T) {
-	allowed := map[Status][]Status{
-		StatusUnspecified: {StatusDraft},
-		StatusDraft:       {StatusReady, StatusArchived},
-		StatusReady:       {StatusRunning, StatusDraft, StatusArchived},
-		StatusRunning:     {StatusFrozen, StatusStopped},
-		StatusFrozen:      {StatusRunning, StatusStopped},
-		StatusStopped:     {StatusRunning, StatusDraft, StatusArchived},
-	}
-	for from, tos := range allowed {
-		for _, to := range tos {
-			if !CanTransition(from, to) {
-				t.Errorf("CanTransition(%s, %s) = false, want true", from, to)
-			}
-		}
-		// Same-state is always allowed.
-		if !CanTransition(from, from) {
-			t.Errorf("CanTransition(%s, %s) = false (same-state)", from, from)
-		}
-	}
-	// Spot-check a few forbidden edges.
-	forbidden := [][2]Status{
-		{StatusDraft, StatusRunning},
-		{StatusRunning, StatusDraft},
-		{StatusArchived, StatusDraft},
-	}
-	for _, edge := range forbidden {
-		if CanTransition(edge[0], edge[1]) {
-			t.Errorf("CanTransition(%s, %s) = true, want false", edge[0], edge[1])
-		}
-	}
-}
-
-func TestStatusStringCoversAllValues(t *testing.T) {
+// TestConditionStatusStringCoversAllValues pins the diagnostic
+// rendering of ConditionStatus so tests can match on it without
+// duplicating the literal table.
+func TestConditionStatusStringCoversAllValues(t *testing.T) {
 	cases := []struct {
-		in   Status
+		in   ConditionStatus
 		want string
 	}{
-		{StatusUnspecified, statusUnspecifiedStr},
-		{StatusDraft, "DRAFT"},
-		{StatusReady, "READY"},
-		{StatusRunning, "RUNNING"},
-		{StatusFrozen, "FROZEN"},
-		{StatusStopped, "STOPPED"},
-		{StatusArchived, "ARCHIVED"},
-		{Status(99), statusUnspecifiedStr},
+		{ConditionStatusTrue, "True"},
+		{ConditionStatusFalse, "False"},
+		{ConditionStatusUnknown, "Unknown"},
+		{ConditionStatusUnspecified, conditionStatusUnspecifiedStr},
+		{ConditionStatus(99), conditionStatusUnspecifiedStr},
 	}
 	for _, tc := range cases {
 		if got := tc.in.String(); got != tc.want {
-			t.Errorf("Status(%d).String() = %q, want %q", tc.in, got, tc.want)
+			t.Errorf("ConditionStatus(%d).String() = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestSetConditionPreservesTransitionTimeOnNoOp pins that an
+// SetCondition that doesn't actually flip the status carries the
+// prior LastTransitionTime forward. K8s readers depend on this
+// to detect real edges instead of churn from periodic re-sets.
+func TestSetConditionPreservesTransitionTimeOnNoOp(t *testing.T) {
+	now := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
+	later := now.Add(time.Minute)
+	status := Status{}
+	status.SetCondition(ConditionDispatched, ConditionStatusTrue, "First", "", now)
+	status.SetCondition(ConditionDispatched, ConditionStatusTrue, "Second", "", later)
+	c := status.Condition(ConditionDispatched)
+	if !c.LastTransitionTime.Equal(now) {
+		t.Errorf("LastTransitionTime = %v, want %v (preserved across no-op set)", c.LastTransitionTime, now)
+	}
+	if c.Reason != "Second" {
+		t.Errorf("Reason = %q, want %q (latest reason overwrites)", c.Reason, "Second")
 	}
 }

@@ -8,8 +8,13 @@
 // (see daft.sandbox.v1) and binds it to a Node. The Node stores
 // nothing across runs — the workspace is the source of truth.
 //
-// This file declares the data shape only. The service surface
-// (WorkspaceCatalogService.* RPCs) lands in Slice B2.
+// Resource shape mirrors Kubernetes: metadata + spec + status.
+//   - metadata: identity, owner, audit, generation
+//   - spec:     declared workload state (user-writable)
+//   - status:   observed state, derived (controller-owned)
+//
+// See ARCHITECTURE.md for the resource model and PLAN.md Phase B4c
+// for the slicing of this reshape.
 syntax = "proto3";
 
 package daft.workspace.v1;
@@ -19,103 +24,115 @@ import "sandbox/v1/sandbox.proto";
 
 option go_package = "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1";
 
-// WorkspaceStatus is the workspace lifecycle state. The full state
-// machine (and the allowed transitions) lands in Slice B4; B1
-// reserves the values so the proto doesn't need a wire break later.
-enum WorkspaceStatus {
-  WORKSPACE_STATUS_UNSPECIFIED = 0;
-  // DRAFT: created but `missing[]` is non-empty — at least one
-  // required field (image / target / a mount) is still unset.
-  WORKSPACE_STATUS_DRAFT = 1;
-  // READY: all required fields populated; Launch will accept it.
-  WORKSPACE_STATUS_READY = 2;
-  // RUNNING: dispatched and currently executing on a sandbox-host.
-  WORKSPACE_STATUS_RUNNING = 3;
-  // FROZEN: VM is QMP-stopped (policy or disconnect-driven, see
-  // Phase G). Resumable via Thaw.
-  WORKSPACE_STATUS_FROZEN = 4;
-  // STOPPED: not currently running; mutations are allowed and a
-  // subsequent Launch will start a fresh VM.
-  WORKSPACE_STATUS_STOPPED = 5;
-  // ARCHIVED: terminal. Kept for audit; no further launches.
-  WORKSPACE_STATUS_ARCHIVED = 6;
+// Workspace is the orchestrator's record of a single workspace.
+message Workspace {
+  WorkspaceMetadata metadata = 1;
+  WorkspaceSpec spec = 2;
+  WorkspaceStatus status = 3;
 }
 
-// Workspace is the orchestrator's record of a single workspace.
-//
-// Identity:
-//   - uuid is the canonical, immutable id (minted at Create time).
-//   - (owner_fingerprint, name) is a per-owner human alias enforced
-//     unique within the owner's set.
-// See PLAN.md "Open questions: Workspace identity across hosts".
-//
-// Mutability:
-//   - uuid, owner_fingerprint, created_at: immutable after Create.
-//   - Everything else is mutated incrementally via
-//     WorkspaceCatalogService RPCs (Slice B2).
-//
-// Wire compatibility: fields are added at the tail; never renumbered.
-message Workspace {
+// WorkspaceMetadata is identity + auditing. Immutable identity
+// fields (uuid, owner_fingerprint, created_at) are stamped at
+// Create time; mutable fields (name, generation, updated_at) move
+// with the workspace's life.
+message WorkspaceMetadata {
   // Canonical id (RFC-4122 UUID, hex with dashes). Immutable.
   string uuid = 1;
   // Per-owner human alias (default basename(pwd) on the
-  // user-host). Mutable, but must be unique within owner_fingerprint.
+  // user-host). Mutable, but must be unique within
+  // owner_fingerprint.
   string name = 2;
   // mTLS leaf-cert fingerprint of the user-host that minted the
   // workspace. Adoption by other user-hosts (Slice F1) does not
   // change this — it identifies the original owner.
   string owner_fingerprint = 3;
+  // Increments every time `spec` changes. K8s analogue:
+  // metadata.generation. Read-only to clients; the reconciler
+  // compares it against status.observed_generation to detect
+  // "edit pending restart" — the workspace was edited after the
+  // current Sandbox was launched.
+  uint64 generation = 4;
+  // Wall-clock create / update timestamps. created_at is
+  // immutable; updated_at advances on every successful mutation.
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
 
-  // Filesystem mounts visible inside the VM. Reuses the
-  // sandbox.v1 type so the spec→SandboxSpec projection at
-  // Launch time is a direct copy.
-  repeated daft.sandbox.v1.Mount mounts = 4;
-  // Environment variables for the container's entrypoint.
-  repeated daft.sandbox.v1.EnvVar env = 5;
-  // Container ports the workload binds. The orchestrator ingress
-  // (Phase C) consumes this list at Launch time.
-  repeated daft.sandbox.v1.PortMapping ports = 6;
-
+// WorkspaceSpec is the user's declared intent. Editing any field
+// bumps metadata.generation. Nothing in here reflects runtime
+// observation.
+message WorkspaceSpec {
   // Image source. Exactly one of image_ref / pending_build_id is
-  // set on a READY workspace. Both empty ⇒ DRAFT.
+  // set on a Ready workspace. Both empty ⇒ Ready=False.
   // OCI image reference (registry/repo:tag or @sha256:...).
-  string image_ref = 7;
+  string image_ref = 1;
   // Build identifier issued by the orchestrator when the workspace
   // declared a Dockerfile instead of an image_ref. Resolves to an
   // image_ref once the buildkit-VM (Phase E) finishes.
-  string pending_build_id = 8;
+  string pending_build_id = 2;
 
-  // Optional pinned sandbox-host (mTLS fingerprint). Empty ⇒
-  // scheduler picks at Launch time.
-  string target_sandbox_fingerprint = 9;
+  // Filesystem mounts visible inside the VM. Reuses the
+  // sandbox.v1 type so the spec→SandboxSpec projection at Launch
+  // time is a direct copy.
+  repeated daft.sandbox.v1.Mount mounts = 3;
+  // Environment variables for the container's entrypoint.
+  repeated daft.sandbox.v1.EnvVar env = 4;
+  // Container ports the workload binds. The orchestrator ingress
+  // (Phase C) consumes this list at Launch time.
+  repeated daft.sandbox.v1.PortMapping ports = 5;
+
+  // Optional pinned Node (mTLS fingerprint). Empty ⇒ scheduler
+  // picks at Launch time.
+  string target_sandbox_fingerprint = 6;
   // GPU reservation. Unset ⇒ CPU-only.
-  daft.sandbox.v1.GpuRequest gpu_request = 10;
+  daft.sandbox.v1.GpuRequest gpu_request = 7;
   // Sharing policy. UNSPECIFIED ⇒ scheduler-default.
-  daft.sandbox.v1.Isolation isolation = 11;
+  daft.sandbox.v1.Isolation isolation = 8;
+}
 
-  // Write-lock owner fingerprint. Empty ⇒ unlocked. Mutations and
-  // launches require holding the lock. Phase F3 lands the explicit
-  // Acquire / Release RPCs.
-  string lock_owner_fingerprint = 12;
-  // Wall-clock time at which the lock auto-releases if not refreshed.
-  // Only meaningful when lock_owner_fingerprint is set.
-  google.protobuf.Timestamp lock_expires_at = 13;
+// WorkspaceStatus is the orchestrator's observed runtime state.
+// Controller-owned; clients read but don't write.
+message WorkspaceStatus {
+  // The metadata.generation this status reflects. If
+  // observed_generation < metadata.generation, the user edited
+  // the spec but the current Sandbox (if any) was launched from
+  // an older spec — clients render this as "edit pending restart".
+  uint64 observed_generation = 1;
 
-  // Lifecycle state. See WorkspaceStatus.
-  WorkspaceStatus status = 14;
-  // Human-readable list of required fields still unset on a DRAFT
-  // workspace. Clients use it to print "missing: image, target" so
-  // the user knows what to add before Launch.
-  repeated string missing = 15;
-
-  // Audit timestamps. Immutable / monotonically advancing.
-  google.protobuf.Timestamp created_at = 16;
-  google.protobuf.Timestamp updated_at = 17;
+  // Standard K8s-style condition array. Each entry is one
+  // dimension of "what is true about this Workspace right now".
+  //
+  // Defined types:
+  //   "Ready"          — spec satisfies all required fields.
+  //   "Dispatched"     — a Sandbox is actively bound for this
+  //                      Workspace (status.current_sandbox is set).
+  //   "Reconciled"     — observed_generation == metadata.generation
+  //                      AND no drift detected by the reconciler.
+  //   "ImageResolved"  — pending_build_id has resolved to an
+  //                      image_ref (Phase E).
+  // Readers ignore unknown condition types.
+  repeated daft.sandbox.v1.Condition conditions = 2;
 
   // Reference to the in-flight (or most recent) Sandbox derived
   // from this Workspace. Minted fresh on each Launch; cleared on
-  // Stop. Replaces the prior opaque dispatch_id with a typed
-  // {uid, node} reference. Slice B4c moves this under a
-  // Workspace.status submessage.
-  daft.sandbox.v1.SandboxRef current_sandbox = 18;
+  // Stop. The Dispatched condition's status reflects whether
+  // this field is set.
+  daft.sandbox.v1.SandboxRef current_sandbox = 3;
+
+  // Human-readable list of required spec fields still unset.
+  // Drives the Ready condition's reason field. Clients render
+  // it so the user knows what to add before Launch.
+  repeated string missing = 4;
+
+  // Write-lock state. Empty owner_fingerprint ⇒ unlocked.
+  // Mutations and Launch require holding the lock when set.
+  // Phase F3 lands the explicit Acquire / Release RPCs.
+  Lock lock = 5;
+}
+
+// Lock is the workspace's optional write-lock. Empty
+// owner_fingerprint ⇒ unlocked.
+message Lock {
+  string owner_fingerprint = 1;
+  google.protobuf.Timestamp expires_at = 2;
 }

@@ -4,13 +4,20 @@
 // secondary (owner, name) index used to enforce per-owner alias
 // uniqueness at Create time.
 //
-// The wire/Connect-RPC adapter that drives this package will live
-// in internal/orchestrator/workspacecatalog.go (Slice B2). This
-// split mirrors nodectrl / orchestrator.nodectrl so the
-// catalog stays independent of generated proto types.
+// Workspace shape mirrors Kubernetes: Metadata + Spec + Status.
+//   - Metadata: identity, owner, generation, audit timestamps
+//   - Spec:     declared workload state (user-writable)
+//   - Status:   observed state (controller-owned), including
+//     conditions[], current Sandbox ref, and the
+//     human-readable Missing[] field that drives the
+//     Ready condition's reason.
 //
-// State is in-memory only; persistence (Badger or JSON-on-disk)
-// lands in Slice B5.
+// The wire/Connect-RPC adapter that drives this package lives in
+// internal/orchestrator/workspacecatalog.go. This split mirrors
+// nodectrl / orchestrator.nodectrl so the catalog stays independent
+// of generated proto types.
+//
+// State is in-memory only; persistence (Badger) lands in Slice B6.
 package workspacecatalog
 
 import (
@@ -25,48 +32,58 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
-// Status is the workspace lifecycle state. Mirrors the proto
-// WorkspaceStatus enum without depending on generated code; the
-// Connect-RPC adapter does the cross-translation. Allowed
-// transitions are codified in CanTransition; the full state
-// machine surface is Slice B4.
-type Status uint8
-
+// Condition types. Defined here as constants so handlers and the
+// reconciler use the same PascalCase tokens that ARCHITECTURE.md
+// pins. New types are appended; readers must ignore unknown values.
 const (
-	StatusUnspecified Status = iota
-	StatusDraft
-	StatusReady
-	StatusRunning
-	StatusFrozen
-	StatusStopped
-	StatusArchived
+	ConditionReady         = "Ready"
+	ConditionDispatched    = "Dispatched"
+	ConditionReconciled    = "Reconciled"
+	ConditionImageResolved = "ImageResolved"
 )
 
-// statusUnspecifiedStr is the rendered form returned by
-// Status.String for every value outside the defined enum.
-const statusUnspecifiedStr = "UNSPECIFIED"
+// conditionStatusUnspecifiedStr is the rendered form for
+// ConditionStatus values outside the defined enum. Hoisted because
+// goconst flags the duplicate string literal.
+const conditionStatusUnspecifiedStr = "Unspecified"
 
-// String renders Status for diagnostics and error messages.
-func (s Status) String() string {
+// ConditionStatus mirrors daft.sandbox.v1.ConditionStatus. The
+// Connect adapter does the cross-translation; the catalog stays
+// independent of generated proto types.
+type ConditionStatus uint8
+
+const (
+	ConditionStatusUnspecified ConditionStatus = iota
+	ConditionStatusTrue
+	ConditionStatusFalse
+	ConditionStatusUnknown
+)
+
+// String renders ConditionStatus for diagnostics. Matches the
+// PascalCase tokens used elsewhere in the wire protocol.
+func (s ConditionStatus) String() string {
 	switch s {
-	case StatusDraft:
-		return "DRAFT"
-	case StatusReady:
-		return "READY"
-	case StatusRunning:
-		return "RUNNING"
-	case StatusFrozen:
-		return "FROZEN"
-	case StatusStopped:
-		return "STOPPED"
-	case StatusArchived:
-		return "ARCHIVED"
+	case ConditionStatusTrue:
+		return "True"
+	case ConditionStatusFalse:
+		return "False"
+	case ConditionStatusUnknown:
+		return "Unknown"
 	}
-	return statusUnspecifiedStr
+	return conditionStatusUnspecifiedStr
 }
 
-// Mount is a workspace filesystem mount. Mirrors the proto Mount
-// from daft.nodectrl.v1 without depending on generated code.
+// Condition is one row of WorkspaceStatus.Conditions. Mirrors the
+// K8s-shaped condition catalogued in proto/sandbox/v1/sandbox.proto.
+type Condition struct {
+	Type               string
+	Status             ConditionStatus
+	Reason             string
+	Message            string
+	LastTransitionTime time.Time
+}
+
+// Mount is a workspace filesystem mount.
 type Mount struct {
 	Target   string
 	Source   string
@@ -79,55 +96,14 @@ type EnvVar struct {
 	Value string
 }
 
-// PortMapping is one container port the workload binds. Mirrors
-// the proto PortMapping from daft.nodectrl.v1; Protocol is kept
-// as the wire enum integer rather than its own Go enum so the
-// catalog stays single-source-of-truth for what's on the wire.
+// PortMapping is one container port the workload binds. Protocol
+// is kept as the wire enum integer (TCP=1, UDP=2) rather than its
+// own Go enum so the catalog stays single-source-of-truth for
+// what's on the wire; int32 matches the proto enum's underlying
+// type so adapter-side casts are no-ops.
 type PortMapping struct {
 	ContainerPort uint32
-	// Protocol carries the wire integer from
-	// daft.nodectrl.v1.Protocol (TCP=1, UDP=2). Zero means
-	// UNSPECIFIED and is refused by the Connect adapter. int32
-	// matches the proto enum's underlying type so handler-side
-	// casts are no-ops.
-	Protocol int32
-}
-
-// Workspace is the catalog's record of a single workspace.
-//
-// Identity fields (UUID, OwnerFingerprint, CreatedAt) are
-// immutable after Create. The Store enforces this — callers cannot
-// mutate them via Update.
-type Workspace struct {
-	UUID             string
-	Name             string
-	OwnerFingerprint identity.Fingerprint
-
-	Mounts []Mount
-	Env    []EnvVar
-	Ports  []PortMapping
-
-	ImageRef       string
-	PendingBuildID string
-
-	TargetSandboxFingerprint string
-
-	LockOwnerFingerprint identity.Fingerprint
-	LockExpiresAt        time.Time
-
-	Status  Status
-	Missing []string
-
-	CreatedAt time.Time
-	UpdatedAt time.Time
-
-	// CurrentSandbox references the Sandbox resource Launch minted
-	// for this workspace, plus the Node it was bound to. Nil when
-	// the workspace has never been launched or has been Stop'd.
-	// Replaces the prior opaque CurrentDispatchID; future cross-
-	// workspace correlation (logs, status streams) keys on
-	// CurrentSandbox.UID.
-	CurrentSandbox *SandboxRef
+	Protocol      int32
 }
 
 // SandboxRef is the Go-native mirror of daft.sandbox.v1.SandboxRef.
@@ -136,6 +112,85 @@ type Workspace struct {
 type SandboxRef struct {
 	UID             string
 	NodeFingerprint identity.Fingerprint
+}
+
+// Lock is the workspace's optional write-lock. Zero owner ⇒ unlocked.
+type Lock struct {
+	OwnerFingerprint identity.Fingerprint
+	ExpiresAt        time.Time
+}
+
+// IsHeld reports whether the lock has an owner set. Used by handlers
+// to decide whether to render the expiry / refuse a mutation.
+func (l Lock) IsHeld() bool { return !l.OwnerFingerprint.IsZero() }
+
+// Metadata is the identity + auditing half of a Workspace.
+// Immutable identity fields (UUID, OwnerFingerprint, CreatedAt) are
+// stamped at Create time; mutable fields (Name, Generation,
+// UpdatedAt) move with the workspace's life. Generation increments
+// on every successful Spec change; the reconciler compares it
+// against Status.ObservedGeneration to detect "edit pending restart".
+type Metadata struct {
+	UUID             string
+	Name             string
+	OwnerFingerprint identity.Fingerprint
+	Generation       uint64
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+// Spec is the user-declared workspace state. Editing any field bumps
+// Metadata.Generation.
+type Spec struct {
+	ImageRef                 string
+	PendingBuildID           string
+	Mounts                   []Mount
+	Env                      []EnvVar
+	Ports                    []PortMapping
+	TargetSandboxFingerprint string
+	// GpuRequest / Isolation: reserved for D-phase scheduler
+	// hookup. Carried on the catalog so the spec→SandboxSpec
+	// projection at Launch time stays a direct copy.
+	GpuCount   uint32
+	GpuMinVRAM uint64
+	Isolation  int32 // matches daft.sandbox.v1.Isolation enum integer
+}
+
+// Status is the controller-observed workspace state.
+type Status struct {
+	ObservedGeneration uint64
+	Conditions         []Condition
+	CurrentSandbox     *SandboxRef
+	Missing            []string
+	Lock               Lock
+}
+
+// Condition returns the entry with matching type, or the zero
+// Condition if absent. Handlers compose this with status.IsTrue
+// to gate transitions.
+func (s Status) Condition(typ string) Condition {
+	for _, c := range s.Conditions {
+		if c.Type == typ {
+			return c
+		}
+	}
+	return Condition{}
+}
+
+// IsTrue reports whether the named condition is present and set
+// to True. Unknown / Unspecified / absent conditions all return
+// false — handlers gate on positive proof of readiness.
+func (s Status) IsTrue(typ string) bool {
+	return s.Condition(typ).Status == ConditionStatusTrue
+}
+
+// Workspace is the catalog's record of a single workspace. The
+// three sub-structs mirror the wire shape exactly so the
+// Connect-RPC projection (workspaceToProto) is a flat copy.
+type Workspace struct {
+	Metadata Metadata
+	Spec     Spec
+	Status   Status
 }
 
 // Sentinel errors. ErrAliasInUse lets the Connect adapter map a
@@ -181,8 +236,8 @@ func NewStore(now func() time.Time) *Store {
 }
 
 // CreateInput is the new-workspace shape. UUID is supplied by the
-// caller so the Connect adapter (B2) can echo the same value back
-// to the client without a second RPC. Empty UUID or empty Name is
+// caller so the Connect adapter can echo the same value back to
+// the client without a second RPC. Empty UUID or empty Name is
 // rejected.
 type CreateInput struct {
 	UUID             string
@@ -191,9 +246,10 @@ type CreateInput struct {
 }
 
 // Create inserts a new workspace. Returns ErrAliasInUse if (Owner,
-// Name) already exists. The new workspace starts in StatusDraft
-// with Missing listing the still-empty required fields
-// (image, target, at least one mount).
+// Name) already exists. The new workspace starts with Generation=1,
+// no conditions True, and Missing listing the still-empty required
+// spec fields (image, target, at least one mount). Validate /
+// mutation calls compute the Ready condition from Missing[].
 func (s *Store) Create(in CreateInput) (Workspace, error) {
 	assert.True(in.UUID != "",
 		"workspacecatalog.Create requires a non-empty UUID; the caller mints one so the Connect adapter can echo it back without a second round-trip")
@@ -210,23 +266,25 @@ func (s *Store) Create(in CreateInput) (Workspace, error) {
 		return Workspace{}, ErrAliasInUse
 	}
 	ws := Workspace{
-		UUID:             in.UUID,
-		Name:             in.Name,
-		OwnerFingerprint: in.OwnerFingerprint,
-		Status:           StatusDraft,
-		Missing:          missingFields(Workspace{}),
-		CreatedAt:        now,
-		UpdatedAt:        now,
+		Metadata: Metadata{
+			UUID:             in.UUID,
+			Name:             in.Name,
+			OwnerFingerprint: in.OwnerFingerprint,
+			Generation:       1,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		},
 	}
+	ws.Status.Missing = missingFields(ws.Spec)
+	ws.Status.Conditions = recomputeConditions(nil, ws.Status.Missing, false, now)
 	s.all[in.UUID] = ws
 	s.byAlias[key] = in.UUID
 	return ws, nil
 }
 
 // Get returns the workspace identified by uuid. The returned value
-// is a deep-enough copy that mutating slice headers won't race the
-// store; the backing arrays are shared, so callers MUST treat the
-// result as read-only.
+// is a shallow copy; the backing slice arrays are shared, so callers
+// MUST treat the result as read-only.
 func (s *Store) Get(uuid string) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -249,16 +307,35 @@ func (s *Store) LookupByAlias(owner identity.Fingerprint, name string) (Workspac
 	return s.all[uuid], nil
 }
 
+// MutateKind tells Update whether a callback's edit is a spec
+// change (bumps Generation, re-derives Missing + Ready), a
+// status-only change (e.g. setting Dispatched after Launch), or
+// metadata-only (e.g. renaming). The Store handles the derived
+// state correspondingly so callers don't have to remember the
+// bookkeeping.
+type MutateKind uint8
+
+const (
+	// MutateSpec: fn edits Spec fields. Generation increments,
+	// Missing is recomputed, Ready condition is refreshed.
+	MutateSpec MutateKind = iota
+	// MutateStatus: fn edits Status only (e.g. set Dispatched,
+	// clear CurrentSandbox). Generation does not change.
+	MutateStatus
+	// MutateMetadata: fn edits Metadata only (e.g. rename).
+	// Generation does not change.
+	MutateMetadata
+)
+
 // Update applies fn to a copy of the workspace and stores the
 // result. fn MUST NOT modify identity fields (UUID,
-// OwnerFingerprint, CreatedAt) — the Store re-asserts the original
-// values on return and reports ErrImmutableField if they changed.
-// Missing[] and UpdatedAt are recomputed by the Store.
+// OwnerFingerprint, CreatedAt) — the Store re-asserts the originals
+// on return and reports ErrImmutableField if they changed.
 //
 // Update under a nil fn is a no-op that still bumps UpdatedAt —
 // useful for touch-style refreshes (lock renewal) without a
 // separate API.
-func (s *Store) Update(uuid string, fn func(*Workspace) error) (Workspace, error) {
+func (s *Store) Update(uuid string, kind MutateKind, fn func(*Workspace) error) (Workspace, error) {
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -272,22 +349,26 @@ func (s *Store) Update(uuid string, fn func(*Workspace) error) (Workspace, error
 			return Workspace{}, err
 		}
 	}
-	if next.UUID != prev.UUID ||
-		next.OwnerFingerprint != prev.OwnerFingerprint ||
-		!next.CreatedAt.Equal(prev.CreatedAt) {
+	if next.Metadata.UUID != prev.Metadata.UUID ||
+		next.Metadata.OwnerFingerprint != prev.Metadata.OwnerFingerprint ||
+		!next.Metadata.CreatedAt.Equal(prev.Metadata.CreatedAt) {
 		return Workspace{}, ErrImmutableField
 	}
-	if next.Name != prev.Name {
-		oldKey := aliasKey{owner: prev.OwnerFingerprint, name: prev.Name}
-		newKey := aliasKey{owner: prev.OwnerFingerprint, name: next.Name}
+	if next.Metadata.Name != prev.Metadata.Name {
+		oldKey := aliasKey{owner: prev.Metadata.OwnerFingerprint, name: prev.Metadata.Name}
+		newKey := aliasKey{owner: prev.Metadata.OwnerFingerprint, name: next.Metadata.Name}
 		if _, dup := s.byAlias[newKey]; dup {
 			return Workspace{}, ErrAliasInUse
 		}
 		delete(s.byAlias, oldKey)
 		s.byAlias[newKey] = uuid
 	}
-	next.Missing = missingFields(next)
-	next.UpdatedAt = now
+	if kind == MutateSpec {
+		next.Metadata.Generation++
+		next.Status.Missing = missingFields(next.Spec)
+		next.Status.Conditions = recomputeConditions(next.Status.Conditions, next.Status.Missing, next.Status.IsTrue(ConditionDispatched), now)
+	}
+	next.Metadata.UpdatedAt = now
 	s.all[uuid] = next
 	return next, nil
 }
@@ -301,7 +382,7 @@ func (s *Store) Delete(uuid string) {
 		return
 	}
 	delete(s.all, uuid)
-	delete(s.byAlias, aliasKey{owner: prev.OwnerFingerprint, name: prev.Name})
+	delete(s.byAlias, aliasKey{owner: prev.Metadata.OwnerFingerprint, name: prev.Metadata.Name})
 }
 
 // List returns every workspace satisfying keep (or every workspace
@@ -320,55 +401,97 @@ func (s *Store) List(keep func(*Workspace) bool) []Workspace {
 		out = append(out, ws)
 	}
 	s.mu.Unlock()
-	slices.SortFunc(out, func(a, b Workspace) int { return cmp.Compare(a.UUID, b.UUID) })
+	slices.SortFunc(out, func(a, b Workspace) int { return cmp.Compare(a.Metadata.UUID, b.Metadata.UUID) })
 	return out
 }
 
-// CanTransition reports whether a status change is allowed by the
-// (B4) workspace state machine. Used by the Connect adapter to
-// reject invalid transitions before they hit the store. The full
-// state machine — including the side effects each transition
-// triggers (Launch, Stop, Freeze, etc.) — is Slice B4's surface;
-// B1 reserves the allowed-edges table so the proto enum doesn't
-// need to be rewired later.
-func CanTransition(from, to Status) bool {
-	if from == to {
-		return true
-	}
-	switch from {
-	case StatusUnspecified:
-		return to == StatusDraft
-	case StatusDraft:
-		return to == StatusReady || to == StatusArchived
-	case StatusReady:
-		return to == StatusRunning || to == StatusDraft || to == StatusArchived
-	case StatusRunning:
-		return to == StatusFrozen || to == StatusStopped
-	case StatusFrozen:
-		return to == StatusRunning || to == StatusStopped
-	case StatusStopped:
-		return to == StatusRunning || to == StatusDraft || to == StatusArchived
-	}
-	return false
-}
-
-// missingFields returns the human-readable list of required
-// workspace fields that are still unset. Used to populate
-// Workspace.Missing on Create and after every Update.
-//
+// missingFields returns the human-readable list of required spec
+// fields that are still unset. Drives the Ready condition's reason.
 // The required set: at least one Mount, exactly one of ImageRef or
 // PendingBuildID, and a target (TargetSandboxFingerprint). The CLI
 // uses this list verbatim, so the strings are user-facing.
-func missingFields(ws Workspace) []string {
+func missingFields(spec Spec) []string {
 	var out []string
-	if len(ws.Mounts) == 0 {
+	if len(spec.Mounts) == 0 {
 		out = append(out, "mount")
 	}
-	if ws.ImageRef == "" && ws.PendingBuildID == "" {
+	if spec.ImageRef == "" && spec.PendingBuildID == "" {
 		out = append(out, "image")
 	}
-	if ws.TargetSandboxFingerprint == "" {
+	if spec.TargetSandboxFingerprint == "" {
 		out = append(out, "target")
 	}
 	return out
+}
+
+// recomputeConditions refreshes the spec-derived conditions (Ready
+// today, ImageResolved when E lands) without disturbing those the
+// reconciler owns (Dispatched, Reconciled). Pass dispatched so the
+// Ready condition can include a reason when Launch is blocked by
+// an in-flight Sandbox.
+//
+// Callers usually pass prev (the existing slice) so transitions
+// preserve LastTransitionTime when the bit didn't actually flip.
+func recomputeConditions(prev []Condition, missing []string, dispatched bool, now time.Time) []Condition {
+	out := make([]Condition, 0, len(prev)+1)
+	for _, c := range prev {
+		// Carry forward conditions the reconciler owns.
+		if c.Type == ConditionDispatched || c.Type == ConditionReconciled || c.Type == ConditionImageResolved {
+			out = append(out, c)
+		}
+	}
+	ready := setReady(prev, missing, dispatched, now)
+	out = append(out, ready)
+	return out
+}
+
+// setReady computes the Ready condition. Preserves LastTransitionTime
+// when the status bit didn't change from the prior value.
+func setReady(prev []Condition, missing []string, dispatched bool, now time.Time) Condition {
+	want := ConditionStatusTrue
+	reason := "Ready"
+	message := ""
+	switch {
+	case len(missing) > 0:
+		want = ConditionStatusFalse
+		reason = "MissingFields"
+		message = fmt.Sprintf("missing: %v", missing)
+	case dispatched:
+		// Spec is satisfied but a Sandbox is in flight; clients
+		// still see Ready=True (the workspace itself is ready),
+		// only Launch is gated by Dispatched separately.
+	}
+	cond := Condition{Type: ConditionReady, Status: want, Reason: reason, Message: message, LastTransitionTime: now}
+	for _, p := range prev {
+		if p.Type == ConditionReady && p.Status == want {
+			cond.LastTransitionTime = p.LastTransitionTime
+			break
+		}
+	}
+	return cond
+}
+
+// SetCondition replaces (or appends) a single condition by Type,
+// preserving LastTransitionTime when Status doesn't change.
+// Handlers use this to set Dispatched after Launch / clear it on
+// Stop / and (B5) for the reconciler-owned Reconciled bit.
+func (s *Status) SetCondition(typ string, status ConditionStatus, reason, message string, now time.Time) {
+	for i, c := range s.Conditions {
+		if c.Type != typ {
+			continue
+		}
+		next := Condition{Type: typ, Status: status, Reason: reason, Message: message, LastTransitionTime: now}
+		if c.Status == status {
+			next.LastTransitionTime = c.LastTransitionTime
+		}
+		s.Conditions[i] = next
+		return
+	}
+	s.Conditions = append(s.Conditions, Condition{
+		Type:               typ,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		LastTransitionTime: now,
+	})
 }
