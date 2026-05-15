@@ -120,6 +120,12 @@ type Workspace struct {
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
+
+	// CurrentDispatchID is the latest dispatch identifier issued by
+	// Launch. Empty when the workspace has never been launched or
+	// has been Stop'd. Future cross-workspace correlation (logs,
+	// status streams) will key on this.
+	CurrentDispatchID string
 }
 
 // Sentinel errors. ErrAliasInUse lets the Connect adapter map a

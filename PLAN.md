@@ -333,9 +333,18 @@ Phase B — **Workspace as a first-class orchestrator object**:
   (adoption) because they are per-user-host overrides — not
   edits to the global workspace spec — per architectural
   implication #5.
-- B2c: Validate, Launch, Stop. Launch composes the workspace
-  into a SandboxSpec and dispatches via the existing
-  SandboxControlHandler.Dispatch path.
+- B2c (landed): Validate, Launch, Stop. Validate auto-
+  transitions DRAFT↔READY based on Missing[]; READY/STOPPED
+  workspaces are launchable. Launch mints a fresh dispatch_id,
+  composes a SandboxSpec from the workspace, hands it to a new
+  `Dispatcher` interface (production: SandboxControlHandler;
+  tests: fakeDispatcher), and transitions to RUNNING.
+  Workspace.current_dispatch_id stores the correlation token.
+  Dispatch error mapping: ErrSandboxNotConnected →
+  FailedPrecondition, ErrDispatchBacklog → Unavailable. Stop is
+  catalog-only for now (RUNNING/FROZEN → STOPPED, clears
+  dispatch_id) — the wire teardown signal to the sandbox-host
+  follows in B2c'.
 - B2d: Lock, Unlock, Adopt. Per-owner write-lock enforcement
   gates the B2a/B2b/B2c mutators retroactively.
 - B3: Client CLI surface — `daft workspace <create|mount|env|

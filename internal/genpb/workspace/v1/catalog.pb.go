@@ -174,10 +174,15 @@ type Workspace struct {
 	// the user knows what to add before Launch.
 	Missing []string `protobuf:"bytes,15,rep,name=missing,proto3" json:"missing,omitempty"`
 	// Audit timestamps. Immutable / monotonically advancing.
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,16,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt *timestamppb.Timestamp `protobuf:"bytes,17,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// Identifier of the in-flight (or most recent) Dispatch to a
+	// sandbox-host. Minted fresh on each Launch; cleared on Stop.
+	// Future RPCs (status streaming, log subscribe) will reference
+	// this to correlate sandbox-side state back to the workspace.
+	CurrentDispatchId string `protobuf:"bytes,18,opt,name=current_dispatch_id,json=currentDispatchId,proto3" json:"current_dispatch_id,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Workspace) Reset() {
@@ -329,11 +334,18 @@ func (x *Workspace) GetUpdatedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Workspace) GetCurrentDispatchId() string {
+	if x != nil {
+		return x.CurrentDispatchId
+	}
+	return ""
+}
+
 var File_workspace_v1_catalog_proto protoreflect.FileDescriptor
 
 const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\n" +
-	"\x1aworkspace/v1/catalog.proto\x12\x11daft.workspace.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a sandboxctrl/v1/sandboxctrl.proto\"\xc6\x06\n" +
+	"\x1aworkspace/v1/catalog.proto\x12\x11daft.workspace.v1\x1a\x1fgoogle/protobuf/timestamp.proto\x1a sandboxctrl/v1/sandboxctrl.proto\"\xf6\x06\n" +
 	"\tWorkspace\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12+\n" +
@@ -355,7 +367,8 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x10 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt*\xe3\x01\n" +
+	"updated_at\x18\x11 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12.\n" +
+	"\x13current_dispatch_id\x18\x12 \x01(\tR\x11currentDispatchId*\xe3\x01\n" +
 	"\x0fWorkspaceStatus\x12 \n" +
 	"\x1cWORKSPACE_STATUS_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16WORKSPACE_STATUS_DRAFT\x10\x01\x12\x1a\n" +

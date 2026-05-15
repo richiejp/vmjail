@@ -25,6 +25,14 @@ import (
 var errUnauthenticated = connect.NewError(connect.CodeUnauthenticated,
 	errors.New("orchestrator: no mTLS peer identity"))
 
+// Dispatcher is the orchestrator-side seam Launch uses to ship a
+// composed SandboxSpec to a sandbox-host. The production
+// implementation is *SandboxControlHandler; tests inject fakes that
+// observe what Launch sent without needing a live sandbox stream.
+type Dispatcher interface {
+	Dispatch(fp identity.Fingerprint, dispatchID string, spec *sandboxctrlv1.SandboxSpec) error
+}
+
 // WorkspaceCatalogHandler adapts the workspacecatalog.Store to the
 // Connect-RPC WorkspaceCatalogService surface. Peer identity for
 // every RPC is the mTLS leaf-cert fingerprint surfaced via
@@ -33,17 +41,19 @@ var errUnauthenticated = connect.NewError(connect.CodeUnauthenticated,
 // mutation lands in B2d.
 type WorkspaceCatalogHandler struct {
 	workspacev1connect.UnimplementedWorkspaceCatalogServiceHandler
-	store *workspacecatalog.Store
+	store      *workspacecatalog.Store
+	dispatcher Dispatcher
 }
 
-// NewWorkspaceCatalogHandler returns a handler backed by store.
-// Returns an error if store is nil — the orchestrator's wiring
-// would be malformed.
-func NewWorkspaceCatalogHandler(store *workspacecatalog.Store) (*WorkspaceCatalogHandler, error) {
+// NewWorkspaceCatalogHandler returns a handler backed by store and
+// dispatcher. dispatcher may be nil — Launch will then refuse with
+// Unimplemented, which is the right shape for catalog-only test
+// rigs that exercise the read/mutate surface in isolation.
+func NewWorkspaceCatalogHandler(store *workspacecatalog.Store, dispatcher Dispatcher) (*WorkspaceCatalogHandler, error) {
 	if store == nil {
 		return nil, errors.New("orchestrator: nil workspace catalog")
 	}
-	return &WorkspaceCatalogHandler{store: store}, nil
+	return &WorkspaceCatalogHandler{store: store, dispatcher: dispatcher}, nil
 }
 
 // Create implements WorkspaceCatalogService.Create. The
@@ -428,6 +438,156 @@ func (h *WorkspaceCatalogHandler) resolveHandle(
 	}
 }
 
+// Validate recomputes readiness and auto-transitions DRAFT↔READY.
+// Other statuses are left untouched.
+func (h *WorkspaceCatalogHandler) Validate(
+	_ context.Context,
+	req *connect.Request[workspacev1.ValidateRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	return h.mutate(req.Header(), req.Msg.GetHandle(),
+		func(w *workspacecatalog.Workspace) error {
+			// Store.Update recomputes Missing[] before we see this
+			// closure return, so the readiness flip can read straight
+			// off the current field values.
+			ready := w.ImageRef != "" || w.PendingBuildID != ""
+			ready = ready && w.TargetSandboxFingerprint != "" && len(w.Mounts) > 0
+			switch w.Status {
+			case workspacecatalog.StatusDraft:
+				if ready {
+					w.Status = workspacecatalog.StatusReady
+				}
+			case workspacecatalog.StatusReady:
+				if !ready {
+					w.Status = workspacecatalog.StatusDraft
+				}
+			}
+			return nil
+		})
+}
+
+// Launch composes a SandboxSpec from the workspace and ships it via
+// the configured Dispatcher. Returns FailedPrecondition for state-
+// machine / readiness violations; Unavailable when the sandbox is
+// momentarily backlogged; Unimplemented when no dispatcher is
+// wired (catalog-only test rigs).
+func (h *WorkspaceCatalogHandler) Launch(
+	_ context.Context,
+	req *connect.Request[workspacev1.LaunchRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	if h.dispatcher == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented,
+			errors.New("orchestrator: no dispatcher configured"))
+	}
+	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	ws, err := h.resolveHandle(fp, req.Msg.GetHandle())
+	if err != nil {
+		return nil, err
+	}
+	if !launchableStatus(ws.Status) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("workspace: cannot launch from status %s", ws.Status))
+	}
+	if len(ws.Missing) > 0 {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("workspace: not ready, missing: %v", ws.Missing))
+	}
+	if ws.TargetSandboxFingerprint == "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			errors.New("workspace: target_sandbox_fingerprint required for Launch"))
+	}
+	targetFP, err := identity.ParseFingerprint(ws.TargetSandboxFingerprint)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("workspace: invalid target fingerprint: %w", err))
+	}
+
+	dispatchID := mintWorkspaceUUID()
+	spec := workspaceToSandboxSpec(ws, dispatchID)
+	if dispatchErr := h.dispatcher.Dispatch(targetFP, dispatchID, spec); dispatchErr != nil {
+		switch {
+		case errors.Is(dispatchErr, ErrSandboxNotConnected):
+			return nil, connect.NewError(connect.CodeFailedPrecondition, dispatchErr)
+		case errors.Is(dispatchErr, ErrDispatchBacklog):
+			return nil, connect.NewError(connect.CodeUnavailable, dispatchErr)
+		}
+		return nil, connect.NewError(connect.CodeInternal, dispatchErr)
+	}
+
+	updated, err := h.store.Update(ws.UUID, func(w *workspacecatalog.Workspace) error {
+		w.Status = workspacecatalog.StatusRunning
+		w.CurrentDispatchID = dispatchID
+		return nil
+	})
+	if err != nil {
+		return nil, mapCatalogErr(err)
+	}
+	return connect.NewResponse(&workspacev1.WorkspaceResponse{
+		Workspace: workspaceToProto(updated),
+	}), nil
+}
+
+// Stop transitions a RUNNING or FROZEN workspace to STOPPED and
+// clears the dispatch_id. Catalog-only — the wire teardown signal
+// to the sandbox-host lands in a follow-up sub-slice.
+func (h *WorkspaceCatalogHandler) Stop(
+	_ context.Context,
+	req *connect.Request[workspacev1.StopRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	return h.mutate(req.Header(), req.Msg.GetHandle(),
+		func(w *workspacecatalog.Workspace) error {
+			if w.Status != workspacecatalog.StatusRunning &&
+				w.Status != workspacecatalog.StatusFrozen {
+				return connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("workspace: cannot stop from status %s", w.Status))
+			}
+			w.Status = workspacecatalog.StatusStopped
+			w.CurrentDispatchID = ""
+			return nil
+		})
+}
+
+// launchableStatus reports whether a workspace's current status
+// admits a Launch (READY or STOPPED). DRAFT requires Validate
+// first; RUNNING/FROZEN are already-running; ARCHIVED is terminal.
+func launchableStatus(s workspacecatalog.Status) bool {
+	return s == workspacecatalog.StatusReady || s == workspacecatalog.StatusStopped
+}
+
+// workspaceToSandboxSpec composes the wire spec that the sandbox-
+// host's executor consumes. The dispatch_id arg is the orchestrator
+// -minted correlation token Launch echoes back via Workspace.
+// current_dispatch_id; SandboxSpec itself doesn't carry it
+// (the surrounding Dispatch envelope does).
+func workspaceToSandboxSpec(ws workspacecatalog.Workspace, _ string) *sandboxctrlv1.SandboxSpec {
+	spec := &sandboxctrlv1.SandboxSpec{
+		ImageRef:      ws.ImageRef,
+		WorkspaceUuid: ws.UUID,
+	}
+	spec.Mounts = make([]*sandboxctrlv1.Mount, len(ws.Mounts))
+	for i, m := range ws.Mounts {
+		spec.Mounts[i] = &sandboxctrlv1.Mount{
+			Target:   m.Target,
+			Source:   m.Source,
+			ReadOnly: m.ReadOnly,
+		}
+	}
+	spec.Env = make([]*sandboxctrlv1.EnvVar, len(ws.Env))
+	for i, e := range ws.Env {
+		spec.Env[i] = &sandboxctrlv1.EnvVar{Name: e.Name, Value: e.Value}
+	}
+	spec.Ports = make([]*sandboxctrlv1.PortMapping, len(ws.Ports))
+	for i, p := range ws.Ports {
+		spec.Ports[i] = &sandboxctrlv1.PortMapping{
+			ContainerPort: p.ContainerPort,
+			Protocol:      sandboxctrlv1.Protocol(p.Protocol),
+		}
+	}
+	return spec
+}
+
 // mapCatalogErr maps workspacecatalog sentinel errors to Connect
 // codes. Returns nil unchanged so handlers can use it
 // unconditionally on every store-call result.
@@ -484,6 +644,7 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 		Missing:                  append([]string(nil), ws.Missing...),
 		CreatedAt:                timestamppb.New(ws.CreatedAt),
 		UpdatedAt:                timestamppb.New(ws.UpdatedAt),
+		CurrentDispatchId:        ws.CurrentDispatchID,
 	}
 	if !ws.LockExpiresAt.IsZero() {
 		out.LockExpiresAt = timestamppb.New(ws.LockExpiresAt)

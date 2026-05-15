@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,6 +22,9 @@ const (
 	// testMountTarget is the canonical in-VM mount target used
 	// across the Add/Remove mount tests.
 	testMountTarget = "/workspace"
+	// testMountSource is the canonical Source value paired with
+	// testMountTarget — opaque to the catalog at this stage.
+	testMountSource = "src"
 )
 
 // TestServerExposesWorkspaceCatalog mirrors
@@ -69,7 +73,7 @@ func mustOpenStoreForWorkspaceCatalog(t *testing.T) *identity.PeerStore {
 // TestNewWorkspaceCatalogHandlerRejectsNilStore covers the
 // constructor's input guard.
 func TestNewWorkspaceCatalogHandlerRejectsNilStore(t *testing.T) {
-	if _, err := NewWorkspaceCatalogHandler(nil); err == nil {
+	if _, err := NewWorkspaceCatalogHandler(nil, nil); err == nil {
 		t.Error("expected error for nil store")
 	}
 }
@@ -77,7 +81,7 @@ func TestNewWorkspaceCatalogHandlerRejectsNilStore(t *testing.T) {
 // TestWorkspaceCatalogHandlerRejectsMissingPeerIdentity covers
 // every RPC's auth check.
 func TestWorkspaceCatalogHandlerRejectsMissingPeerIdentity(t *testing.T) {
-	h, err := NewWorkspaceCatalogHandler(workspacecatalog.NewStore(nil))
+	h, err := NewWorkspaceCatalogHandler(workspacecatalog.NewStore(nil), nil)
 	if err != nil {
 		t.Fatalf("NewWorkspaceCatalogHandler: %v", err)
 	}
@@ -157,19 +161,68 @@ type workspaceCatalogRig struct {
 	catalog  *workspacecatalog.Store
 	callerID *identity.Identity
 	client   workspacev1connect.WorkspaceCatalogServiceClient
+	// dispatcher is the fake injected when newWorkspaceCatalogRig
+	// is called with a non-nil dispatcher option; nil otherwise so
+	// the production SandboxControlHandler is in play.
+	dispatcher *fakeDispatcher
 }
 
 func newWorkspaceCatalogRig(t *testing.T) *workspaceCatalogRig {
+	return newWorkspaceCatalogRigWith(t, nil)
+}
+
+func newWorkspaceCatalogRigWith(t *testing.T, dispatcher *fakeDispatcher) *workspaceCatalogRig {
 	t.Helper()
 	cat := workspacecatalog.NewStore(nil)
-	env := newOrchTestEnv(t, identity.RoleClient, Config{WorkspaceCatalog: cat})
+	cfg := Config{WorkspaceCatalog: cat}
+	if dispatcher != nil {
+		cfg.WorkspaceDispatcher = dispatcher
+	}
+	env := newOrchTestEnv(t, identity.RoleClient, cfg)
 	client := workspacev1connect.NewWorkspaceCatalogServiceClient(env.httpc, env.baseURL)
 	return &workspaceCatalogRig{
-		server:   env.server,
-		catalog:  cat,
-		callerID: env.callerID,
-		client:   client,
+		server:     env.server,
+		catalog:    cat,
+		callerID:   env.callerID,
+		client:     client,
+		dispatcher: dispatcher,
 	}
+}
+
+// fakeDispatcher records every Dispatch call. The next-error knob
+// lets tests cover the FailedPrecondition / Unavailable / Internal
+// mappings without going through a real sandbox-host stream.
+type fakeDispatcher struct {
+	mu        sync.Mutex
+	calls     []dispatchCall
+	nextError error
+}
+
+type dispatchCall struct {
+	fp         identity.Fingerprint
+	dispatchID string
+	spec       *sandboxctrlv1.SandboxSpec
+}
+
+func (f *fakeDispatcher) Dispatch(fp identity.Fingerprint, dispatchID string, spec *sandboxctrlv1.SandboxSpec) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.nextError != nil {
+		err := f.nextError
+		f.nextError = nil
+		return err
+	}
+	f.calls = append(f.calls, dispatchCall{fp: fp, dispatchID: dispatchID, spec: spec})
+	return nil
+}
+
+func (f *fakeDispatcher) last() (dispatchCall, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.calls) == 0 {
+		return dispatchCall{}, false
+	}
+	return f.calls[len(f.calls)-1], true
 }
 
 // TestCreateMintsUUIDAndStampsOwner pins that Create generates an
@@ -627,7 +680,7 @@ func TestRemoveMountDropsTheTargetAndReReinstatesMissing(t *testing.T) {
 	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 		&workspacev1.AddMountRequest{
 			Handle: handle,
-			Mount:  &sandboxctrlv1.Mount{Target: testMountTarget, Source: "src"},
+			Mount:  &sandboxctrlv1.Mount{Target: testMountTarget, Source: testMountSource},
 		},
 	)); err != nil {
 		t.Fatalf("AddMount: %v", err)
@@ -685,7 +738,7 @@ func TestRemoveMountMiddleEntryPreservesOthers(t *testing.T) {
 		if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
 			&workspacev1.AddMountRequest{
 				Handle: handle,
-				Mount:  &sandboxctrlv1.Mount{Target: target, Source: "src"},
+				Mount:  &sandboxctrlv1.Mount{Target: target, Source: testMountSource},
 			},
 		)); err != nil {
 			t.Fatalf("AddMount %s: %v", target, err)
@@ -859,6 +912,326 @@ func hasMissing(missing []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// readyWorkspace creates a workspace, populates the three required
+// fields, and returns its uuid. Used as the prelude for every B2c
+// test that needs a launchable workspace.
+func readyWorkspace(t *testing.T, rig *workspaceCatalogRig, name, target string) string {
+	t.Helper()
+	created, err := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: name},
+	))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	handle := uuidHandle(created.Msg.GetWorkspace().GetUuid())
+	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
+		&workspacev1.AddMountRequest{
+			Handle: handle,
+			Mount:  &sandboxctrlv1.Mount{Target: testMountTarget, Source: testMountSource},
+		},
+	)); err != nil {
+		t.Fatalf("AddMount: %v", err)
+	}
+	if _, err := rig.client.SetImage(t.Context(), connect.NewRequest(
+		&workspacev1.SetImageRequest{Handle: handle, ImageRef: testImageRef},
+	)); err != nil {
+		t.Fatalf("SetImage: %v", err)
+	}
+	if _, err := rig.client.SetTarget(t.Context(), connect.NewRequest(
+		&workspacev1.SetTargetRequest{Handle: handle, SandboxFingerprint: target},
+	)); err != nil {
+		t.Fatalf("SetTarget: %v", err)
+	}
+	return created.Msg.GetWorkspace().GetUuid()
+}
+
+// TestValidatePromotesDraftToReady pins the "ready means missing[]
+// is empty and target is set" sieve: a workspace with all three
+// required fields auto-transitions to READY on Validate.
+func TestValidatePromotesDraftToReady(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
+	uuid := readyWorkspace(t, rig, "promote", target)
+	resp, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
+	))
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got := resp.Msg.GetWorkspace().GetStatus(); got != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_READY {
+		t.Errorf("status = %s, want READY", got)
+	}
+}
+
+// TestValidateKeepsIncompleteAsDraft pins the negative half — a
+// workspace still missing a field stays DRAFT.
+func TestValidateKeepsIncompleteAsDraft(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "incomplete"},
+	))
+	resp, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: uuidHandle(created.Msg.GetWorkspace().GetUuid())},
+	))
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if got := resp.Msg.GetWorkspace().GetStatus(); got != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_DRAFT {
+		t.Errorf("status = %s, want DRAFT", got)
+	}
+}
+
+// TestValidateDemotesReadyOnDrift pins that a workspace that was
+// READY but has since lost a required field flips back to DRAFT
+// when Validate runs.
+func TestValidateDemotesReadyOnDrift(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
+	uuid := readyWorkspace(t, rig, "drift", target)
+	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatalf("Validate up: %v", err)
+	}
+	if _, err := rig.client.RemoveMount(t.Context(), connect.NewRequest(
+		&workspacev1.RemoveMountRequest{Handle: uuidHandle(uuid), Target: testMountTarget},
+	)); err != nil {
+		t.Fatalf("RemoveMount: %v", err)
+	}
+	resp, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
+	))
+	if err != nil {
+		t.Fatalf("Validate down: %v", err)
+	}
+	if got := resp.Msg.GetWorkspace().GetStatus(); got != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_DRAFT {
+		t.Errorf("status = %s, want DRAFT after drift", got)
+	}
+}
+
+// TestLaunchDispatchesComposedSandboxSpec drives the happy path:
+// Validate first to reach READY, then Launch composes the spec and
+// hands it to the dispatcher. Asserts the spec carries every field
+// the workspace declared.
+func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	targetID := mustGenerate(t, identity.RoleSandboxHost)
+	target := targetID.Fingerprint().String()
+	uuid := readyWorkspace(t, rig, "launch-ok", target)
+	if _, err := rig.client.AddEnv(t.Context(), connect.NewRequest(
+		&workspacev1.AddEnvRequest{
+			Handle: uuidHandle(uuid),
+			Env:    &sandboxctrlv1.EnvVar{Name: "K", Value: "v"},
+		},
+	)); err != nil {
+		t.Fatalf("AddEnv: %v", err)
+	}
+	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	resp, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+	))
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	got := resp.Msg.GetWorkspace()
+	if got.GetStatus() != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_RUNNING {
+		t.Errorf("status = %s, want RUNNING", got.GetStatus())
+	}
+	if got.GetCurrentDispatchId() == "" {
+		t.Error("current_dispatch_id not populated")
+	}
+	call, ok := fake.last()
+	if !ok {
+		t.Fatal("fake dispatcher saw no calls")
+	}
+	if call.fp != targetID.Fingerprint() {
+		t.Errorf("dispatch target = %s, want %s", call.fp.String(), target)
+	}
+	if call.dispatchID != got.GetCurrentDispatchId() {
+		t.Errorf("dispatch_id = %q, want %q", call.dispatchID, got.GetCurrentDispatchId())
+	}
+	if call.spec.GetImageRef() != testImageRef {
+		t.Errorf("spec.image_ref = %q, want %q", call.spec.GetImageRef(), testImageRef)
+	}
+	if call.spec.GetWorkspaceUuid() != uuid {
+		t.Errorf("spec.workspace_uuid = %q, want %q", call.spec.GetWorkspaceUuid(), uuid)
+	}
+	if len(call.spec.GetMounts()) != 1 || call.spec.GetMounts()[0].GetTarget() != testMountTarget {
+		t.Errorf("spec.mounts = %v, want [%s]", call.spec.GetMounts(), testMountTarget)
+	}
+	if len(call.spec.GetEnv()) != 1 || call.spec.GetEnv()[0].GetName() != "K" {
+		t.Errorf("spec.env = %v, want [K=v]", call.spec.GetEnv())
+	}
+}
+
+// TestLaunchRejectsDraftAndMissing pins the readiness preconditions:
+// a workspace still in DRAFT (or one missing fields after drift)
+// gets FailedPrecondition before the dispatcher is touched.
+func TestLaunchRejectsDraftAndMissing(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "draft"},
+	))
+	_, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(created.Msg.GetWorkspace().GetUuid())},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
+		t.Errorf("code = %s, want FailedPrecondition", code)
+	}
+	if _, ok := fake.last(); ok {
+		t.Error("dispatcher was called for an unready workspace")
+	}
+}
+
+// TestLaunchPropagatesDispatchErrors pins the FailedPrecondition
+// (sandbox offline) and Unavailable (backlog) mappings.
+func TestLaunchPropagatesDispatchErrors(t *testing.T) {
+	cases := []struct {
+		name string
+		in   error
+		want connect.Code
+	}{
+		{"not connected", ErrSandboxNotConnected, connect.CodeFailedPrecondition},
+		{"backlog", ErrDispatchBacklog, connect.CodeUnavailable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeDispatcher{nextError: tc.in}
+			rig := newWorkspaceCatalogRigWith(t, fake)
+			target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
+			uuid := readyWorkspace(t, rig, "dispatch-err", target)
+			if _, err := rig.client.Validate(t.Context(), connect.NewRequest(
+				&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
+			)); err != nil {
+				t.Fatalf("Validate: %v", err)
+			}
+			_, err := rig.client.Launch(t.Context(), connect.NewRequest(
+				&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+			))
+			if code := connect.CodeOf(err); code != tc.want {
+				t.Errorf("code = %s, want %s", code, tc.want)
+			}
+		})
+	}
+}
+
+// TestLaunchRefusesInvalidTargetFingerprint pins the target-parse
+// guard: an opaque non-fingerprint stored via SetTarget gets caught
+// at Launch rather than confusing the dispatcher.
+func TestLaunchRefusesInvalidTargetFingerprint(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	// SetTarget accepts any string for now (Phase B doesn't validate),
+	// so we plant a bogus value and let Launch's ParseFingerprint
+	// catch it. Bypass the alias-uniqueness path by writing through
+	// the store directly.
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "bad-target"},
+	))
+	uuid := created.Msg.GetWorkspace().GetUuid()
+	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
+		&workspacev1.AddMountRequest{
+			Handle: uuidHandle(uuid),
+			Mount:  &sandboxctrlv1.Mount{Target: testMountTarget, Source: testMountSource},
+		},
+	)); err != nil {
+		t.Fatalf("AddMount: %v", err)
+	}
+	if _, err := rig.client.SetImage(t.Context(), connect.NewRequest(
+		&workspacev1.SetImageRequest{Handle: uuidHandle(uuid), ImageRef: testImageRef},
+	)); err != nil {
+		t.Fatalf("SetImage: %v", err)
+	}
+	if _, err := rig.client.SetTarget(t.Context(), connect.NewRequest(
+		&workspacev1.SetTargetRequest{Handle: uuidHandle(uuid), SandboxFingerprint: "not-a-real-fingerprint"},
+	)); err != nil {
+		t.Fatalf("SetTarget: %v", err)
+	}
+	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	_, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
+		t.Errorf("code = %s, want FailedPrecondition", code)
+	}
+	if _, ok := fake.last(); ok {
+		t.Error("dispatcher was called with a bogus target")
+	}
+}
+
+// TestLaunchWithoutDispatcherIsUnimplemented covers the catalog-
+// only test-rig path: a handler with nil dispatcher refuses Launch
+// with Unimplemented rather than panicking.
+func TestLaunchWithoutDispatcherIsUnimplemented(t *testing.T) {
+	h, err := NewWorkspaceCatalogHandler(workspacecatalog.NewStore(nil), nil)
+	if err != nil {
+		t.Fatalf("NewWorkspaceCatalogHandler: %v", err)
+	}
+	req := connect.NewRequest(&workspacev1.LaunchRequest{})
+	req.Header().Set(peerFingerprintHeader, mustGenerate(t, identity.RoleClient).Fingerprint().String())
+	_, err = h.Launch(t.Context(), req)
+	if code := connect.CodeOf(err); code != connect.CodeUnimplemented {
+		t.Errorf("code = %s, want Unimplemented", code)
+	}
+}
+
+// TestStopFromRunningTransitionsAndClearsDispatch pins the full
+// Launch → Stop cycle: dispatch_id populated by Launch must be
+// cleared on Stop.
+func TestStopFromRunningTransitionsAndClearsDispatch(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
+	uuid := readyWorkspace(t, rig, "stop", target)
+	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if _, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	resp, err := rig.client.Stop(t.Context(), connect.NewRequest(
+		&workspacev1.StopRequest{Handle: uuidHandle(uuid)},
+	))
+	if err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	ws := resp.Msg.GetWorkspace()
+	if ws.GetStatus() != workspacev1.WorkspaceStatus_WORKSPACE_STATUS_STOPPED {
+		t.Errorf("status = %s, want STOPPED", ws.GetStatus())
+	}
+	if ws.GetCurrentDispatchId() != "" {
+		t.Errorf("current_dispatch_id = %q, want empty after Stop", ws.GetCurrentDispatchId())
+	}
+}
+
+// TestStopFromDraftIsRejected pins that Stop is RUNNING/FROZEN-only.
+func TestStopFromDraftIsRejected(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "stop-draft"},
+	))
+	_, err := rig.client.Stop(t.Context(), connect.NewRequest(
+		&workspacev1.StopRequest{Handle: uuidHandle(created.Msg.GetWorkspace().GetUuid())},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
+		t.Errorf("code = %s, want FailedPrecondition", code)
+	}
 }
 
 // TestStatusToProtoCoversAllValues exercises every catalog Status →

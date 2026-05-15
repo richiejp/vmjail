@@ -112,4 +112,10 @@ message Workspace {
   // Audit timestamps. Immutable / monotonically advancing.
   google.protobuf.Timestamp created_at = 16;
   google.protobuf.Timestamp updated_at = 17;
+
+  // Identifier of the in-flight (or most recent) Dispatch to a
+  // sandbox-host. Minted fresh on each Launch; cleared on Stop.
+  // Future RPCs (status streaming, log subscribe) will reference
+  // this to correlate sandbox-side state back to the workspace.
+  string current_dispatch_id = 18;
 }

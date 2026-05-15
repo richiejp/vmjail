@@ -88,6 +88,34 @@ service WorkspaceCatalogService {
   // RemovePort drops the port mapping with the given (port,
   // protocol). Returns NotFound if the pair is not present.
   rpc RemovePort(RemovePortRequest) returns (WorkspaceResponse) {}
+
+  // Validate recomputes the workspace's readiness. DRAFT
+  // workspaces with no missing fields auto-promote to READY;
+  // READY workspaces whose state has since drifted (e.g. the
+  // last mount was removed) auto-demote to DRAFT. Returns the
+  // resulting workspace; no transition is treated as an error.
+  // RUNNING / FROZEN / STOPPED / ARCHIVED workspaces are left
+  // untouched — Validate is the readiness sieve for not-yet-
+  // launched workspaces only.
+  rpc Validate(ValidateRequest) returns (WorkspaceResponse) {}
+
+  // Launch dispatches the workspace to its pinned sandbox-host.
+  // Preconditions: status READY or STOPPED; missing[] empty;
+  // target_sandbox_fingerprint set. The orchestrator mints a
+  // fresh dispatch_id, composes a SandboxSpec from the workspace,
+  // and ships it via the sandbox-control stream. On success the
+  // status transitions to RUNNING and current_dispatch_id is
+  // populated. FailedPrecondition for state-machine violations
+  // and offline sandboxes; Unavailable when the sandbox is
+  // momentarily backlogged (the caller may retry).
+  rpc Launch(LaunchRequest) returns (WorkspaceResponse) {}
+
+  // Stop transitions a RUNNING or FROZEN workspace to STOPPED
+  // and clears current_dispatch_id. For Slice B2c this is
+  // catalog-only — the wire teardown signal to the sandbox-host
+  // lands in a follow-up sub-slice. STOPPED workspaces stay
+  // mutable; a subsequent Launch boots a fresh VM.
+  rpc Stop(StopRequest) returns (WorkspaceResponse) {}
 }
 
 // WorkspaceHandle addresses a workspace by either its canonical
@@ -175,4 +203,16 @@ message RemovePortRequest {
   // port can be bound on both TCP and UDP.
   uint32 container_port = 2;
   daft.sandboxctrl.v1.Protocol protocol = 3;
+}
+
+message ValidateRequest {
+  WorkspaceHandle handle = 1;
+}
+
+message LaunchRequest {
+  WorkspaceHandle handle = 1;
+}
+
+message StopRequest {
+  WorkspaceHandle handle = 1;
 }

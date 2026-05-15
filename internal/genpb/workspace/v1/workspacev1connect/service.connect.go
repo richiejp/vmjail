@@ -94,6 +94,15 @@ const (
 	// WorkspaceCatalogServiceRemovePortProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's RemovePort RPC.
 	WorkspaceCatalogServiceRemovePortProcedure = "/daft.workspace.v1.WorkspaceCatalogService/RemovePort"
+	// WorkspaceCatalogServiceValidateProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's Validate RPC.
+	WorkspaceCatalogServiceValidateProcedure = "/daft.workspace.v1.WorkspaceCatalogService/Validate"
+	// WorkspaceCatalogServiceLaunchProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's Launch RPC.
+	WorkspaceCatalogServiceLaunchProcedure = "/daft.workspace.v1.WorkspaceCatalogService/Launch"
+	// WorkspaceCatalogServiceStopProcedure is the fully-qualified name of the WorkspaceCatalogService's
+	// Stop RPC.
+	WorkspaceCatalogServiceStopProcedure = "/daft.workspace.v1.WorkspaceCatalogService/Stop"
 )
 
 // WorkspaceCatalogServiceClient is a client for the daft.workspace.v1.WorkspaceCatalogService
@@ -142,6 +151,31 @@ type WorkspaceCatalogServiceClient interface {
 	// RemovePort drops the port mapping with the given (port,
 	// protocol). Returns NotFound if the pair is not present.
 	RemovePort(context.Context, *connect.Request[v1.RemovePortRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Validate recomputes the workspace's readiness. DRAFT
+	// workspaces with no missing fields auto-promote to READY;
+	// READY workspaces whose state has since drifted (e.g. the
+	// last mount was removed) auto-demote to DRAFT. Returns the
+	// resulting workspace; no transition is treated as an error.
+	// RUNNING / FROZEN / STOPPED / ARCHIVED workspaces are left
+	// untouched — Validate is the readiness sieve for not-yet-
+	// launched workspaces only.
+	Validate(context.Context, *connect.Request[v1.ValidateRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Launch dispatches the workspace to its pinned sandbox-host.
+	// Preconditions: status READY or STOPPED; missing[] empty;
+	// target_sandbox_fingerprint set. The orchestrator mints a
+	// fresh dispatch_id, composes a SandboxSpec from the workspace,
+	// and ships it via the sandbox-control stream. On success the
+	// status transitions to RUNNING and current_dispatch_id is
+	// populated. FailedPrecondition for state-machine violations
+	// and offline sandboxes; Unavailable when the sandbox is
+	// momentarily backlogged (the caller may retry).
+	Launch(context.Context, *connect.Request[v1.LaunchRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Stop transitions a RUNNING or FROZEN workspace to STOPPED
+	// and clears current_dispatch_id. For Slice B2c this is
+	// catalog-only — the wire teardown signal to the sandbox-host
+	// lands in a follow-up sub-slice. STOPPED workspaces stay
+	// mutable; a subsequent Launch boots a fresh VM.
+	Stop(context.Context, *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 }
 
 // NewWorkspaceCatalogServiceClient constructs a client for the
@@ -221,6 +255,24 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("RemovePort")),
 			connect.WithClientOptions(opts...),
 		),
+		validate: connect.NewClient[v1.ValidateRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceValidateProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("Validate")),
+			connect.WithClientOptions(opts...),
+		),
+		launch: connect.NewClient[v1.LaunchRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceLaunchProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("Launch")),
+			connect.WithClientOptions(opts...),
+		),
+		stop: connect.NewClient[v1.StopRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceStopProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("Stop")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -237,6 +289,9 @@ type workspaceCatalogServiceClient struct {
 	removeMount *connect.Client[v1.RemoveMountRequest, v1.WorkspaceResponse]
 	removeEnv   *connect.Client[v1.RemoveEnvRequest, v1.WorkspaceResponse]
 	removePort  *connect.Client[v1.RemovePortRequest, v1.WorkspaceResponse]
+	validate    *connect.Client[v1.ValidateRequest, v1.WorkspaceResponse]
+	launch      *connect.Client[v1.LaunchRequest, v1.WorkspaceResponse]
+	stop        *connect.Client[v1.StopRequest, v1.WorkspaceResponse]
 }
 
 // Create calls daft.workspace.v1.WorkspaceCatalogService.Create.
@@ -294,6 +349,21 @@ func (c *workspaceCatalogServiceClient) RemovePort(ctx context.Context, req *con
 	return c.removePort.CallUnary(ctx, req)
 }
 
+// Validate calls daft.workspace.v1.WorkspaceCatalogService.Validate.
+func (c *workspaceCatalogServiceClient) Validate(ctx context.Context, req *connect.Request[v1.ValidateRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.validate.CallUnary(ctx, req)
+}
+
+// Launch calls daft.workspace.v1.WorkspaceCatalogService.Launch.
+func (c *workspaceCatalogServiceClient) Launch(ctx context.Context, req *connect.Request[v1.LaunchRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.launch.CallUnary(ctx, req)
+}
+
+// Stop calls daft.workspace.v1.WorkspaceCatalogService.Stop.
+func (c *workspaceCatalogServiceClient) Stop(ctx context.Context, req *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.stop.CallUnary(ctx, req)
+}
+
 // WorkspaceCatalogServiceHandler is an implementation of the
 // daft.workspace.v1.WorkspaceCatalogService service.
 type WorkspaceCatalogServiceHandler interface {
@@ -340,6 +410,31 @@ type WorkspaceCatalogServiceHandler interface {
 	// RemovePort drops the port mapping with the given (port,
 	// protocol). Returns NotFound if the pair is not present.
 	RemovePort(context.Context, *connect.Request[v1.RemovePortRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Validate recomputes the workspace's readiness. DRAFT
+	// workspaces with no missing fields auto-promote to READY;
+	// READY workspaces whose state has since drifted (e.g. the
+	// last mount was removed) auto-demote to DRAFT. Returns the
+	// resulting workspace; no transition is treated as an error.
+	// RUNNING / FROZEN / STOPPED / ARCHIVED workspaces are left
+	// untouched — Validate is the readiness sieve for not-yet-
+	// launched workspaces only.
+	Validate(context.Context, *connect.Request[v1.ValidateRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Launch dispatches the workspace to its pinned sandbox-host.
+	// Preconditions: status READY or STOPPED; missing[] empty;
+	// target_sandbox_fingerprint set. The orchestrator mints a
+	// fresh dispatch_id, composes a SandboxSpec from the workspace,
+	// and ships it via the sandbox-control stream. On success the
+	// status transitions to RUNNING and current_dispatch_id is
+	// populated. FailedPrecondition for state-machine violations
+	// and offline sandboxes; Unavailable when the sandbox is
+	// momentarily backlogged (the caller may retry).
+	Launch(context.Context, *connect.Request[v1.LaunchRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Stop transitions a RUNNING or FROZEN workspace to STOPPED
+	// and clears current_dispatch_id. For Slice B2c this is
+	// catalog-only — the wire teardown signal to the sandbox-host
+	// lands in a follow-up sub-slice. STOPPED workspaces stay
+	// mutable; a subsequent Launch boots a fresh VM.
+	Stop(context.Context, *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 }
 
 // NewWorkspaceCatalogServiceHandler builds an HTTP handler from the service implementation. It
@@ -415,6 +510,24 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("RemovePort")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceValidateHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceValidateProcedure,
+		svc.Validate,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("Validate")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workspaceCatalogServiceLaunchHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceLaunchProcedure,
+		svc.Launch,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("Launch")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workspaceCatalogServiceStopHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceStopProcedure,
+		svc.Stop,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("Stop")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.workspace.v1.WorkspaceCatalogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkspaceCatalogServiceCreateProcedure:
@@ -439,6 +552,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceRemoveEnvHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceRemovePortProcedure:
 			workspaceCatalogServiceRemovePortHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceValidateProcedure:
+			workspaceCatalogServiceValidateHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceLaunchProcedure:
+			workspaceCatalogServiceLaunchHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceStopProcedure:
+			workspaceCatalogServiceStopHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -490,4 +609,16 @@ func (UnimplementedWorkspaceCatalogServiceHandler) RemoveEnv(context.Context, *c
 
 func (UnimplementedWorkspaceCatalogServiceHandler) RemovePort(context.Context, *connect.Request[v1.RemovePortRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.RemovePort is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) Validate(context.Context, *connect.Request[v1.ValidateRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.Validate is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) Launch(context.Context, *connect.Request[v1.LaunchRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.Launch is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) Stop(context.Context, *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.Stop is not implemented"))
 }

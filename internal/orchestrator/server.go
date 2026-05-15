@@ -75,6 +75,13 @@ type Config struct {
 	// if this is nil. The Connect-RPC service surface that exposes
 	// the catalog to clients lands in Slice B2.
 	WorkspaceCatalog *workspacecatalog.Store
+
+	// WorkspaceDispatcher backs WorkspaceCatalogService.Launch.
+	// Defaults to the orchestrator's own SandboxControlHandler so
+	// production wiring is implicit; tests inject a fake to
+	// observe the SandboxSpec without standing up a sandbox-host
+	// stream.
+	WorkspaceDispatcher Dispatcher
 }
 
 // Server is the orchestrator's mTLS-gated control-plane listener.
@@ -150,7 +157,11 @@ func New(cfg Config) (*Server, error) {
 	if scErr != nil {
 		return nil, scErr
 	}
-	workspaceCtrl, wcErr := NewWorkspaceCatalogHandler(workspaceCat)
+	workspaceDispatcher := cfg.WorkspaceDispatcher
+	if workspaceDispatcher == nil {
+		workspaceDispatcher = sandboxCtrl
+	}
+	workspaceCtrl, wcErr := NewWorkspaceCatalogHandler(workspaceCat, workspaceDispatcher)
 	if wcErr != nil {
 		return nil, wcErr
 	}
