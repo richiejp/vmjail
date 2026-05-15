@@ -362,11 +362,73 @@ Phase B — **Workspace as a first-class orchestrator object**:
   create→image→target→mount→env→port→validate→launch→stop
   sequence and asserts the fake dispatcher saw the composed
   SandboxSpec.
-- B4: Workspace state machine: Draft → Ready → Running →
-  Frozen → Stopped → Archived. `status` is one cobra subcommand
-  showing both state and `missing[]`.
-- B5: Persistence: Badger or JSON-on-disk for workspace +
-  sandbox registrations (orchestrator side).
+- B4: **Resource-model reshape + K8s-style rename.** One pre-
+  deployment wire break that introduces the conventions documented
+  in [ARCHITECTURE.md](ARCHITECTURE.md). No backwards-compat
+  shims — nothing is field-deployed yet, so the break is free.
+  Split into mechanical sub-slices to keep each commit reviewable:
+  - **B4a**: rename `sandboxctrl` → `nodectrl` end to end. Proto
+    package `daft.sandboxctrl.v1` → `daft.nodectrl.v1`; directory
+    `proto/sandboxctrl/v1/` → `proto/nodectrl/v1/`; Go packages
+    `internal/sandboxctrl/` → `internal/nodectrl/`,
+    `internal/sandboxctrlclient/` → `internal/nodectrlclient/`,
+    generated code under `internal/genpb/nodectrl/`.
+    `SandboxControlService` → `NodeControlService`;
+    `RegisterSandbox`/`ListSandboxes` → `RegisterNode`/`ListNodes`;
+    `SandboxRegistration` → `Node`. CLI `daft sandbox list` →
+    `daft node list`. Find-and-replace + `make proto`. No
+    semantic changes.
+  - **B4b**: introduce the `Sandbox` resource (the new per-Launch
+    execution unit). New `proto/sandbox/v1/` defines `Sandbox`
+    with `metadata { uid, workspace_ref, created_at,
+    deletion_timestamp }`, `spec { image_ref, mounts, env, ports,
+    gpu_request, isolation, node_ref }`, and `status { phase,
+    exit_code, conditions[], last_transition_time }`. New
+    `internal/sandboxstore/` owns the orchestrator-side map of
+    Sandboxes by uid. The `Dispatch` message goes away; the
+    `RegisterEvent` oneof becomes `NodeEvent` carrying
+    `SubscriptionReady` or `SandboxWatchEvent{EventType, Sandbox}`.
+    `Workspace.Launch` now creates a Sandbox resource and emits
+    `SandboxWatchEvent(ADDED)` on the target Node's stream;
+    `Workspace.current_dispatch_id` becomes
+    `Workspace.status.current_sandbox_ref { uid, node_fingerprint }`.
+  - **B4c**: reshape `Workspace` into metadata/spec/status with
+    conditions and generation. `WorkspaceStatus` enum is
+    deleted; `Workspace.status.conditions[]` replaces it
+    (`Ready`, `Dispatched`, `Reconciled`, `ImageResolved`).
+    `metadata.generation` increments on every spec change;
+    `status.observed_generation` tracks the reconciler's last
+    pass. Validate becomes "set the Ready condition based on
+    missing[]"; Launch/Stop check conditions instead of the
+    enum. CLI `status` output renders the condition list and
+    the "edit pending" indicator
+    (`observed_generation < generation`).
+  - **B4d**: extend `Heartbeat` to carry `NodeStatus` with
+    `repeated SandboxStatus live_sandboxes`. Orchestrator's
+    heartbeat handler diffs the reported set against the
+    sandboxstore and updates Sandbox `status.phase` /
+    Workspace conditions accordingly. This is the
+    reconciliation primitive — pre-action reconcile and
+    periodic sweep (B5) build on it. No new RPC; the
+    extension is additive on the existing unary call.
+- B5: **Reconciler.** Pull the per-RPC diff logic from B4d into
+  `internal/reconciler/` and wire it at the four reconciliation
+  points described in ARCHITECTURE.md (pre-action, on heartbeat,
+  periodic sweep, startup). Phantom-Sandbox cleanup: any Sandbox
+  the orchestrator believes RUNNING that no Node reports for
+  three consecutive heartbeats is transitioned to `Killed` with
+  reason `SandboxLost`. Sweep cadence configurable; default
+  30 s.
+- B6: **Persistence.** Badger-backed store for the *declarative*
+  half of each resource (Workspace.spec, Workspace.metadata,
+  Sandbox.spec.node_ref binding, Node.metadata). Runtime
+  state (`Sandbox.status`, `Workspace.status`, `Node.status`)
+  is **not persisted** — it is always derived by reconciliation
+  on startup. Schema versioned by an on-disk `schema_version`
+  key; migrations land alongside future wire breaks. Catalog
+  Create/Update/Patch become write-through; reads stay served
+  from the in-memory cache. Crash-safety verified by a
+  kill-9-mid-write integration test.
 
 Phase C — **Orchestrator-driven port ingress**:
 - C1: Sandbox-side: container `0.0.0.0:N` exposed back over the
@@ -515,7 +577,16 @@ Notes:
   real — `name` collisions across owners are inevitable.
 - **Dispatch granularity**: SandboxSpec as a one-shot RPC vs a
   continuously-mutable workspace state mirrored to the sandbox?
-  Lean one-shot for v1; mutations re-dispatch.
+  *Resolved in B4 by the resource model*: a Workspace edit bumps
+  `metadata.generation`; the running Sandbox is immutable (snapshot
+  of `Workspace.spec` at Launch time); re-applying an edit means
+  a new Launch creating a fresh Sandbox. UI shows
+  `observed_generation < generation` as "edit pending restart".
+- **K8s integration path**: containerd shim (Path 1), Virtual
+  Kubelet (Path 2), or direct CRI (Path 3)? Not in scope until
+  a real user pulls — but the resource model in B4 is K8s-shaped
+  so any of the three stays cheap. See
+  [ARCHITECTURE.md](ARCHITECTURE.md#kubernetes-integration-paths).
 - **Port allocation**: per-workspace subpath under one shared
   TLS vhost, or per-workspace hostname with a wildcard cert?
   Subpaths simpler for v1; hostnames needed once apps care
@@ -1405,16 +1476,38 @@ Notes:
 
 ## Architecture
 
+The standalone reference is [ARCHITECTURE.md](ARCHITECTURE.md). The
+condensed view follows; anything in conflict, the standalone doc wins.
+
 ### Components
 
 There are 4 main components:
-- client CLI: runs on the user-host, performs I/O with the sandbox-hosts
-- Orchestrator: Runs on any host, athenticates clients and sandbox controllers, provides a web UI with various information
-- Sandbox Controller: Creates sandbox VMs and virtual networks, performs I/O with user-hosts and Sandbox Agents
-- Sandbox Agent: Runs inside the sandbox VM and creates containers, performs I/O with the controller.
+- **client CLI** (`daft`): runs on the user-host; talks to the orchestrator
+- **Orchestrator**: authority over Workspaces and Sandboxes; authenticates
+  clients and Nodes; binds Sandboxes to Nodes; will host the Phase C ingress
+- **Node** (`sandboxd`): per-host daemon that runs Sandboxes (VMs + the
+  container inside); reports status. Single-binary bundle including VMM,
+  virtiofsd, kernel, initramfs.
+- **In-VM agent** (`daft-agent`): runs inside the VM; spawns `crun`-managed
+  containers; ships traces back over vsock.
 
-Note that the containers the sandbox agent creates are not a security boundary. They are just a convenient way to create a Linux userland that avoids
-creating VM images.
+Note that the containers the agent creates are not a security boundary —
+the VM is. Containers exist for filesystem/userland convenience.
+
+### Resource model (one-line summary)
+
+Three resources, each with the K8s-style metadata+spec+status triple:
+
+- **Workspace**: user-owned, long-lived, declarative. The thing the user
+  edits incrementally and Launches.
+- **Sandbox**: controller-derived, short-lived, one per Launch. The unit
+  of execution: 1 VM × 1 container in strict isolation; packed into a
+  shared VM in non-strict.
+- **Node**: long-lived, the registered `sandboxd`. Identified by mTLS
+  fingerprint.
+
+Full shape, conditions, naming conventions, and the K8s mapping +
+integration paths live in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ### Concepts
 

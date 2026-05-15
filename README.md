@@ -1,6 +1,8 @@
 # darkaifactory
 
-> _Project description TBD — see [PLAN.md](PLAN.md)._
+> _Project description TBD — see [PLAN.md](PLAN.md) for current direction
+> and [ARCHITECTURE.md](ARCHITECTURE.md) for the resource model and
+> conventions._
 
 `darkaifactory` is the source repository for the `daft` command-line tool.
 
