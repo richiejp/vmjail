@@ -467,11 +467,18 @@ Phase C — **Orchestrator-driven port ingress**:
       directions until either side closes. Stateless DialFunc
       indirection keeps the package free of any vsock/CH knowledge;
       C1.3b registers a DialGuestVsock closure per spec.ports entry.
-    - C1.3b: Executor wires the Bridger. Each dispatch generates a
-      per-Sandbox VsockConfig (UDS path + GuestCID), populates
-      sandbox.Config.Vsock, and registers each (workspaceUUID,
-      containerPort) → DialGuestVsock(hostSocket, vsockPort) on the
-      Bridger; terminal phase unregisters.
+    - C1.3b (landed): Executor wires the Bridger. `sandboxexec.Config`
+      gains Bridger + VsockDir fields; New rejects the half-configured
+      case at construction. Each dispatch with ports allocates a fresh
+      AF_VSOCK GuestCID (atomic counter ≥3) and a per-Sandbox UDS path
+      under VsockDir, populates `sandbox.Config.Vsock`, and registers
+      one DialGuestVsock closure per spec.ports entry on the Bridger.
+      A deferred unregister cleans up on every dispatch exit. Skipped
+      silently when no workspace_uuid (the smoke-test probe path) or
+      no Bridger (back-compat for tests not exercising ingress).
+      Production wiring (passing a real Bridger from sandboxd serve)
+      lands with C1.3c so the Bridger has an actual consumer the
+      moment it gains routes.
     - C1.3c: Orchestrator-driven Bridge. New bidi RPC + NodeEvent
       variant carrying (workspace, port, session_id) so the
       orchestrator can ask a Node to open a labeled stream; sandboxd

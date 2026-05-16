@@ -4,18 +4,22 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"strings"
 	"testing"
 
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 )
 
 const (
 	testImageRef  = "alpine:3"
 	testSandboxID = "sb-1"
+	testVsockDir  = "/var/run/daft-sandboxd"
 )
 
 func noopRunner() Runner {
@@ -399,5 +403,241 @@ func TestHandleSandboxEventWiresPortForwardsToCfg(t *testing.T) {
 	}
 	if seen.PortForwards[0].VsockPort != BaseVsockPort {
 		t.Errorf("first VsockPort = %d, want %d", seen.PortForwards[0].VsockPort, BaseVsockPort)
+	}
+}
+
+// TestNewRejectsBridgerWithoutVsockDir pins the configuration
+// invariant: a Bridger needs somewhere to put per-Sandbox UDS
+// files. New rejects the half-configured case at construction so
+// the operator doesn't hit it at dispatch time.
+func TestNewRejectsBridgerWithoutVsockDir(t *testing.T) {
+	br := sandboxgateway.New()
+	if _, err := New(Config{Stdout: io.Discard, Bridger: br}); err == nil {
+		t.Fatal("expected error when Bridger is set but VsockDir is empty")
+	}
+	if _, err := New(Config{Stdout: io.Discard, Bridger: br, VsockDir: "relative"}); err == nil {
+		t.Fatal("expected error when VsockDir is relative")
+	}
+}
+
+// TestHandleSandboxEventAssignsPerSandboxVsock pins the
+// per-dispatch Vsock allocation: when a Bridger is wired and the
+// spec has ports, the executor sets cfg.Vsock with a fresh GuestCID
+// and a UDS path under VsockDir named after the Sandbox uid.
+func TestHandleSandboxEventAssignsPerSandboxVsock(t *testing.T) {
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	br := sandboxgateway.New()
+	e, err := New(Config{
+		Stdout:   io.Discard,
+		Runner:   runner,
+		Bridger:  br,
+		VsockDir: testVsockDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{
+		WorkspaceUuid: "ws-aaa",
+		Ports: []*sandboxv1.PortMapping{
+			{ContainerPort: 8080, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
+		},
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-xyz", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if seen.Vsock == nil {
+		t.Fatal("cfg.Vsock not set")
+	}
+	if seen.Vsock.GuestCID < 3 {
+		t.Errorf("GuestCID = %d, want >= 3", seen.Vsock.GuestCID)
+	}
+	wantPath := "/var/run/daft-sandboxd/sb-xyz.sock"
+	if seen.Vsock.HostSocket != wantPath {
+		t.Errorf("HostSocket = %q, want %q", seen.Vsock.HostSocket, wantPath)
+	}
+}
+
+// TestHandleSandboxEventAssignsDistinctCIDsPerDispatch pins the
+// counter behaviour: two dispatches get different GuestCIDs so two
+// concurrent VMs don't collide on the AF_VSOCK ABI.
+func TestHandleSandboxEventAssignsDistinctCIDsPerDispatch(t *testing.T) {
+	var cfgs []sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		cfgs = append(cfgs, cfg)
+		return nil
+	}
+	br := sandboxgateway.New()
+	e, err := New(Config{
+		Stdout:   io.Discard,
+		Runner:   runner,
+		Bridger:  br,
+		VsockDir: testVsockDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for i, uid := range []string{"sb-cid-1", "sb-cid-2"} {
+		spec := &sandboxv1.SandboxSpec{
+			WorkspaceUuid: fmt.Sprintf("ws-%d", i),
+			Ports: []*sandboxv1.PortMapping{
+				{ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
+			},
+		}
+		if err := e.HandleSandboxEvent(t.Context(), addedEvent(uid, spec)); err != nil {
+			t.Fatalf("HandleSandboxEvent(%s): %v", uid, err)
+		}
+	}
+	if len(cfgs) != 2 {
+		t.Fatalf("captured %d cfgs, want 2", len(cfgs))
+	}
+	if cfgs[0].Vsock.GuestCID == cfgs[1].Vsock.GuestCID {
+		t.Errorf("two dispatches got the same CID %d", cfgs[0].Vsock.GuestCID)
+	}
+}
+
+// TestHandleSandboxEventRegistersAndUnregistersRoutes pins the
+// Bridger lifecycle: during the dispatch, Bridge for the registered
+// (ws,port) tuple finds a route; after the dispatch returns the
+// route is gone (ErrNoRoute).
+func TestHandleSandboxEventRegistersAndUnregistersRoutes(t *testing.T) {
+	br := sandboxgateway.New()
+	runner := noopRunner()
+	e, err := New(Config{
+		Stdout:   io.Discard,
+		Runner:   runner,
+		Bridger:  br,
+		VsockDir: testVsockDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{
+		WorkspaceUuid: "ws-routes",
+		Ports: []*sandboxv1.PortMapping{
+			{ContainerPort: 8080, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
+			{ContainerPort: 22, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
+		},
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-routes", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	// After dispatch returns the routes must be gone — a Bridge
+	// call against the unregistered tuple errs with ErrNoRoute.
+	upA, _ := net.Pipe()
+	defer func() { _ = upA.Close() }()
+	if err := br.Bridge(t.Context(), "ws-routes", 8080, upA); !errors.Is(err, sandboxgateway.ErrNoRoute) {
+		t.Errorf("post-dispatch Bridge err = %v, want ErrNoRoute", err)
+	}
+}
+
+// TestRegisterPortRoutesObservedDuringRun pins that the route is
+// registered while the runner is executing. Uses a runner that
+// calls Bridge.Bridge inline; without registration this would
+// return ErrNoRoute.
+func TestRegisterPortRoutesObservedDuringRun(t *testing.T) {
+	br := sandboxgateway.New()
+	var bridgeErr error
+	runner := func(ctx context.Context, _ io.Writer, cfg sandbox.Config) error {
+		// The DialFunc would normally dial CH; here we just verify
+		// a route exists by calling Bridge with a Pipe that
+		// immediately tears down.
+		_ = cfg
+		upA, upB := net.Pipe()
+		_ = upA.Close()
+		_ = upB.Close()
+		bridgeErr = br.Bridge(ctx, "ws-live", 8080, upA)
+		return nil
+	}
+	e, err := New(Config{
+		Stdout:   io.Discard,
+		Runner:   runner,
+		Bridger:  br,
+		VsockDir: testVsockDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{
+		WorkspaceUuid: "ws-live",
+		Ports: []*sandboxv1.PortMapping{
+			{ContainerPort: 8080, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
+		},
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-live", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	// During run, the route existed. Bridge wouldn't have returned
+	// ErrNoRoute — it would have failed at the dial step (the
+	// closure tries to DialGuestVsock against a non-existent UDS
+	// path), which surfaces as a dial-error wrap.
+	if errors.Is(bridgeErr, sandboxgateway.ErrNoRoute) {
+		t.Errorf("Bridge returned ErrNoRoute during run; want dial-error wrap")
+	}
+}
+
+// TestHandleSandboxEventSkipsRoutesWithoutWorkspaceUuid covers the
+// smoke-test path: a spec with ports but no workspace_uuid is the
+// orchestrator's "alive?" probe — no Bridger registration is
+// possible without a workspace key, so the executor skips it
+// silently.
+func TestHandleSandboxEventSkipsRoutesWithoutWorkspaceUuid(t *testing.T) {
+	br := sandboxgateway.New()
+	runner := noopRunner()
+	e, err := New(Config{
+		Stdout:   io.Discard,
+		Runner:   runner,
+		Bridger:  br,
+		VsockDir: testVsockDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{
+		// no WorkspaceUuid
+		Ports: []*sandboxv1.PortMapping{
+			{ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
+		},
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-anon", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	// Nothing should be registered — proxied by trying every plausible
+	// (ws, port) tuple. Just spot-check the empty-workspace tuple.
+	upA, _ := net.Pipe()
+	defer func() { _ = upA.Close() }()
+	if err := br.Bridge(t.Context(), "", 80, upA); !errors.Is(err, sandboxgateway.ErrNoRoute) {
+		t.Errorf("err = %v, want ErrNoRoute (no registration possible without workspace)", err)
+	}
+}
+
+// TestHandleSandboxEventNoBridgerLeavesCfgVsockNil pins the back-
+// compat path: when no Bridger is configured, the executor must
+// not touch cfg.Vsock — pre-C1.3b tests that don't set Bridger
+// would otherwise see a surprise Vsock device on their config.
+func TestHandleSandboxEventNoBridgerLeavesCfgVsockNil(t *testing.T) {
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	e, err := New(Config{Stdout: io.Discard, Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{
+		WorkspaceUuid: "ws-noop",
+		Ports: []*sandboxv1.PortMapping{
+			{ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
+		},
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-noop", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if seen.Vsock != nil {
+		t.Errorf("Vsock = %+v, want nil (no Bridger configured)", seen.Vsock)
 	}
 }

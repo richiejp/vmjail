@@ -16,14 +16,18 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"path/filepath"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/richiejp/darkaifactory/internal/assert"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
@@ -66,6 +70,17 @@ type Executor struct {
 	run       Runner
 	assembler Assembler
 
+	// bridger and vsockDir are populated only when the orchestrator-
+	// driven port-ingress path is wired (Slice C1.3b). When nil/empty
+	// the executor falls back to the pre-C1 behaviour: no Vsock
+	// device on the dispatched Config and no port-route registration.
+	bridger  *sandboxgateway.Bridger
+	vsockDir string
+	// nextCID hands out fresh AF_VSOCK Context IDs for each dispatch.
+	// Initialised to 2 so the first .Add(1) returns 3 — the lowest
+	// CID the ABI allows for a guest (0/1/2 are reserved).
+	nextCID atomic.Uint32
+
 	mu   sync.Mutex
 	live map[string]*liveSandbox
 }
@@ -81,12 +96,28 @@ type Config struct {
 	Stdout    io.Writer
 	Runner    Runner
 	Assembler Assembler
+	// Bridger, when non-nil, is the per-(workspace, port) routing
+	// table the executor populates on every dispatch with a
+	// DialGuestVsock closure per spec.ports entry. Slice C1.3c's
+	// orchestrator-driven ingress handler calls Bridger.Bridge to
+	// reach the running VM. Leave nil for tests/baselines that don't
+	// exercise ingress.
+	Bridger *sandboxgateway.Bridger
+	// VsockDir is the absolute parent directory where per-Sandbox
+	// hybrid-vsock UDS files live (one per running VM, named after
+	// the Sandbox uid). Required when Bridger is non-nil; ignored
+	// otherwise. Typically `/var/run/daft-sandboxd` in production.
+	VsockDir string
 }
 
 // New builds an Executor. Stdout is required; Runner defaults to
 // sandbox.Hello when nil; Assembler defaults to a wrapper around
 // sandboxboot.BuildBundleConfig with the deps the caller passes
 // via the production helper (see ProductionAssembler below).
+//
+// When Bridger is set, VsockDir must be a non-empty absolute path —
+// the executor cannot mint per-Sandbox hybrid-vsock sockets without
+// somewhere to put them.
 func New(cfg Config) (*Executor, error) {
 	if cfg.Stdout == nil {
 		return nil, errors.New("sandboxexec: nil stdout writer")
@@ -94,13 +125,27 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.Runner == nil {
 		cfg.Runner = sandbox.Hello
 	}
-	return &Executor{
+	if cfg.Bridger != nil {
+		if cfg.VsockDir == "" {
+			return nil, errors.New("sandboxexec: VsockDir required when Bridger is set")
+		}
+		if !filepath.IsAbs(cfg.VsockDir) {
+			return nil, fmt.Errorf("sandboxexec: VsockDir %q must be absolute", cfg.VsockDir)
+		}
+	}
+	e := &Executor{
 		base:      cfg.Base,
 		stdout:    cfg.Stdout,
 		run:       cfg.Runner,
 		assembler: cfg.Assembler,
+		bridger:   cfg.Bridger,
+		vsockDir:  cfg.VsockDir,
 		live:      map[string]*liveSandbox{},
-	}, nil
+	}
+	// First .Add(1) returns 3 — the lowest CID the AF_VSOCK ABI
+	// allows for a guest.
+	e.nextCID.Store(2)
+	return e, nil
 }
 
 // LiveSnapshot returns the wire-shaped set of sandboxes the Executor
@@ -222,12 +267,15 @@ func (e *Executor) HandleSandboxEvent(
 
 	e.markPhase(uid, phaseRunning, 0)
 
-	cfg, unlock, err := e.resolveBootConfig(ctx, spec)
+	cfg, unlock, err := e.resolveBootConfig(ctx, uid, spec)
 	if err != nil {
 		e.markPhase(uid, phaseKilled, 0)
 		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
 	}
 	defer unlock()
+
+	unregister := e.registerPortRoutes(cfg, spec.GetWorkspaceUuid())
+	defer unregister()
 
 	if err := e.run(ctx, e.stdout, cfg); err != nil {
 		e.markPhase(uid, phaseKilled, 0)
@@ -237,17 +285,76 @@ func (e *Executor) HandleSandboxEvent(
 	return nil
 }
 
+// registerPortRoutes adds one Bridger route per PortForward on cfg,
+// each backed by a DialGuestVsock closure that targets this VM's
+// HostSocket + vsock port. Returns an unregister func — the caller
+// defers it so the routes vanish on dispatch exit (whether the VM
+// booted, errored, or never started).
+//
+// No-op when no Bridger is configured or when the dispatch carries
+// no workspace_uuid (the orchestrator's smoke-test path).
+func (e *Executor) registerPortRoutes(cfg sandbox.Config, workspaceUUID string) func() {
+	if e.bridger == nil || workspaceUUID == "" || cfg.Vsock == nil {
+		return func() {}
+	}
+	hostSocket := cfg.Vsock.HostSocket
+	registered := make([]uint32, 0, len(cfg.PortForwards))
+	for _, pf := range cfg.PortForwards {
+		vsockPort := pf.VsockPort
+		dial := func(ctx context.Context) (net.Conn, error) {
+			return sandbox.DialGuestVsock(ctx, hostSocket, vsockPort)
+		}
+		if err := e.bridger.Register(workspaceUUID, pf.ContainerPort, dial); err != nil {
+			// Register failures are executor-bug-class
+			// (duplicate (ws,port) tuple). Surface them on
+			// stdout so the operator sees them, then unregister
+			// whatever did succeed so the table isn't left with
+			// stragglers.
+			_, _ = fmt.Fprintf(e.stdout, "sandboxexec: register port route: %v\n", err)
+			for _, cp := range registered {
+				e.bridger.Unregister(workspaceUUID, cp)
+			}
+			return func() {}
+		}
+		registered = append(registered, pf.ContainerPort)
+	}
+	return func() {
+		for _, cp := range registered {
+			e.bridger.Unregister(workspaceUUID, cp)
+		}
+	}
+}
+
 // resolveBootConfig picks between the baseline Hello config and
 // the per-dispatch bundled config, then layers in the C1 port-
-// forward plan derived from spec.ports. unlock is always non-nil
-// so callers can defer it unconditionally.
-func (e *Executor) resolveBootConfig(ctx context.Context, spec *sandboxv1.SandboxSpec) (sandbox.Config, func(), error) {
+// forward plan derived from spec.ports plus the per-Sandbox Vsock
+// device the C1.3c ingress path will dial through. unlock is
+// always non-nil so callers can defer it unconditionally.
+func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) (sandbox.Config, func(), error) {
 	cfg, unlock, err := e.baseBootConfig(ctx, spec.GetImageRef())
 	if err != nil {
 		return sandbox.Config{}, func() {}, err
 	}
 	cfg.PortForwards = portForwardsFromSpec(spec.GetPorts())
+	if e.bridger != nil && len(cfg.PortForwards) > 0 {
+		cfg.Vsock = e.assignVsock(uid)
+	}
 	return cfg, unlock, nil
+}
+
+// assignVsock mints a per-Sandbox hybrid-vsock device: a fresh
+// GuestCID via the executor's atomic counter and an absolute UDS
+// path under VsockDir named after the Sandbox uid. Caller
+// guarantees Bridger != nil ⇒ VsockDir != "" (checked in New), so
+// no further validation is needed here.
+func (e *Executor) assignVsock(uid string) *sandbox.VsockConfig {
+	cid := e.nextCID.Add(1)
+	assert.True(cid >= 3,
+		"vsock CID counter wrapped past uint32 — this Executor has dispatched 2^32 Sandboxes, well beyond any realistic operator scenario")
+	return &sandbox.VsockConfig{
+		HostSocket: filepath.Join(e.vsockDir, uid+".sock"),
+		GuestCID:   cid,
+	}
 }
 
 // baseBootConfig is the image-or-fallback half of resolveBootConfig:
