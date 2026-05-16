@@ -23,6 +23,10 @@ const dialReplyLineLimit = 256
 // CONNECT: `OK <hostside-port>\n`.
 const dialOKPrefix = "OK "
 
+// dialConnectFmt is the request line we write to CH's main UDS
+// to ask for a tunnel into the given guest-side AF_VSOCK port.
+const dialConnectFmt = "CONNECT %d\n"
+
 // DialGuestVsock opens a byte tunnel into the guest by speaking
 // Cloud Hypervisor's hybrid-vsock CONNECT protocol against the main
 // HostSocket UDS:
@@ -48,26 +52,30 @@ func DialGuestVsock(ctx context.Context, hostSocket string, port uint32) (net.Co
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: dial %s: %w", hostSocket, err)
 	}
+	success := false
+	defer func() {
+		if !success {
+			oops.Skip("sandbox: close after CONNECT failure", conn.Close(), net.ErrClosed)
+		}
+	}()
 	if deadline, ok := ctx.Deadline(); ok {
 		oops.Skip("sandbox: set guest-vsock dial deadline",
 			conn.SetDeadline(deadline))
 	}
-	if _, err := fmt.Fprintf(conn, "CONNECT %d\n", port); err != nil {
-		oops.Skip("sandbox: close after CONNECT-write error", conn.Close(), net.ErrClosed)
+	if _, err := fmt.Fprintf(conn, dialConnectFmt, port); err != nil {
 		return nil, fmt.Errorf("sandbox: CONNECT %d: %w", port, err)
 	}
 	br := bufio.NewReaderSize(conn, dialReplyLineLimit)
 	line, err := readBoundedLine(br, dialReplyLineLimit)
 	if err != nil {
-		oops.Skip("sandbox: close after CONNECT-read error", conn.Close(), net.ErrClosed)
 		return nil, fmt.Errorf("sandbox: read CONNECT %d reply: %w", port, err)
 	}
 	if !strings.HasPrefix(line, dialOKPrefix) {
-		oops.Skip("sandbox: close after CONNECT-reject", conn.Close(), net.ErrClosed)
 		return nil, fmt.Errorf("sandbox: CONNECT %d rejected: %q", port, strings.TrimRight(line, "\n"))
 	}
 	oops.Skip("sandbox: clear guest-vsock dial deadline",
 		conn.SetDeadline(time.Time{}))
+	success = true
 	return &bufferedConn{Conn: conn, r: br}, nil
 }
 
