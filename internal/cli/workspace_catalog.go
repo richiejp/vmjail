@@ -16,6 +16,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 	"golang.org/x/net/http2"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
@@ -230,6 +231,8 @@ func newWorkspaceCatalogSubcommands() []*cobra.Command {
 		newWorkspaceValidateCmd(),
 		newWorkspaceLaunchCmd(),
 		newWorkspaceStopCmd(),
+		newWorkspaceAcquireCmd(),
+		newWorkspaceReleaseCmd(),
 	}
 }
 
@@ -658,6 +661,67 @@ func newWorkspaceLaunchCmd() *cobra.Command {
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.Launch(ctx, connect.NewRequest(
 						&workspacev1.LaunchRequest{Handle: h},
+					))
+					if err != nil {
+						return err
+					}
+					return writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace())
+				})
+		},
+	}
+	bindWorkspaceClientFlags(cmd, &opts)
+	return cmd
+}
+
+// acquireSubName / releaseSubName are the verb tokens under
+// `daft workspace`. Hoisted as constants so the cobra registration
+// and the e2e tests reference the same string.
+const (
+	acquireSubName = "acquire"
+	releaseSubName = "release"
+)
+
+//nolint:dupl // catalog subcommands are structurally parallel by design — runCatalogCmd factors the body.
+func newWorkspaceAcquireCmd() *cobra.Command {
+	var opts workspaceClientOpts
+	var ttl time.Duration
+	cmd := &cobra.Command{
+		Use:           acquireSubName,
+		Short:         "Acquire (or refresh) the workspace's write lock",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runCatalogCmd(cmd, opts, acquireSubName,
+				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
+					resp, err := c.Acquire(ctx, connect.NewRequest(
+						&workspacev1.AcquireRequest{Handle: h, Ttl: durationpb.New(ttl)},
+					))
+					if err != nil {
+						return err
+					}
+					return writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace())
+				})
+		},
+	}
+	bindWorkspaceClientFlags(cmd, &opts)
+	cmd.Flags().DurationVar(&ttl, "ttl", 5*time.Minute,
+		"how long the lock should auto-release after; refresh by re-running")
+	return cmd
+}
+
+//nolint:dupl // catalog subcommands are structurally parallel by design — runCatalogCmd factors the body.
+func newWorkspaceReleaseCmd() *cobra.Command {
+	var opts workspaceClientOpts
+	cmd := &cobra.Command{
+		Use:           releaseSubName,
+		Short:         "Release the workspace's write lock",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runCatalogCmd(cmd, opts, releaseSubName,
+				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
+					resp, err := c.Release(ctx, connect.NewRequest(
+						&workspacev1.ReleaseRequest{Handle: h},
 					))
 					if err != nil {
 						return err

@@ -174,7 +174,10 @@ func (h *WorkspaceCatalogHandler) mutate(
 
 // mutateKind is mutate with an explicit MutateKind so handlers
 // touching Status (Launch, Stop) don't accidentally bump the
-// workspace's spec generation.
+// workspace's spec generation. Gates on the workspace's write
+// lock: a held lock owned by another fingerprint refuses
+// mutation with FailedPrecondition (reason LockHeld). Unheld /
+// expired / self-held locks pass.
 func (h *WorkspaceCatalogHandler) mutateKind(
 	header http.Header,
 	handle *workspacev1.WorkspaceHandle,
@@ -189,6 +192,9 @@ func (h *WorkspaceCatalogHandler) mutateKind(
 	if err != nil {
 		return nil, err
 	}
+	if err := guardLock(ws, fp); err != nil {
+		return nil, err
+	}
 	updated, err := h.store.Update(ws.Metadata.UUID, kind, mut)
 	if err != nil {
 		return nil, mapCatalogErr(err)
@@ -196,6 +202,18 @@ func (h *WorkspaceCatalogHandler) mutateKind(
 	return connect.NewResponse(&workspacev1.WorkspaceResponse{
 		Workspace: workspaceToProto(updated),
 	}), nil
+}
+
+// guardLock refuses mutation when the workspace is locked by a
+// different caller. Unheld or expired locks fall through. Hoisted
+// so the Add* handlers (which don't use mutateKind) can call it
+// after their own pre-resolve input validation.
+func guardLock(ws workspacecatalog.Workspace, fp identity.Fingerprint) error {
+	if ws.Status.Lock.HeldByOther(fp, time.Now()) {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("workspace: locked by %s", ws.Status.Lock.OwnerFingerprint))
+	}
+	return nil
 }
 
 // AddMount appends a mount to the workspace. Validates absolute
@@ -220,6 +238,9 @@ func (h *WorkspaceCatalogHandler) AddMount(
 	}
 	ws, err := h.resolveHandle(fp, req.Msg.GetHandle())
 	if err != nil {
+		return nil, err
+	}
+	if err := guardLock(ws, fp); err != nil {
 		return nil, err
 	}
 	source := mount.GetSource()
@@ -270,6 +291,9 @@ func (h *WorkspaceCatalogHandler) AddEnv(
 	if err != nil {
 		return nil, err
 	}
+	if err := guardLock(ws, fp); err != nil {
+		return nil, err
+	}
 	name := env.GetName()
 	updated, err := h.store.Update(ws.Metadata.UUID, workspacecatalog.MutateSpec, func(w *workspacecatalog.Workspace) error {
 		for i := range w.Spec.Env {
@@ -313,6 +337,9 @@ func (h *WorkspaceCatalogHandler) AddPort(
 	}
 	ws, err := h.resolveHandle(fp, req.Msg.GetHandle())
 	if err != nil {
+		return nil, err
+	}
+	if err := guardLock(ws, fp); err != nil {
 		return nil, err
 	}
 	containerPort := port.GetContainerPort()
@@ -498,6 +525,9 @@ func (h *WorkspaceCatalogHandler) Launch(
 	if err != nil {
 		return nil, err
 	}
+	if err := guardLock(ws, fp); err != nil {
+		return nil, err
+	}
 	// Apply any pending phantom-cleanup decisions before reading
 	// status fields the precondition check below depends on.
 	h.reconcileBefore(ws.Metadata.UUID)
@@ -598,6 +628,84 @@ func (h *WorkspaceCatalogHandler) Stop(
 			)
 			return nil
 		})
+}
+
+// Acquire takes or refreshes the workspace's write lock. Refresh
+// is just an Acquire by the current holder: the expiry advances,
+// the holder doesn't change. Refusal is FailedPrecondition with
+// the prior owner's fingerprint in the error message so the
+// client can tell who's holding it.
+func (h *WorkspaceCatalogHandler) Acquire(
+	_ context.Context,
+	req *connect.Request[workspacev1.AcquireRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	ttl := req.Msg.GetTtl().AsDuration()
+	if ttl <= 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("workspace: ttl must be positive"))
+	}
+	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	ws, err := h.resolveHandle(fp, req.Msg.GetHandle())
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if ws.Status.Lock.HeldByOther(fp, now) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("workspace: locked by %s until %s",
+				ws.Status.Lock.OwnerFingerprint, ws.Status.Lock.ExpiresAt.Format(time.RFC3339)))
+	}
+	updated, err := h.store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus,
+		func(w *workspacecatalog.Workspace) error {
+			w.Status.Lock = workspacecatalog.Lock{
+				OwnerFingerprint: fp,
+				ExpiresAt:        now.Add(ttl),
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, mapCatalogErr(err)
+	}
+	return connect.NewResponse(&workspacev1.WorkspaceResponse{
+		Workspace: workspaceToProto(updated),
+	}), nil
+}
+
+// Release clears the workspace's write lock if held by the
+// caller. Idempotent on an unheld workspace; refuses with
+// FailedPrecondition when held by someone else.
+func (h *WorkspaceCatalogHandler) Release(
+	_ context.Context,
+	req *connect.Request[workspacev1.ReleaseRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	ws, err := h.resolveHandle(fp, req.Msg.GetHandle())
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if ws.Status.Lock.HeldByOther(fp, now) {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("workspace: locked by %s; cannot release another caller's lock",
+				ws.Status.Lock.OwnerFingerprint))
+	}
+	updated, err := h.store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus,
+		func(w *workspacecatalog.Workspace) error {
+			w.Status.Lock = workspacecatalog.Lock{}
+			return nil
+		})
+	if err != nil {
+		return nil, mapCatalogErr(err)
+	}
+	return connect.NewResponse(&workspacev1.WorkspaceResponse{
+		Workspace: workspaceToProto(updated),
+	}), nil
 }
 
 // workspaceToSandboxSpec composes the wire workload spec that the

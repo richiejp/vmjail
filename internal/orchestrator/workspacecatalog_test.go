@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
@@ -1378,5 +1379,260 @@ func TestWorkspaceToProtoCarriesLock(t *testing.T) {
 	}
 	if !lock.GetExpiresAt().IsValid() {
 		t.Error("Lock.expires_at should be populated")
+	}
+}
+
+// uuidHandleFromMsg pulls the workspace UUID off a Create
+// response — terser than repeating the chain in every lock test.
+func uuidHandleFromMsg(resp *connect.Response[workspacev1.WorkspaceResponse]) *workspacev1.WorkspaceHandle {
+	return uuidHandle(resp.Msg.GetWorkspace().GetMetadata().GetUuid())
+}
+
+// TestAcquireTakesLockAndPopulatesExpiry pins the happy path:
+// caller acquires a workspace with no held lock; the response
+// reflects the new owner and an expiry derived from the TTL.
+func TestAcquireTakesLockAndPopulatesExpiry(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, err := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "lock-acquire"},
+	))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	resp, err := rig.client.Acquire(t.Context(), connect.NewRequest(
+		&workspacev1.AcquireRequest{
+			Handle: uuidHandleFromMsg(created),
+			Ttl:    durationpb.New(10 * time.Second),
+		},
+	))
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	lock := resp.Msg.GetWorkspace().GetStatus().GetLock()
+	if lock == nil {
+		t.Fatal("Lock should be populated after Acquire")
+	}
+	if lock.GetOwnerFingerprint() != rig.callerID.Fingerprint().String() {
+		t.Errorf("Lock.owner = %q, want caller's fingerprint", lock.GetOwnerFingerprint())
+	}
+	if !lock.GetExpiresAt().IsValid() {
+		t.Error("Lock.expires_at should be set")
+	}
+}
+
+// TestAcquireRejectsZeroTTL pins the InvalidArgument guard on TTL.
+func TestAcquireRejectsZeroTTL(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "lock-zero-ttl"},
+	))
+	_, err := rig.client.Acquire(t.Context(), connect.NewRequest(
+		&workspacev1.AcquireRequest{Handle: uuidHandleFromMsg(created)},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeInvalidArgument {
+		t.Errorf("code = %s, want InvalidArgument", code)
+	}
+}
+
+// TestAcquireRefusesContestedLock plants a lock held by a
+// different fingerprint and asserts Acquire returns
+// FailedPrecondition.
+func TestAcquireRefusesContestedLock(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "lock-contested"},
+	))
+	uuid := created.Msg.GetWorkspace().GetMetadata().GetUuid()
+	other := mustGenerate(t, identity.RoleClient).Fingerprint()
+	_, err := rig.catalog.Update(uuid, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
+		w.Status.Lock = workspacecatalog.Lock{OwnerFingerprint: other, ExpiresAt: time.Now().Add(time.Hour)}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("seed lock: %v", err)
+	}
+	_, err = rig.client.Acquire(t.Context(), connect.NewRequest(
+		&workspacev1.AcquireRequest{
+			Handle: uuidHandle(uuid),
+			Ttl:    durationpb.New(10 * time.Second),
+		},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
+		t.Errorf("code = %s, want FailedPrecondition", code)
+	}
+}
+
+// TestAcquireRefreshesOwnLock pins the refresh semantic: the
+// same caller can Acquire repeatedly to extend their expiry.
+func TestAcquireRefreshesOwnLock(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "lock-refresh"},
+	))
+	handle := uuidHandleFromMsg(created)
+	first, err := rig.client.Acquire(t.Context(), connect.NewRequest(
+		&workspacev1.AcquireRequest{Handle: handle, Ttl: durationpb.New(10 * time.Second)},
+	))
+	if err != nil {
+		t.Fatalf("first Acquire: %v", err)
+	}
+	firstExpiry := first.Msg.GetWorkspace().GetStatus().GetLock().GetExpiresAt().AsTime()
+	time.Sleep(10 * time.Millisecond)
+	second, err := rig.client.Acquire(t.Context(), connect.NewRequest(
+		&workspacev1.AcquireRequest{Handle: handle, Ttl: durationpb.New(20 * time.Second)},
+	))
+	if err != nil {
+		t.Fatalf("refresh Acquire: %v", err)
+	}
+	if !second.Msg.GetWorkspace().GetStatus().GetLock().GetExpiresAt().AsTime().After(firstExpiry) {
+		t.Error("refresh did not extend ExpiresAt")
+	}
+}
+
+// TestMutationRefusedUnderContestedLock pins the gating: a
+// mutator (SetImage) called by a caller other than the lock
+// holder returns FailedPrecondition without touching state.
+func TestMutationRefusedUnderContestedLock(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "lock-mutate"},
+	))
+	uuid := created.Msg.GetWorkspace().GetMetadata().GetUuid()
+	other := mustGenerate(t, identity.RoleClient).Fingerprint()
+	_, _ = rig.catalog.Update(uuid, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
+		w.Status.Lock = workspacecatalog.Lock{OwnerFingerprint: other, ExpiresAt: time.Now().Add(time.Hour)}
+		return nil
+	})
+	_, err := rig.client.SetImage(t.Context(), connect.NewRequest(
+		&workspacev1.SetImageRequest{Handle: uuidHandle(uuid), ImageRef: testImageRef},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
+		t.Errorf("code = %s, want FailedPrecondition", code)
+	}
+}
+
+// TestReleaseClearsOwnLock pins Release's happy path.
+func TestReleaseClearsOwnLock(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "lock-release"},
+	))
+	handle := uuidHandleFromMsg(created)
+	if _, err := rig.client.Acquire(t.Context(), connect.NewRequest(
+		&workspacev1.AcquireRequest{Handle: handle, Ttl: durationpb.New(10 * time.Second)},
+	)); err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+	resp, err := rig.client.Release(t.Context(), connect.NewRequest(
+		&workspacev1.ReleaseRequest{Handle: handle},
+	))
+	if err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if resp.Msg.GetWorkspace().GetStatus().GetLock() != nil {
+		t.Errorf("Lock = %+v, want nil after Release", resp.Msg.GetWorkspace().GetStatus().GetLock())
+	}
+}
+
+// TestReleaseIsIdempotentOnUnheld pins that Release against an
+// unheld workspace is a no-op (not an error).
+func TestReleaseIsIdempotentOnUnheld(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "lock-no-op"},
+	))
+	if _, err := rig.client.Release(t.Context(), connect.NewRequest(
+		&workspacev1.ReleaseRequest{Handle: uuidHandleFromMsg(created)},
+	)); err != nil {
+		t.Errorf("Release on unheld: %v, want nil", err)
+	}
+}
+
+// TestReleaseRefusesOtherCallersLock pins the negative half:
+// Release against a lock held by someone else returns
+// FailedPrecondition.
+func TestReleaseRefusesOtherCallersLock(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "lock-foreign"},
+	))
+	uuid := created.Msg.GetWorkspace().GetMetadata().GetUuid()
+	other := mustGenerate(t, identity.RoleClient).Fingerprint()
+	_, _ = rig.catalog.Update(uuid, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
+		w.Status.Lock = workspacecatalog.Lock{OwnerFingerprint: other, ExpiresAt: time.Now().Add(time.Hour)}
+		return nil
+	})
+	_, err := rig.client.Release(t.Context(), connect.NewRequest(
+		&workspacev1.ReleaseRequest{Handle: uuidHandle(uuid)},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
+		t.Errorf("code = %s, want FailedPrecondition", code)
+	}
+}
+
+// TestExpiredLockAllowsAcquire pins the expiry-as-released rule:
+// once a lock's ExpiresAt is in the past, a different caller can
+// Acquire without waiting for the old holder to Release.
+func TestExpiredLockAllowsAcquire(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "lock-expired"},
+	))
+	uuid := created.Msg.GetWorkspace().GetMetadata().GetUuid()
+	other := mustGenerate(t, identity.RoleClient).Fingerprint()
+	_, _ = rig.catalog.Update(uuid, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
+		w.Status.Lock = workspacecatalog.Lock{OwnerFingerprint: other, ExpiresAt: time.Now().Add(-time.Hour)}
+		return nil
+	})
+	if _, err := rig.client.Acquire(t.Context(), connect.NewRequest(
+		&workspacev1.AcquireRequest{Handle: uuidHandle(uuid), Ttl: durationpb.New(10 * time.Second)},
+	)); err != nil {
+		t.Errorf("Acquire over expired lock: %v, want nil", err)
+	}
+}
+
+// TestConditionStatusToProtoCoversAllValues pins the wire mapping
+// for every ConditionStatus value, including the
+// fall-through (Unspecified / out-of-range → UNSPECIFIED).
+func TestConditionStatusToProtoCoversAllValues(t *testing.T) {
+	cases := []struct {
+		in   workspacecatalog.ConditionStatus
+		want sandboxv1.ConditionStatus
+	}{
+		{workspacecatalog.ConditionStatusTrue, sandboxv1.ConditionStatus_CONDITION_STATUS_TRUE},
+		{workspacecatalog.ConditionStatusFalse, sandboxv1.ConditionStatus_CONDITION_STATUS_FALSE},
+		{workspacecatalog.ConditionStatusUnknown, sandboxv1.ConditionStatus_CONDITION_STATUS_UNKNOWN},
+		{workspacecatalog.ConditionStatusUnspecified, sandboxv1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED},
+		{workspacecatalog.ConditionStatus(99), sandboxv1.ConditionStatus_CONDITION_STATUS_UNSPECIFIED},
+	}
+	for _, tc := range cases {
+		if got := conditionStatusToProto(tc.in); got != tc.want {
+			t.Errorf("conditionStatusToProto(%v) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestGpuRequestToProtoEmitsWhenAnyFieldNonZero pins both branches
+// of the early-return: GpuCount + GpuMinVRAM both zero ⇒ nil
+// (omits the wire field); any non-zero ⇒ populated.
+func TestGpuRequestToProtoEmitsWhenAnyFieldNonZero(t *testing.T) {
+	if got := gpuRequestToProto(workspacecatalog.Spec{}); got != nil {
+		t.Errorf("zero spec → %+v, want nil", got)
+	}
+	if got := gpuRequestToProto(workspacecatalog.Spec{GpuCount: 2}); got == nil || got.GetCount() != 2 {
+		t.Errorf("count=2 → %+v, want non-nil with Count=2", got)
+	}
+	if got := gpuRequestToProto(workspacecatalog.Spec{GpuMinVRAM: 1024}); got == nil || got.GetMinVramBytes() != 1024 {
+		t.Errorf("min_vram=1024 → %+v, want non-nil with MinVramBytes=1024", got)
+	}
+}
+
+// TestFingerprintStringOrEmptyZeroBecomesEmpty pins the helper's
+// zero-fingerprint branch (covered by the projection but worth a
+// direct pin so the contract is explicit).
+func TestFingerprintStringOrEmptyZeroBecomesEmpty(t *testing.T) {
+	var zero identity.Fingerprint
+	if got := fingerprintStringOrEmpty(zero); got != "" {
+		t.Errorf("zero fp → %q, want empty", got)
 	}
 }

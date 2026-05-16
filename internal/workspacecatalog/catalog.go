@@ -124,6 +124,37 @@ type Lock struct {
 // to decide whether to render the expiry / refuse a mutation.
 func (l Lock) IsHeld() bool { return !l.OwnerFingerprint.IsZero() }
 
+// IsExpired reports whether a held lock has passed its expiry.
+// An unheld lock is never expired (callers check IsHeld first).
+// Zero ExpiresAt is treated as "never expires" — the lock blocks
+// mutations indefinitely until Release is called.
+func (l Lock) IsExpired(now time.Time) bool {
+	if l.ExpiresAt.IsZero() {
+		return false
+	}
+	return !now.Before(l.ExpiresAt)
+}
+
+// HeldBy reports whether the lock is currently held by fp. A lock
+// that's past its expiry is treated as unheld so a stale refresh
+// from the prior holder doesn't block a new acquirer.
+func (l Lock) HeldBy(fp identity.Fingerprint, now time.Time) bool {
+	if !l.IsHeld() || l.IsExpired(now) {
+		return false
+	}
+	return l.OwnerFingerprint == fp
+}
+
+// HeldByOther reports whether the lock is held by someone other
+// than fp. An unheld or expired lock returns false (the caller
+// can acquire / mutate).
+func (l Lock) HeldByOther(fp identity.Fingerprint, now time.Time) bool {
+	if !l.IsHeld() || l.IsExpired(now) {
+		return false
+	}
+	return l.OwnerFingerprint != fp
+}
+
 // Metadata is the identity + auditing half of a Workspace.
 // Immutable identity fields (UUID, OwnerFingerprint, CreatedAt) are
 // stamped at Create time; mutable fields (Name, Generation,
@@ -201,6 +232,10 @@ var (
 	ErrNotFound       = errors.New("workspacecatalog: workspace not found")
 	ErrAliasInUse     = errors.New("workspacecatalog: name already used by this owner")
 	ErrImmutableField = errors.New("workspacecatalog: refusing to mutate immutable field")
+	// ErrLockHeldByOther is returned by mutators when the
+	// workspace lock is held by an identity other than the caller.
+	// Maps to FailedPrecondition at the Connect surface.
+	ErrLockHeldByOther = errors.New("workspacecatalog: workspace locked by another caller")
 )
 
 // Store holds the live set of workspaces. Safe for concurrent use.

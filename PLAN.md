@@ -345,8 +345,16 @@ Phase B — **Workspace as a first-class orchestrator object**:
   catalog-only for now (RUNNING/FROZEN → STOPPED, clears
   dispatch_id) — the wire teardown signal to the sandbox-host
   follows in B2c'.
-- B2d: Lock, Unlock, Adopt. Per-owner write-lock enforcement
-  gates the B2a/B2b/B2c mutators retroactively.
+- B2d (landed): Acquire / Release RPCs + lock gating across every
+  spec/status mutator (SetImage/SetTarget, Add*, Remove*, Launch,
+  Stop). New `workspacecatalog.Lock` helpers: IsHeld / IsExpired /
+  HeldBy / HeldByOther; expired locks are treated as unheld so a
+  runaway client can't squat a workspace forever. Acquire is also
+  the refresh primitive (caller-as-holder extends ExpiresAt).
+  Refusal cases map to FailedPrecondition with the prior owner's
+  fingerprint in the message. CLI: `daft workspace acquire --ttl
+  5m` and `daft workspace release`. Adopt remains a Phase F1
+  concern; `force` + audit trail land in F3.
 - B3 (landed): Client CLI surface for the catalog. New file
   `internal/cli/workspace_catalog.go` ships
   `daft workspace <create|status|list|image|target|

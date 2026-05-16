@@ -388,3 +388,47 @@ func TestSetConditionPreservesTransitionTimeOnNoOp(t *testing.T) {
 		t.Errorf("Reason = %q, want %q (latest reason overwrites)", c.Reason, "Second")
 	}
 }
+
+// TestLockSemantics pins the four Lock helpers (IsHeld /
+// IsExpired / HeldBy / HeldByOther) used by the orchestrator's
+// guardLock + Acquire/Release. Built as a table because all four
+// share the same {owner, expires_at, now, caller} dimensions —
+// keeping them in one place stops the helpers from drifting
+// apart.
+func TestLockSemantics(t *testing.T) {
+	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
+	owner := mustOwner(t)
+	other := mustOwner(t)
+	cases := []struct {
+		name           string
+		lock           Lock
+		caller         identity.Fingerprint
+		wantHeld       bool
+		wantExpired    bool
+		wantHeldBy     bool
+		wantHeldByOthr bool
+	}{
+		{"unheld", Lock{}, owner, false, false, false, false},
+		{"held-self-fresh", Lock{OwnerFingerprint: owner, ExpiresAt: now.Add(time.Hour)}, owner, true, false, true, false},
+		{"held-self-no-expiry", Lock{OwnerFingerprint: owner}, owner, true, false, true, false},
+		{"held-other-fresh", Lock{OwnerFingerprint: owner, ExpiresAt: now.Add(time.Hour)}, other, true, false, false, true},
+		{"held-self-expired", Lock{OwnerFingerprint: owner, ExpiresAt: now.Add(-time.Hour)}, owner, true, true, false, false},
+		{"held-other-expired", Lock{OwnerFingerprint: owner, ExpiresAt: now.Add(-time.Hour)}, other, true, true, false, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.lock.IsHeld(); got != tc.wantHeld {
+				t.Errorf("IsHeld = %v, want %v", got, tc.wantHeld)
+			}
+			if got := tc.lock.IsExpired(now); got != tc.wantExpired {
+				t.Errorf("IsExpired(now) = %v, want %v", got, tc.wantExpired)
+			}
+			if got := tc.lock.HeldBy(tc.caller, now); got != tc.wantHeldBy {
+				t.Errorf("HeldBy(caller, now) = %v, want %v", got, tc.wantHeldBy)
+			}
+			if got := tc.lock.HeldByOther(tc.caller, now); got != tc.wantHeldByOthr {
+				t.Errorf("HeldByOther(caller, now) = %v, want %v", got, tc.wantHeldByOthr)
+			}
+		})
+	}
+}

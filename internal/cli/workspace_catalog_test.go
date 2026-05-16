@@ -98,6 +98,7 @@ func TestWorkspaceCatalogSubcommandsRegistered(t *testing.T) {
 	wantVerbs := []string{
 		createSubName, statusSubName, listSubName, imageSubName, targetSubName,
 		mountSubName, envSubName, portSubName, validateSubName, launchSubName, stopSubName,
+		acquireSubName, releaseSubName,
 	}
 	for _, v := range wantVerbs {
 		if !strings.Contains(stdout, v) {
@@ -287,6 +288,14 @@ func (h *workspaceE2EHarness) run(args ...string) string {
 		h.t.Fatalf("daft workspace %v: %v\nstderr: %s", args, err, stderr)
 	}
 	return stdout
+}
+
+// runErr mirrors run but returns the error instead of t.Fatal'ing
+// so a negative-path test can assert on the wire error.
+func (h *workspaceE2EHarness) runErr(args ...string) (string, error) {
+	h.t.Helper()
+	stdout, _, err := runDaft(h.t, append([]string{"workspace"}, args...)...)
+	return stdout, err
 }
 
 func (h *workspaceE2EHarness) assemble() {
@@ -542,5 +551,37 @@ func TestWriteWorkspaceListEmpty(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "NAME") {
 		t.Errorf("empty list should still emit header, got:\n%s", buf.String())
+	}
+}
+
+// TestWorkspaceAcquireAndReleaseRoundTrip drives the CLI's lock
+// surface end-to-end: create → acquire → release. Mirrors the
+// other RPC e2e tests; runs against a fresh in-process
+// orchestrator with a fake dispatcher.
+func TestWorkspaceAcquireAndReleaseRoundTrip(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	acquireOut := h.run(append([]string{acquireSubName, "--ttl", "30s"}, h.commonArgs...)...)
+	// The summary block shows "Lock:" implicitly via the owner
+	// being set; assert on the caller's fingerprint appearing
+	// alongside the workspace name.
+	if !strings.Contains(acquireOut, "Owner:") {
+		t.Errorf("acquire output missing Owner row:\n%s", acquireOut)
+	}
+	if _, err := h.runErr(append([]string{releaseSubName}, h.commonArgs...)...); err != nil {
+		t.Errorf("release: %v", err)
+	}
+}
+
+// TestWorkspaceAcquireRejectsZeroTTL pins the InvalidArgument
+// guard at the wire — passing --ttl 0s surfaces the error from
+// the orchestrator handler.
+func TestWorkspaceAcquireRejectsZeroTTL(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	args := append([]string{acquireSubName, "--ttl", "0s"}, h.commonArgs...)
+	_, err := h.runErr(args...)
+	if err == nil {
+		t.Error("expected error for --ttl 0s")
 	}
 }

@@ -103,6 +103,12 @@ const (
 	// WorkspaceCatalogServiceStopProcedure is the fully-qualified name of the WorkspaceCatalogService's
 	// Stop RPC.
 	WorkspaceCatalogServiceStopProcedure = "/daft.workspace.v1.WorkspaceCatalogService/Stop"
+	// WorkspaceCatalogServiceAcquireProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's Acquire RPC.
+	WorkspaceCatalogServiceAcquireProcedure = "/daft.workspace.v1.WorkspaceCatalogService/Acquire"
+	// WorkspaceCatalogServiceReleaseProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's Release RPC.
+	WorkspaceCatalogServiceReleaseProcedure = "/daft.workspace.v1.WorkspaceCatalogService/Release"
 )
 
 // WorkspaceCatalogServiceClient is a client for the daft.workspace.v1.WorkspaceCatalogService
@@ -176,6 +182,25 @@ type WorkspaceCatalogServiceClient interface {
 	// lands in a follow-up sub-slice. STOPPED workspaces stay
 	// mutable; a subsequent Launch boots a fresh VM.
 	Stop(context.Context, *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Acquire takes (or refreshes) the workspace's per-owner write
+	// lock. While the lock is held, only the holder can mutate the
+	// workspace; every other authenticated caller's mutator
+	// returns FailedPrecondition with reason LockHeld. The lock
+	// auto-releases after the requested TTL — Acquire is also the
+	// refresh primitive (calling Acquire as the current holder
+	// extends the expiry).
+	//
+	// Refusal cases: held by someone else and not yet expired
+	// (FailedPrecondition). Refusal for an unknown workspace
+	// surfaces as NotFound. Phase F3 adds an explicit `force`
+	// override with an audit-log entry; B2d ships only the
+	// own-or-unheld semantic.
+	Acquire(context.Context, *connect.Request[v1.AcquireRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Release clears the workspace's write lock if held by the
+	// caller. Calling Release on an unheld workspace is a no-op
+	// (idempotent); calling it on a workspace held by someone
+	// else returns FailedPrecondition with reason LockHeld.
+	Release(context.Context, *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 }
 
 // NewWorkspaceCatalogServiceClient constructs a client for the
@@ -273,6 +298,18 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("Stop")),
 			connect.WithClientOptions(opts...),
 		),
+		acquire: connect.NewClient[v1.AcquireRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceAcquireProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("Acquire")),
+			connect.WithClientOptions(opts...),
+		),
+		release: connect.NewClient[v1.ReleaseRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceReleaseProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("Release")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -292,6 +329,8 @@ type workspaceCatalogServiceClient struct {
 	validate    *connect.Client[v1.ValidateRequest, v1.WorkspaceResponse]
 	launch      *connect.Client[v1.LaunchRequest, v1.WorkspaceResponse]
 	stop        *connect.Client[v1.StopRequest, v1.WorkspaceResponse]
+	acquire     *connect.Client[v1.AcquireRequest, v1.WorkspaceResponse]
+	release     *connect.Client[v1.ReleaseRequest, v1.WorkspaceResponse]
 }
 
 // Create calls daft.workspace.v1.WorkspaceCatalogService.Create.
@@ -362,6 +401,16 @@ func (c *workspaceCatalogServiceClient) Launch(ctx context.Context, req *connect
 // Stop calls daft.workspace.v1.WorkspaceCatalogService.Stop.
 func (c *workspaceCatalogServiceClient) Stop(ctx context.Context, req *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return c.stop.CallUnary(ctx, req)
+}
+
+// Acquire calls daft.workspace.v1.WorkspaceCatalogService.Acquire.
+func (c *workspaceCatalogServiceClient) Acquire(ctx context.Context, req *connect.Request[v1.AcquireRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.acquire.CallUnary(ctx, req)
+}
+
+// Release calls daft.workspace.v1.WorkspaceCatalogService.Release.
+func (c *workspaceCatalogServiceClient) Release(ctx context.Context, req *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.release.CallUnary(ctx, req)
 }
 
 // WorkspaceCatalogServiceHandler is an implementation of the
@@ -435,6 +484,25 @@ type WorkspaceCatalogServiceHandler interface {
 	// lands in a follow-up sub-slice. STOPPED workspaces stay
 	// mutable; a subsequent Launch boots a fresh VM.
 	Stop(context.Context, *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Acquire takes (or refreshes) the workspace's per-owner write
+	// lock. While the lock is held, only the holder can mutate the
+	// workspace; every other authenticated caller's mutator
+	// returns FailedPrecondition with reason LockHeld. The lock
+	// auto-releases after the requested TTL — Acquire is also the
+	// refresh primitive (calling Acquire as the current holder
+	// extends the expiry).
+	//
+	// Refusal cases: held by someone else and not yet expired
+	// (FailedPrecondition). Refusal for an unknown workspace
+	// surfaces as NotFound. Phase F3 adds an explicit `force`
+	// override with an audit-log entry; B2d ships only the
+	// own-or-unheld semantic.
+	Acquire(context.Context, *connect.Request[v1.AcquireRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Release clears the workspace's write lock if held by the
+	// caller. Calling Release on an unheld workspace is a no-op
+	// (idempotent); calling it on a workspace held by someone
+	// else returns FailedPrecondition with reason LockHeld.
+	Release(context.Context, *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 }
 
 // NewWorkspaceCatalogServiceHandler builds an HTTP handler from the service implementation. It
@@ -528,6 +596,18 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("Stop")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceAcquireHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceAcquireProcedure,
+		svc.Acquire,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("Acquire")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workspaceCatalogServiceReleaseHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceReleaseProcedure,
+		svc.Release,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("Release")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.workspace.v1.WorkspaceCatalogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkspaceCatalogServiceCreateProcedure:
@@ -558,6 +638,10 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceLaunchHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceStopProcedure:
 			workspaceCatalogServiceStopHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceAcquireProcedure:
+			workspaceCatalogServiceAcquireHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceReleaseProcedure:
+			workspaceCatalogServiceReleaseHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -621,4 +705,12 @@ func (UnimplementedWorkspaceCatalogServiceHandler) Launch(context.Context, *conn
 
 func (UnimplementedWorkspaceCatalogServiceHandler) Stop(context.Context, *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.Stop is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) Acquire(context.Context, *connect.Request[v1.AcquireRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.Acquire is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) Release(context.Context, *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.Release is not implemented"))
 }

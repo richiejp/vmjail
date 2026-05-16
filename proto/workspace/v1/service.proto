@@ -29,6 +29,7 @@ syntax = "proto3";
 
 package daft.workspace.v1;
 
+import "google/protobuf/duration.proto";
 import "sandbox/v1/sandbox.proto";
 import "workspace/v1/catalog.proto";
 
@@ -116,6 +117,27 @@ service WorkspaceCatalogService {
   // lands in a follow-up sub-slice. STOPPED workspaces stay
   // mutable; a subsequent Launch boots a fresh VM.
   rpc Stop(StopRequest) returns (WorkspaceResponse) {}
+
+  // Acquire takes (or refreshes) the workspace's per-owner write
+  // lock. While the lock is held, only the holder can mutate the
+  // workspace; every other authenticated caller's mutator
+  // returns FailedPrecondition with reason LockHeld. The lock
+  // auto-releases after the requested TTL — Acquire is also the
+  // refresh primitive (calling Acquire as the current holder
+  // extends the expiry).
+  //
+  // Refusal cases: held by someone else and not yet expired
+  // (FailedPrecondition). Refusal for an unknown workspace
+  // surfaces as NotFound. Phase F3 adds an explicit `force`
+  // override with an audit-log entry; B2d ships only the
+  // own-or-unheld semantic.
+  rpc Acquire(AcquireRequest) returns (WorkspaceResponse) {}
+
+  // Release clears the workspace's write lock if held by the
+  // caller. Calling Release on an unheld workspace is a no-op
+  // (idempotent); calling it on a workspace held by someone
+  // else returns FailedPrecondition with reason LockHeld.
+  rpc Release(ReleaseRequest) returns (WorkspaceResponse) {}
 }
 
 // WorkspaceHandle addresses a workspace by either its canonical
@@ -214,5 +236,18 @@ message LaunchRequest {
 }
 
 message StopRequest {
+  WorkspaceHandle handle = 1;
+}
+
+message AcquireRequest {
+  WorkspaceHandle handle = 1;
+  // Lock auto-release window. Required (positive); a zero/empty
+  // duration is rejected with InvalidArgument so a runaway
+  // never-refreshed client can't leave a workspace permanently
+  // locked. Refresh by calling Acquire again with the same handle.
+  google.protobuf.Duration ttl = 2;
+}
+
+message ReleaseRequest {
   WorkspaceHandle handle = 1;
 }
