@@ -457,10 +457,25 @@ Phase C — **Orchestrator-driven port ingress**:
     zero-container-port entries are skipped. Validation rejects
     duplicate VsockPort, zero ports, and TracePort collisions before
     boot.
-  - C1.3 (next): Workspacebroker labeled-stream registration — the
+  - C1.3 (in progress): Workspacebroker labeled-stream registration —
     sandboxd registers each (workspace_uuid, container_port) with the
     orchestrator and bridges the labeled inbound stream to a
-    DialGuestVsock call. Enables C2.
+    DialGuestVsock call. Enables C2. Split into three sub-slices:
+    - C1.3a (landed): `internal/sandboxgateway.Bridger` — local
+      (workspace_uuid, container_port) → DialFunc registry plus a
+      Bridge(ctx, ws, port, upstream) that pipes bytes both
+      directions until either side closes. Stateless DialFunc
+      indirection keeps the package free of any vsock/CH knowledge;
+      C1.3b registers a DialGuestVsock closure per spec.ports entry.
+    - C1.3b: Executor wires the Bridger. Each dispatch generates a
+      per-Sandbox VsockConfig (UDS path + GuestCID), populates
+      sandbox.Config.Vsock, and registers each (workspaceUUID,
+      containerPort) → DialGuestVsock(hostSocket, vsockPort) on the
+      Bridger; terminal phase unregisters.
+    - C1.3c: Orchestrator-driven Bridge. New bidi RPC + NodeEvent
+      variant carrying (workspace, port, session_id) so the
+      orchestrator can ask a Node to open a labeled stream; sandboxd
+      handler dials and pipes through Bridger.
 - C2: Orchestrator side: per-workspace HTTP/HTTPS listener (or
   subpath under one wildcard) that byte-relays into the
   sandbox-side stream. TLS termination on the orchestrator with
