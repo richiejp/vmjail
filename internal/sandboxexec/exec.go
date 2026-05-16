@@ -16,6 +16,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"sync"
 
 	"github.com/richiejp/darkaifactory/internal/assert"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
@@ -23,6 +25,16 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/trace"
+)
+
+// Phase tokens reported on heartbeat. Match the PascalCase values
+// documented on daft.sandbox.v1.SandboxStatus.phase and read by the
+// orchestrator's reconciler.
+const (
+	phasePending = "Pending"
+	phaseRunning = "Running"
+	phaseExited  = "Exited"
+	phaseKilled  = "Killed"
 )
 
 // Assembler is the seam through which the Executor turns an OCI
@@ -37,7 +49,15 @@ type Assembler func(ctx context.Context, ref string) (sandbox.Config, func(), er
 // they don't need /dev/kvm.
 type Runner func(ctx context.Context, w io.Writer, cfg sandbox.Config) error
 
-// Executor implements nodectrlclient.DispatchHandler. One
+// liveSandbox tracks one sandbox the Executor is supervising.
+// Reported as a snapshot on each heartbeat (Slice B4d).
+type liveSandbox struct {
+	uid      string
+	phase    string
+	exitCode int32
+}
+
+// Executor implements nodectrlclient.SandboxEventHandler. One
 // Executor per sandboxd process — concurrent dispatches share the
 // same baseline config and stdout writer.
 type Executor struct {
@@ -45,6 +65,9 @@ type Executor struct {
 	stdout    io.Writer
 	run       Runner
 	assembler Assembler
+
+	mu   sync.Mutex
+	live map[string]*liveSandbox
 }
 
 // Config bundles the Executor's dependencies. The baseline
@@ -76,7 +99,65 @@ func New(cfg Config) (*Executor, error) {
 		stdout:    cfg.Stdout,
 		run:       cfg.Runner,
 		assembler: cfg.Assembler,
+		live:      map[string]*liveSandbox{},
 	}, nil
+}
+
+// LiveSnapshot returns the wire-shaped set of sandboxes the Executor
+// currently knows about. Wired into nodectrlclient.Config so each
+// Heartbeat carries the level-triggered reconciliation signal that
+// drives Workspace.status.observed_generation upstream (Slice B4d).
+//
+// Snapshot semantics: a sandbox is included until it transitions to
+// a terminal phase AND the orchestrator has had a heartbeat to
+// observe that terminal state. Terminal entries are dropped from
+// the live map on the next snapshot to keep the wire payload
+// bounded; the orchestrator's reconciler treats absence as "exited"
+// going forward.
+func (e *Executor) LiveSnapshot() []*nodectrlv1.LiveSandbox {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]*nodectrlv1.LiveSandbox, 0, len(e.live))
+	var drop []string
+	for uid, ls := range e.live {
+		out = append(out, &nodectrlv1.LiveSandbox{
+			Uid:      ls.uid,
+			Phase:    ls.phase,
+			ExitCode: ls.exitCode,
+		})
+		if ls.phase == phaseExited || ls.phase == phaseKilled {
+			drop = append(drop, uid)
+		}
+	}
+	for _, uid := range drop {
+		delete(e.live, uid)
+	}
+	// Sort by uid so heartbeats are byte-stable across replays —
+	// makes test golden-file comparisons trivial.
+	slices.SortFunc(out, func(a, b *nodectrlv1.LiveSandbox) int {
+		switch {
+		case a.GetUid() < b.GetUid():
+			return -1
+		case a.GetUid() > b.GetUid():
+			return 1
+		}
+		return 0
+	})
+	return out
+}
+
+// markPhase records a phase transition for uid. Used by
+// HandleSandboxEvent's lifecycle path to populate the snapshot.
+func (e *Executor) markPhase(uid, phase string, exitCode int32) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ls, ok := e.live[uid]
+	if !ok {
+		ls = &liveSandbox{uid: uid}
+		e.live[uid] = ls
+	}
+	ls.phase = phase
+	ls.exitCode = exitCode
 }
 
 // ProductionAssembler returns an Assembler backed by
@@ -139,15 +220,20 @@ func (e *Executor) HandleSandboxEvent(
 		"daft-sandboxd: sandbox %s spec.workspace=%s image=%s\n",
 		uid, spec.GetWorkspaceUuid(), spec.GetImageRef())
 
+	e.markPhase(uid, phaseRunning, 0)
+
 	cfg, unlock, err := e.resolveBootConfig(ctx, spec.GetImageRef())
 	if err != nil {
+		e.markPhase(uid, phaseKilled, 0)
 		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
 	}
 	defer unlock()
 
 	if err := e.run(ctx, e.stdout, cfg); err != nil {
+		e.markPhase(uid, phaseKilled, 0)
 		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
 	}
+	e.markPhase(uid, phaseExited, 0)
 	return nil
 }
 

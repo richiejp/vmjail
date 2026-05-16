@@ -8,6 +8,7 @@ import (
 
 	"connectrpc.com/connect"
 
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
@@ -1378,5 +1379,121 @@ func TestWorkspaceToProtoCarriesLock(t *testing.T) {
 	}
 	if !lock.GetExpiresAt().IsValid() {
 		t.Error("Lock.expires_at should be populated")
+	}
+}
+
+// TestReconcileLiveSandboxesAdvancesObservedGeneration pins the
+// B4d reconciler primitive: a heartbeat carrying the workspace's
+// in-flight Sandbox uid with phase=Running should bump
+// ObservedGeneration to match Metadata.Generation and flip the
+// Reconciled condition True.
+func TestReconcileLiveSandboxesAdvancesObservedGeneration(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	target := mustGenerate(t, identity.RoleSandboxHost)
+	targetFP := target.Fingerprint()
+	uuid := readyWorkspace(t, rig, "reconcile-run", targetFP.String())
+	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if _, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	sandboxUID := fake.calls[0].sandbox.GetMetadata().GetUid()
+
+	handler, err := NewWorkspaceCatalogHandler(rig.catalog, fake)
+	if err != nil {
+		t.Fatalf("NewWorkspaceCatalogHandler: %v", err)
+	}
+	handler.ReconcileLiveSandboxes(targetFP, []*nodectrlv1.LiveSandbox{
+		{Uid: sandboxUID, Phase: sandboxPhaseRunning},
+	})
+
+	got, _ := rig.catalog.Get(uuid)
+	if got.Status.ObservedGeneration != got.Metadata.Generation {
+		t.Errorf("ObservedGeneration = %d, want %d", got.Status.ObservedGeneration, got.Metadata.Generation)
+	}
+	if !got.Status.IsTrue(workspacecatalog.ConditionReconciled) {
+		t.Errorf("Reconciled not True after Running heartbeat; conditions=%+v", got.Status.Conditions)
+	}
+}
+
+// TestReconcileLiveSandboxesClearsOnExited pins the terminal-phase
+// branch: a Node report of phase=Exited tears the Dispatched
+// condition down and clears CurrentSandbox so the Workspace
+// returns to Ready=True / Dispatched=False.
+func TestReconcileLiveSandboxesClearsOnExited(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	target := mustGenerate(t, identity.RoleSandboxHost)
+	targetFP := target.Fingerprint()
+	uuid := readyWorkspace(t, rig, "reconcile-exit", targetFP.String())
+	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if _, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	sandboxUID := fake.calls[0].sandbox.GetMetadata().GetUid()
+
+	handler, err := NewWorkspaceCatalogHandler(rig.catalog, fake)
+	if err != nil {
+		t.Fatalf("NewWorkspaceCatalogHandler: %v", err)
+	}
+	handler.ReconcileLiveSandboxes(targetFP, []*nodectrlv1.LiveSandbox{
+		{Uid: sandboxUID, Phase: sandboxPhaseExited},
+	})
+
+	got, _ := rig.catalog.Get(uuid)
+	if got.Status.CurrentSandbox != nil {
+		t.Errorf("CurrentSandbox = %+v, want nil after Exited", got.Status.CurrentSandbox)
+	}
+	if got.Status.IsTrue(workspacecatalog.ConditionDispatched) {
+		t.Errorf("Dispatched should be False after Exited; conditions=%+v", got.Status.Conditions)
+	}
+}
+
+// TestReconcileLiveSandboxesIgnoresOtherNodes pins the per-Node
+// filter: a heartbeat from one Node must not touch workspaces
+// bound to a different Node, even if the uids happen to collide.
+func TestReconcileLiveSandboxesIgnoresOtherNodes(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	target := mustGenerate(t, identity.RoleSandboxHost)
+	targetFP := target.Fingerprint()
+	otherFP := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	uuid := readyWorkspace(t, rig, "reconcile-other", targetFP.String())
+	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if _, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	sandboxUID := fake.calls[0].sandbox.GetMetadata().GetUid()
+
+	handler, err := NewWorkspaceCatalogHandler(rig.catalog, fake)
+	if err != nil {
+		t.Fatalf("NewWorkspaceCatalogHandler: %v", err)
+	}
+	// Heartbeat from the *wrong* Node — must be ignored.
+	handler.ReconcileLiveSandboxes(otherFP, []*nodectrlv1.LiveSandbox{
+		{Uid: sandboxUID, Phase: sandboxPhaseExited},
+	})
+
+	got, _ := rig.catalog.Get(uuid)
+	if got.Status.CurrentSandbox == nil {
+		t.Error("CurrentSandbox cleared by a heartbeat from a different Node")
 	}
 }

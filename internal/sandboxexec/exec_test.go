@@ -268,3 +268,63 @@ func TestHandleSandboxEventSurfacesRunnerError(t *testing.T) {
 		t.Errorf("err message %q should mention sandbox uid", got.Error())
 	}
 }
+
+// TestLiveSnapshotTracksLifecycle pins the B4d heartbeat-side
+// reporting: after a successful run the snapshot reports the
+// sandbox with phase=Exited; on a runner error it reports
+// phase=Killed. A second snapshot drops the terminal entry so
+// future heartbeats don't keep re-reporting it.
+func TestLiveSnapshotTracksLifecycle(t *testing.T) {
+	okRunner := func(context.Context, io.Writer, sandbox.Config) error { return nil }
+	e, err := New(Config{Stdout: io.Discard, Runner: okRunner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(),
+		addedEvent("sb-live-1", &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	snap := e.LiveSnapshot()
+	if len(snap) != 1 || snap[0].GetUid() != "sb-live-1" || snap[0].GetPhase() != "Exited" {
+		t.Fatalf("snapshot[0] = %+v, want sb-live-1 Exited", snap[0])
+	}
+	// Terminal entries drop on the next snapshot — the
+	// orchestrator infers "the sandbox is gone" from absence
+	// going forward.
+	if got := e.LiveSnapshot(); len(got) != 0 {
+		t.Errorf("second snapshot = %+v, want empty", got)
+	}
+}
+
+func TestLiveSnapshotReportsKilledOnRunnerError(t *testing.T) {
+	want := errors.New("synthetic boot failure")
+	failRunner := func(context.Context, io.Writer, sandbox.Config) error { return want }
+	e, err := New(Config{Stdout: io.Discard, Runner: failRunner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	_ = e.HandleSandboxEvent(t.Context(),
+		addedEvent("sb-live-bad", &sandboxv1.SandboxSpec{}))
+	snap := e.LiveSnapshot()
+	if len(snap) != 1 || snap[0].GetPhase() != "Killed" {
+		t.Fatalf("snapshot = %+v, want one Killed entry", snap)
+	}
+}
+
+// TestLiveSnapshotIsSortedByUID pins the deterministic ordering
+// the orchestrator relies on for stable trace and golden-file
+// output.
+func TestLiveSnapshotIsSortedByUID(t *testing.T) {
+	okRunner := func(context.Context, io.Writer, sandbox.Config) error { return nil }
+	e, err := New(Config{Stdout: io.Discard, Runner: okRunner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, uid := range []string{"sb-c", "sb-a", "sb-b"} {
+		e.markPhase(uid, "Running", 0)
+	}
+	snap := e.LiveSnapshot()
+	if len(snap) != 3 || snap[0].GetUid() != "sb-a" || snap[1].GetUid() != "sb-b" || snap[2].GetUid() != "sb-c" {
+		t.Errorf("snapshot order = %+v, want sb-a, sb-b, sb-c", snap)
+	}
+}

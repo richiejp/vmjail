@@ -44,16 +44,38 @@ var ErrSandboxEventBacklog = errors.New("orchestrator: sandbox-event backlog ful
 // ErrDispatchBacklog is the previous name; alias retained.
 var ErrDispatchBacklog = ErrSandboxEventBacklog
 
+// LivenessReconciler is the seam Heartbeat uses to push the
+// Node's reported live-sandbox set up into whatever subsystem
+// owns the Workspace / Sandbox state machines. The production
+// implementation is *WorkspaceCatalogHandler; tests inject a
+// fake to assert what got reconciled. Nil reconciler ⇒ the
+// reported set is discarded (acceptable for catalog-less rigs).
+//
+// B4d wires the primitive; B5 promotes it into a periodic
+// sweep that turns "missing for N heartbeats" into SandboxLost.
+type LivenessReconciler interface {
+	ReconcileLiveSandboxes(nodeFP identity.Fingerprint, live []*nodectrlv1.LiveSandbox)
+}
+
 // NodeControlHandler adapts the nodectrl.Registry to the
 // Connect-RPC NodeControlService surface. Peer identity for
 // every RPC is the mTLS leaf-cert fingerprint surfaced via
 // withPeerMiddleware — there is no in-band sandbox_id.
 type NodeControlHandler struct {
 	nodectrlv1connect.UnimplementedNodeControlServiceHandler
-	reg *nodectrl.Registry
+	reg        *nodectrl.Registry
+	reconciler LivenessReconciler
 
 	mu      sync.Mutex
 	streams map[identity.Fingerprint]chan *nodectrlv1.NodeEvent
+}
+
+// SetReconciler wires the LivenessReconciler invoked on every
+// Heartbeat. Called by Server.New after the WorkspaceCatalogHandler
+// is constructed — handler-construction order means the reconciler
+// can't be passed at NewNodeControlHandler time.
+func (h *NodeControlHandler) SetReconciler(r LivenessReconciler) {
+	h.reconciler = r
 }
 
 // NewNodeControlHandler returns a handler that records registrations
@@ -206,6 +228,15 @@ func (h *NodeControlHandler) Heartbeat(
 	seenAt, err := h.reg.Heartbeat(fp, resourcesFromProto(req.Msg.GetCurrent()))
 	if err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	if h.reconciler != nil {
+		// Reconcile is fire-and-forget from the heartbeat's point of
+		// view: a slow reconciler shouldn't stall the registry
+		// refresh that other RPC paths depend on. For B4d the
+		// reconciler is a map-lookup + a few catalog Updates, so
+		// inline-call is fine; B5 may move it onto its own goroutine
+		// once the sweep grows side work.
+		h.reconciler.ReconcileLiveSandboxes(fp, req.Msg.GetLiveSandboxes())
 	}
 	return connect.NewResponse(&nodectrlv1.HeartbeatResponse{
 		SeenAt: timestamppb.New(seenAt),

@@ -165,6 +165,10 @@ func New(cfg Config) (*Server, error) {
 	if wcErr != nil {
 		return nil, wcErr
 	}
+	// Wire the heartbeat-driven LivenessReconciler (B4d). The
+	// reconciler can't be passed at NewNodeControlHandler time
+	// because workspaceCtrl is constructed after sandboxCtrl.
+	sandboxCtrl.SetReconciler(workspaceCtrl)
 	// The broker handler needs the orchestrator's bound address
 	// to return as the relay endpoint, but the listener doesn't
 	// bind until Listen(). Close over a late-bound *mtls.Server

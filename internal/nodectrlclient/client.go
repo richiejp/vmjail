@@ -82,6 +82,14 @@ type Config struct {
 	// fleet). Production wiring sets this to an executor that
 	// drives the Hello / container pipeline.
 	SandboxEvents SandboxEventHandler
+	// LiveSnapshot returns the wire-shaped set of sandboxes the
+	// Node currently knows about. Called on every Heartbeat tick
+	// to populate HeartbeatRequest.live_sandboxes — the
+	// level-triggered signal that drives Workspace reconciliation
+	// upstream (Slice B4d). Nil ⇒ the field is left empty, which
+	// the orchestrator treats as "Node has no live sandboxes" (an
+	// authoritative empty, not "no data").
+	LiveSnapshot func() []*nodectrlv1.LiveSandbox
 }
 
 // Client wraps a generated NodeControlServiceClient with a
@@ -222,9 +230,11 @@ func consumeStream(
 }
 
 func (c *Client) sendHeartbeat(ctx context.Context, resources nodectrl.Resources) error {
-	_, err := c.ctrl.Heartbeat(ctx, connect.NewRequest(
-		&nodectrlv1.HeartbeatRequest{Current: resourcesToProto(resources)},
-	))
+	req := &nodectrlv1.HeartbeatRequest{Current: resourcesToProto(resources)}
+	if c.cfg.LiveSnapshot != nil {
+		req.LiveSandboxes = c.cfg.LiveSnapshot()
+	}
+	_, err := c.ctrl.Heartbeat(ctx, connect.NewRequest(req))
 	if err != nil {
 		return fmt.Errorf("nodectrlclient: Heartbeat: %w", err)
 	}

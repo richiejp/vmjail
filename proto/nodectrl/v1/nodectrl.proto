@@ -127,6 +127,36 @@ message HeartbeatRequest {
   // Optional updated resource snapshot. Allowed to be nil if the
   // Node has nothing fresh to report.
   HostResources current = 1;
+  // Sandboxes the Node currently knows about. Each entry is a
+  // {uid, phase} pair. The orchestrator uses this as the
+  // reconciliation primitive: a sandbox the orchestrator believes
+  // RUNNING that disappears from this list is the level-triggered
+  // signal that the workload exited. B4d ships the wire field +
+  // minimal reconcile (set Workspace.status.observed_generation
+  // and Reconciled when the reported phase matches); the periodic
+  // phantom-sweep that turns "missing for N heartbeats" into
+  // SandboxLost is B5's reconciler.
+  //
+  // Reported every heartbeat — the snapshot is authoritative; an
+  // empty list explicitly means "no live sandboxes," not "no data".
+  repeated LiveSandbox live_sandboxes = 2;
+}
+
+// LiveSandbox is one row of the Node's reported sandbox liveness
+// set. K8s analogue: the per-pod entries on a kubelet's
+// NodeStatus. Carries only what the orchestrator needs to
+// reconcile; richer per-sandbox state (conditions, container
+// logs, etc.) flows via future RPCs.
+message LiveSandbox {
+  // The Sandbox.metadata.uid the orchestrator assigned at Launch.
+  string uid = 1;
+  // PascalCase phase token. Matches daft.sandbox.v1.SandboxStatus.
+  // phase: "Pending" | "Running" | "Exited" | "Killed" | "Unknown".
+  // Unknown phases pass through to the orchestrator unchanged so
+  // a wire-bumped Node can report new states without breaking us.
+  string phase = 2;
+  // Set once phase is terminal (Exited / Killed).
+  int32 exit_code = 3;
 }
 
 message HeartbeatResponse {

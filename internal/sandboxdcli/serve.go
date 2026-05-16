@@ -101,6 +101,7 @@ func runServe(
 		Version:           version.Version,
 		HeartbeatInterval: heartbeatInterval,
 		SandboxEvents:     dispatcher,
+		LiveSnapshot:      dispatcher.LiveSnapshot,
 	})
 	if err != nil {
 		return err
