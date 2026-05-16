@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"slices"
 	"time"
@@ -34,6 +35,16 @@ type Dispatcher interface {
 	PublishSandboxEvent(fp identity.Fingerprint, eventType sandboxv1.EventType, sandbox *sandboxv1.Sandbox) error
 }
 
+// WorkspacePortBridger is the seam ForwardPort uses to open a
+// labeled byte channel into the Node bound to a Workspace. The
+// production implementation is *NodeControlHandler (its
+// OpenPortBridge method); tests inject fakes that return a
+// pre-paired net.Conn so the splice loop can be exercised
+// without standing up a real sandboxd.
+type WorkspacePortBridger interface {
+	OpenPortBridge(ctx context.Context, fp identity.Fingerprint, workspaceUUID string, containerPort uint32) (net.Conn, error)
+}
+
 // WorkspaceCatalogHandler adapts the workspacecatalog.Store to the
 // Connect-RPC WorkspaceCatalogService surface. Peer identity for
 // every RPC is the mTLS leaf-cert fingerprint surfaced via
@@ -42,9 +53,17 @@ type Dispatcher interface {
 // mutation lands in B2d.
 type WorkspaceCatalogHandler struct {
 	workspacev1connect.UnimplementedWorkspaceCatalogServiceHandler
-	store      *workspacecatalog.Store
-	dispatcher Dispatcher
-	preAction  preActionReconciler
+	store       *workspacecatalog.Store
+	dispatcher  Dispatcher
+	preAction   preActionReconciler
+	portBridger WorkspacePortBridger
+}
+
+// SetPortBridger wires the WorkspacePortBridger ForwardPort calls
+// route to. Nil ⇒ ForwardPort returns Unimplemented, the right
+// shape for catalog-only test rigs that don't exercise ingress.
+func (h *WorkspaceCatalogHandler) SetPortBridger(b WorkspacePortBridger) {
+	h.portBridger = b
 }
 
 // NewWorkspaceCatalogHandler returns a handler backed by store and

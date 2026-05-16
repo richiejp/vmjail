@@ -109,6 +109,9 @@ const (
 	// WorkspaceCatalogServiceReleaseProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's Release RPC.
 	WorkspaceCatalogServiceReleaseProcedure = "/daft.workspace.v1.WorkspaceCatalogService/Release"
+	// WorkspaceCatalogServiceForwardPortProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's ForwardPort RPC.
+	WorkspaceCatalogServiceForwardPortProcedure = "/daft.workspace.v1.WorkspaceCatalogService/ForwardPort"
 )
 
 // WorkspaceCatalogServiceClient is a client for the daft.workspace.v1.WorkspaceCatalogService
@@ -201,6 +204,20 @@ type WorkspaceCatalogServiceClient interface {
 	// (idempotent); calling it on a workspace held by someone
 	// else returns FailedPrecondition with reason LockHeld.
 	Release(context.Context, *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// ForwardPort is the bidi byte channel a user-host CLI dials
+	// to tunnel local TCP traffic into a running workspace's
+	// container. The first message MUST be a ForwardFrame{hello}
+	// carrying the addressed (workspace, container_port);
+	// subsequent messages carry data bytes.
+	//
+	// The orchestrator resolves the workspace to its bound Node,
+	// calls OpenPortBridge to open a labeled stream into the
+	// sandboxd, and io.Copy splices the two streams. Errors:
+	// NotFound when the handle doesn't resolve; FailedPrecondition
+	// when the workspace isn't RUNNING (no current_sandbox);
+	// Unavailable when the Node is offline or the stream backlog is
+	// full. See PLAN.md Phase C3.
+	ForwardPort(context.Context) *connect.BidiStreamForClient[v1.ForwardFrame, v1.ForwardFrame]
 }
 
 // NewWorkspaceCatalogServiceClient constructs a client for the
@@ -310,6 +327,12 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("Release")),
 			connect.WithClientOptions(opts...),
 		),
+		forwardPort: connect.NewClient[v1.ForwardFrame, v1.ForwardFrame](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceForwardPortProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("ForwardPort")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -331,6 +354,7 @@ type workspaceCatalogServiceClient struct {
 	stop        *connect.Client[v1.StopRequest, v1.WorkspaceResponse]
 	acquire     *connect.Client[v1.AcquireRequest, v1.WorkspaceResponse]
 	release     *connect.Client[v1.ReleaseRequest, v1.WorkspaceResponse]
+	forwardPort *connect.Client[v1.ForwardFrame, v1.ForwardFrame]
 }
 
 // Create calls daft.workspace.v1.WorkspaceCatalogService.Create.
@@ -411,6 +435,11 @@ func (c *workspaceCatalogServiceClient) Acquire(ctx context.Context, req *connec
 // Release calls daft.workspace.v1.WorkspaceCatalogService.Release.
 func (c *workspaceCatalogServiceClient) Release(ctx context.Context, req *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return c.release.CallUnary(ctx, req)
+}
+
+// ForwardPort calls daft.workspace.v1.WorkspaceCatalogService.ForwardPort.
+func (c *workspaceCatalogServiceClient) ForwardPort(ctx context.Context) *connect.BidiStreamForClient[v1.ForwardFrame, v1.ForwardFrame] {
+	return c.forwardPort.CallBidiStream(ctx)
 }
 
 // WorkspaceCatalogServiceHandler is an implementation of the
@@ -503,6 +532,20 @@ type WorkspaceCatalogServiceHandler interface {
 	// (idempotent); calling it on a workspace held by someone
 	// else returns FailedPrecondition with reason LockHeld.
 	Release(context.Context, *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// ForwardPort is the bidi byte channel a user-host CLI dials
+	// to tunnel local TCP traffic into a running workspace's
+	// container. The first message MUST be a ForwardFrame{hello}
+	// carrying the addressed (workspace, container_port);
+	// subsequent messages carry data bytes.
+	//
+	// The orchestrator resolves the workspace to its bound Node,
+	// calls OpenPortBridge to open a labeled stream into the
+	// sandboxd, and io.Copy splices the two streams. Errors:
+	// NotFound when the handle doesn't resolve; FailedPrecondition
+	// when the workspace isn't RUNNING (no current_sandbox);
+	// Unavailable when the Node is offline or the stream backlog is
+	// full. See PLAN.md Phase C3.
+	ForwardPort(context.Context, *connect.BidiStream[v1.ForwardFrame, v1.ForwardFrame]) error
 }
 
 // NewWorkspaceCatalogServiceHandler builds an HTTP handler from the service implementation. It
@@ -608,6 +651,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("Release")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceForwardPortHandler := connect.NewBidiStreamHandler(
+		WorkspaceCatalogServiceForwardPortProcedure,
+		svc.ForwardPort,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("ForwardPort")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.workspace.v1.WorkspaceCatalogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkspaceCatalogServiceCreateProcedure:
@@ -642,6 +691,8 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceAcquireHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceReleaseProcedure:
 			workspaceCatalogServiceReleaseHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceForwardPortProcedure:
+			workspaceCatalogServiceForwardPortHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -713,4 +764,8 @@ func (UnimplementedWorkspaceCatalogServiceHandler) Acquire(context.Context, *con
 
 func (UnimplementedWorkspaceCatalogServiceHandler) Release(context.Context, *connect.Request[v1.ReleaseRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.Release is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) ForwardPort(context.Context, *connect.BidiStream[v1.ForwardFrame, v1.ForwardFrame]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.ForwardPort is not implemented"))
 }

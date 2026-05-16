@@ -520,14 +520,31 @@ Phase C — **Orchestrator-driven port ingress**:
   is exercised end-to-end; C2 (per-workspace HTTP listener that
   drives `OpenPortBridge` from inbound HTTP traffic) is the next
   user-visible step.
-- C2: Orchestrator side: per-workspace HTTP/HTTPS listener (or
-  subpath under one wildcard) that byte-relays into the
-  sandbox-side stream. TLS termination on the orchestrator with
-  an auto-issued cert; backend stays plaintext over the
-  outer-mTLS broker channel.
-- C3: User-host `--forward-ports`: opens localhost listeners
-  that tunnel through the orchestrator to the same sandbox
-  stream.
+- C2 (deferred): Orchestrator side: per-workspace TCP listener
+  on an orchestrator-host interface that calls OpenPortBridge and
+  splices bytes. Per-workspace forwards persisted in
+  Workspace.spec; opened on Launch, closed on Stop. TLS
+  termination remains an option but isn't required — the raw-TCP
+  forward is sufficient for most ingress.
+- C3: User-host port forward.
+  - C3.1 (landed): Orchestrator-side `ForwardPort` bidi RPC on
+    `WorkspaceCatalogService` + `ForwardFrame{hello,data}` proto.
+    The orchestrator handler reads the Hello (workspace handle +
+    container_port), resolves the workspace, gates on
+    `status.current_sandbox`, calls `OpenPortBridge` on the
+    `WorkspacePortBridger` seam (production: NodeControlHandler;
+    tests: a fake bridger), and `io.Copy`-splices the bidi stream
+    with the resulting `net.Conn`. Errors:
+    ErrForwardHelloMissing, ErrForwardWorkspaceNotRunning,
+    NotFound (unknown workspace), Unimplemented (no bridger).
+    `forwardFrameConn` adapts the bidi stream as `net.Conn`,
+    structurally parallel to `serverPortStreamConn` (kept
+    side-by-side with `//nolint:dupl` — proto types differ).
+  - C3.2 (next): `daft workspace forward <local>:<container> <ws>`
+    CLI that opens a local TCP listener and per-accepted-conn
+    dials a fresh `ForwardPort` RPC.
+  - C3.3 (next): end-to-end test wiring CLI → orch → sandboxd
+    → echo DialFunc.
 - C4: Allowlist of egress destinations per workspace (the
   "shadow services" hook): outbound from the container is
   intercepted at the controller and either forwarded

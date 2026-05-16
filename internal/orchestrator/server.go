@@ -84,6 +84,13 @@ type Config struct {
 	// stream.
 	WorkspaceDispatcher Dispatcher
 
+	// WorkspacePortBridger backs WorkspaceCatalogService.ForwardPort
+	// (Slice C3.1). Defaults to the orchestrator's own
+	// NodeControlHandler (its OpenPortBridge); tests inject a fake
+	// that returns a pre-paired net.Conn so the splice loop can be
+	// exercised without a real sandboxd.
+	WorkspacePortBridger WorkspacePortBridger
+
 	// Reconciler tunables (Slice B5). Zero values fall through to
 	// the reconciler package's defaults — tests usually override
 	// MissThreshold and SweepInterval to fire quickly.
@@ -185,6 +192,7 @@ func New(cfg Config) (*Server, error) {
 	rec := buildReconciler(cfg, workspaceCat, nodeReg)
 	sandboxCtrl.SetReconciler(rec)
 	workspaceCtrl.SetPreActionReconciler(rec)
+	workspaceCtrl.SetPortBridger(resolvePortBridger(cfg, sandboxCtrl))
 	// The broker handler needs the orchestrator's bound address
 	// to return as the relay endpoint, but the listener doesn't
 	// bind until Listen(). Close over a late-bound *mtls.Server
@@ -240,6 +248,17 @@ func buildReconciler(cfg Config, cat *workspacecatalog.Store, nodes *nodectrl.Re
 		SweepInterval: cfg.ReconcilerSweepInterval,
 		NodeGrace:     cfg.ReconcilerNodeGrace,
 	})
+}
+
+// resolvePortBridger returns cfg.WorkspacePortBridger when set,
+// otherwise the orchestrator's own NodeControlHandler — the
+// production wiring path that routes ForwardPort through the
+// same Bridger the sandboxd registers routes on.
+func resolvePortBridger(cfg Config, sandboxCtrl *NodeControlHandler) WorkspacePortBridger {
+	if cfg.WorkspacePortBridger != nil {
+		return cfg.WorkspacePortBridger
+	}
+	return sandboxCtrl
 }
 
 // registerServices installs every Connect-RPC handler plus the

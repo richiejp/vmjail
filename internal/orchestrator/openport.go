@@ -251,6 +251,7 @@ func newServerPortStreamConn(stream serverPortStream, release chan struct{}) *se
 	return &serverPortStreamConn{stream: stream, release: release}
 }
 
+//nolint:dupl // structurally parallel to forwardFrameConn.Read in forwardport.go; proto types differ (PortStreamMessage vs ForwardFrame) so factoring this out would require generics that obscure type checking. Both adapters live in this package and are kept side-by-side for review.
 func (c *serverPortStreamConn) Read(p []byte) (int, error) {
 	c.readMu.Lock()
 	defer c.readMu.Unlock()

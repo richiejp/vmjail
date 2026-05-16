@@ -138,6 +138,40 @@ service WorkspaceCatalogService {
   // (idempotent); calling it on a workspace held by someone
   // else returns FailedPrecondition with reason LockHeld.
   rpc Release(ReleaseRequest) returns (WorkspaceResponse) {}
+
+  // ForwardPort is the bidi byte channel a user-host CLI dials
+  // to tunnel local TCP traffic into a running workspace's
+  // container. The first message MUST be a ForwardFrame{hello}
+  // carrying the addressed (workspace, container_port);
+  // subsequent messages carry data bytes.
+  //
+  // The orchestrator resolves the workspace to its bound Node,
+  // calls OpenPortBridge to open a labeled stream into the
+  // sandboxd, and io.Copy splices the two streams. Errors:
+  // NotFound when the handle doesn't resolve; FailedPrecondition
+  // when the workspace isn't RUNNING (no current_sandbox);
+  // Unavailable when the Node is offline or the stream backlog is
+  // full. See PLAN.md Phase C3.
+  rpc ForwardPort(stream ForwardFrame) returns (stream ForwardFrame) {}
+}
+
+// ForwardFrame is the wire envelope for the ForwardPort byte
+// channel. First frame on each direction MUST be a ForwardHello;
+// subsequent frames carry opaque application bytes.
+message ForwardFrame {
+  oneof body {
+    ForwardHello hello = 1;
+    bytes data = 2;
+  }
+}
+
+// ForwardHello identifies which (workspace, container_port) the
+// caller wants to bridge to. Workspace name resolution is scoped
+// to the calling identity's mTLS fingerprint, matching the rest
+// of the catalog's name semantics.
+message ForwardHello {
+  WorkspaceHandle workspace = 1;
+  uint32 container_port = 2;
 }
 
 // WorkspaceHandle addresses a workspace by either its canonical
