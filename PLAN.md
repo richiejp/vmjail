@@ -540,9 +540,17 @@ Phase C — **Orchestrator-driven port ingress**:
     `forwardFrameConn` adapts the bidi stream as `net.Conn`,
     structurally parallel to `serverPortStreamConn` (kept
     side-by-side with `//nolint:dupl` — proto types differ).
-  - C3.2 (next): `daft workspace forward <local>:<container> <ws>`
-    CLI that opens a local TCP listener and per-accepted-conn
-    dials a fresh `ForwardPort` RPC.
+  - C3.2 (landed): `daft workspace forward <local>:<container>
+    <workspace>` CLI on the user-host. Opens a local TCP listener
+    on `--bind` (default 127.0.0.1), per-accepted-conn dials a
+    fresh `ForwardPort` RPC, sends Hello, and `io.Copy`-splices
+    bytes in both directions. The pump uses cross-cancellation
+    (Close conn + CloseResponse stream on first goroutine exit)
+    so a half that errors first doesn't leave its partner parked.
+    forwardDeps injection seam lets tests cover the full
+    listen → accept → tunnel → pump path with a fake echo
+    stream factory and a real local TCP listener bound to an
+    OS-assigned port.
   - C3.3 (next): end-to-end test wiring CLI → orch → sandboxd
     → echo DialFunc.
 - C4: Allowlist of egress destinations per workspace (the
