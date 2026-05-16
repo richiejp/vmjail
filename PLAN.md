@@ -499,13 +499,27 @@ Phase C — **Orchestrator-driven port ingress**:
       release signal, releasing the handler). Errors:
       ErrNodeNotConnected, ErrSandboxEventBacklog, context timeout,
       ErrHelloMissingSession, ErrUnknownPortSession.
-    - C1.3c.3 (next): production Bridger wiring + e2e test.
+    - C1.3c.3 (landed): production Bridger wiring + e2e test.
       `daft-sandboxd serve` instantiates one
       `sandboxgateway.Bridger`, passes it to both the
       `sandboxexec.Executor` (so dispatches register routes) and
-      `nodectrlclient.Config` (so OpenPort events find them). End-
-      to-end test through in-process orchestrator: launch a Sandbox
-      with ports, call `OpenPortBridge`, verify byte round-trip.
+      `nodectrlclient.Config` (so OpenPort events find them). New
+      `--vsock-dir` CLI flag with a `<TempDir>/daft-sandboxd-vsock-<pid>`
+      default; `resolveVsockDir` rejects relative paths and mkdirs
+      the target. E2E test (`TestOpenPortBridgeEndToEnd`) wires a
+      real Connect orchestrator + sandboxd over HTTP/2+mTLS, parks
+      until the heartbeat refresh, calls `OpenPortBridge` from the
+      orchestrator side, and round-trips `ping-pong` through every
+      layer: orchestrator `OpenPortRequest` → sandboxd
+      `handleOpenPort` → bidi `OpenPortStream` RPC →
+      `Bridger.Bridge` → registered DialFunc → in-process echo
+      loop. `TestOpenPortBridgeNoRouteClosesConn` covers the
+      missing-route teardown path.
+
+  **Phase C1 closed.** The byte path from `OpenPortBridge` rightward
+  is exercised end-to-end; C2 (per-workspace HTTP listener that
+  drives `OpenPortBridge` from inbound HTTP traffic) is the next
+  user-visible step.
 - C2: Orchestrator side: per-workspace HTTP/HTTPS listener (or
   subpath under one wildcard) that byte-relays into the
   sandbox-side stream. TLS termination on the orchestrator with

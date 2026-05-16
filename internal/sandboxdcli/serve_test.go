@@ -14,6 +14,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxexec"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 )
 
 // stubBuildDispatcher swaps buildDispatcher with one that returns
@@ -25,7 +26,7 @@ func stubBuildDispatcher(t *testing.T) {
 	t.Helper()
 	saved := buildDispatcher
 	t.Cleanup(func() { buildDispatcher = saved })
-	buildDispatcher = func(w io.Writer) (*sandboxexec.Executor, error) {
+	buildDispatcher = func(w io.Writer, _ *sandboxgateway.Bridger, _ string) (*sandboxexec.Executor, error) {
 		return sandboxexec.New(sandboxexec.Config{
 			Stdout: w,
 			Runner: func(context.Context, io.Writer, sandbox.Config) error { return nil },
@@ -69,7 +70,7 @@ func TestRunServeRunsRegisterAndServe(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
-	if err := runServe(ctx, &noopWriter{}, "https://orch.invalid:8443", dir, 100*time.Millisecond); err != nil {
+	if err := runServe(ctx, &noopWriter{}, "https://orch.invalid:8443", dir, "", 100*time.Millisecond); err != nil {
 		t.Fatalf("runServe: %v", err)
 	}
 	select {
@@ -98,7 +99,7 @@ func TestRunServeBadConfigDirResolve(t *testing.T) {
 	}
 	t.Setenv("HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
-	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", "", time.Second)
+	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", "", "", time.Second)
 	if err == nil {
 		t.Fatal("expected error when neither HOME nor XDG_CONFIG_HOME is set")
 	}
@@ -118,7 +119,7 @@ func TestRunServeBadIdentityDir(t *testing.T) {
 	if err := writeBlocker(conflict); err != nil {
 		t.Fatalf("writeBlocker: %v", err)
 	}
-	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", conflict, time.Second)
+	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", conflict, "", time.Second)
 	if err == nil {
 		t.Fatal("expected error from identity load against a file path")
 	}
@@ -143,7 +144,7 @@ func TestRunServeBadPeerStore(t *testing.T) {
 	if err := os.Mkdir(dir+"/peers.json", 0o700); err != nil {
 		t.Fatalf("mkdir peers.json blocker: %v", err)
 	}
-	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", dir, time.Second)
+	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", dir, "", time.Second)
 	if err == nil {
 		t.Fatal("expected error from peer store load against a directory")
 	}
@@ -160,7 +161,7 @@ func TestRunServePropagatesRegisterError(t *testing.T) {
 	}
 
 	dir := t.TempDir()
-	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", dir, time.Second)
+	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", dir, "", time.Second)
 	if !errors.Is(err, want) {
 		t.Errorf("err = %v, want %v", err, want)
 	}
@@ -173,7 +174,7 @@ func TestRunServePropagatesBuildDispatcherError(t *testing.T) {
 	saved := buildDispatcher
 	t.Cleanup(func() { buildDispatcher = saved })
 	want := errors.New("synthetic dispatcher build failure")
-	buildDispatcher = func(io.Writer) (*sandboxexec.Executor, error) {
+	buildDispatcher = func(io.Writer, *sandboxgateway.Bridger, string) (*sandboxexec.Executor, error) {
 		return nil, want
 	}
 	savedRun := runRegisterAndServe
@@ -183,7 +184,7 @@ func TestRunServePropagatesBuildDispatcherError(t *testing.T) {
 		return nil
 	}
 	dir := t.TempDir()
-	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", dir, time.Second)
+	err := runServe(t.Context(), &noopWriter{}, "https://orch.invalid:8443", dir, "", time.Second)
 	if !errors.Is(err, want) {
 		t.Errorf("err = %v, want %v", err, want)
 	}
@@ -198,11 +199,12 @@ func TestBuildDispatcherProductionSeam(t *testing.T) {
 	t.Setenv("DAFT_CLOUD_HYPERVISOR", "/dev/null")
 	t.Setenv("DAFT_KERNEL", "/dev/null")
 	t.Setenv("DAFT_INITRAMFS", "")
-	if _, err := buildDispatcher(&noopWriter{}); err == nil {
+	br := sandboxgateway.New()
+	if _, err := buildDispatcher(&noopWriter{}, br, t.TempDir()); err == nil {
 		t.Fatal("buildDispatcher with DAFT_INITRAMFS unset should fail")
 	}
 	t.Setenv("DAFT_INITRAMFS", "/dev/null")
-	d, err := buildDispatcher(&noopWriter{})
+	d, err := buildDispatcher(&noopWriter{}, br, t.TempDir())
 	if err != nil {
 		t.Fatalf("buildDispatcher: %v", err)
 	}
@@ -262,4 +264,64 @@ func (*noopWriter) Write(p []byte) (int, error) { return len(p), nil }
 // "not a directory".
 func writeBlocker(path string) error {
 	return os.WriteFile(path, []byte("blocker"), 0o600)
+}
+
+// TestResolveVsockDirDefaultCreatesTempSubdir covers the
+// empty-override branch: with no caller-supplied path,
+// resolveVsockDir mints a per-pid subdir under os.TempDir and
+// mkdirs it so the Executor has somewhere to put per-Sandbox UDS
+// files at dispatch time.
+func TestResolveVsockDirDefaultCreatesTempSubdir(t *testing.T) {
+	dir, err := resolveVsockDir("")
+	if err != nil {
+		t.Fatalf("resolveVsockDir(\"\"): %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat %s: %v", dir, err)
+	}
+	if !info.IsDir() {
+		t.Errorf("%s is not a directory", dir)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+}
+
+// TestResolveVsockDirAbsoluteOverride covers the explicit-path
+// branch: an absolute override is mkdir'd and returned as-is.
+func TestResolveVsockDirAbsoluteOverride(t *testing.T) {
+	override := t.TempDir() + "/vsock-sub"
+	got, err := resolveVsockDir(override)
+	if err != nil {
+		t.Fatalf("resolveVsockDir: %v", err)
+	}
+	if got != override {
+		t.Errorf("resolveVsockDir = %q, want %q", got, override)
+	}
+	if _, err := os.Stat(override); err != nil {
+		t.Errorf("dir not created: %v", err)
+	}
+}
+
+// TestResolveVsockDirRejectsRelative pins the absolute-path
+// invariant: a relative override is refused before any side-effect
+// runs, so a typo in the CLI flag surfaces as a clear error
+// rather than mkdir'ing under the current working directory.
+func TestResolveVsockDirRejectsRelative(t *testing.T) {
+	if _, err := resolveVsockDir("relative/path"); err == nil {
+		t.Fatal("expected error for relative override")
+	}
+}
+
+// TestResolveVsockDirMkdirError covers the mkdir-fail branch:
+// when the override points under an existing regular file the
+// MkdirAll call surfaces a clear error to the caller.
+func TestResolveVsockDirMkdirError(t *testing.T) {
+	dir := t.TempDir()
+	blocker := dir + "/notadir"
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
+	if _, err := resolveVsockDir(blocker + "/sub"); err == nil {
+		t.Fatal("expected error when mkdir fails")
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/sandboxexec"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/version"
 )
 
@@ -35,6 +37,7 @@ func newServeCmd() *cobra.Command {
 	var (
 		orchestratorURL   string
 		configDir         string
+		vsockDir          string
 		heartbeatInterval time.Duration
 	)
 	cmd := &cobra.Command{
@@ -47,12 +50,14 @@ func newServeCmd() *cobra.Command {
 				os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 			return runServe(ctx, cmd.OutOrStdout(),
-				orchestratorURL, configDir, heartbeatInterval)
+				orchestratorURL, configDir, vsockDir, heartbeatInterval)
 		},
 	}
 	cmd.Flags().StringVar(&orchestratorURL, "orchestrator", "",
 		"orchestrator endpoint URL (e.g. https://orchestrator.example:8443)")
 	cmd.Flags().StringVar(&configDir, "config-dir", "", configDirFlagDesc)
+	cmd.Flags().StringVar(&vsockDir, "vsock-dir", "",
+		"parent directory for per-Sandbox hybrid-vsock UDS files; defaults to <os.TempDir>/daft-sandboxd-vsock")
 	cmd.Flags().DurationVar(&heartbeatInterval, "heartbeat-interval",
 		nodectrlclient.DefaultHeartbeatInterval,
 		"how often to ping the orchestrator with a Heartbeat")
@@ -65,7 +70,7 @@ func newServeCmd() *cobra.Command {
 func runServe(
 	ctx context.Context,
 	stdout io.Writer,
-	orchestratorURL, configDirOverride string,
+	orchestratorURL, configDirOverride, vsockDirOverride string,
 	heartbeatInterval time.Duration,
 ) error {
 	if orchestratorURL == "" {
@@ -89,7 +94,13 @@ func runServe(
 		return err
 	}
 
-	dispatcher, err := buildDispatcher(stdout)
+	vsockDir, err := resolveVsockDir(vsockDirOverride)
+	if err != nil {
+		return err
+	}
+
+	bridger := sandboxgateway.New()
+	dispatcher, err := buildDispatcher(stdout, bridger, vsockDir)
 	if err != nil {
 		return err
 	}
@@ -102,6 +113,8 @@ func runServe(
 		HeartbeatInterval: heartbeatInterval,
 		SandboxEvents:     dispatcher,
 		LiveSnapshot:      dispatcher.LiveSnapshot,
+		Bridger:           bridger,
+		Stderr:            stdout,
 	})
 	if err != nil {
 		return err
@@ -136,8 +149,17 @@ var runRegisterAndServe = func(
 // pulls + bundles images via the local imagestore so dispatches
 // carrying a spec.image_ref actually run a container.
 //
+// bridger and vsockDir are the C1.3b port-ingress wiring: the
+// Executor registers per-(workspace, port) DialGuestVsock closures
+// on bridger as dispatches arrive, and the same bridger is shared
+// with the nodectrlclient so its OpenPortStream handler finds them.
+//
 //nolint:gochecknoglobals // single test seam, not state.
-var buildDispatcher = func(stdout io.Writer) (*sandboxexec.Executor, error) {
+var buildDispatcher = func(
+	stdout io.Writer,
+	bridger *sandboxgateway.Bridger,
+	vsockDir string,
+) (*sandboxexec.Executor, error) {
 	base, err := sandbox.ConfigFromEnv()
 	if err != nil {
 		return nil, err
@@ -151,7 +173,29 @@ var buildDispatcher = func(stdout io.Writer) (*sandboxexec.Executor, error) {
 		Base:      base,
 		Stdout:    stdout,
 		Assembler: assembler,
+		Bridger:   bridger,
+		VsockDir:  vsockDir,
 	})
+}
+
+// resolveVsockDir returns the absolute, mkdir'd parent directory
+// for per-Sandbox hybrid-vsock UDS files. An explicit override
+// must already be absolute. Empty override → a per-sandboxd-process
+// subdir under os.TempDir so test parallelism and multiple daemons
+// on one host don't collide on UDS paths.
+func resolveVsockDir(override string) (string, error) {
+	dir := override
+	if dir == "" {
+		dir = filepath.Join(os.TempDir(),
+			fmt.Sprintf("daft-sandboxd-vsock-%d", os.Getpid()))
+	}
+	if !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("daft-sandboxd serve: --vsock-dir %q must be absolute", dir)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("daft-sandboxd serve: mkdir vsock dir: %w", err)
+	}
+	return dir, nil
 }
 
 // openSandboxbootStore is the production OpenStore — it returns
