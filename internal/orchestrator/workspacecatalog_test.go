@@ -272,10 +272,10 @@ func TestCreateMintsUUIDAndStampsOwner(t *testing.T) {
 	if ws.GetMetadata().GetOwnerFingerprint() != rig.callerID.Fingerprint().String() {
 		t.Errorf("Workspace.owner_fingerprint = %q, want caller's", ws.GetMetadata().GetOwnerFingerprint())
 	}
-	if conditionIsTrue(ws.GetStatus(), "Ready") {
+	if conditionIsTrue(ws.GetStatus(), workspacecatalog.ConditionReady) {
 		t.Errorf("fresh workspace should not be Ready; conditions=%v", ws.GetStatus().GetConditions())
 	}
-	if reason := conditionReason(ws.GetStatus(), "Ready"); reason != "MissingFields" {
+	if reason := conditionReason(ws.GetStatus(), workspacecatalog.ConditionReady); reason != "MissingFields" {
 		t.Errorf("Ready.reason = %q, want MissingFields", reason)
 	}
 	if len(ws.GetStatus().GetMissing()) == 0 {
@@ -991,7 +991,7 @@ func TestValidatePromotesDraftToReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if !conditionIsTrue(resp.Msg.GetWorkspace().GetStatus(), "Ready") {
+	if !conditionIsTrue(resp.Msg.GetWorkspace().GetStatus(), workspacecatalog.ConditionReady) {
 		t.Errorf("Ready not True after spec satisfied; conditions=%v", resp.Msg.GetWorkspace().GetStatus().GetConditions())
 	}
 }
@@ -1010,7 +1010,7 @@ func TestValidateKeepsIncompleteAsNotReady(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	if conditionIsTrue(resp.Msg.GetWorkspace().GetStatus(), "Ready") {
+	if conditionIsTrue(resp.Msg.GetWorkspace().GetStatus(), workspacecatalog.ConditionReady) {
 		t.Errorf("Ready should be False on incomplete spec; conditions=%v", resp.Msg.GetWorkspace().GetStatus().GetConditions())
 	}
 }
@@ -1038,7 +1038,7 @@ func TestValidateDemotesReadyOnDrift(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate down: %v", err)
 	}
-	if conditionIsTrue(resp.Msg.GetWorkspace().GetStatus(), "Ready") {
+	if conditionIsTrue(resp.Msg.GetWorkspace().GetStatus(), workspacecatalog.ConditionReady) {
 		t.Errorf("Ready should be False after drift; conditions=%v", resp.Msg.GetWorkspace().GetStatus().GetConditions())
 	}
 }
@@ -1073,7 +1073,7 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 		t.Fatalf("Launch: %v", err)
 	}
 	got := resp.Msg.GetWorkspace()
-	if !conditionIsTrue(got.GetStatus(), "Dispatched") {
+	if !conditionIsTrue(got.GetStatus(), workspacecatalog.ConditionDispatched) {
 		t.Errorf("Dispatched not True after Launch; conditions=%v", got.GetStatus().GetConditions())
 	}
 	if got.GetStatus().GetCurrentSandbox().GetUid() == "" {
@@ -1244,7 +1244,7 @@ func TestStopFromRunningTransitionsAndClearsDispatch(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 	ws := resp.Msg.GetWorkspace()
-	if conditionIsTrue(ws.GetStatus(), "Dispatched") {
+	if conditionIsTrue(ws.GetStatus(), workspacecatalog.ConditionDispatched) {
 		t.Errorf("Dispatched should be False after Stop; conditions=%v", ws.GetStatus().GetConditions())
 	}
 	if ws.GetStatus().GetCurrentSandbox().GetUid() != "" {

@@ -22,6 +22,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 const orchestratorFlag = "orchestrator"
@@ -767,17 +768,17 @@ func summariseConditions(status *workspacev1.WorkspaceStatus) string {
 			continue
 		}
 		switch c.GetType() {
-		case "Dispatched":
+		case workspacecatalog.ConditionDispatched:
 			dispatched = true
-		case "Ready":
+		case workspacecatalog.ConditionReady:
 			ready = true
 		}
 	}
 	switch {
 	case dispatched:
-		return "Dispatched"
+		return workspacecatalog.ConditionDispatched
 	case ready:
-		return "Ready"
+		return workspacecatalog.ConditionReady
 	default:
 		return "NotReady"
 	}
