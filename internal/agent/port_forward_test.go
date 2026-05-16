@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -25,7 +26,7 @@ type fakeVsockListener struct {
 
 func newFakeVsockListener(port uint32) *fakeVsockListener {
 	return &fakeVsockListener{
-		addr:  fakeAddr{net: "vsock", str: "vsock:" + uint32String(port)},
+		addr:  fakeAddr{net: "vsock", str: "vsock:" + strconv.FormatUint(uint64(port), 10)},
 		conns: make(chan net.Conn, 4),
 		done:  make(chan struct{}),
 	}
@@ -60,22 +61,6 @@ type fakeAddr struct{ net, str string }
 
 func (a fakeAddr) Network() string { return a.net }
 func (a fakeAddr) String() string  { return a.str }
-
-func uint32String(n uint32) string {
-	// Avoid importing strconv twice — the production path already
-	// pulls it; the test stays self-contained.
-	if n == 0 {
-		return "0"
-	}
-	var buf [10]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
-}
 
 // TestPortForwarderPumpsBytesEndToEnd drives runPortForwarders
 // against an in-process pair: a test net.Pipe stands in for the

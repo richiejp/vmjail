@@ -523,6 +523,81 @@ func TestBuildKernelCmdlineOmitsOverlayWhenFlagFalse(t *testing.T) {
 	}
 }
 
+// TestBuildKernelCmdlineIncludesPortForwards pins the C1.2 wiring:
+// each PortForwards entry emits exactly one daft.port=<vsock>:<container>
+// token, in declaration order, so the in-VM agent sees the same shape
+// FormatPortForwardCmdline produces.
+func TestBuildKernelCmdlineIncludesPortForwards(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.PortForwards = []PortForward{
+		{VsockPort: 10000, ContainerPort: 8080},
+		{VsockPort: 10001, ContainerPort: 22},
+	}
+	got := buildKernelCmdline(cfg)
+	for _, want := range []string{"daft.port=10000:8080", "daft.port=10001:22"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("cmdline %q missing %q", got, want)
+		}
+	}
+}
+
+// TestValidatePortForwardsRejectsDuplicateVsockPort exercises the
+// duplicate-bind guard. Without it CH would surface the collision
+// as an opaque virtio-vsock error after the VM was already spawned.
+func TestValidatePortForwardsRejectsDuplicateVsockPort(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.PortForwards = []PortForward{
+		{VsockPort: 10000, ContainerPort: 80},
+		{VsockPort: 10000, ContainerPort: 81},
+	}
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("err = %v, want duplicate-port error", err)
+	}
+}
+
+// TestValidatePortForwardsRejectsZeroPorts covers the two
+// non-zero invariants. Both halves of every PortForward must be
+// set; a zero on either side would silently drop a port mapping
+// from the agent's parse without a useful error.
+func TestValidatePortForwardsRejectsZeroPorts(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pf   PortForward
+		want string
+	}{
+		{"zero vsock", PortForward{VsockPort: 0, ContainerPort: 80}, "VsockPort"},
+		{"zero container", PortForward{VsockPort: 10000, ContainerPort: 0}, "ContainerPort"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validCfg().withDefaults()
+			cfg.PortForwards = []PortForward{tc.pf}
+			err := cfg.validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want %s in message", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestValidatePortForwardsRejectsTracePortCollision pins the
+// cross-field invariant: a PortForward.VsockPort that matches the
+// already-assigned Vsock.TracePort would result in CH refusing the
+// second guest-side bind at boot.
+func TestValidatePortForwardsRejectsTracePortCollision(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.Vsock = &VsockConfig{
+		HostSocket: testHostSocketPath,
+		GuestCID:   3,
+		TracePort:  10000,
+	}
+	cfg.PortForwards = []PortForward{{VsockPort: 10000, ContainerPort: 80}}
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "TracePort") {
+		t.Fatalf("err = %v, want TracePort-collision error", err)
+	}
+}
+
 func TestHelloRejectsRelativeBundle(t *testing.T) {
 	cfg := validCfg()
 	cfg.Bundle = "relative/bundle"

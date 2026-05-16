@@ -222,7 +222,7 @@ func (e *Executor) HandleSandboxEvent(
 
 	e.markPhase(uid, phaseRunning, 0)
 
-	cfg, unlock, err := e.resolveBootConfig(ctx, spec.GetImageRef())
+	cfg, unlock, err := e.resolveBootConfig(ctx, spec)
 	if err != nil {
 		e.markPhase(uid, phaseKilled, 0)
 		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
@@ -238,11 +238,60 @@ func (e *Executor) HandleSandboxEvent(
 }
 
 // resolveBootConfig picks between the baseline Hello config and
-// the per-dispatch bundled config. unlock is always non-nil so
-// callers can defer it unconditionally.
-func (e *Executor) resolveBootConfig(ctx context.Context, imageRef string) (sandbox.Config, func(), error) {
+// the per-dispatch bundled config, then layers in the C1 port-
+// forward plan derived from spec.ports. unlock is always non-nil
+// so callers can defer it unconditionally.
+func (e *Executor) resolveBootConfig(ctx context.Context, spec *sandboxv1.SandboxSpec) (sandbox.Config, func(), error) {
+	cfg, unlock, err := e.baseBootConfig(ctx, spec.GetImageRef())
+	if err != nil {
+		return sandbox.Config{}, func() {}, err
+	}
+	cfg.PortForwards = portForwardsFromSpec(spec.GetPorts())
+	return cfg, unlock, nil
+}
+
+// baseBootConfig is the image-or-fallback half of resolveBootConfig:
+// when the spec carries an image_ref we ask the assembler to bundle
+// it; otherwise we fall back to the smoke-test baseline. Split out
+// so port-forward layering above stays a one-liner regardless of
+// which branch produced the cfg.
+func (e *Executor) baseBootConfig(ctx context.Context, imageRef string) (sandbox.Config, func(), error) {
 	if imageRef == "" || e.assembler == nil {
 		return e.base, func() {}, nil
 	}
 	return e.assembler(ctx, imageRef)
+}
+
+// BaseVsockPort is the first AF_VSOCK port the executor hands out
+// for orchestrator-driven ingress. Sits well clear of CH's reserved
+// low-numbered ports and the TracePort=8000 convention so a typo
+// in one half doesn't collide with the other.
+const BaseVsockPort = 10000
+
+// portForwardsFromSpec assigns a unique guest-side AF_VSOCK port
+// (starting at BaseVsockPort, incrementing per accepted entry) to
+// each TCP PortMapping in declaration order. UDP entries and
+// zero-valued container ports are skipped: the CH hybrid-vsock
+// CONNECT proxy is stream-only and zero-port means "any" — which
+// the orchestrator (not us) resolves before dispatch.
+func portForwardsFromSpec(ports []*sandboxv1.PortMapping) []sandbox.PortForward {
+	if len(ports) == 0 {
+		return nil
+	}
+	out := make([]sandbox.PortForward, 0, len(ports))
+	next := uint32(BaseVsockPort)
+	for _, pm := range ports {
+		if pm.GetProtocol() != sandboxv1.Protocol_PROTOCOL_TCP {
+			continue
+		}
+		if pm.GetContainerPort() == 0 {
+			continue
+		}
+		out = append(out, sandbox.PortForward{
+			VsockPort:     next,
+			ContainerPort: pm.GetContainerPort(),
+		})
+		next++
+	}
+	return out
 }

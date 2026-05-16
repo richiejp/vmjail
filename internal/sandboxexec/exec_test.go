@@ -328,3 +328,76 @@ func TestLiveSnapshotIsSortedByUID(t *testing.T) {
 		t.Errorf("snapshot order = %+v, want sb-a, sb-b, sb-c", snap)
 	}
 }
+
+// TestPortForwardsFromSpecAssignsSequentialVsockPorts pins the
+// allocator: TCP entries get VsockPort = BaseVsockPort, +1, +2…
+// in declaration order; UDP and zero-container-port entries are
+// skipped silently (UDP because the CH hybrid-vsock CONNECT proxy
+// is stream-only; zero because the orchestrator resolves "any"
+// before dispatch).
+func TestPortForwardsFromSpecAssignsSequentialVsockPorts(t *testing.T) {
+	ports := []*sandboxv1.PortMapping{
+		{ContainerPort: 8080, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
+		{ContainerPort: 53, Protocol: sandboxv1.Protocol_PROTOCOL_UDP}, // dropped
+		{ContainerPort: 0, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},  // dropped
+		{ContainerPort: 22, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
+	}
+	got := portForwardsFromSpec(ports)
+	want := []sandbox.PortForward{
+		{VsockPort: BaseVsockPort, ContainerPort: 8080},
+		{VsockPort: BaseVsockPort + 1, ContainerPort: 22},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d entries, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entries[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestPortForwardsFromSpecEmpty pins the no-ports path: the
+// spec carries nothing, the cmdline should carry no daft.port=
+// tokens, no allocation churn.
+func TestPortForwardsFromSpecEmpty(t *testing.T) {
+	if got := portForwardsFromSpec(nil); got != nil {
+		t.Errorf("got %+v, want nil", got)
+	}
+	if got := portForwardsFromSpec([]*sandboxv1.PortMapping{}); got != nil {
+		t.Errorf("got %+v, want nil", got)
+	}
+}
+
+// TestHandleSandboxEventWiresPortForwardsToCfg covers the executor
+// end-to-end: a Sandbox spec with ports[] arrives, the runner sees
+// the resolved sandbox.Config carry the matching PortForwards.
+func TestHandleSandboxEventWiresPortForwardsToCfg(t *testing.T) {
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	e, err := New(Config{Stdout: io.Discard, Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{
+		Ports: []*sandboxv1.PortMapping{
+			{ContainerPort: 8080, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
+			{ContainerPort: 22, Protocol: sandboxv1.Protocol_PROTOCOL_TCP},
+		},
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-pf", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if len(seen.PortForwards) != 2 {
+		t.Fatalf("PortForwards len = %d, want 2: %+v", len(seen.PortForwards), seen.PortForwards)
+	}
+	if seen.PortForwards[0].ContainerPort != 8080 || seen.PortForwards[1].ContainerPort != 22 {
+		t.Errorf("PortForwards = %+v, want 8080 then 22", seen.PortForwards)
+	}
+	if seen.PortForwards[0].VsockPort != BaseVsockPort {
+		t.Errorf("first VsockPort = %d, want %d", seen.PortForwards[0].VsockPort, BaseVsockPort)
+	}
+}

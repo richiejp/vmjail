@@ -441,6 +441,26 @@ Phase B — **Workspace as a first-class orchestrator object**:
 Phase C — **Orchestrator-driven port ingress**:
 - C1: Sandbox-side: container `0.0.0.0:N` exposed back over the
   broker as a labeled stream (`workspace=<uuid>, port=N`).
+  - C1.1 (landed): Agent in-VM port pump. `daft.port=<vsockPort>:<containerPort>`
+    kernel cmdline (repeatable); the agent vsock-listens per token and
+    piped each accepted connection to `127.0.0.1:<containerPort>` inside
+    the workload container.
+  - C1.2 (landed): Sandboxd-side host primitive. New
+    `sandbox.DialGuestVsock(ctx, hostSocket, vsockPort)` performs the
+    Cloud Hypervisor hybrid-vsock CONNECT handshake (`CONNECT N\n` →
+    expect `OK …\n`) and returns the resulting byte tunnel.
+    `sandbox.Config` gains a `PortForwards []PortForward` slice that
+    emits `daft.port=…` tokens in `buildKernelCmdline`. The
+    sandboxd executor walks `SandboxSpec.spec.ports` and assigns
+    distinct guest-side vsock ports starting at
+    `sandboxexec.BaseVsockPort` (10000) for every TCP entry; UDP and
+    zero-container-port entries are skipped. Validation rejects
+    duplicate VsockPort, zero ports, and TracePort collisions before
+    boot.
+  - C1.3 (next): Workspacebroker labeled-stream registration — the
+    sandboxd registers each (workspace_uuid, container_port) with the
+    orchestrator and bridges the labeled inbound stream to a
+    DialGuestVsock call. Enables C2.
 - C2: Orchestrator side: per-workspace HTTP/HTTPS listener (or
   subpath under one wildcard) that byte-relays into the
   sandbox-side stream. TLS termination on the orchestrator with

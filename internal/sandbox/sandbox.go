@@ -76,6 +76,31 @@ type Config struct {
 	// Currently used for trace span shipping; future channels (LSP
 	// stdio, container exec, control RPC) will reuse the same UDS.
 	Vsock *VsockConfig
+
+	// PortForwards declares the guest-side ports the in-VM agent
+	// should listen on for orchestrator-driven ingress (Slice C1).
+	// Each entry becomes a `daft.port=<vsockPort>:<containerPort>`
+	// token on the kernel cmdline; the agent vsock-listens on
+	// VsockPort and pumps accepted connections to the container's
+	// `127.0.0.1:ContainerPort`.
+	//
+	// VsockPort must be unique across the slice and disjoint from
+	// any Vsock.TracePort the same VM uses, otherwise CH rejects
+	// the duplicate guest-side bind.
+	PortForwards []PortForward
+}
+
+// PortForward declares one Slice C1 port-forward: traffic the
+// sandbox-host (via DialGuestVsock + the CH hybrid-vsock CONNECT
+// proxy) sends to VsockPort on the guest side gets relayed by the
+// in-VM agent to 127.0.0.1:ContainerPort inside the container.
+type PortForward struct {
+	// VsockPort is the AF_VSOCK port the agent listens on inside
+	// the VM. Must be non-zero.
+	VsockPort uint32
+	// ContainerPort is the TCP port the workload container is
+	// already bound to on its loopback. Must be non-zero.
+	ContainerPort uint32
 }
 
 // VsockConfig describes a Cloud Hypervisor hybrid-vsock device.
@@ -152,6 +177,40 @@ func (c *Config) validate() error {
 	if c.Vsock != nil {
 		if err := c.Vsock.validate(); err != nil {
 			return err
+		}
+	}
+	if err := c.validatePortForwards(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validatePortForwards enforces the per-PortForward invariants
+// (non-zero ports, unique guest-side VsockPort, no collision with
+// Vsock.TracePort). Cloud Hypervisor would otherwise surface a
+// duplicate bind as an opaque virtio-vsock error at boot.
+func (c *Config) validatePortForwards() error {
+	if len(c.PortForwards) == 0 {
+		return nil
+	}
+	seen := make(map[uint32]bool, len(c.PortForwards))
+	var tracePort uint32
+	if c.Vsock != nil {
+		tracePort = c.Vsock.TracePort
+	}
+	for i, pf := range c.PortForwards {
+		if pf.VsockPort == 0 {
+			return fmt.Errorf("sandbox: PortForwards[%d].VsockPort must be non-zero", i)
+		}
+		if pf.ContainerPort == 0 {
+			return fmt.Errorf("sandbox: PortForwards[%d].ContainerPort must be non-zero", i)
+		}
+		if seen[pf.VsockPort] {
+			return fmt.Errorf("sandbox: duplicate PortForwards[*].VsockPort %d", pf.VsockPort)
+		}
+		seen[pf.VsockPort] = true
+		if tracePort != 0 && pf.VsockPort == tracePort {
+			return fmt.Errorf("sandbox: PortForwards[%d].VsockPort %d collides with Vsock.TracePort", i, pf.VsockPort)
 		}
 	}
 	return nil
@@ -394,6 +453,12 @@ func buildKernelCmdline(cfg Config) string {
 	}
 	if cfg.Vsock != nil && cfg.Vsock.TracePort != 0 {
 		parts = append(parts, agent.FormatVsockTracePortCmdline(cfg.Vsock.TracePort))
+	}
+	for _, pf := range cfg.PortForwards {
+		parts = append(parts, agent.FormatPortForwardCmdline(agent.PortForwardSpec{
+			VsockPort:     pf.VsockPort,
+			ContainerPort: pf.ContainerPort,
+		}))
 	}
 	for _, s := range cfg.Shares {
 		if s.Overlay {
