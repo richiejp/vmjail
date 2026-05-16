@@ -15,3 +15,9 @@ import (
 func DialHostVsock(_ context.Context, _ uint32) (net.Conn, error) {
 	return nil, errors.New("agent: vsock unsupported off Linux")
 }
+
+// vsockListenGuest on non-Linux always errors for the same reason
+// as DialHostVsock — there's no AF_VSOCK off Linux.
+func vsockListenGuest(_ uint32) (net.Listener, error) {
+	return nil, errors.New("agent: vsock listen unsupported off Linux")
+}

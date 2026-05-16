@@ -63,3 +63,46 @@ func TestDialHostVsockAppliesContextDeadline(t *testing.T) {
 		t.Error("Read past deadline returned nil err; deadline not applied")
 	}
 }
+
+// TestVsockListenGuestWrapsListenErrors mirrors the dialer test:
+// swap vsockListener, confirm the wrapper preserves the underlying
+// error so log-grepping for "vsock listen" stays stable.
+func TestVsockListenGuestWrapsListenErrors(t *testing.T) {
+	saved := vsockListener
+	t.Cleanup(func() { vsockListener = saved })
+
+	wantErr := errors.New("synthetic listen fail")
+	vsockListener = func(port uint32) (net.Listener, error) {
+		if port != 9000 {
+			t.Errorf("port = %d, want 9000", port)
+		}
+		return nil, wantErr
+	}
+
+	_, err := vsockListenGuest(9000)
+	if !errors.Is(err, wantErr) {
+		t.Errorf("err = %v, want wrapping %v", err, wantErr)
+	}
+	if !strings.Contains(err.Error(), "vsock listen") {
+		t.Errorf("err message %q lost the wrapper context", err.Error())
+	}
+}
+
+// TestVsockListenGuestPassesListenerThrough pins the happy path:
+// the listener returned by the substituted vsockListener is
+// returned verbatim by vsockListenGuest.
+func TestVsockListenGuestPassesListenerThrough(t *testing.T) {
+	saved := vsockListener
+	t.Cleanup(func() { vsockListener = saved })
+
+	ln := newFakeVsockListener(1234)
+	vsockListener = func(uint32) (net.Listener, error) { return ln, nil }
+
+	got, err := vsockListenGuest(1234)
+	if err != nil {
+		t.Fatalf("vsockListenGuest: %v", err)
+	}
+	if got != ln {
+		t.Errorf("listener = %p, want %p", got, ln)
+	}
+}

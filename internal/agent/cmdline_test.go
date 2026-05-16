@@ -292,3 +292,98 @@ func FuzzParseShareCmdline(f *testing.F) {
 		_, _, _ = ParseShareCmdline(raw)
 	})
 }
+
+// TestParsePortForwardCmdlinesHappyPath pins the parse + ordering
+// contract that the host-side cmdline-builder relies on. Tokens
+// appear in workspace-spec order; ParsePortForwardCmdlines must
+// return them likewise.
+func TestParsePortForwardCmdlinesHappyPath(t *testing.T) {
+	cmdline := "console=ttyS0 daft.port=8000:3000 daft.port=8001:80"
+	got, err := ParsePortForwardCmdlines(cmdline)
+	if err != nil {
+		t.Fatalf("ParsePortForwardCmdlines: %v", err)
+	}
+	want := []PortForwardSpec{
+		{VsockPort: 8000, ContainerPort: 3000},
+		{VsockPort: 8001, ContainerPort: 80},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d (%+v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestParsePortForwardCmdlinesEmpty pins the no-tokens path: the
+// host might pass a cmdline with no daft.port= at all (workspace
+// with empty ports list).
+func TestParsePortForwardCmdlinesEmpty(t *testing.T) {
+	got, err := ParsePortForwardCmdlines("console=ttyS0")
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if got != nil {
+		t.Errorf("got = %+v, want nil", got)
+	}
+}
+
+// TestParsePortForwardCmdlinesRejectsMalformed pins the every-
+// rejected-form surface. A typo on the host cmdline must surface
+// loudly rather than silently dropping the offending token.
+func TestParsePortForwardCmdlinesRejectsMalformed(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"missing colon", "daft.port=80003000", "must be <vsockPort>:<containerPort>"},
+		{"empty vsock", "daft.port=:3000", "empty vsock or container port"},
+		{"empty container", "daft.port=8000:", "empty vsock or container port"},
+		{"non-numeric vsock", "daft.port=foo:3000", "vsock port"},
+		{"non-numeric container", "daft.port=8000:bar", "container port"},
+		{"zero vsock", "daft.port=0:3000", "vsock port must be non-zero"},
+		{"zero container", "daft.port=8000:0", "container port must be non-zero"},
+		{"out of range vsock", "daft.port=70000:3000", "vsock port 70000 out of range"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParsePortForwardCmdlines(tc.in)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestFormatPortForwardCmdlineRoundTrips pins that the host's
+// Format + agent's Parse are exact inverses.
+func TestFormatPortForwardCmdlineRoundTrips(t *testing.T) {
+	in := PortForwardSpec{VsockPort: 8000, ContainerPort: 3000}
+	got, err := ParsePortForwardCmdlines(FormatPortForwardCmdline(in))
+	if err != nil {
+		t.Fatalf("ParsePortForwardCmdlines: %v", err)
+	}
+	if len(got) != 1 || got[0] != in {
+		t.Errorf("round-trip = %+v, want [%+v]", got, in)
+	}
+}
+
+func FuzzParsePortForwardCmdlines(f *testing.F) {
+	for _, seed := range []string{
+		"daft.port=8000:3000",
+		"daft.port=8000:3000 daft.port=8001:80",
+		"daft.port=:",
+		"daft.port=abc:def",
+		"daft.port=0:0",
+		"",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(_ *testing.T, raw string) {
+		// Parser must never panic on arbitrary input.
+		_, _ = ParsePortForwardCmdlines(raw)
+	})
+}

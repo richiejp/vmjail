@@ -80,6 +80,7 @@ func Run(ctx context.Context, w io.Writer) error {
 		share:       defaultShareDeps(),
 		container:   defaultContainerDeps(),
 		dialVsock:   DialHostVsock,
+		portForward: defaultPortForwardDeps(),
 	})
 }
 
@@ -94,6 +95,9 @@ type runDeps struct {
 	// as a net.Conn so the trace package's StreamExporter can write
 	// framed proto without caring about transport.
 	dialVsock func(ctx context.Context, port uint32) (net.Conn, error)
+	// portForward is the test-substitutable surface for the C1
+	// in-VM port-forwarder: vsock.Listen + container dial.
+	portForward portForwardDeps
 }
 
 func runWith(ctx context.Context, w io.Writer, d runDeps) error {
@@ -105,6 +109,7 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	bundle, _, _ := ParseBundleCmdline(cmdline)
 	applySharesFromCmdline(w, d, cmdline, bundle != "")
 	runContainerFromCmdline(ctx, w, d, cmdline)
+	startPortForwardersFromCmdline(ctx, w, d, cmdline)
 	bootSpan.End()
 
 	// Flush spans *before* the banner: the host's banner-scan is

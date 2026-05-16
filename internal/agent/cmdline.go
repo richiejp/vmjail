@@ -203,3 +203,87 @@ func ParseShareCmdlines(cmdline string) ([]ShareSpec, error) {
 	}
 	return specs, nil
 }
+
+// PortForwardCmdlineKey names the kernel cmdline parameter that
+// tells the agent to vsock-listen on VsockPort and forward each
+// accepted connection to the container at 127.0.0.1:ContainerPort.
+// Format: `daft.port=<vsockPort>:<containerPort>`. Repeatable —
+// one token per exposed PortMapping. See Slice C1 in PLAN.md.
+const PortForwardCmdlineKey = "daft.port"
+
+// PortForwardSpec is the parsed form of a `daft.port=...` cmdline
+// parameter. VsockPort is the AF_VSOCK port the agent listens on;
+// ContainerPort is the TCP port inside the VM the container is
+// already bound to. Both are required and must be non-zero.
+type PortForwardSpec struct {
+	VsockPort     uint32
+	ContainerPort uint32
+}
+
+// FormatPortForwardCmdline renders a PortForwardSpec to the wire
+// form. Host-side wiring uses this to build the cmdline.
+func FormatPortForwardCmdline(s PortForwardSpec) string {
+	return fmt.Sprintf("%s=%d:%d", PortForwardCmdlineKey, s.VsockPort, s.ContainerPort)
+}
+
+// ParsePortForwardCmdlines walks every `daft.port=...` token and
+// returns the parsed specs in order of appearance. Empty cmdline
+// or no matching tokens ⇒ (nil, nil). The first malformed token
+// aborts so a typo on the host doesn't leave a half-configured
+// forwarder running.
+func ParsePortForwardCmdlines(cmdline string) ([]PortForwardSpec, error) {
+	prefix := PortForwardCmdlineKey + "="
+	var specs []PortForwardSpec
+	for tok := range strings.FieldsSeq(cmdline) {
+		val, ok := strings.CutPrefix(tok, prefix)
+		if !ok {
+			continue
+		}
+		spec, err := parsePortForwardSpec(val)
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, spec)
+	}
+	return specs, nil
+}
+
+// parsePortForwardSpec validates a single `<vsockPort>:<containerPort>`
+// value. Empty either side, non-numeric, zero, or >65535 are all
+// rejected — the host's port table feeds straight into this and a
+// silent miss would mean a workload's port never gets exposed.
+func parsePortForwardSpec(val string) (PortForwardSpec, error) {
+	vsockStr, containerStr, ok := strings.Cut(val, ":")
+	if !ok {
+		return PortForwardSpec{}, fmt.Errorf("agent: %s value %q must be <vsockPort>:<containerPort>", PortForwardCmdlineKey, val)
+	}
+	if vsockStr == "" || containerStr == "" {
+		return PortForwardSpec{}, fmt.Errorf("agent: %s value %q has empty vsock or container port", PortForwardCmdlineKey, val)
+	}
+	vsockPort, err := parsePortField(vsockStr, "vsock port")
+	if err != nil {
+		return PortForwardSpec{}, err
+	}
+	containerPort, err := parsePortField(containerStr, "container port")
+	if err != nil {
+		return PortForwardSpec{}, err
+	}
+	return PortForwardSpec{VsockPort: vsockPort, ContainerPort: containerPort}, nil
+}
+
+// parsePortField parses a uint32 port and rejects zero / >65535.
+// The label is folded into the error so the user can tell which
+// side of the `:` was bad.
+func parsePortField(s, label string) (uint32, error) {
+	n, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, fmt.Errorf("agent: %s: %s %q: %w", PortForwardCmdlineKey, label, s, err)
+	}
+	if n == 0 {
+		return 0, fmt.Errorf("agent: %s: %s must be non-zero", PortForwardCmdlineKey, label)
+	}
+	if n > 65535 {
+		return 0, fmt.Errorf("agent: %s: %s %d out of range", PortForwardCmdlineKey, label, n)
+	}
+	return uint32(n), nil
+}
