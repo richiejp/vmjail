@@ -60,6 +60,9 @@ const (
 	// NodeControlServiceListNodesProcedure is the fully-qualified name of the NodeControlService's
 	// ListNodes RPC.
 	NodeControlServiceListNodesProcedure = "/daft.nodectrl.v1.NodeControlService/ListNodes"
+	// NodeControlServiceOpenPortStreamProcedure is the fully-qualified name of the NodeControlService's
+	// OpenPortStream RPC.
+	NodeControlServiceOpenPortStreamProcedure = "/daft.nodectrl.v1.NodeControlService/OpenPortStream"
 )
 
 // NodeControlServiceClient is a client for the daft.nodectrl.v1.NodeControlService service.
@@ -79,6 +82,20 @@ type NodeControlServiceClient interface {
 	// Snapshot ordering is stable (sorted by fingerprint) for
 	// deterministic test output.
 	ListNodes(context.Context, *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error)
+	// OpenPortStream is the byte channel for a single brokered
+	// port-forward attach. The Node dials this in response to an
+	// OpenPortRequest event delivered on its RegisterNode stream;
+	// the orchestrator splices the resulting bidi stream to the
+	// caller (typically its C2 HTTP ingress listener).
+	//
+	// The first message on each direction MUST be a PortStreamHello
+	// carrying the announced session_id so the orchestrator can
+	// match this stream to its pending request; subsequent messages
+	// carry opaque bytes. Inner mTLS is NOT layered on top of this
+	// channel — both endpoints are already inside the outer
+	// orchestrator-authenticated session and the workload behind
+	// the agent's vsock listener is the trust boundary.
+	OpenPortStream(context.Context) *connect.BidiStreamForClient[v1.PortStreamMessage, v1.PortStreamMessage]
 }
 
 // NewNodeControlServiceClient constructs a client for the daft.nodectrl.v1.NodeControlService
@@ -110,14 +127,21 @@ func NewNodeControlServiceClient(httpClient connect.HTTPClient, baseURL string, 
 			connect.WithSchema(nodeControlServiceMethods.ByName("ListNodes")),
 			connect.WithClientOptions(opts...),
 		),
+		openPortStream: connect.NewClient[v1.PortStreamMessage, v1.PortStreamMessage](
+			httpClient,
+			baseURL+NodeControlServiceOpenPortStreamProcedure,
+			connect.WithSchema(nodeControlServiceMethods.ByName("OpenPortStream")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // nodeControlServiceClient implements NodeControlServiceClient.
 type nodeControlServiceClient struct {
-	registerNode *connect.Client[v1.RegisterNodeRequest, v1.NodeEvent]
-	heartbeat    *connect.Client[v1.HeartbeatRequest, v1.HeartbeatResponse]
-	listNodes    *connect.Client[v1.ListNodesRequest, v1.ListNodesResponse]
+	registerNode   *connect.Client[v1.RegisterNodeRequest, v1.NodeEvent]
+	heartbeat      *connect.Client[v1.HeartbeatRequest, v1.HeartbeatResponse]
+	listNodes      *connect.Client[v1.ListNodesRequest, v1.ListNodesResponse]
+	openPortStream *connect.Client[v1.PortStreamMessage, v1.PortStreamMessage]
 }
 
 // RegisterNode calls daft.nodectrl.v1.NodeControlService.RegisterNode.
@@ -133,6 +157,11 @@ func (c *nodeControlServiceClient) Heartbeat(ctx context.Context, req *connect.R
 // ListNodes calls daft.nodectrl.v1.NodeControlService.ListNodes.
 func (c *nodeControlServiceClient) ListNodes(ctx context.Context, req *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error) {
 	return c.listNodes.CallUnary(ctx, req)
+}
+
+// OpenPortStream calls daft.nodectrl.v1.NodeControlService.OpenPortStream.
+func (c *nodeControlServiceClient) OpenPortStream(ctx context.Context) *connect.BidiStreamForClient[v1.PortStreamMessage, v1.PortStreamMessage] {
+	return c.openPortStream.CallBidiStream(ctx)
 }
 
 // NodeControlServiceHandler is an implementation of the daft.nodectrl.v1.NodeControlService
@@ -153,6 +182,20 @@ type NodeControlServiceHandler interface {
 	// Snapshot ordering is stable (sorted by fingerprint) for
 	// deterministic test output.
 	ListNodes(context.Context, *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error)
+	// OpenPortStream is the byte channel for a single brokered
+	// port-forward attach. The Node dials this in response to an
+	// OpenPortRequest event delivered on its RegisterNode stream;
+	// the orchestrator splices the resulting bidi stream to the
+	// caller (typically its C2 HTTP ingress listener).
+	//
+	// The first message on each direction MUST be a PortStreamHello
+	// carrying the announced session_id so the orchestrator can
+	// match this stream to its pending request; subsequent messages
+	// carry opaque bytes. Inner mTLS is NOT layered on top of this
+	// channel — both endpoints are already inside the outer
+	// orchestrator-authenticated session and the workload behind
+	// the agent's vsock listener is the trust boundary.
+	OpenPortStream(context.Context, *connect.BidiStream[v1.PortStreamMessage, v1.PortStreamMessage]) error
 }
 
 // NewNodeControlServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -180,6 +223,12 @@ func NewNodeControlServiceHandler(svc NodeControlServiceHandler, opts ...connect
 		connect.WithSchema(nodeControlServiceMethods.ByName("ListNodes")),
 		connect.WithHandlerOptions(opts...),
 	)
+	nodeControlServiceOpenPortStreamHandler := connect.NewBidiStreamHandler(
+		NodeControlServiceOpenPortStreamProcedure,
+		svc.OpenPortStream,
+		connect.WithSchema(nodeControlServiceMethods.ByName("OpenPortStream")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.nodectrl.v1.NodeControlService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case NodeControlServiceRegisterNodeProcedure:
@@ -188,6 +237,8 @@ func NewNodeControlServiceHandler(svc NodeControlServiceHandler, opts ...connect
 			nodeControlServiceHeartbeatHandler.ServeHTTP(w, r)
 		case NodeControlServiceListNodesProcedure:
 			nodeControlServiceListNodesHandler.ServeHTTP(w, r)
+		case NodeControlServiceOpenPortStreamProcedure:
+			nodeControlServiceOpenPortStreamHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -207,4 +258,8 @@ func (UnimplementedNodeControlServiceHandler) Heartbeat(context.Context, *connec
 
 func (UnimplementedNodeControlServiceHandler) ListNodes(context.Context, *connect.Request[v1.ListNodesRequest]) (*connect.Response[v1.ListNodesResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.nodectrl.v1.NodeControlService.ListNodes is not implemented"))
+}
+
+func (UnimplementedNodeControlServiceHandler) OpenPortStream(context.Context, *connect.BidiStream[v1.PortStreamMessage, v1.PortStreamMessage]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("daft.nodectrl.v1.NodeControlService.OpenPortStream is not implemented"))
 }

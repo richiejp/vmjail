@@ -42,6 +42,21 @@ service NodeControlService {
   // Snapshot ordering is stable (sorted by fingerprint) for
   // deterministic test output.
   rpc ListNodes(ListNodesRequest) returns (ListNodesResponse) {}
+
+  // OpenPortStream is the byte channel for a single brokered
+  // port-forward attach. The Node dials this in response to an
+  // OpenPortRequest event delivered on its RegisterNode stream;
+  // the orchestrator splices the resulting bidi stream to the
+  // caller (typically its C2 HTTP ingress listener).
+  //
+  // The first message on each direction MUST be a PortStreamHello
+  // carrying the announced session_id so the orchestrator can
+  // match this stream to its pending request; subsequent messages
+  // carry opaque bytes. Inner mTLS is NOT layered on top of this
+  // channel — both endpoints are already inside the outer
+  // orchestrator-authenticated session and the workload behind
+  // the agent's vsock listener is the trust boundary.
+  rpc OpenPortStream(stream PortStreamMessage) returns (stream PortStreamMessage) {}
 }
 
 // ProtocolVersion is the wire-protocol version exchanged at
@@ -89,7 +104,39 @@ message NodeEvent {
   oneof event {
     SubscriptionReady ready = 1;
     SandboxWatchEvent sandbox = 2;
+    OpenPortRequest open_port = 3;
   }
+}
+
+// OpenPortRequest asks the Node to dial OpenPortStream for one
+// inbound port-forward attach. The Node looks (workspace_uuid,
+// container_port) up in its local sandboxgateway Bridger to find
+// the running VM's hybrid-vsock UDS, then echoes session_id back
+// on the OpenPortStream Hello so the orchestrator can splice.
+message OpenPortRequest {
+  // Opaque rendezvous token, randomly minted per request. Random
+  // 32 bytes, base64-url encoded for readability in logs and
+  // traces. Same flavour as workspacebroker.PendingAttach.session_id.
+  string session_id = 1;
+  // Identifies which Sandbox port to open. The Node uses these as
+  // the routing key against its sandboxgateway Bridger.
+  string workspace_uuid = 2;
+  // Container port the workload is bound to; the Node's
+  // PortForward table maps this to the matching VsockPort.
+  uint32 container_port = 3;
+}
+
+// PortStreamMessage is the OpenPortStream frame. First message
+// on each direction is a Hello; the rest carry data bytes.
+message PortStreamMessage {
+  oneof body {
+    PortStreamHello hello = 1;
+    bytes data = 2;
+  }
+}
+
+message PortStreamHello {
+  string session_id = 1;
 }
 
 // SandboxWatchEvent reports a Sandbox lifecycle transition the

@@ -479,10 +479,19 @@ Phase C — **Orchestrator-driven port ingress**:
       Production wiring (passing a real Bridger from sandboxd serve)
       lands with C1.3c so the Bridger has an actual consumer the
       moment it gains routes.
-    - C1.3c: Orchestrator-driven Bridge. New bidi RPC + NodeEvent
-      variant carrying (workspace, port, session_id) so the
-      orchestrator can ask a Node to open a labeled stream; sandboxd
-      handler dials and pipes through Bridger.
+    - C1.3c: Orchestrator-driven Bridge — sandboxd half. Proto
+      adds an `OpenPortRequest` variant on `NodeEvent` and a new
+      `OpenPortStream` bidi RPC carrying `PortStreamMessage{hello|data}`
+      frames. `nodectrlclient.dispatchEvent` routes the event to
+      `handleOpenPort`, which dials `OpenPortStream`, sends Hello with
+      the announced session_id, wraps the post-handshake bidi stream
+      as `portStreamConn` (a `net.Conn`), and hands it to
+      `Config.Bridger.Bridge`. The Bridger interface is satisfied
+      implicitly by `sandboxgateway.Bridger.Bridge` so no glue is
+      needed at the wiring layer. Orchestrator side: still returns
+      Unimplemented (provided by the connect-generated default
+      handler); the splice machinery + per-workspace session table
+      lands in C1.3c follow-up.
 - C2: Orchestrator side: per-workspace HTTP/HTTPS listener (or
   subpath under one wildcard) that byte-relays into the
   sandbox-side stream. TLS termination on the orchestrator with

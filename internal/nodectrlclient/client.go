@@ -14,7 +14,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"connectrpc.com/connect"
@@ -90,6 +92,27 @@ type Config struct {
 	// the orchestrator treats as "Node has no live sandboxes" (an
 	// authoritative empty, not "no data").
 	LiveSnapshot func() []*nodectrlv1.LiveSandbox
+	// Bridger is the per-(workspace, port) routing table that
+	// receives an inbound byte stream when the orchestrator
+	// pushes an OpenPortRequest event. Nil ⇒ OpenPortRequest
+	// events surface as bridge errors on Stderr (the
+	// orchestrator-side session times out). Production wiring
+	// (`daft-sandboxd serve`) instantiates one sandboxgateway.Bridger
+	// and shares it with the sandboxexec Executor so the routes the
+	// executor registers are the same table this transport reads from.
+	Bridger PortBridger
+	// Stderr is where per-OpenPort bridge errors are logged.
+	// Defaults to os.Stderr when nil.
+	Stderr io.Writer
+}
+
+// openPortLogSink returns the configured Stderr, falling back to
+// os.Stderr so a zero-Config still produces visible diagnostics.
+func (c Config) openPortLogSink() io.Writer {
+	if c.Stderr != nil {
+		return c.Stderr
+	}
+	return os.Stderr
 }
 
 // Client wraps a generated NodeControlServiceClient with a
@@ -182,7 +205,7 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources nodectrl.Resour
 	}
 
 	streamErr := make(chan error, 1)
-	go consumeStream(ctx, stream, c.cfg.SandboxEvents, streamErr)
+	go c.consumeStream(ctx, stream, streamErr)
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -206,27 +229,52 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources nodectrl.Resour
 }
 
 // consumeStream drains the RegisterNode stream for the lifetime of
-// the registration. SandboxWatchEvents go to handler when non-nil;
-// nil handler drops them silently (register-only mode). A handler
-// error tears the stream down by surfacing through errCh.
-func consumeStream(
+// the registration. SandboxWatchEvents go to the configured
+// SandboxEventHandler; OpenPortRequest events go to the Client's
+// own handleOpenPort. A handler error on either path tears the
+// stream down by surfacing through errCh.
+func (c *Client) consumeStream(
 	ctx context.Context,
 	stream *connect.ServerStreamForClient[nodectrlv1.NodeEvent],
-	handler SandboxEventHandler,
 	errCh chan<- error,
 ) {
 	//daft:lint:disable=forloopbound reason="bounded by stream lifetime; Receive returns false when the server closes or ctx cancels the underlying connection"
 	for stream.Receive() {
-		evt := stream.Msg().GetSandbox()
-		if evt == nil || handler == nil {
-			continue
-		}
-		if err := handler.HandleSandboxEvent(ctx, evt); err != nil {
-			errCh <- fmt.Errorf("nodectrlclient: sandbox-event handler: %w", err)
+		if err := c.dispatchEvent(ctx, stream.Msg()); err != nil {
+			errCh <- err
 			return
 		}
 	}
 	errCh <- stream.Err()
+}
+
+// dispatchEvent demuxes one NodeEvent to its handler. Returns the
+// wrapped handler error (which tears the stream down) or nil to
+// continue draining. SubscriptionReady is consumed in
+// RegisterAndServe before the loop starts, so seeing one here is
+// an orchestrator-side bug — surface it rather than ignoring.
+func (c *Client) dispatchEvent(ctx context.Context, msg *nodectrlv1.NodeEvent) error {
+	if sb := msg.GetSandbox(); sb != nil {
+		if c.cfg.SandboxEvents == nil {
+			return nil
+		}
+		if err := c.cfg.SandboxEvents.HandleSandboxEvent(ctx, sb); err != nil {
+			return fmt.Errorf("nodectrlclient: sandbox-event handler: %w", err)
+		}
+		return nil
+	}
+	if op := msg.GetOpenPort(); op != nil {
+		// Run the bridge in its own goroutine — a single
+		// long-lived attach must not block subsequent events on
+		// the same registration stream.
+		go func() {
+			if err := c.handleOpenPort(ctx, op); err != nil {
+				_, _ = fmt.Fprintf(c.cfg.openPortLogSink(), "nodectrlclient: openport bridge: %v\n", err)
+			}
+		}()
+		return nil
+	}
+	return nil
 }
 
 func (c *Client) sendHeartbeat(ctx context.Context, resources nodectrl.Resources) error {
