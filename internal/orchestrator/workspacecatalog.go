@@ -13,7 +13,6 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
@@ -45,6 +44,7 @@ type WorkspaceCatalogHandler struct {
 	workspacev1connect.UnimplementedWorkspaceCatalogServiceHandler
 	store      *workspacecatalog.Store
 	dispatcher Dispatcher
+	preAction  preActionReconciler
 }
 
 // NewWorkspaceCatalogHandler returns a handler backed by store and
@@ -498,6 +498,13 @@ func (h *WorkspaceCatalogHandler) Launch(
 	if err != nil {
 		return nil, err
 	}
+	// Apply any pending phantom-cleanup decisions before reading
+	// status fields the precondition check below depends on.
+	h.reconcileBefore(ws.Metadata.UUID)
+	ws, err = h.store.Get(ws.Metadata.UUID)
+	if err != nil {
+		return nil, mapCatalogErr(err)
+	}
 	if !ws.Status.IsTrue(workspacecatalog.ConditionReady) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("workspace: not ready, missing: %v", ws.Status.Missing))
@@ -546,75 +553,25 @@ func (h *WorkspaceCatalogHandler) Launch(
 	}), nil
 }
 
-// ReconcileLiveSandboxes is the B4d reconciliation primitive. The
-// Node's Heartbeat carries the set of sandbox uids it currently
-// knows about and their phases; the orchestrator walks every
-// workspace bound to that Node and brings catalog state in line
-// with what the Node reports.
-//
-// Reconciliation rules:
-//   - reported phase = Running, uid matches Workspace.status.
-//     current_sandbox.uid → set ObservedGeneration = Generation
-//     and Reconciled = True. The "edit pending restart" indicator
-//     clears once observed catches up.
-//   - reported phase = Exited / Killed → clear CurrentSandbox,
-//     flip Dispatched = False with the phase as reason.
-//   - workspace's expected sandbox absent from the report →
-//     leave it alone in B4d. The B5 sweep will turn "missing for
-//     N heartbeats" into SandboxLost / Killed.
-//
-// Implements orchestrator.LivenessReconciler.
-func (h *WorkspaceCatalogHandler) ReconcileLiveSandboxes(
-	nodeFP identity.Fingerprint,
-	live []*nodectrlv1.LiveSandbox,
-) {
-	byUID := make(map[string]*nodectrlv1.LiveSandbox, len(live))
-	for _, ls := range live {
-		if ls.GetUid() == "" {
-			continue
-		}
-		byUID[ls.GetUid()] = ls
-	}
-	owned := h.store.List(func(w *workspacecatalog.Workspace) bool {
-		if w.Status.CurrentSandbox == nil {
-			return false
-		}
-		return w.Status.CurrentSandbox.NodeFingerprint == nodeFP
-	})
-	now := time.Now()
-	for i := range owned {
-		ws := owned[i]
-		uid := ws.Status.CurrentSandbox.UID
-		ls, present := byUID[uid]
-		if !present {
-			// Node didn't report this sandbox this heartbeat; B5's
-			// sweep decides when "absent" becomes "lost". For now,
-			// the Workspace keeps Dispatched=True and stale
-			// ObservedGeneration.
-			continue
-		}
-		_, _ = h.store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus,
-			reconcileFromPhase(ls, ws.Metadata.Generation, now))
-	}
+// preActionReconciler is the seam Launch/Stop call before reading
+// workspace status — ensures any pending threshold-crossed
+// transitions (SandboxLost) are applied first. The production
+// implementation is *reconciler.Reconciler; nil is acceptable
+// (catalog-only test rigs).
+type preActionReconciler interface {
+	ReconcileBefore(uuid string)
 }
 
-// reconcileFromPhase returns the catalog mutator that brings a
-// workspace's status into line with what the Node reported for its
-// current sandbox. Split out so ReconcileLiveSandboxes stays
-// readable when more terminal phases land.
-func reconcileFromPhase(ls *nodectrlv1.LiveSandbox, generation uint64, now time.Time) func(*workspacecatalog.Workspace) error {
-	return func(w *workspacecatalog.Workspace) error {
-		switch ls.GetPhase() {
-		case sandboxPhaseRunning:
-			w.Status.ObservedGeneration = generation
-			w.Status.SetCondition(workspacecatalog.ConditionReconciled,
-				workspacecatalog.ConditionStatusTrue, sandboxPhaseRunning, "", now)
-		case sandboxPhaseExited, sandboxPhaseKilled:
-			w.Status.CurrentSandbox = nil
-			w.Status.SetCondition(workspacecatalog.ConditionDispatched,
-				workspacecatalog.ConditionStatusFalse, ls.GetPhase(), "", now)
-		}
-		return nil
+// SetPreActionReconciler wires the optional pre-action reconcile
+// hook. Called by Server.New after the reconciler is constructed.
+func (h *WorkspaceCatalogHandler) SetPreActionReconciler(r preActionReconciler) {
+	h.preAction = r
+}
+
+// reconcileBefore is a nil-safe helper. Internal-only.
+func (h *WorkspaceCatalogHandler) reconcileBefore(uuid string) {
+	if h.preAction != nil {
+		h.preAction.ReconcileBefore(uuid)
 	}
 }
 

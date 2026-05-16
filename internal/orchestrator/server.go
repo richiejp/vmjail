@@ -27,6 +27,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/mtls"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/richiejp/darkaifactory/internal/reconciler"
 	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspacebroker"
 	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
@@ -82,6 +83,13 @@ type Config struct {
 	// observe the SandboxSpec without standing up a sandbox-host
 	// stream.
 	WorkspaceDispatcher Dispatcher
+
+	// Reconciler tunables (Slice B5). Zero values fall through to
+	// the reconciler package's defaults — tests usually override
+	// MissThreshold and SweepInterval to fire quickly.
+	ReconcilerMissThreshold int
+	ReconcilerSweepInterval time.Duration
+	ReconcilerNodeGrace     time.Duration
 }
 
 // Server is the orchestrator's mTLS-gated control-plane listener.
@@ -97,11 +105,17 @@ type Server struct {
 	nodeReg          *nodectrl.Registry
 	sandboxCtrl      *NodeControlHandler
 	workspaceCatalog *workspacecatalog.Store
+	reconciler       *reconciler.Reconciler
 
 	reaperStart  sync.Once
 	reaperStop   sync.Once
 	reaperCancel context.CancelFunc
 	reaperDone   chan struct{}
+
+	reconcilerStart  sync.Once
+	reconcilerStop   sync.Once
+	reconcilerCancel context.CancelFunc
+	reconcilerDone   chan struct{}
 }
 
 // Matcher returns the orchestrator's workspace-broker matcher.
@@ -165,10 +179,12 @@ func New(cfg Config) (*Server, error) {
 	if wcErr != nil {
 		return nil, wcErr
 	}
-	// Wire the heartbeat-driven LivenessReconciler (B4d). The
-	// reconciler can't be passed at NewNodeControlHandler time
-	// because workspaceCtrl is constructed after sandboxCtrl.
-	sandboxCtrl.SetReconciler(workspaceCtrl)
+	// Reconciler (Slice B5) owns per-heartbeat reconcile, the
+	// missing-heartbeat threshold → SandboxLost, periodic sweep
+	// for unreachable Nodes, and the Launch/Stop pre-action hook.
+	rec := buildReconciler(cfg, workspaceCat, nodeReg)
+	sandboxCtrl.SetReconciler(rec)
+	workspaceCtrl.SetPreActionReconciler(rec)
 	// The broker handler needs the orchestrator's bound address
 	// to return as the relay endpoint, but the listener doesn't
 	// bind until Listen(). Close over a late-bound *mtls.Server
@@ -208,7 +224,22 @@ func New(cfg Config) (*Server, error) {
 		nodeReg:          nodeReg,
 		sandboxCtrl:      sandboxCtrl,
 		workspaceCatalog: workspaceCat,
+		reconciler:       rec,
 	}, nil
+}
+
+// buildReconciler constructs the Reconciler with Config-supplied
+// tunables (when set) and the orchestrator's catalog + node
+// registry. Extracted from New so the field-wiring stanza there
+// stays readable.
+func buildReconciler(cfg Config, cat *workspacecatalog.Store, nodes *nodectrl.Registry) *reconciler.Reconciler {
+	return reconciler.New(reconciler.Config{
+		Catalog:       cat,
+		Nodes:         nodes,
+		MissThreshold: cfg.ReconcilerMissThreshold,
+		SweepInterval: cfg.ReconcilerSweepInterval,
+		NodeGrace:     cfg.ReconcilerNodeGrace,
+	})
 }
 
 // registerServices installs every Connect-RPC handler plus the
@@ -267,19 +298,49 @@ func (s *Server) Tracer() *trace.Tracer { return s.tracer }
 func (s *Server) Listen() error { return s.inner.Listen() }
 func (s *Server) Addr() string  { return s.inner.Addr() }
 
-// Serve starts the ingress reaper and blocks on the inner HTTP
-// server. Reaper lifetime is the Serve→Shutdown window.
+// Serve starts the ingress reaper + the reconciler sweep, then
+// blocks on the inner HTTP server. Both background lifetimes span
+// the Serve→Shutdown window.
 func (s *Server) Serve() error {
 	s.startReaper()
+	s.startReconciler()
 	return s.inner.Serve()
 }
 
-// Shutdown stops the reaper before draining the HTTP server so a
-// final scan can't race a teardown that's about to lose its span
-// sources.
+// Shutdown stops the reconciler and reaper before draining the
+// HTTP server so neither can race a teardown that's about to lose
+// its span sources.
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.stopReconciler()
 	s.stopReaper()
 	return s.inner.Shutdown(ctx)
+}
+
+func (s *Server) startReconciler() {
+	s.reconcilerStart.Do(func() {
+		if s.reconciler == nil {
+			return
+		}
+		// Reconciler lifetime is Serve→Shutdown, not
+		// request-scoped — same shape as the reaper.
+		ctx, cancel := context.WithCancel(context.Background()) //nolint:contextcheck // see above
+		s.reconcilerCancel = cancel
+		s.reconcilerDone = make(chan struct{})
+		go func() {
+			defer close(s.reconcilerDone)
+			_ = s.reconciler.Run(ctx)
+		}()
+	})
+}
+
+func (s *Server) stopReconciler() {
+	s.reconcilerStop.Do(func() {
+		if s.reconcilerCancel == nil {
+			return
+		}
+		s.reconcilerCancel()
+		<-s.reconcilerDone
+	})
 }
 
 func (s *Server) startReaper() {
