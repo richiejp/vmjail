@@ -479,19 +479,33 @@ Phase C — **Orchestrator-driven port ingress**:
       Production wiring (passing a real Bridger from sandboxd serve)
       lands with C1.3c so the Bridger has an actual consumer the
       moment it gains routes.
-    - C1.3c: Orchestrator-driven Bridge — sandboxd half. Proto
-      adds an `OpenPortRequest` variant on `NodeEvent` and a new
-      `OpenPortStream` bidi RPC carrying `PortStreamMessage{hello|data}`
-      frames. `nodectrlclient.dispatchEvent` routes the event to
-      `handleOpenPort`, which dials `OpenPortStream`, sends Hello with
-      the announced session_id, wraps the post-handshake bidi stream
-      as `portStreamConn` (a `net.Conn`), and hands it to
-      `Config.Bridger.Bridge`. The Bridger interface is satisfied
-      implicitly by `sandboxgateway.Bridger.Bridge` so no glue is
-      needed at the wiring layer. Orchestrator side: still returns
-      Unimplemented (provided by the connect-generated default
-      handler); the splice machinery + per-workspace session table
-      lands in C1.3c follow-up.
+    - C1.3c.1 (landed): Orchestrator-driven Bridge — sandboxd
+      half. Proto adds an `OpenPortRequest` variant on `NodeEvent`
+      and a new `OpenPortStream` bidi RPC carrying
+      `PortStreamMessage{hello|data}` frames. `nodectrlclient`
+      dispatches the event to `handleOpenPort`, which dials
+      `OpenPortStream`, sends Hello with the announced session_id,
+      wraps the post-handshake bidi stream as `portStreamConn` (a
+      `net.Conn`), and hands it to `Config.Bridger.Bridge`.
+    - C1.3c.2 (landed): Orchestrator-driven Bridge — orchestrator
+      half. `NodeControlHandler.OpenPortBridge(ctx, fp, ws, port)`
+      mints a base64-url session id, registers a pending entry,
+      pushes the `OpenPortRequest` event on the addressed Node's
+      RegisterNode stream, and parks until the matching
+      `OpenPortStream` arrives. `OpenPortStream` reads the Hello,
+      matches against the pending map, hands the bidi stream off
+      via a `portStreamArrival` channel, then blocks until the
+      bridge caller closes its `net.Conn` (which closes the
+      release signal, releasing the handler). Errors:
+      ErrNodeNotConnected, ErrSandboxEventBacklog, context timeout,
+      ErrHelloMissingSession, ErrUnknownPortSession.
+    - C1.3c.3 (next): production Bridger wiring + e2e test.
+      `daft-sandboxd serve` instantiates one
+      `sandboxgateway.Bridger`, passes it to both the
+      `sandboxexec.Executor` (so dispatches register routes) and
+      `nodectrlclient.Config` (so OpenPort events find them). End-
+      to-end test through in-process orchestrator: launch a Sandbox
+      with ports, call `OpenPortBridge`, verify byte round-trip.
 - C2: Orchestrator side: per-workspace HTTP/HTTPS listener (or
   subpath under one wildcard) that byte-relays into the
   sandbox-side stream. TLS termination on the orchestrator with

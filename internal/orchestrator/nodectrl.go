@@ -68,6 +68,11 @@ type NodeControlHandler struct {
 
 	mu      sync.Mutex
 	streams map[identity.Fingerprint]chan *nodectrlv1.NodeEvent
+	// pendingPorts is the session_id → pending-OpenPortBridge map
+	// (Slice C1.3c.2). Populated by OpenPortBridge before pushing
+	// the OpenPortRequest event; drained by OpenPortStream when the
+	// matching inbound stream arrives. See openport.go.
+	pendingPorts map[string]*pendingPort
 }
 
 // SetReconciler wires the LivenessReconciler invoked on every
@@ -86,8 +91,9 @@ func NewNodeControlHandler(reg *nodectrl.Registry) (*NodeControlHandler, error) 
 		return nil, errors.New("orchestrator: nil nodectrl registry")
 	}
 	return &NodeControlHandler{
-		reg:     reg,
-		streams: map[identity.Fingerprint]chan *nodectrlv1.NodeEvent{},
+		reg:          reg,
+		streams:      map[identity.Fingerprint]chan *nodectrlv1.NodeEvent{},
+		pendingPorts: map[string]*pendingPort{},
 	}, nil
 }
 
