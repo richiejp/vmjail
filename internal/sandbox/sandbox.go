@@ -125,6 +125,14 @@ type VsockConfig struct {
 	// port on the host. The sandbox-host arranges a listener at
 	// <HostSocket>_<TracePort> before booting the VM.
 	TracePort uint32
+
+	// AttachPort, if non-zero, instructs the in-VM agent (via the
+	// kernel cmdline) to vsock-listen on this guest-side port for
+	// inbound attach sessions from the sandboxd host. The host
+	// reaches the listener by dialing
+	// <HostSocket>_<AttachPort> through the CH hybrid-vsock CONNECT
+	// proxy. Conventionally agent.DefaultAttachVsockPort (9000).
+	AttachPort uint32
 }
 
 // ShareConfig describes one host→guest virtiofs mount.
@@ -192,16 +200,18 @@ func (c *Config) validate() error {
 
 // validatePortForwards enforces the per-PortForward invariants
 // (non-zero ports, unique guest-side VsockPort, no collision with
-// Vsock.TracePort). Cloud Hypervisor would otherwise surface a
-// duplicate bind as an opaque virtio-vsock error at boot.
+// Vsock.TracePort or Vsock.AttachPort). Cloud Hypervisor would
+// otherwise surface a duplicate bind as an opaque virtio-vsock
+// error at boot.
 func (c *Config) validatePortForwards() error {
 	if len(c.PortForwards) == 0 {
 		return nil
 	}
 	seen := make(map[uint32]bool, len(c.PortForwards))
-	var tracePort uint32
+	var tracePort, attachPort uint32
 	if c.Vsock != nil {
 		tracePort = c.Vsock.TracePort
+		attachPort = c.Vsock.AttachPort
 	}
 	for i, pf := range c.PortForwards {
 		if pf.VsockPort == 0 {
@@ -216,6 +226,9 @@ func (c *Config) validatePortForwards() error {
 		seen[pf.VsockPort] = true
 		if tracePort != 0 && pf.VsockPort == tracePort {
 			return fmt.Errorf("sandbox: PortForwards[%d].VsockPort %d collides with Vsock.TracePort", i, pf.VsockPort)
+		}
+		if attachPort != 0 && pf.VsockPort == attachPort {
+			return fmt.Errorf("sandbox: PortForwards[%d].VsockPort %d collides with Vsock.AttachPort", i, pf.VsockPort)
 		}
 	}
 	return nil
@@ -232,6 +245,9 @@ func (v *VsockConfig) validate() error {
 	}
 	if v.GuestCID < 3 {
 		return fmt.Errorf("sandbox: Vsock.GuestCID %d must be >= 3 (0/1/2 reserved)", v.GuestCID)
+	}
+	if v.TracePort != 0 && v.AttachPort != 0 && v.TracePort == v.AttachPort {
+		return fmt.Errorf("sandbox: Vsock.TracePort %d collides with Vsock.AttachPort", v.TracePort)
 	}
 	return nil
 }
@@ -458,6 +474,9 @@ func buildKernelCmdline(cfg Config) string {
 	}
 	if cfg.Vsock != nil && cfg.Vsock.TracePort != 0 {
 		parts = append(parts, agent.FormatVsockTracePortCmdline(cfg.Vsock.TracePort))
+	}
+	if cfg.Vsock != nil && cfg.Vsock.AttachPort != 0 {
+		parts = append(parts, agent.FormatAttachPortCmdline(cfg.Vsock.AttachPort))
 	}
 	for _, pf := range cfg.PortForwards {
 		parts = append(parts, agent.FormatPortForwardCmdline(agent.PortForwardSpec{

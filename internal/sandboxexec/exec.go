@@ -22,10 +22,12 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/richiejp/darkaifactory/internal/agent"
 	"github.com/richiejp/darkaifactory/internal/assert"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/darkaifactory/internal/sandboxattach"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/trace"
@@ -78,6 +80,13 @@ type Executor struct {
 	// device on the dispatched Config and no port-route registration.
 	bridger  *sandboxgateway.Bridger
 	vsockDir string
+	// attachRegistry, when non-nil, is the per-sandbox attach-route
+	// table the executor populates on every dispatch (Slice D2b.3b).
+	// Each route's dialer dials the per-Sandbox hybrid-vsock UDS at
+	// agent.DefaultAttachVsockPort and runs sandboxattach.OpenSession
+	// to wrap the framed conn as an AttachSession. Sharing
+	// VsockDir with bridger is enforced by New().
+	attachRegistry *sandboxgateway.AttachRegistry
 	// nextCID hands out fresh AF_VSOCK Context IDs for each dispatch.
 	// Initialised to 2 so the first .Add(1) returns 3 — the lowest
 	// CID the ABI allows for a guest (0/1/2 are reserved).
@@ -105,10 +114,20 @@ type Config struct {
 	// reach the running VM. Leave nil for tests/baselines that don't
 	// exercise ingress.
 	Bridger *sandboxgateway.Bridger
+	// AttachRegistry, when non-nil, is the per-sandbox attach-route
+	// table the executor populates with a vsock-dial closure on
+	// every dispatch (Slice D2b.3b). The orchestrator-driven
+	// AttachStream handler dispatches through it (via the
+	// AttachBridger interface) to reach the agent's attach listener
+	// inside the right VM. Requires VsockDir (same reason as
+	// Bridger). Leave nil for tests/baselines that don't exercise
+	// attach.
+	AttachRegistry *sandboxgateway.AttachRegistry
 	// VsockDir is the absolute parent directory where per-Sandbox
 	// hybrid-vsock UDS files live (one per running VM, named after
-	// the Sandbox uid). Required when Bridger is non-nil; ignored
-	// otherwise. Typically `/var/run/daft-sandboxd` in production.
+	// the Sandbox uid). Required when Bridger or AttachRegistry is
+	// non-nil; ignored otherwise. Typically `/var/run/daft-sandboxd`
+	// in production.
 	VsockDir string
 }
 
@@ -127,22 +146,23 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.Runner == nil {
 		cfg.Runner = sandbox.Serve
 	}
-	if cfg.Bridger != nil {
+	if cfg.Bridger != nil || cfg.AttachRegistry != nil {
 		if cfg.VsockDir == "" {
-			return nil, errors.New("sandboxexec: VsockDir required when Bridger is set")
+			return nil, errors.New("sandboxexec: VsockDir required when Bridger or AttachRegistry is set")
 		}
 		if !filepath.IsAbs(cfg.VsockDir) {
 			return nil, fmt.Errorf("sandboxexec: VsockDir %q must be absolute", cfg.VsockDir)
 		}
 	}
 	e := &Executor{
-		base:      cfg.Base,
-		stdout:    cfg.Stdout,
-		run:       cfg.Runner,
-		assembler: cfg.Assembler,
-		bridger:   cfg.Bridger,
-		vsockDir:  cfg.VsockDir,
-		live:      map[string]*liveSandbox{},
+		base:           cfg.Base,
+		stdout:         cfg.Stdout,
+		run:            cfg.Runner,
+		assembler:      cfg.Assembler,
+		bridger:        cfg.Bridger,
+		attachRegistry: cfg.AttachRegistry,
+		vsockDir:       cfg.VsockDir,
+		live:           map[string]*liveSandbox{},
 	}
 	// First .Add(1) returns 3 — the lowest CID the AF_VSOCK ABI
 	// allows for a guest.
@@ -276,8 +296,10 @@ func (e *Executor) HandleSandboxEvent(
 	}
 	defer unlock()
 
-	unregister := e.registerPortRoutes(cfg, spec.GetWorkspaceUuid())
-	defer unregister()
+	unregisterPorts := e.registerPortRoutes(cfg, spec.GetWorkspaceUuid())
+	defer unregisterPorts()
+	unregisterAttach := e.registerAttachRoute(cfg, uid)
+	defer unregisterAttach()
 
 	if err := e.run(ctx, e.stdout, cfg); err != nil {
 		e.markPhase(uid, phaseKilled, 0)
@@ -327,6 +349,39 @@ func (e *Executor) registerPortRoutes(cfg sandbox.Config, workspaceUUID string) 
 	}
 }
 
+// registerAttachRoute adds one AttachRegistry entry for this
+// dispatch's sandbox_uid, backed by a closure that dials the
+// agent's attach vsock through the per-Sandbox hybrid-vsock UDS
+// and runs sandboxattach.OpenSession to wrap the framed conn as
+// an AttachSession. Returns an unregister func — the caller
+// defers it so the route vanishes on dispatch exit.
+//
+// No-op when no AttachRegistry is configured or when cfg.Vsock /
+// AttachPort is unset (resolveBootConfig only populates them
+// when AttachRegistry != nil; the guard mirrors registerPortRoutes'
+// defensive style).
+func (e *Executor) registerAttachRoute(cfg sandbox.Config, uid string) func() {
+	if e.attachRegistry == nil || cfg.Vsock == nil || cfg.Vsock.AttachPort == 0 || uid == "" {
+		return func() {}
+	}
+	hostSocket := cfg.Vsock.HostSocket
+	attachPort := cfg.Vsock.AttachPort
+	dial := func(ctx context.Context, req sandboxgateway.AttachRequest) (sandboxgateway.AttachSession, error) {
+		conn, err := sandbox.DialGuestVsock(ctx, hostSocket, attachPort)
+		if err != nil {
+			return nil, fmt.Errorf("sandboxexec: dial attach vsock: %w", err)
+		}
+		return sandboxattach.OpenSession(ctx, conn, req)
+	}
+	if err := e.attachRegistry.Register(uid, dial); err != nil {
+		// Same executor-bug class as duplicate port routes —
+		// surface it on stdout and leave the table clean.
+		_, _ = fmt.Fprintf(e.stdout, "sandboxexec: register attach route: %v\n", err)
+		return func() {}
+	}
+	return func() { e.attachRegistry.Unregister(uid) }
+}
+
 // resolveBootConfig picks between the baseline Hello config and
 // the per-dispatch bundled config, then layers in the C1 port-
 // forward plan derived from spec.ports plus the per-Sandbox Vsock
@@ -338,8 +393,13 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 		return sandbox.Config{}, func() {}, err
 	}
 	cfg.PortForwards = portForwardsFromSpec(spec.GetPorts())
-	if e.bridger != nil && len(cfg.PortForwards) > 0 {
+	wantVsockForPorts := e.bridger != nil && len(cfg.PortForwards) > 0
+	wantVsockForAttach := e.attachRegistry != nil
+	if wantVsockForPorts || wantVsockForAttach {
 		cfg.Vsock = e.assignVsock(uid)
+	}
+	if wantVsockForAttach {
+		cfg.Vsock.AttachPort = agent.DefaultAttachVsockPort
 	}
 	return cfg, unlock, nil
 }

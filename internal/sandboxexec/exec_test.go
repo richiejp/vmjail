@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/richiejp/darkaifactory/internal/agent"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
@@ -639,5 +640,92 @@ func TestHandleSandboxEventNoBridgerLeavesCfgVsockNil(t *testing.T) {
 	}
 	if seen.Vsock != nil {
 		t.Errorf("Vsock = %+v, want nil (no Bridger configured)", seen.Vsock)
+	}
+}
+
+// TestNewRejectsAttachRegistryWithoutVsockDir pins the same
+// configuration invariant Bridger has: an AttachRegistry needs a
+// VsockDir to mint per-Sandbox UDS files.
+func TestNewRejectsAttachRegistryWithoutVsockDir(t *testing.T) {
+	ar := sandboxgateway.NewAttachRegistry()
+	if _, err := New(Config{Stdout: io.Discard, AttachRegistry: ar}); err == nil {
+		t.Fatal("expected error when AttachRegistry is set but VsockDir is empty")
+	}
+	if _, err := New(Config{Stdout: io.Discard, AttachRegistry: ar, VsockDir: "relative"}); err == nil {
+		t.Fatal("expected error when VsockDir is relative")
+	}
+}
+
+// TestHandleSandboxEventAssignsAttachPortAndVsock pins the
+// attach-side allocation: when an AttachRegistry is wired, every
+// dispatch gets a Vsock device with AttachPort set to
+// agent.DefaultAttachVsockPort — even when the spec has no ports
+// (i.e. the port-forward branch wouldn't have allocated one).
+func TestHandleSandboxEventAssignsAttachPortAndVsock(t *testing.T) {
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	ar := sandboxgateway.NewAttachRegistry()
+	e, err := New(Config{
+		Stdout:         io.Discard,
+		Runner:         runner,
+		AttachRegistry: ar,
+		VsockDir:       testVsockDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	// No ports → port-forward branch wouldn't allocate Vsock, but
+	// the attach branch should.
+	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: "ws-attach"}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-attach", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if seen.Vsock == nil {
+		t.Fatal("Vsock not set")
+	}
+	if seen.Vsock.AttachPort != agent.DefaultAttachVsockPort {
+		t.Errorf("AttachPort = %d, want %d", seen.Vsock.AttachPort, agent.DefaultAttachVsockPort)
+	}
+}
+
+// TestHandleSandboxEventRegistersAndUnregistersAttachRoute pins
+// the attach-route lifecycle: during the dispatch the route is
+// reachable via the registry; after dispatch returns it's gone
+// (Attach yields ErrAttachNoRoute).
+func TestHandleSandboxEventRegistersAndUnregistersAttachRoute(t *testing.T) {
+	ar := sandboxgateway.NewAttachRegistry()
+	var attachErrDuringRun error
+	runner := func(ctx context.Context, _ io.Writer, _ sandbox.Config) error {
+		// Inside the run, Attach would normally dial the agent
+		// vsock; here we just verify a route exists by calling
+		// Attach. The dial will fail (UDS doesn't exist) but the
+		// failure mode tells us the route was registered.
+		_, attachErrDuringRun = ar.Attach(ctx, sandboxgateway.AttachRequest{SandboxUID: "sb-attached"})
+		return nil
+	}
+	e, err := New(Config{
+		Stdout:         io.Discard,
+		Runner:         runner,
+		AttachRegistry: ar,
+		VsockDir:       testVsockDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: "ws-attach-lifecycle"}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-attached", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	// During run the registry knew the route — the failure must
+	// not be ErrAttachNoRoute (dial-error wrap instead).
+	if errors.Is(attachErrDuringRun, sandboxgateway.ErrAttachNoRoute) {
+		t.Errorf("Attach returned ErrAttachNoRoute during run; want dial-error wrap")
+	}
+	// After dispatch returns the route is gone.
+	if _, err := ar.Attach(t.Context(), sandboxgateway.AttachRequest{SandboxUID: "sb-attached"}); !errors.Is(err, sandboxgateway.ErrAttachNoRoute) {
+		t.Errorf("post-dispatch Attach err = %v, want ErrAttachNoRoute", err)
 	}
 }

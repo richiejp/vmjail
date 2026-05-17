@@ -100,7 +100,8 @@ func runServe(
 	}
 
 	bridger := sandboxgateway.New()
-	dispatcher, err := buildDispatcher(stdout, bridger, vsockDir)
+	attachRegistry := sandboxgateway.NewAttachRegistry()
+	dispatcher, err := buildDispatcher(stdout, bridger, attachRegistry, vsockDir)
 	if err != nil {
 		return err
 	}
@@ -114,6 +115,7 @@ func runServe(
 		SandboxEvents:     dispatcher,
 		LiveSnapshot:      dispatcher.LiveSnapshot,
 		Bridger:           bridger,
+		AttachBridger:     attachRegistry,
 		Stderr:            stdout,
 	})
 	if err != nil {
@@ -153,11 +155,15 @@ var runRegisterAndServe = func(
 // Executor registers per-(workspace, port) DialGuestVsock closures
 // on bridger as dispatches arrive, and the same bridger is shared
 // with the nodectrlclient so its OpenPortStream handler finds them.
+// attachRegistry is the D2b.3 counterpart for AttachStream — the
+// same instance is shared with the nodectrlclient so AttachRequest
+// events route through to the executor-populated dial closures.
 //
 //nolint:gochecknoglobals // single test seam, not state.
 var buildDispatcher = func(
 	stdout io.Writer,
 	bridger *sandboxgateway.Bridger,
+	attachRegistry *sandboxgateway.AttachRegistry,
 	vsockDir string,
 ) (*sandboxexec.Executor, error) {
 	base, err := sandbox.ConfigFromEnv()
@@ -170,11 +176,12 @@ var buildDispatcher = func(
 		Extract:   bundled.Extract,
 	})
 	return sandboxexec.New(sandboxexec.Config{
-		Base:      base,
-		Stdout:    stdout,
-		Assembler: assembler,
-		Bridger:   bridger,
-		VsockDir:  vsockDir,
+		Base:           base,
+		Stdout:         stdout,
+		Assembler:      assembler,
+		Bridger:        bridger,
+		AttachRegistry: attachRegistry,
+		VsockDir:       vsockDir,
 	})
 }
 

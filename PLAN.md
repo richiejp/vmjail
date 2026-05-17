@@ -690,14 +690,31 @@ the user-host or in CI today.
         implements `AttachBridger`. Both pieces are
         transport-free so unit tests drive them against
         `net.Pipe`.
-      - D2b.3b: executor wiring. Add an attach vsock-port
-        constant; emit `daft.attach_port=N` on the cmdline;
-        wire the AttachRegistry into `sandboxexec.Executor`
-        (register on dispatch with a closure dialing the
-        per-sandbox hybrid-vsock UDS + AttachVsockPort,
-        unregister on terminal phase); wire it into
-        `sandboxdcli/serve.go` alongside the existing
-        port-forward Bridger.
+      - D2b.3b (landed): executor + serve.go wiring.
+        `agent.DefaultAttachVsockPort = 9000` is the
+        conventional guest-side port (between TracePort=8000
+        and BaseVsockPort=10000). `sandbox.VsockConfig`
+        carries a parallel `AttachPort uint32`; when set,
+        `buildKernelCmdline` emits `daft.attach_port=<N>` so
+        the agent's listener comes up. `sandboxexec.Config`
+        gains `AttachRegistry *sandboxgateway.AttachRegistry`
+        (same `VsockDir` requirement as `Bridger`).
+        `resolveBootConfig` allocates a Vsock device whenever
+        either the port-forward or attach branch needs it,
+        and sets `Vsock.AttachPort` when the attach registry
+        is wired. `HandleSandboxEvent` defers
+        `registerAttachRoute` alongside `registerPortRoutes`;
+        the route is a closure that dials the per-sandbox
+        hybrid-vsock UDS via `sandbox.DialGuestVsock`, runs
+        `sandboxattach.OpenSession`, and returns the
+        resulting `AttachSession`. `sandboxdcli/serve.go`
+        instantiates the registry and shares it with both
+        the executor and the nodectrlclient (as the
+        `AttachBridger` Config field already added in D2a).
+        End-to-end: an orchestrator-side `AttachSandbox`
+        call now flows orch → sandboxd
+        → executor's registered dial → in-VM agent's PTY,
+        with no missing seam.
   - D2c: user-host CLI. `daft workspace attach` puts the
     local terminal into raw mode, ships SIGWINCH-derived
     Resize frames, splices stdin/stdout to the

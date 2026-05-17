@@ -25,6 +25,14 @@ import (
 // builder stays uniform.
 const AttachPortCmdlineKey = "daft.attach_port"
 
+// DefaultAttachVsockPort is the AF_VSOCK port the agent listens on
+// for attach sessions when the host opts in. Picked to sit
+// between the trace port (8000) and the port-forward base
+// (BaseVsockPort = 10000), well clear of CH's reserved
+// low-numbered ports. There is no per-sandbox attach port — each
+// VM has one agent and one attach listener.
+const DefaultAttachVsockPort uint32 = 9000
+
 // FormatAttachPortCmdline renders an attach-port to the wire form.
 // Used by the host to add `daft.attach_port=N` to the cmdline.
 func FormatAttachPortCmdline(port uint32) string {
