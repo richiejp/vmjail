@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 
@@ -156,7 +155,7 @@ func pumpAttach(ctx context.Context, stream attachServerStream, session sandboxg
 		if err == nil {
 			continue
 		}
-		if isAttachCleanExit(err) {
+		if oops.IsExpectedPumpExit(err) {
 			continue
 		}
 		return err
@@ -174,7 +173,7 @@ func pumpAttachClientToSession(stream attachServerStream, session sandboxgateway
 	for {
 		msg, err := stream.Receive()
 		if err != nil {
-			if isAttachCleanExit(err) {
+			if oops.IsExpectedPumpExit(err) {
 				return nil
 			}
 			return err
@@ -185,7 +184,7 @@ func pumpAttachClientToSession(stream attachServerStream, session sandboxgateway
 				continue
 			}
 			if _, werr := session.Write(body.Data); werr != nil {
-				if isAttachCleanExit(werr) {
+				if oops.IsExpectedPumpExit(werr) {
 					return nil
 				}
 				return werr
@@ -196,7 +195,7 @@ func pumpAttachClientToSession(stream attachServerStream, session sandboxgateway
 				continue
 			}
 			if rerr := session.Resize(r.GetCols(), r.GetRows()); rerr != nil {
-				if isAttachCleanExit(rerr) {
+				if oops.IsExpectedPumpExit(rerr) {
 					return nil
 				}
 				return rerr
@@ -222,20 +221,12 @@ func pumpAttachSessionToClient(stream attachServerStream, session sandboxgateway
 			}
 		}
 		if err != nil {
-			if isAttachCleanExit(err) {
+			if oops.IsExpectedPumpExit(err) {
 				return nil
 			}
 			return err
 		}
 	}
-}
-
-// isAttachCleanExit reports whether err is one of the expected
-// teardown signals. Same allowlist as the forward path.
-func isAttachCleanExit(err error) bool {
-	return errors.Is(err, io.EOF) ||
-		errors.Is(err, net.ErrClosed) ||
-		errors.Is(err, io.ErrClosedPipe)
 }
 
 // attachCopyBufSize matches forwardCopyBufSize: large enough to

@@ -191,20 +191,10 @@ func pumpBidirectional(ctx context.Context, a, b net.Conn) error {
 		if err == nil {
 			continue
 		}
-		if isExpectedPumpExit(err) {
+		if oops.IsExpectedPumpExit(err) {
 			continue
 		}
 		return err
 	}
 	return nil
-}
-
-// isExpectedPumpExit reports whether err is one of the benign
-// signals an io.Copy can return when the pump is shutting down
-// normally — EOF, net.ErrClosed, io.ErrClosedPipe (net.Pipe's
-// close error). Anything else propagates.
-func isExpectedPumpExit(err error) bool {
-	return errors.Is(err, io.EOF) ||
-		errors.Is(err, net.ErrClosed) ||
-		errors.Is(err, io.ErrClosedPipe)
 }

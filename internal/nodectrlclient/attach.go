@@ -108,7 +108,7 @@ func pumpAttachStream(stream attachStreamRPC, session sandboxgateway.AttachSessi
 		if err == nil {
 			continue
 		}
-		if isAttachCleanExit(err) {
+		if oops.IsExpectedPumpExit(err) {
 			continue
 		}
 		return err
@@ -123,7 +123,7 @@ func pumpAttachStreamToSession(stream attachStreamRPC, session sandboxgateway.At
 	for {
 		msg, err := stream.Receive()
 		if err != nil {
-			if isAttachCleanExit(err) {
+			if oops.IsExpectedPumpExit(err) {
 				return nil
 			}
 			return err
@@ -134,7 +134,7 @@ func pumpAttachStreamToSession(stream attachStreamRPC, session sandboxgateway.At
 				continue
 			}
 			if _, werr := session.Write(body.Data); werr != nil {
-				if isAttachCleanExit(werr) {
+				if oops.IsExpectedPumpExit(werr) {
 					return nil
 				}
 				return werr
@@ -145,7 +145,7 @@ func pumpAttachStreamToSession(stream attachStreamRPC, session sandboxgateway.At
 				continue
 			}
 			if rerr := session.Resize(r.GetCols(), r.GetRows()); rerr != nil {
-				if isAttachCleanExit(rerr) {
+				if oops.IsExpectedPumpExit(rerr) {
 					return nil
 				}
 				return rerr
@@ -176,20 +176,12 @@ func pumpAttachSessionToStream(stream attachStreamRPC, session sandboxgateway.At
 			}
 		}
 		if err != nil {
-			if isAttachCleanExit(err) {
+			if oops.IsExpectedPumpExit(err) {
 				return nil
 			}
 			return err
 		}
 	}
-}
-
-// isAttachCleanExit reports whether err is one of the expected
-// teardown signals. Same allowlist as the port forward path.
-func isAttachCleanExit(err error) bool {
-	return errors.Is(err, io.EOF) ||
-		errors.Is(err, net.ErrClosed) ||
-		errors.Is(err, io.ErrClosedPipe)
 }
 
 // attachStreamBufSize matches the orchestrator-side copy buffer:

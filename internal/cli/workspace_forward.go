@@ -29,16 +29,6 @@ const forwardSubName = "forward"
 // on the remote stream.
 const forwardCopyBufSize = 32 * 1024
 
-// isCleanForwardExit reports whether err is one of the expected
-// teardown signals — io.EOF (peer half-close), net.ErrClosed
-// (Close on our side), io.ErrClosedPipe (net.Pipe close in tests).
-// Both pump halves share the allowlist.
-func isCleanForwardExit(err error) bool {
-	return errors.Is(err, io.EOF) ||
-		errors.Is(err, net.ErrClosed) ||
-		errors.Is(err, io.ErrClosedPipe)
-}
-
 // workspaceForwardOpts gathers `daft workspace forward` flags.
 type workspaceForwardOpts struct {
 	orchestrator string
@@ -348,7 +338,7 @@ func pumpLocalToStream(conn net.Conn, stream forwardClientStream) error {
 			}
 		}
 		if err != nil {
-			if isCleanForwardExit(err) {
+			if oops.IsExpectedPumpExit(err) {
 				return nil
 			}
 			return err
@@ -363,7 +353,7 @@ func pumpStreamToLocal(conn net.Conn, stream forwardClientStream) error {
 	for {
 		msg, err := stream.Receive()
 		if err != nil {
-			if isCleanForwardExit(err) {
+			if oops.IsExpectedPumpExit(err) {
 				return nil
 			}
 			return err
@@ -373,7 +363,7 @@ func pumpStreamToLocal(conn net.Conn, stream forwardClientStream) error {
 			continue
 		}
 		if _, werr := conn.Write(data); werr != nil {
-			if isCleanForwardExit(werr) {
+			if oops.IsExpectedPumpExit(werr) {
 				return nil
 			}
 			return werr

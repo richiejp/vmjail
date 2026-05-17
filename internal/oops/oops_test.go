@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"net"
 	"sync"
 	"testing"
 )
@@ -132,3 +133,31 @@ func TestMustNilNoOp(t *testing.T) {
 		t.Error("Must(nil) should not exit")
 	}
 }
+
+func TestIsExpectedPumpExit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{"io.EOF", io.EOF, true},
+		{"net.ErrClosed", net.ErrClosed, true},
+		{"io.ErrClosedPipe", io.ErrClosedPipe, true},
+		{"wrapped io.EOF", &wrappedErr{io.EOF}, true},
+		{"wrapped net.ErrClosed", &wrappedErr{net.ErrClosed}, true},
+		{"unrelated", errors.New("nope"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsExpectedPumpExit(tc.err); got != tc.want {
+				t.Errorf("IsExpectedPumpExit(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
+// wrappedErr verifies the errors.Is unwrap path goes through.
+type wrappedErr struct{ inner error }
+
+func (w *wrappedErr) Error() string { return w.inner.Error() }
+func (w *wrappedErr) Unwrap() error { return w.inner }

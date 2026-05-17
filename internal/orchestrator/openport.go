@@ -113,7 +113,7 @@ func (h *NodeControlHandler) OpenPortBridge(
 		return nil, err
 	}
 
-	waitCtx, cancel := waitContext(ctx)
+	waitCtx, cancel := waitContextWithFallback(ctx, DefaultOpenPortHandshakeTimeout)
 	defer cancel()
 	select {
 	case arrival := <-pending.arrived:
@@ -124,15 +124,16 @@ func (h *NodeControlHandler) OpenPortBridge(
 	}
 }
 
-// waitContext returns ctx as-is if it already carries a deadline;
-// otherwise it derives a child context with DefaultOpenPortHandshakeTimeout
-// so callers passing context.Background don't park forever waiting
+// waitContextWithFallback returns parent as-is if it already
+// carries a deadline; otherwise derives a child context capped
+// at fallback. Shared by the OpenPort and Attach rendezvous so a
+// caller passing context.Background doesn't park forever waiting
 // for a sandboxd that will never dial.
-func waitContext(parent context.Context) (context.Context, context.CancelFunc) {
+func waitContextWithFallback(parent context.Context, fallback time.Duration) (context.Context, context.CancelFunc) {
 	if _, ok := parent.Deadline(); ok {
 		return parent, func() {}
 	}
-	return context.WithTimeout(parent, DefaultOpenPortHandshakeTimeout)
+	return context.WithTimeout(parent, fallback)
 }
 
 // pushOpenPortRequest emits the OpenPortRequest event on the

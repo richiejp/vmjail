@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"sync"
 )
@@ -105,6 +106,26 @@ func Skip(label string, err error, expected ...error) {
 		}
 	}
 	Must(label, err)
+}
+
+// IsExpectedPumpExit reports whether err is one of the benign
+// signals a bidi byte pump (io.Copy, stream.Receive, conn.Read)
+// can return when the underlying conn is shutting down normally:
+//
+//   - io.EOF — peer half-close
+//   - net.ErrClosed — Close on our side
+//   - io.ErrClosedPipe — net.Pipe close (test plumbing)
+//
+// Used at every pump-loop exit to distinguish "the other side
+// hung up" (return nil) from "something actually broke" (return
+// err). Centralised here so the four bidi pumps in the codebase
+// (sandboxgateway.Bridger, orchestrator port + attach pumps,
+// nodectrlclient port + attach pumps, cli forward pump) share
+// one allowlist.
+func IsExpectedPumpExit(err error) bool {
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, io.ErrClosedPipe)
 }
 
 // Must logs label-prefixed err and exits with FatalExitCode when

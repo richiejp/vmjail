@@ -95,7 +95,7 @@ func (h *NodeControlHandler) OpenAttachBridge(
 		return nil, err
 	}
 
-	waitCtx, cancel := waitContextAttach(ctx)
+	waitCtx, cancel := waitContextWithFallback(ctx, DefaultOpenAttachHandshakeTimeout)
 	defer cancel()
 	select {
 	case arrival := <-pending.arrived:
@@ -104,17 +104,6 @@ func (h *NodeControlHandler) OpenAttachBridge(
 	case <-waitCtx.Done():
 		return nil, fmt.Errorf("orchestrator: wait for AttachStream session=%s: %w", sessionID, waitCtx.Err())
 	}
-}
-
-// waitContextAttach mirrors waitContext for the attach handshake
-// — applies DefaultOpenAttachHandshakeTimeout when the caller
-// didn't pass a deadline. Kept separate so the two flows can
-// evolve their timeouts independently.
-func waitContextAttach(parent context.Context) (context.Context, context.CancelFunc) {
-	if _, ok := parent.Deadline(); ok {
-		return parent, func() {}
-	}
-	return context.WithTimeout(parent, DefaultOpenAttachHandshakeTimeout)
 }
 
 // pushAttachRequest emits the AttachRequest event on the Node's
