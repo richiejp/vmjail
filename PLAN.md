@@ -594,6 +594,20 @@ in-VM Dockerfile/flake build pipeline (the old Phase E) is
 deferred until a workflow needs it; image construction lives on
 the user-host or in CI today.
 
+- D-pre (landed): **Agent lifecycle — listeners first, orchestrator
+  Serve.** Two small but load-bearing changes that unblock anything
+  past hello-world. (1) In `internal/agent`, port-forwarders (and
+  future attach listeners) are spawned *before* `runContainerFromCmdline`
+  so they're already accepting when a long-running container like
+  `bash` would otherwise block the agent's main goroutine. (2) New
+  `sandbox.Serve(ctx, w, cfg)` mirrors stdout for the VMM's full
+  lifetime and returns on `ctx.Done()` OR VMM exit — no banner gate.
+  `sandboxexec.Executor`'s default Runner switches from
+  `sandbox.Hello` to `sandbox.Serve`, so the orchestrator-driven
+  path supports interactive workloads where the container outlives
+  any console-side handshake. `sandbox.Hello` stays as the
+  smoke-test variant (boot → see banner → tear down) for the
+  one-shot CLI path. Total ~80 lines, no test rewrites.
 - D1: Sandboxd resource advertisement: GPU BDFs + VRAM, current
   utilisation; orchestrator scheduler.
 - D2: **Interactive attach (CPU+GPU).** `daft workspace attach

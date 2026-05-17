@@ -111,12 +111,28 @@ type fakeRunner struct {
 	startErr        error
 	stopCalled      bool
 	gotShareSockets []string // captured shareSockets arg, for share tests
+	// neverEOF keeps the returned stdout reader blocking after the
+	// output has been drained so Serve tests can verify the
+	// ctx-cancel branch (a real VMM's stdout stays open until the
+	// VM is killed). stop() closes the writer to unblock the reader.
+	neverEOF bool
 }
 
 func (f *fakeRunner) run(_ context.Context, _ Config, shareSockets []string) (io.ReadCloser, func(), error) {
 	f.gotShareSockets = shareSockets
 	if f.startErr != nil {
 		return nil, nil, f.startErr
+	}
+	if f.neverEOF {
+		pr, pw := io.Pipe()
+		go func() {
+			_, _ = pw.Write([]byte(f.output))
+			// Leave the writer open; stop() below closes it.
+		}()
+		return pr, func() {
+			f.stopCalled = true
+			_ = pw.Close()
+		}, nil
 	}
 	return io.NopCloser(strings.NewReader(f.output)),
 		func() { f.stopCalled = true },
@@ -827,5 +843,87 @@ func clearVars(t *testing.T) {
 		EnvCloudHypervisor, EnvKernel, EnvInitramfs, EnvMemory, EnvCPUs,
 	} {
 		t.Setenv(k, "")
+	}
+}
+
+// TestServeReturnsOnRunnerExit pins that Serve returns nil once
+// the fake VMM's stdout closes (i.e., the runner naturally exits)
+// and tears down via stop().
+func TestServeReturnsOnRunnerExit(t *testing.T) {
+	r := &fakeRunner{output: "boot line\nmore output\n"}
+	var buf bytes.Buffer
+	err := serveWith(t.Context(), &buf, validCfg(), r, noShareSidecar{})
+	if err != nil {
+		t.Fatalf("serveWith: %v", err)
+	}
+	if !r.stopCalled {
+		t.Error("stop function was not called after Serve returned")
+	}
+	// Serve mirrors the entire stdout, not just up to a banner.
+	if !strings.Contains(buf.String(), "more output") {
+		t.Errorf("output missing post-banner content: %q", buf.String())
+	}
+}
+
+// TestServeReturnsOnCtxCancel pins the ctx-driven teardown
+// branch: Serve blocks until ctx is cancelled even though the
+// runner would otherwise stay alive indefinitely.
+func TestServeReturnsOnCtxCancel(t *testing.T) {
+	r := &fakeRunner{output: "boot\n", neverEOF: true}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- serveWith(ctx, &bytes.Buffer{}, validCfg(), r, noShareSidecar{})
+	}()
+	// Give the mirror goroutine a moment to start before cancelling.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("serveWith did not return after ctx cancel")
+	}
+	if !r.stopCalled {
+		t.Error("stop function was not called on ctx-cancel teardown")
+	}
+}
+
+// TestServeRejectsEmptyConfigFields exercises the validate
+// branch of Serve — same shape as the Hello equivalent.
+func TestServeRejectsEmptyConfigFields(t *testing.T) {
+	err := Serve(t.Context(), &bytes.Buffer{},
+		Config{Kernel: "k", Initramfs: "i"})
+	if err == nil {
+		t.Fatal("Serve with empty CloudHypervisor returned nil")
+	}
+}
+
+// TestServePropagatesRunnerStartError pins that a runner
+// start-failure surfaces as Serve's return error.
+func TestServePropagatesRunnerStartError(t *testing.T) {
+	want := errors.New("synthetic start failure")
+	r := &fakeRunner{startErr: want}
+	err := serveWith(t.Context(), &bytes.Buffer{}, validCfg(), r, noShareSidecar{})
+	if !errors.Is(err, want) {
+		t.Errorf("err = %v, want wrap of %v", err, want)
+	}
+}
+
+// TestServePropagatesShareStartError pins the startShares branch
+// in serveWith — a virtiofsd start-failure surfaces verbatim
+// before runVMM is touched.
+func TestServePropagatesShareStartError(t *testing.T) {
+	want := errors.New("synthetic share-start failure")
+	r := &fakeRunner{}
+	sc := &fakeShareSidecar{startErr: want}
+	cfg := validCfg()
+	cfg.Virtiofsd = "/nonexistent/virtiofsd"
+	cfg.Shares = []*ShareConfig{{HostDir: "/", Tag: "t", Mountpoint: "/m"}}
+	err := serveWith(t.Context(), &bytes.Buffer{}, cfg, r, sc)
+	if !errors.Is(err, want) {
+		t.Errorf("err = %v, want wrap of %v", err, want)
 	}
 }

@@ -34,6 +34,11 @@ import (
 // decompression and sandbox-host load.
 const HelloTimeout = 30 * time.Second
 
+// traceAttrShares is the trace-attribute key for the share count
+// stamped on the Hello / Serve / startShares spans. Factored as a
+// const so goconst doesn't flag the three nearby call sites.
+const traceAttrShares = "shares"
+
 // Config selects the VMM and the artifacts it boots. All paths are
 // absolute on the sandbox-host. The struct is exported so tests and
 // callers can build one without going through the env.
@@ -578,6 +583,79 @@ func Hello(ctx context.Context, w io.Writer, cfg Config) error {
 	return helloWith(ctx, w, cfg, cloudHypervisorRunner{}, virtiofsdSidecar{})
 }
 
+// Serve is the long-running variant of Hello used by the
+// orchestrator-driven sandboxd path. It boots the VMM, mirrors
+// stdout to w in a background goroutine, and blocks until either
+// ctx is cancelled or the VMM exits on its own. The VMM is killed
+// before Serve returns regardless of outcome.
+//
+// Unlike Hello there is no banner gate — the agent inside the VM
+// starts its vsock listeners early in boot, so attach + port-
+// forward become reachable as soon as those listeners are bound
+// regardless of any console-side handshake. The orchestrator
+// signals teardown via ctx cancellation; a workload that exits on
+// its own (PID 1 returns, kernel panics, VMM crashes) bubbles up
+// as a normal Serve return without an error.
+func Serve(ctx context.Context, w io.Writer, cfg Config) error {
+	return serveWith(ctx, w, cfg, cloudHypervisorRunner{}, virtiofsdSidecar{})
+}
+
+// serveWith is Serve parameterised on its subprocess drivers so
+// tests can swap in fakes. Production callers go through Serve.
+func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareSidecar) error {
+	ctx, span := trace.Start(ctx, "sandbox.Serve",
+		trace.WithAttributes(
+			trace.KV{Key: "kernel", Value: cfg.Kernel},
+			trace.KV{Key: traceAttrShares, Value: strconv.Itoa(len(cfg.Shares))},
+			trace.KV{Key: "bundle", Value: cfg.Bundle},
+		))
+	defer span.End()
+
+	if err := cfg.validate(); err != nil {
+		return trace.RecordError(ctx, err)
+	}
+	cfg = cfg.withDefaults()
+
+	shareSockets, stopShare, err := startShares(ctx, cfg, sc)
+	if err != nil {
+		return trace.RecordError(ctx, err)
+	}
+	defer stopShare()
+
+	stopVsock, err := startVsockTraceReceiver(ctx, cfg)
+	if err != nil {
+		return trace.RecordError(ctx, err)
+	}
+	defer stopVsock()
+
+	stdout, stop, err := runVMM(ctx, cfg, shareSockets, r)
+	if err != nil {
+		return trace.RecordError(ctx, err)
+	}
+	defer stop()
+
+	// Mirror stdout for the VMM's full lifetime in a background
+	// goroutine. The drain inside stop() catches any residual
+	// bytes after we return.
+	mirrored := make(chan struct{})
+	go func() {
+		defer close(mirrored)
+		if _, copyErr := io.Copy(w, stdout); copyErr != nil {
+			oops.Skip("sandbox: mirror Serve stdout", copyErr,
+				io.EOF, os.ErrClosed)
+		}
+	}()
+
+	// Block on whichever happens first — caller-side cancellation
+	// or VMM exit (which causes the stdout pipe to close).
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-mirrored:
+		return nil
+	}
+}
+
 // helloWith is Hello parameterised on its subprocess drivers so tests
 // can swap in fakes. Production code calls Hello, which threads the
 // real cloudHypervisorRunner / virtiofsdSidecar.
@@ -585,7 +663,7 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	ctx, span := trace.Start(ctx, "sandbox.Hello",
 		trace.WithAttributes(
 			trace.KV{Key: "kernel", Value: cfg.Kernel},
-			trace.KV{Key: "shares", Value: strconv.Itoa(len(cfg.Shares))},
+			trace.KV{Key: traceAttrShares, Value: strconv.Itoa(len(cfg.Shares))},
 			trace.KV{Key: "bundle", Value: cfg.Bundle},
 		))
 	defer span.End()
@@ -634,7 +712,7 @@ func startShares(ctx context.Context, cfg Config, sc shareSidecar) (sockets []st
 		return nil, func() {}, nil
 	}
 	ctx, span := trace.Start(ctx, "sandbox.start_virtiofsd",
-		trace.WithAttributes(trace.KV{Key: "shares", Value: strconv.Itoa(len(cfg.Shares))}))
+		trace.WithAttributes(trace.KV{Key: traceAttrShares, Value: strconv.Itoa(len(cfg.Shares))}))
 	defer span.End()
 	sockets, stop, err = sc.start(ctx, cfg)
 	if err != nil {

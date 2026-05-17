@@ -108,8 +108,14 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 		trace.WithAttributes(trace.KV{Key: "cmdline.len", Value: fmt.Sprintf("%d", len(cmdline))}))
 	bundle, _, _ := ParseBundleCmdline(cmdline)
 	applySharesFromCmdline(w, d, cmdline, bundle != "")
-	runContainerFromCmdline(ctx, w, d, cmdline)
+	// Port-forwarders (and future attach listeners) must come up
+	// BEFORE the container so a long-running workload like
+	// `bash` doesn't block the agent's main goroutine forever
+	// before any listener is ready. Each helper spawns its own
+	// goroutines and returns immediately; the listeners live for
+	// the agent's lifetime.
 	startPortForwardersFromCmdline(ctx, w, d, cmdline)
+	runContainerFromCmdline(ctx, w, d, cmdline)
 	bootSpan.End()
 
 	// Flush spans *before* the banner: the host's banner-scan is

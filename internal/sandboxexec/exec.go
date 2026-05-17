@@ -49,8 +49,10 @@ const (
 type Assembler func(ctx context.Context, ref string) (sandbox.Config, func(), error)
 
 // Runner is the function the Executor calls to boot a VM. The
-// default in production is sandbox.Hello; tests inject a fake so
-// they don't need /dev/kvm.
+// default in production is sandbox.Serve — the long-running
+// variant that blocks on ctx.Done OR VMM exit, suitable for
+// interactive workloads where the container outlives any banner
+// handshake. Tests inject a fake so they don't need /dev/kvm.
 type Runner func(ctx context.Context, w io.Writer, cfg sandbox.Config) error
 
 // liveSandbox tracks one sandbox the Executor is supervising.
@@ -90,7 +92,7 @@ type Executor struct {
 // (used for the bare-Hello fallback when image_ref is empty);
 // Assembler is the image-ref → bootable-config seam used when
 // image_ref is set. Runner is the function that actually boots
-// the VM — production wiring uses sandbox.Hello.
+// the VM — production wiring uses sandbox.Serve (long-running).
 type Config struct {
 	Base      sandbox.Config
 	Stdout    io.Writer
@@ -111,7 +113,7 @@ type Config struct {
 }
 
 // New builds an Executor. Stdout is required; Runner defaults to
-// sandbox.Hello when nil; Assembler defaults to a wrapper around
+// sandbox.Serve when nil; Assembler defaults to a wrapper around
 // sandboxboot.BuildBundleConfig with the deps the caller passes
 // via the production helper (see ProductionAssembler below).
 //
@@ -123,7 +125,7 @@ func New(cfg Config) (*Executor, error) {
 		return nil, errors.New("sandboxexec: nil stdout writer")
 	}
 	if cfg.Runner == nil {
-		cfg.Runner = sandbox.Hello
+		cfg.Runner = sandbox.Serve
 	}
 	if cfg.Bridger != nil {
 		if cfg.VsockDir == "" {
