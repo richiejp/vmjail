@@ -178,7 +178,7 @@ func attachAcceptLoop(ctx context.Context, w io.Writer, ln net.Listener, exec Ex
 // session sees the failure rather than a silent EOF.
 func handleAttach(ctx context.Context, w io.Writer, conn net.Conn, exec ExecAttach) {
 	defer func() { oops.Skip("agent: close attach conn", conn.Close(), net.ErrClosed) }()
-	hello, err := readAttachHello(conn)
+	hello, err := ReadAttachHello(conn)
 	if err != nil {
 		writeReport(w, attachReportPrefix, "read hello: "+err.Error())
 		writeAttachExit(conn, 1, "agent: read hello: "+err.Error())
@@ -304,9 +304,12 @@ func pumpAttachProcessToConn(w io.Writer, conn net.Conn, proc AttachProcess) {
 	}
 }
 
-// readAttachHello reads exactly one length-prefixed
-// AgentAttachHello off r. Any other frame type is a protocol error.
-func readAttachHello(r io.Reader) (*agentv1.AgentAttachHello, error) {
+// ReadAttachHello reads exactly one length-prefixed
+// AgentAttachHello off r. Any other frame type is a protocol
+// error. Exported as the symmetric counterpart of WriteAttachHello
+// so test fakes / integration harnesses don't open-code the
+// length-prefix decoder.
+func ReadAttachHello(r io.Reader) (*agentv1.AgentAttachHello, error) {
 	payload, err := readAttachPayload(r)
 	if err != nil {
 		return nil, err

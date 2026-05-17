@@ -57,9 +57,12 @@ func OpenSession(_ context.Context, conn net.Conn, req sandboxgateway.AttachRequ
 //     writes it.
 //   - Close: closes the underlying conn (idempotent).
 //
-// Read serialises with itself; Write/Resize serialise via a
-// separate write mutex so a Resize never interleaves a partial
-// Data frame.
+// writeMu serialises every frame write. The framing helper emits
+// the 4-byte length prefix and the marshalled payload as two
+// separate conn.Write calls; net.Conn doesn't guarantee atomicity
+// across them, so without the mutex a concurrent Write or Resize
+// could splice its header between another frame's prefix and body,
+// leaving the peer unable to parse the corrupted length.
 type agentSession struct {
 	conn net.Conn
 
@@ -92,7 +95,7 @@ func (s *agentSession) Read(b []byte) (int, error) {
 	// Loop because off-spec agent → host Resize frames are dropped
 	// (a confused peer mustn't kill the session); keep reading
 	// until we see Data, Exit, or an error.
-	//daft:lint:disable=forloopbound reason="bounded by agent.ReadAttachFrame returning io.EOF / net.ErrClosed on close"
+	//daft:lint:disable=forloopbound reason="bounded by agent.ReadAttachFrame returning io.EOF / net.ErrClosed on close. A trusted agent terminates the session with Data or Exit; the trusted-agent threat model accepts a goroutine pin if the agent floods Resize frames."
 	for {
 		frame, err := agent.ReadAttachFrame(s.conn)
 		if err != nil {
@@ -102,12 +105,20 @@ func (s *agentSession) Read(b []byte) (int, error) {
 		case *agentv1.AgentAttachFrame_Data:
 			n := copy(b, body.Data)
 			if n < len(body.Data) {
-				s.readBuf = append([]byte(nil), body.Data[n:]...)
+				// proto.Unmarshal hands us a fresh buffer
+				// owned by this frame; slice the tail
+				// directly instead of allocating + copying.
+				s.readBuf = body.Data[n:]
 			}
 			return n, nil
 		case *agentv1.AgentAttachFrame_Exit:
 			return 0, io.EOF
 		case *agentv1.AgentAttachFrame_Resize:
+			// v0: agent → host Resize is undefined. Drop and
+			// keep reading so a confused peer can't kill the
+			// session. The trusted-agent threat model accepts
+			// that a malicious agent sending infinite Resize
+			// frames could pin this goroutine.
 			continue
 		default:
 			return 0, errors.New("sandboxattach: agent sent frame with no body")
@@ -126,7 +137,7 @@ func (s *agentSession) Write(b []byte) (int, error) {
 		Body: &agentv1.AgentAttachFrame_Data{Data: b},
 	}
 	if err := agent.WriteAttachFrame(s.conn, frame); err != nil {
-		return 0, err
+		return 0, fmt.Errorf("sandboxattach: send Data: %w", err)
 	}
 	return len(b), nil
 }

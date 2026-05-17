@@ -9,8 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
 	"github.com/richiejp/darkaifactory/internal/agent"
 	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
@@ -368,31 +366,15 @@ func TestSessionReadRejectsEmptyBody(t *testing.T) {
 }
 
 // readHello reads one length-prefixed AgentAttachHello off the
-// agent-facing end of the pipe. internal/agent only exports a
-// frame-shaped ReadAttachFrame (which would reject a Hello
-// payload), so we open-code the same 4-byte BE length-prefix
-// scheme here. t is optional — pass nil from non-Helper-cap call
-// sites (the goroutine-based agent simulator).
+// agent-facing end of the pipe via the exported helper. The t
+// argument is accepted (and may be nil) so callers from non-
+// t.Helper-eligible sites — the goroutine-based agent simulator —
+// can reuse it.
 func readHello(t *testing.T, conn net.Conn) (*agentv1.AgentAttachHello, error) {
 	if t != nil {
 		t.Helper()
 	}
-	var hdr [4]byte
-	if _, err := io.ReadFull(conn, hdr[:]); err != nil {
-		return nil, err
-	}
-	n := uint32(hdr[0])<<24 | uint32(hdr[1])<<16 | uint32(hdr[2])<<8 | uint32(hdr[3])
-	buf := make([]byte, n)
-	if n > 0 {
-		if _, err := io.ReadFull(conn, buf); err != nil {
-			return nil, err
-		}
-	}
-	var hello agentv1.AgentAttachHello
-	if err := proto.Unmarshal(buf, &hello); err != nil {
-		return nil, err
-	}
-	return &hello, nil
+	return agent.ReadAttachHello(conn)
 }
 
 // closedConn is a net.Conn whose Read/Write all error. Used to

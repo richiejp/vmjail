@@ -205,7 +205,7 @@ func TestAttachFrameRoundtrip(t *testing.T) {
 	if err := WriteAttachHello(&buf, hello); err != nil {
 		t.Fatalf("write hello: %v", err)
 	}
-	got, err := readAttachHello(&buf)
+	got, err := ReadAttachHello(&buf)
 	if err != nil {
 		t.Fatalf("read hello: %v", err)
 	}
