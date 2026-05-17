@@ -677,12 +677,27 @@ the user-host or in CI today.
       <argv...>` (defaulting to `/bin/sh -l` for an empty
       command). New `golang.org/x/sys` direct dep. Non-Linux
       builds keep the unavailableAttachExec stub.
-    - D2b.3: sandboxd-side `AttachBridger` that implements
-      `sandboxgateway.AttachBridger` by dialing the agent's
-      attach vsock, sending the Hello, and adapting the
-      framed stream to an `AttachSession`. Wired into
-      `sandboxexec.Executor` (register attach route per
-      dispatched sandbox) and `sandboxdcli/serve.go`.
+    - D2b.3: sandboxd-side `AttachBridger`. Sub-sliced:
+      - D2b.3a (landed): host-side framing client +
+        per-sandbox registry. New `internal/sandboxattach`
+        package: `OpenSession(ctx, conn, req)` sends the
+        AgentAttachHello and wraps the framed conn as a
+        `sandboxgateway.AttachSession` (Read yields Data
+        bytes, Write wraps in Data frames, Resize wraps in
+        Resize frames, agent's Exit frame surfaces as
+        io.EOF). New `sandboxgateway.AttachRegistry`:
+        sandbox_uid-keyed table of `AttachDialer`s,
+        implements `AttachBridger`. Both pieces are
+        transport-free so unit tests drive them against
+        `net.Pipe`.
+      - D2b.3b: executor wiring. Add an attach vsock-port
+        constant; emit `daft.attach_port=N` on the cmdline;
+        wire the AttachRegistry into `sandboxexec.Executor`
+        (register on dispatch with a closure dialing the
+        per-sandbox hybrid-vsock UDS + AttachVsockPort,
+        unregister on terminal phase); wire it into
+        `sandboxdcli/serve.go` alongside the existing
+        port-forward Bridger.
   - D2c: user-host CLI. `daft workspace attach` puts the
     local terminal into raw mode, ships SIGWINCH-derived
     Resize frames, splices stdin/stdout to the

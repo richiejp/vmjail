@@ -146,7 +146,7 @@ func TestRegisterRejectsBadInput(t *testing.T) {
 	}{
 		{"empty workspace", "", testPort, dial, "empty workspaceUUID"},
 		{"zero port", testWorkspace, 0, dial, "zero port"},
-		{"nil dial", testWorkspace, testPort, nil, "nil dial"},
+		{noDialLabel, testWorkspace, testPort, nil, "nil dial"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := b.Register(tc.ws, tc.port, tc.dial)

@@ -3,7 +3,9 @@ package sandboxgateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
+	"sync"
 )
 
 // ErrAttachNoRoute is returned by an AttachBridger when no
@@ -38,9 +40,87 @@ type AttachSession interface {
 
 // AttachBridger opens an attach session into a running Sandbox
 // on the local Node. Implementations live in the sandboxd
-// (production: vsock to daft-agent — Slice D2b) and tests (fake
-// in-process PTY). The interface is transport-free so this
-// package never depends on the agent or the wire format.
+// (production: vsock to daft-agent) and tests (fake in-process
+// PTY). The interface is transport-free so this package never
+// depends on the agent or the wire format.
 type AttachBridger interface {
 	Attach(ctx context.Context, req AttachRequest) (AttachSession, error)
+}
+
+// AttachDialer opens a fresh AttachSession against the agent
+// listener on the configured sandbox. Single-shot: every Attach
+// call produces a new session; the caller owns its lifetime. The
+// AttachRequest carries the Hello fields so the dialer can drive
+// the host-side framing handshake before returning.
+type AttachDialer func(ctx context.Context, req AttachRequest) (AttachSession, error)
+
+// ErrAttachRouteExists is returned by AttachRegistry.Register
+// when a route is already registered for the sandbox_uid. Same
+// shape as ErrRouteExists on the port side — an executor/
+// orchestrator bug rather than a transient condition.
+var ErrAttachRouteExists = errors.New("sandboxgateway: attach route already registered for sandbox")
+
+// AttachRegistry is the sandbox-host's per-sandbox attach-route
+// table. The executor populates it on dispatch and the
+// orchestrator-driven AttachStream handler dispatches through it
+// (via the AttachBridger interface) to reach the right VM.
+//
+// Single-key (sandbox_uid) — each sandbox has at most one agent
+// attach listener; nothing like the (workspace, port) tuple
+// Bridger uses for port-forward.
+type AttachRegistry struct {
+	mu      sync.RWMutex
+	dialers map[string]AttachDialer
+}
+
+// NewAttachRegistry returns an empty AttachRegistry. Single
+// instance per sandboxd process.
+func NewAttachRegistry() *AttachRegistry {
+	return &AttachRegistry{dialers: map[string]AttachDialer{}}
+}
+
+// Register adds a sandbox_uid → dial mapping. Returns
+// ErrAttachRouteExists if the uid was already registered — same
+// executor-invariant rationale as Bridger.Register.
+func (r *AttachRegistry) Register(sandboxUID string, dial AttachDialer) error {
+	if sandboxUID == "" {
+		return errors.New("sandboxgateway: AttachRegistry.Register: empty sandboxUID")
+	}
+	if dial == nil {
+		return errors.New("sandboxgateway: AttachRegistry.Register: nil dial")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.dialers[sandboxUID]; ok {
+		return fmt.Errorf("%w: sandbox=%s", ErrAttachRouteExists, sandboxUID)
+	}
+	r.dialers[sandboxUID] = dial
+	return nil
+}
+
+// Unregister removes the sandbox_uid mapping. Idempotent —
+// removing a missing uid is a no-op so the executor's terminal-
+// phase cleanup runs without first checking presence.
+func (r *AttachRegistry) Unregister(sandboxUID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.dialers, sandboxUID)
+}
+
+// Attach satisfies AttachBridger by looking the sandbox_uid up
+// and delegating to the registered dialer. Returns
+// ErrAttachNoRoute when no mapping exists. The session's
+// lifetime is the caller's responsibility once Attach returns.
+func (r *AttachRegistry) Attach(ctx context.Context, req AttachRequest) (AttachSession, error) {
+	dial := r.lookup(req.SandboxUID)
+	if dial == nil {
+		return nil, fmt.Errorf("%w: sandbox=%s", ErrAttachNoRoute, req.SandboxUID)
+	}
+	return dial(ctx, req)
+}
+
+func (r *AttachRegistry) lookup(sandboxUID string) AttachDialer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.dialers[sandboxUID]
 }
