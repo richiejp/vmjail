@@ -112,6 +112,9 @@ const (
 	// WorkspaceCatalogServiceForwardPortProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's ForwardPort RPC.
 	WorkspaceCatalogServiceForwardPortProcedure = "/daft.workspace.v1.WorkspaceCatalogService/ForwardPort"
+	// WorkspaceCatalogServiceAttachSandboxProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's AttachSandbox RPC.
+	WorkspaceCatalogServiceAttachSandboxProcedure = "/daft.workspace.v1.WorkspaceCatalogService/AttachSandbox"
 )
 
 // WorkspaceCatalogServiceClient is a client for the daft.workspace.v1.WorkspaceCatalogService
@@ -218,6 +221,22 @@ type WorkspaceCatalogServiceClient interface {
 	// Unavailable when the Node is offline or the stream backlog is
 	// full. See PLAN.md Phase C3.
 	ForwardPort(context.Context) *connect.BidiStreamForClient[v1.ForwardFrame, v1.ForwardFrame]
+	// AttachSandbox is the bidi PTY channel a user-host CLI dials
+	// to open an interactive shell (or arbitrary exec) inside the
+	// running workspace's container. The first frame on the
+	// client side MUST be an AttachFrame{hello} carrying the
+	// workspace handle, the command to exec, and (if tty=true)
+	// the initial window size. The orchestrator resolves the
+	// workspace, calls OpenAttachBridge to open a sandboxd-side
+	// AttachStream, and splices the two bidi streams. Data frames
+	// pass through opaquely; resize frames flow client → sandbox
+	// and translate to the in-VM PTY's TIOCSWINSZ.
+	//
+	// Errors: NotFound when the handle doesn't resolve;
+	// FailedPrecondition when the workspace isn't RUNNING (no
+	// current_sandbox); Unavailable when the Node is offline.
+	// See PLAN.md Slice D2.
+	AttachSandbox(context.Context) *connect.BidiStreamForClient[v1.AttachFrame, v1.AttachFrame]
 }
 
 // NewWorkspaceCatalogServiceClient constructs a client for the
@@ -333,28 +352,35 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("ForwardPort")),
 			connect.WithClientOptions(opts...),
 		),
+		attachSandbox: connect.NewClient[v1.AttachFrame, v1.AttachFrame](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceAttachSandboxProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("AttachSandbox")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // workspaceCatalogServiceClient implements WorkspaceCatalogServiceClient.
 type workspaceCatalogServiceClient struct {
-	create      *connect.Client[v1.CreateWorkspaceRequest, v1.WorkspaceResponse]
-	get         *connect.Client[v1.GetWorkspaceRequest, v1.WorkspaceResponse]
-	list        *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
-	setImage    *connect.Client[v1.SetImageRequest, v1.WorkspaceResponse]
-	setTarget   *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
-	addMount    *connect.Client[v1.AddMountRequest, v1.WorkspaceResponse]
-	addEnv      *connect.Client[v1.AddEnvRequest, v1.WorkspaceResponse]
-	addPort     *connect.Client[v1.AddPortRequest, v1.WorkspaceResponse]
-	removeMount *connect.Client[v1.RemoveMountRequest, v1.WorkspaceResponse]
-	removeEnv   *connect.Client[v1.RemoveEnvRequest, v1.WorkspaceResponse]
-	removePort  *connect.Client[v1.RemovePortRequest, v1.WorkspaceResponse]
-	validate    *connect.Client[v1.ValidateRequest, v1.WorkspaceResponse]
-	launch      *connect.Client[v1.LaunchRequest, v1.WorkspaceResponse]
-	stop        *connect.Client[v1.StopRequest, v1.WorkspaceResponse]
-	acquire     *connect.Client[v1.AcquireRequest, v1.WorkspaceResponse]
-	release     *connect.Client[v1.ReleaseRequest, v1.WorkspaceResponse]
-	forwardPort *connect.Client[v1.ForwardFrame, v1.ForwardFrame]
+	create        *connect.Client[v1.CreateWorkspaceRequest, v1.WorkspaceResponse]
+	get           *connect.Client[v1.GetWorkspaceRequest, v1.WorkspaceResponse]
+	list          *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
+	setImage      *connect.Client[v1.SetImageRequest, v1.WorkspaceResponse]
+	setTarget     *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
+	addMount      *connect.Client[v1.AddMountRequest, v1.WorkspaceResponse]
+	addEnv        *connect.Client[v1.AddEnvRequest, v1.WorkspaceResponse]
+	addPort       *connect.Client[v1.AddPortRequest, v1.WorkspaceResponse]
+	removeMount   *connect.Client[v1.RemoveMountRequest, v1.WorkspaceResponse]
+	removeEnv     *connect.Client[v1.RemoveEnvRequest, v1.WorkspaceResponse]
+	removePort    *connect.Client[v1.RemovePortRequest, v1.WorkspaceResponse]
+	validate      *connect.Client[v1.ValidateRequest, v1.WorkspaceResponse]
+	launch        *connect.Client[v1.LaunchRequest, v1.WorkspaceResponse]
+	stop          *connect.Client[v1.StopRequest, v1.WorkspaceResponse]
+	acquire       *connect.Client[v1.AcquireRequest, v1.WorkspaceResponse]
+	release       *connect.Client[v1.ReleaseRequest, v1.WorkspaceResponse]
+	forwardPort   *connect.Client[v1.ForwardFrame, v1.ForwardFrame]
+	attachSandbox *connect.Client[v1.AttachFrame, v1.AttachFrame]
 }
 
 // Create calls daft.workspace.v1.WorkspaceCatalogService.Create.
@@ -440,6 +466,11 @@ func (c *workspaceCatalogServiceClient) Release(ctx context.Context, req *connec
 // ForwardPort calls daft.workspace.v1.WorkspaceCatalogService.ForwardPort.
 func (c *workspaceCatalogServiceClient) ForwardPort(ctx context.Context) *connect.BidiStreamForClient[v1.ForwardFrame, v1.ForwardFrame] {
 	return c.forwardPort.CallBidiStream(ctx)
+}
+
+// AttachSandbox calls daft.workspace.v1.WorkspaceCatalogService.AttachSandbox.
+func (c *workspaceCatalogServiceClient) AttachSandbox(ctx context.Context) *connect.BidiStreamForClient[v1.AttachFrame, v1.AttachFrame] {
+	return c.attachSandbox.CallBidiStream(ctx)
 }
 
 // WorkspaceCatalogServiceHandler is an implementation of the
@@ -546,6 +577,22 @@ type WorkspaceCatalogServiceHandler interface {
 	// Unavailable when the Node is offline or the stream backlog is
 	// full. See PLAN.md Phase C3.
 	ForwardPort(context.Context, *connect.BidiStream[v1.ForwardFrame, v1.ForwardFrame]) error
+	// AttachSandbox is the bidi PTY channel a user-host CLI dials
+	// to open an interactive shell (or arbitrary exec) inside the
+	// running workspace's container. The first frame on the
+	// client side MUST be an AttachFrame{hello} carrying the
+	// workspace handle, the command to exec, and (if tty=true)
+	// the initial window size. The orchestrator resolves the
+	// workspace, calls OpenAttachBridge to open a sandboxd-side
+	// AttachStream, and splices the two bidi streams. Data frames
+	// pass through opaquely; resize frames flow client → sandbox
+	// and translate to the in-VM PTY's TIOCSWINSZ.
+	//
+	// Errors: NotFound when the handle doesn't resolve;
+	// FailedPrecondition when the workspace isn't RUNNING (no
+	// current_sandbox); Unavailable when the Node is offline.
+	// See PLAN.md Slice D2.
+	AttachSandbox(context.Context, *connect.BidiStream[v1.AttachFrame, v1.AttachFrame]) error
 }
 
 // NewWorkspaceCatalogServiceHandler builds an HTTP handler from the service implementation. It
@@ -657,6 +704,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("ForwardPort")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceAttachSandboxHandler := connect.NewBidiStreamHandler(
+		WorkspaceCatalogServiceAttachSandboxProcedure,
+		svc.AttachSandbox,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("AttachSandbox")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.workspace.v1.WorkspaceCatalogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkspaceCatalogServiceCreateProcedure:
@@ -693,6 +746,8 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceReleaseHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceForwardPortProcedure:
 			workspaceCatalogServiceForwardPortHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceAttachSandboxProcedure:
+			workspaceCatalogServiceAttachSandboxHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -768,4 +823,8 @@ func (UnimplementedWorkspaceCatalogServiceHandler) Release(context.Context, *con
 
 func (UnimplementedWorkspaceCatalogServiceHandler) ForwardPort(context.Context, *connect.BidiStream[v1.ForwardFrame, v1.ForwardFrame]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.ForwardPort is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) AttachSandbox(context.Context, *connect.BidiStream[v1.AttachFrame, v1.AttachFrame]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.AttachSandbox is not implemented"))
 }

@@ -57,6 +57,21 @@ service NodeControlService {
   // orchestrator-authenticated session and the workload behind
   // the agent's vsock listener is the trust boundary.
   rpc OpenPortStream(stream PortStreamMessage) returns (stream PortStreamMessage) {}
+
+  // AttachStream is the byte channel for a single attach session.
+  // The Node dials this in response to an AttachRequest event
+  // delivered on its RegisterNode stream; the orchestrator
+  // splices the resulting bidi stream to the caller (a
+  // `daft workspace attach` client).
+  //
+  // First message on each direction MUST be an
+  // AttachStreamMessage{hello} carrying the announced session_id
+  // so the orchestrator can match this stream to its pending
+  // request. Subsequent messages carry opaque data bytes or
+  // window-resize control frames. The transport is opaque to the
+  // orchestrator — the agent inside the VM is the actual PTY
+  // endpoint. See PLAN.md Slice D2.
+  rpc AttachStream(stream AttachStreamMessage) returns (stream AttachStreamMessage) {}
 }
 
 // ProtocolVersion is the wire-protocol version exchanged at
@@ -105,6 +120,7 @@ message NodeEvent {
     SubscriptionReady ready = 1;
     SandboxWatchEvent sandbox = 2;
     OpenPortRequest open_port = 3;
+    AttachRequest attach = 4;
   }
 }
 
@@ -137,6 +153,52 @@ message PortStreamMessage {
 
 message PortStreamHello {
   string session_id = 1;
+}
+
+// AttachRequest asks the Node to dial AttachStream for one
+// inbound attach session. The Node identifies the live sandbox
+// by sandbox_uid (matching Sandbox.metadata.uid), dispatches the
+// exec to its in-VM daft-agent via vsock, and echoes session_id
+// back on the AttachStream Hello so the orchestrator can splice.
+message AttachRequest {
+  // Opaque rendezvous token (random 32 bytes, base64-url).
+  string session_id = 1;
+  // Sandbox.metadata.uid of the live sandbox to attach to. The
+  // Node uses this as the routing key into its local
+  // sandboxgateway AttachBridger.
+  string sandbox_uid = 2;
+  // Command to exec inside the container. Empty → the agent's
+  // default shell.
+  repeated string command = 3;
+  // Whether to allocate a PTY for the exec. Almost always true;
+  // false is useful for one-shot piped commands.
+  bool tty = 4;
+  // Initial window size when tty=true. Both required > 0.
+  uint32 cols = 5;
+  uint32 rows = 6;
+}
+
+// AttachStreamMessage is the AttachStream frame. First message
+// on each direction is a Hello; subsequent frames carry data
+// bytes or window-resize control events.
+message AttachStreamMessage {
+  oneof body {
+    AttachStreamHello hello = 1;
+    bytes data = 2;
+    AttachStreamResize resize = 3;
+  }
+}
+
+message AttachStreamHello {
+  string session_id = 1;
+}
+
+// AttachStreamResize forwards a window-resize event from the
+// attaching client through to the in-VM PTY. Strictly
+// client → sandbox; the orchestrator passes them transparently.
+message AttachStreamResize {
+  uint32 cols = 1;
+  uint32 rows = 2;
 }
 
 // SandboxWatchEvent reports a Sandbox lifecycle transition the

@@ -188,6 +188,8 @@ func (h *NodeControlHandler) OpenPortStream(
 // runOpenPortStream is the testable core, taking the narrow
 // serverPortStream interface so in-process stubs can drive it
 // without standing up a real Connect server.
+//
+//nolint:dupl // structurally parallel to runAttachStream in attach.go; proto types differ and a generic merge would obscure type checking. Side-by-side review is the intent.
 func (h *NodeControlHandler) runOpenPortStream(ctx context.Context, stream serverPortStream) error {
 	msg, err := stream.Receive()
 	if err != nil {

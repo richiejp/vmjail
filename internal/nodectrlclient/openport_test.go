@@ -329,6 +329,8 @@ func TestHandleOpenPortRejectsMissingBridger(t *testing.T) {
 // the open-port branch and triggers handleOpenPort. The handler is
 // invoked in a goroutine for liveness — we wait on the bridger's
 // observation rather than the dispatchEvent return.
+//
+//nolint:dupl // structurally parallel to TestDispatchEventRoutesAttach in attach_test.go; the two event variants are different and side-by-side review is the intent.
 func TestDispatchEventRoutesOpenPort(t *testing.T) {
 	// dispatchEvent dials c.ctrl.OpenPortStream, which we can't
 	// hit without a real Connect server. Instead, exercise the

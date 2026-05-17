@@ -73,6 +73,11 @@ type NodeControlHandler struct {
 	// the OpenPortRequest event; drained by OpenPortStream when the
 	// matching inbound stream arrives. See openport.go.
 	pendingPorts map[string]*pendingPort
+	// pendingAttaches is the parallel map for OpenAttachBridge
+	// (Slice D2a). Same rendezvous-by-session_id pattern as
+	// pendingPorts; populated before AttachRequest event is
+	// pushed, drained when AttachStream arrives. See attach.go.
+	pendingAttaches map[string]*pendingAttach
 }
 
 // SetReconciler wires the LivenessReconciler invoked on every
@@ -91,9 +96,10 @@ func NewNodeControlHandler(reg *nodectrl.Registry) (*NodeControlHandler, error) 
 		return nil, errors.New("orchestrator: nil nodectrl registry")
 	}
 	return &NodeControlHandler{
-		reg:          reg,
-		streams:      map[identity.Fingerprint]chan *nodectrlv1.NodeEvent{},
-		pendingPorts: map[string]*pendingPort{},
+		reg:             reg,
+		streams:         map[identity.Fingerprint]chan *nodectrlv1.NodeEvent{},
+		pendingPorts:    map[string]*pendingPort{},
+		pendingAttaches: map[string]*pendingAttach{},
 	}, nil
 }
 

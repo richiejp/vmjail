@@ -576,22 +576,91 @@ Phase C — **Orchestrator-driven port ingress**:
   intercepted at the controller and either forwarded
   upstream or routed back to the orchestrator for inspection.
 
-Phase D — **GPU mode + multi-container VMs**:
+Phase D — **Attach + GPU**:
+
+The Phase D scope was reshaped (2026-05-17) once the actual
+blocker for the reference CPU workflow became clear: the user
+needs a shell inside the container to drive `nix develop` / `nix
+run` against their flake. That is **attach**, not the heavier
+multi-container scheduling story the old D2 conflated. Attach
+(new D2) is a structural clone of C3 with a PTY on the far end
+instead of a TCP port; multi-container moves to D5, where it
+actually belongs (GPU-VM amortisation, not interactive dev).
+
+In-VM build (was Phase E) is also descoped — for the CPU
+reference workflow, "boot the nix container image with bash as
+PID 1 and let the user `nix develop`" is the path. A dedicated
+in-VM Dockerfile/flake build pipeline (the old Phase E) is
+deferred until a workflow needs it; image construction lives on
+the user-host or in CI today.
+
 - D1: Sandboxd resource advertisement: GPU BDFs + VRAM, current
   utilisation; orchestrator scheduler.
-- D2: daft-agent multi-container: a vsock control stream from
-  the controller; agent accepts `RunContainer(spec)` /
-  `StopContainer(id)`, runs N crun children, isolates each by
-  user-namespace subuid range and a per-container subpath of
-  `/workspace`.
+- D2: **Interactive attach (CPU+GPU).** `daft workspace attach
+  <workspace> [-- cmd ...]` opens a PTY into the running
+  container's sandbox. Structurally a clone of C3 — same
+  session-id rendezvous via the orchestrator, same bidi-stream
+  pump — with a PTY on the agent side instead of a TCP forward.
+  Default cmd is `/bin/sh -l` (bash if present). Unblocks the
+  nix-shell reference workflow. Sliced:
+  - D2a (landed): proto + orchestrator + sandboxd halves.
+    New `AttachSandbox` bidi RPC on `WorkspaceCatalogService`
+    carrying `AttachFrame{hello,data,resize}`; new
+    `NodeEvent.AttachRequest{session_id, sandbox_uid,
+    command[], tty, cols, rows}`; new `AttachStream` bidi on
+    `NodeControlService`. Orchestrator gets
+    `OpenAttachBridge` mirroring `OpenPortBridge` (mint
+    session, push event, wait for sandboxd to dial back, hand
+    back an `AttachSession` that wraps the bidi stream as a
+    net.Conn plus a `Resize(cols, rows)` side-channel). The
+    `AttachSandbox` connect handler reads the Hello, resolves
+    the workspace + RUNNING gate (same shape as ForwardPort),
+    calls `OpenAttachBridge`, and runs `pumpAttach` — a bidi
+    pump that splices Data frames as bytes and forwards
+    Resize frames via `session.Resize`. New transport-free
+    `sandboxgateway.AttachBridger` + `AttachSession`
+    interfaces; production `daft-sandboxd serve` wiring lands
+    in D2b. `nodectrlclient` grows a parallel
+    `handleAttach`/`runAttach`/`pumpAttachStream` dispatcher
+    on the sandboxd side. Same `//nolint:dupl` discipline as
+    OpenPort — proto types differ, side-by-side review is
+    intentional.
+  - D2b: daft-agent PTY exec. Vsock listener that accepts
+    `AttachRequest`, spawns `crun exec -t <id> <cmd...>`
+    against the running container, splices the PTY master fd
+    to the vsock stream, forwards `Resize{rows, cols}`
+    control frames.
+  - D2c: user-host CLI. `daft workspace attach` puts the
+    local terminal into raw mode, ships SIGWINCH-derived
+    Resize frames, splices stdin/stdout to the
+    `AttachSandbox` RPC.
+  - D2d: full-stack e2e test (parallel to C3.3) booting a
+    real VM, attaching, running `echo hello`, asserting byte
+    round-trip.
 - D3: GPU-bound VM lifecycle: orchestrator keeps the VM up
   while ≥1 workspace targets it; stops it when idle for $TTL
   (default 10 min) or on operator command.
 - D4: `--isolation strict` opt-out from sharing — 1 VM per
   workspace even with `--gpu`. Same control surface as CPU
   mode.
+- D5: **Multi-container per VM** (was the old D2). daft-agent
+  vsock control stream: agent accepts `RunContainer(spec)` /
+  `StopContainer(id)`, runs N crun children, isolates each by
+  user-namespace subuid range and a per-container subpath of
+  `/workspace`. Only needed for GPU amortisation (siblings
+  sharing a GPU-bound VM) — pushed behind D2/D3/D4 because the
+  CPU workflow is one-container-per-Sandbox by design.
 
-Phase E — **Dockerfile build in VM (Ayup-style)**:
+Phase E (deferred) — **Image build in VM (Ayup-style)**:
+
+Descoped 2026-05-17 for the CPU reference workflow: a nix-based
+container image with bash as PID 1 is sufficient, and the user
+runs `nix develop` / `nix run` interactively via D2 attach. A
+dedicated server-side image build pipeline only becomes
+necessary if a workflow can't pre-build its image
+(user-host-side `nix build` + push to registry, or CI). Kept
+here as a sketch in case that workflow appears.
+
 - E1: `daft workspace image --dockerfile <path>` packages
   build context as a transient workspace; workspace image is
   set to `pending-build:<uuid>`.

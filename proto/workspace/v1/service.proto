@@ -153,6 +153,23 @@ service WorkspaceCatalogService {
   // Unavailable when the Node is offline or the stream backlog is
   // full. See PLAN.md Phase C3.
   rpc ForwardPort(stream ForwardFrame) returns (stream ForwardFrame) {}
+
+  // AttachSandbox is the bidi PTY channel a user-host CLI dials
+  // to open an interactive shell (or arbitrary exec) inside the
+  // running workspace's container. The first frame on the
+  // client side MUST be an AttachFrame{hello} carrying the
+  // workspace handle, the command to exec, and (if tty=true)
+  // the initial window size. The orchestrator resolves the
+  // workspace, calls OpenAttachBridge to open a sandboxd-side
+  // AttachStream, and splices the two bidi streams. Data frames
+  // pass through opaquely; resize frames flow client → sandbox
+  // and translate to the in-VM PTY's TIOCSWINSZ.
+  //
+  // Errors: NotFound when the handle doesn't resolve;
+  // FailedPrecondition when the workspace isn't RUNNING (no
+  // current_sandbox); Unavailable when the Node is offline.
+  // See PLAN.md Slice D2.
+  rpc AttachSandbox(stream AttachFrame) returns (stream AttachFrame) {}
 }
 
 // ForwardFrame is the wire envelope for the ForwardPort byte
@@ -172,6 +189,46 @@ message ForwardFrame {
 message ForwardHello {
   WorkspaceHandle workspace = 1;
   uint32 container_port = 2;
+}
+
+// AttachFrame is the wire envelope for the AttachSandbox bidi
+// stream. First frame on the client side MUST be an AttachHello;
+// the orchestrator emits a hello-less first frame on the return
+// path once the bridge is established (a zero-data frame). All
+// subsequent frames are application bytes or window-resize
+// control events.
+message AttachFrame {
+  oneof body {
+    AttachHello hello = 1;
+    bytes data = 2;
+    AttachResize resize = 3;
+  }
+}
+
+// AttachHello identifies the target workspace and the exec
+// shape. The orchestrator routes to the workspace's
+// current_sandbox; the in-VM agent runs `command` with a PTY if
+// `tty` is true.
+message AttachHello {
+  WorkspaceHandle workspace = 1;
+  // Command to exec inside the container. Empty selects the
+  // agent's default shell (/bin/sh -l, or bash if present).
+  repeated string command = 2;
+  // Allocate a PTY for the exec. Almost always true; false is
+  // useful for one-shot commands consuming piped stdin.
+  bool tty = 3;
+  // Initial window size when tty=true. Both required > 0.
+  uint32 cols = 4;
+  uint32 rows = 5;
+}
+
+// AttachResize is a window-resize control frame. Sent from the
+// client whenever its local terminal's window size changes
+// (SIGWINCH). Strictly client → orchestrator → sandbox;
+// orchestrator never emits one back to the client.
+message AttachResize {
+  uint32 cols = 1;
+  uint32 rows = 2;
 }
 
 // WorkspaceHandle addresses a workspace by either its canonical

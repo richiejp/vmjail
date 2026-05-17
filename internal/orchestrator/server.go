@@ -91,6 +91,12 @@ type Config struct {
 	// exercised without a real sandboxd.
 	WorkspacePortBridger WorkspacePortBridger
 
+	// WorkspaceAttachBridger backs WorkspaceCatalogService.AttachSandbox
+	// (Slice D2a). Defaults to the orchestrator's own
+	// NodeControlHandler (its OpenAttachBridge); tests inject a
+	// fake that returns a pre-paired AttachSession.
+	WorkspaceAttachBridger WorkspaceAttachBridger
+
 	// Reconciler tunables (Slice B5). Zero values fall through to
 	// the reconciler package's defaults — tests usually override
 	// MissThreshold and SweepInterval to fire quickly.
@@ -193,6 +199,7 @@ func New(cfg Config) (*Server, error) {
 	sandboxCtrl.SetReconciler(rec)
 	workspaceCtrl.SetPreActionReconciler(rec)
 	workspaceCtrl.SetPortBridger(resolvePortBridger(cfg, sandboxCtrl))
+	workspaceCtrl.SetAttachBridger(resolveAttachBridger(cfg, sandboxCtrl))
 	// The broker handler needs the orchestrator's bound address
 	// to return as the relay endpoint, but the listener doesn't
 	// bind until Listen(). Close over a late-bound *mtls.Server
@@ -257,6 +264,17 @@ func buildReconciler(cfg Config, cat *workspacecatalog.Store, nodes *nodectrl.Re
 func resolvePortBridger(cfg Config, sandboxCtrl *NodeControlHandler) WorkspacePortBridger {
 	if cfg.WorkspacePortBridger != nil {
 		return cfg.WorkspacePortBridger
+	}
+	return sandboxCtrl
+}
+
+// resolveAttachBridger returns cfg.WorkspaceAttachBridger when
+// set, otherwise the orchestrator's own NodeControlHandler.
+// Production wiring; tests inject a fake to exercise the splice
+// loop without a sandboxd.
+func resolveAttachBridger(cfg Config, sandboxCtrl *NodeControlHandler) WorkspaceAttachBridger {
+	if cfg.WorkspaceAttachBridger != nil {
+		return cfg.WorkspaceAttachBridger
 	}
 	return sandboxCtrl
 }

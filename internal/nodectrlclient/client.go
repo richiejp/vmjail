@@ -101,8 +101,14 @@ type Config struct {
 	// and shares it with the sandboxexec Executor so the routes the
 	// executor registers are the same table this transport reads from.
 	Bridger PortBridger
-	// Stderr is where per-OpenPort bridge errors are logged.
-	// Defaults to os.Stderr when nil.
+	// AttachBridger is the per-sandbox attach factory invoked when
+	// the orchestrator pushes an AttachRequest event (Slice D2a).
+	// Nil ⇒ AttachRequest events surface as bridge errors on
+	// Stderr. Production wiring (`daft-sandboxd serve`) wires this
+	// to the agent-vsock implementation landing in D2b.
+	AttachBridger AttachBridger
+	// Stderr is where per-bridge errors are logged. Defaults to
+	// os.Stderr when nil.
 	Stderr io.Writer
 }
 
@@ -270,6 +276,14 @@ func (c *Client) dispatchEvent(ctx context.Context, msg *nodectrlv1.NodeEvent) e
 		go func() {
 			if err := c.handleOpenPort(ctx, op); err != nil {
 				_, _ = fmt.Fprintf(c.cfg.openPortLogSink(), "nodectrlclient: openport bridge: %v\n", err)
+			}
+		}()
+		return nil
+	}
+	if at := msg.GetAttach(); at != nil {
+		go func() {
+			if err := c.handleAttach(ctx, at); err != nil {
+				_, _ = fmt.Fprintf(c.cfg.openPortLogSink(), "nodectrlclient: attach bridge: %v\n", err)
 			}
 		}()
 		return nil

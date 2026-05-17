@@ -93,6 +93,8 @@ func (b *fakeBridger) OpenPortBridge(_ context.Context, _ identity.Fingerprint, 
 // newForwardingTestHandler builds a WorkspaceCatalogHandler with
 // a workspace UUID + a RUNNING status (current_sandbox set) so
 // runForwardPort's catalog lookup + readiness gate both pass.
+//
+//nolint:dupl // structurally parallel to newAttachTestHandlerWithWorkspace in attachsandbox_test.go; the bridger interface differs (Port vs Attach) and the side-by-side review is the intent.
 func newForwardingTestHandler(t *testing.T, bridger WorkspacePortBridger) (*WorkspaceCatalogHandler, string, identity.Fingerprint) {
 	t.Helper()
 	cat := workspacecatalog.NewStore(nil)
@@ -209,7 +211,7 @@ func TestRunForwardPortRejectsBadHello(t *testing.T) {
 		name  string
 		first *workspacev1.ForwardFrame
 	}{
-		{"data first", &workspacev1.ForwardFrame{
+		{testBadHelloDataFirst, &workspacev1.ForwardFrame{
 			Body: &workspacev1.ForwardFrame_Data{Data: []byte("nope")},
 		}},
 		{"hello empty handle", &workspacev1.ForwardFrame{

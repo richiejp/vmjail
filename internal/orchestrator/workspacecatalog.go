@@ -18,6 +18,7 @@ import (
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
@@ -45,6 +46,15 @@ type WorkspacePortBridger interface {
 	OpenPortBridge(ctx context.Context, fp identity.Fingerprint, workspaceUUID string, containerPort uint32) (net.Conn, error)
 }
 
+// WorkspaceAttachBridger is the seam AttachSandbox uses to open
+// an attach session into the Sandbox bound to a Workspace. The
+// production implementation is *NodeControlHandler (its
+// OpenAttachBridge method); tests inject fakes that return a
+// pre-paired sandboxgateway.AttachSession.
+type WorkspaceAttachBridger interface {
+	OpenAttachBridge(ctx context.Context, fp identity.Fingerprint, req sandboxgateway.AttachRequest) (sandboxgateway.AttachSession, error)
+}
+
 // WorkspaceCatalogHandler adapts the workspacecatalog.Store to the
 // Connect-RPC WorkspaceCatalogService surface. Peer identity for
 // every RPC is the mTLS leaf-cert fingerprint surfaced via
@@ -53,10 +63,11 @@ type WorkspacePortBridger interface {
 // mutation lands in B2d.
 type WorkspaceCatalogHandler struct {
 	workspacev1connect.UnimplementedWorkspaceCatalogServiceHandler
-	store       *workspacecatalog.Store
-	dispatcher  Dispatcher
-	preAction   preActionReconciler
-	portBridger WorkspacePortBridger
+	store         *workspacecatalog.Store
+	dispatcher    Dispatcher
+	preAction     preActionReconciler
+	portBridger   WorkspacePortBridger
+	attachBridger WorkspaceAttachBridger
 }
 
 // SetPortBridger wires the WorkspacePortBridger ForwardPort calls
@@ -64,6 +75,12 @@ type WorkspaceCatalogHandler struct {
 // shape for catalog-only test rigs that don't exercise ingress.
 func (h *WorkspaceCatalogHandler) SetPortBridger(b WorkspacePortBridger) {
 	h.portBridger = b
+}
+
+// SetAttachBridger wires the WorkspaceAttachBridger AttachSandbox
+// calls route to. Nil ⇒ AttachSandbox returns Unimplemented.
+func (h *WorkspaceCatalogHandler) SetAttachBridger(b WorkspaceAttachBridger) {
+	h.attachBridger = b
 }
 
 // NewWorkspaceCatalogHandler returns a handler backed by store and
