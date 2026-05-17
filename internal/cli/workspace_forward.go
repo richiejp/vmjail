@@ -29,6 +29,16 @@ const forwardSubName = "forward"
 // on the remote stream.
 const forwardCopyBufSize = 32 * 1024
 
+// isCleanForwardExit reports whether err is one of the expected
+// teardown signals — io.EOF (peer half-close), net.ErrClosed
+// (Close on our side), io.ErrClosedPipe (net.Pipe close in tests).
+// Both pump halves share the allowlist.
+func isCleanForwardExit(err error) bool {
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, net.ErrClosed) ||
+		errors.Is(err, io.ErrClosedPipe)
+}
+
 // workspaceForwardOpts gathers `daft workspace forward` flags.
 type workspaceForwardOpts struct {
 	orchestrator string
@@ -320,7 +330,11 @@ func pumpForwardConn(conn net.Conn, stream forwardClientStream) error {
 }
 
 // pumpLocalToStream reads from conn and sends Data frames on the
-// stream until either side closes or errors.
+// stream until either side closes or errors. The per-Read
+// append-copy is required because protobuf marshals []byte fields
+// by reference and io.Copy reuses the same buffer across Reads —
+// the next Read would overwrite the bytes the in-flight Send is
+// still reading.
 func pumpLocalToStream(conn net.Conn, stream forwardClientStream) error {
 	buf := make([]byte, forwardCopyBufSize)
 	//daft:lint:disable=forloopbound reason="exits when conn.Read returns err (peer close / cross-cancel close)"
@@ -334,7 +348,7 @@ func pumpLocalToStream(conn net.Conn, stream forwardClientStream) error {
 			}
 		}
 		if err != nil {
-			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+			if isCleanForwardExit(err) {
 				return nil
 			}
 			return err
@@ -349,7 +363,7 @@ func pumpStreamToLocal(conn net.Conn, stream forwardClientStream) error {
 	for {
 		msg, err := stream.Receive()
 		if err != nil {
-			if errors.Is(err, io.EOF) {
+			if isCleanForwardExit(err) {
 				return nil
 			}
 			return err
@@ -359,7 +373,7 @@ func pumpStreamToLocal(conn net.Conn, stream forwardClientStream) error {
 			continue
 		}
 		if _, werr := conn.Write(data); werr != nil {
-			if errors.Is(werr, net.ErrClosed) || errors.Is(werr, io.ErrClosedPipe) {
+			if isCleanForwardExit(werr) {
 				return nil
 			}
 			return werr
