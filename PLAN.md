@@ -551,8 +551,26 @@ Phase C — **Orchestrator-driven port ingress**:
     listen → accept → tunnel → pump path with a fake echo
     stream factory and a real local TCP listener bound to an
     OS-assigned port.
-  - C3.3 (next): end-to-end test wiring CLI → orch → sandboxd
-    → echo DialFunc.
+  - C3.3 (landed): end-to-end test wiring CLI → orch → sandboxd
+    → echo DialFunc. `TestWorkspaceForwardEndToEnd` brings up a
+    real orchestrator (mTLS + HTTP/2 Connect, default
+    WorkspacePortBridger = the orchestrator's own SandboxControl
+    handler), a real `nodectrlclient` registered as a Node with a
+    real `sandboxgateway.Bridger`, seeds a RUNNING workspace
+    owned by the client identity, and runs
+    `runWorkspaceForwardWith` against the orchestrator. A test
+    TCP client dials the CLI's local listener and round-trips
+    bytes through every layer (CLI → ForwardPort RPC → handler →
+    OpenPortBridge → push OpenPortRequest → sandboxd dispatch →
+    OpenPortStream RPC → Bridger.Bridge → DialFunc → echo
+    net.Pipe). Catches integration regressions the per-layer
+    unit tests can't see (proto rename ripples, missed Hello
+    shape changes, cross-cancellation deadlocks). C3 is now
+    fully exercised end-to-end; the user-host port-forward
+    feature is shippable. C2 (orchestrator-side per-workspace
+    TCP listener that drives `OpenPortBridge` from inbound
+    traffic on an orchestrator-host interface) is the natural
+    next step.
 - C4: Allowlist of egress destinations per workspace (the
   "shadow services" hook): outbound from the container is
   intercepted at the controller and either forwarded
