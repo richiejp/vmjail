@@ -1,0 +1,66 @@
+// Wire format for the in-VM daft-agent's attach listener. The
+// sandboxd host dials the agent's AF_VSOCK attach port (configured
+// via `daft.attach_port=<n>` on the kernel cmdline), writes one
+// length-prefixed AgentAttachHello, then exchanges length-prefixed
+// AgentAttachFrame messages bidirectionally until either side
+// closes. Framing is the same 4-byte big-endian length prefix the
+// trace stream uses — see internal/trace/stream.go for the precedent.
+//
+// Inner mTLS is NOT layered on top of this channel: vsock dials are
+// pinned to a single VM by the hypervisor; the agent process inside
+// is the trust boundary.
+//
+// See PLAN.md Slice D2b.
+syntax = "proto3";
+
+package daft.agent.v1;
+
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1";
+
+// AgentAttachHello is the first message the sandboxd sends on a
+// fresh attach connection. The agent uses it to decide what to
+// exec inside the running container and how to size the PTY.
+message AgentAttachHello {
+  // Argv to exec inside the running container. The agent passes
+  // this to `crun exec` as the command. Empty means "agent's
+  // default shell" (e.g. /bin/sh -l).
+  repeated string command = 1;
+  // Allocate a PTY for the exec. False is reserved for one-shot
+  // pipe commands; D2b ships TTY-only.
+  bool tty = 2;
+  // Initial PTY window size. Honoured only when tty=true; both
+  // must be >0 in that case.
+  uint32 cols = 3;
+  uint32 rows = 4;
+}
+
+// AgentAttachFrame is the per-message envelope after the Hello.
+// Sandboxd → agent carries data + resize; agent → sandboxd carries
+// data + a terminal exit frame.
+message AgentAttachFrame {
+  oneof body {
+    bytes data = 1;
+    AgentAttachResize resize = 2;
+    AgentAttachExit exit = 3;
+  }
+}
+
+// AgentAttachResize forwards a window-resize event from the
+// attaching client through to the agent's PTY (ioctl TIOCSWINSZ).
+message AgentAttachResize {
+  uint32 cols = 1;
+  uint32 rows = 2;
+}
+
+// AgentAttachExit is the agent's final message before closing the
+// connection. Either reports a clean exec exit code or, when the
+// agent couldn't run the command at all (crun missing, container
+// not found), an error string for the operator to triage.
+message AgentAttachExit {
+  // Exit code from the exec'd command.
+  int32 code = 1;
+  // Non-empty when the agent failed before or during exec. On a
+  // clean exit this is empty even if code is non-zero — code is
+  // authoritative for that.
+  string error = 2;
+}

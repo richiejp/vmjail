@@ -643,7 +643,32 @@ the user-host or in CI today.
     `AttachRequest`, spawns `crun exec -t <id> <cmd...>`
     against the running container, splices the PTY master fd
     to the vsock stream, forwards `Resize{rows, cols}`
-    control frames.
+    control frames. Sub-sliced:
+    - D2b.1 (landed): proto + agent vsock listener + framing.
+      New `proto/agent/v1/attach.proto` carrying
+      `AgentAttachHello` + `AgentAttachFrame{data, resize, exit}`
+      with the same 4-byte BE length-prefix framing as the
+      trace stream. New `daft.attach_port=<n>` kernel cmdline
+      parameter. New `internal/agent/attach.go`:
+      `runAttachListener` accept loop, `handleAttach` per-conn
+      (read Hello → `ExecAttach.Start` → bidi pump →
+      terminal Exit frame). `ExecAttach` interface is
+      injected so unit tests drive the listener against an
+      in-process `io.Pipe`-backed `AttachProcess` without
+      spawning a real PTY. Production `defaultAttachDeps`
+      wires a stub `unavailableAttachExec` until D2b.2 lands
+      the real crun-exec-with-PTY. The listener is started
+      before the container in `runWith`, same lifecycle
+      rule the port-forwarders follow (D-pre).
+    - D2b.2: production `ExecAttach` implementation —
+      `crun exec -t <id> <cmd...>` with PTY allocation, PTY
+      master ↔ frame splicing, TIOCSWINSZ for resize.
+    - D2b.3: sandboxd-side `AttachBridger` that implements
+      `sandboxgateway.AttachBridger` by dialing the agent's
+      attach vsock, sending the Hello, and adapting the
+      framed stream to an `AttachSession`. Wired into
+      `sandboxexec.Executor` (register attach route per
+      dispatched sandbox) and `sandboxdcli/serve.go`.
   - D2c: user-host CLI. `daft workspace attach` puts the
     local terminal into raw mode, ships SIGWINCH-derived
     Resize frames, splices stdin/stdout to the

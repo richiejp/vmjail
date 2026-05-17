@@ -81,6 +81,7 @@ func Run(ctx context.Context, w io.Writer) error {
 		container:   defaultContainerDeps(),
 		dialVsock:   DialHostVsock,
 		portForward: defaultPortForwardDeps(),
+		attach:      defaultAttachDeps(),
 	})
 }
 
@@ -98,6 +99,9 @@ type runDeps struct {
 	// portForward is the test-substitutable surface for the C1
 	// in-VM port-forwarder: vsock.Listen + container dial.
 	portForward portForwardDeps
+	// attach is the test-substitutable surface for the D2b
+	// in-VM attach listener: vsock.Listen + ExecAttach.
+	attach attachDeps
 }
 
 func runWith(ctx context.Context, w io.Writer, d runDeps) error {
@@ -108,13 +112,14 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 		trace.WithAttributes(trace.KV{Key: "cmdline.len", Value: fmt.Sprintf("%d", len(cmdline))}))
 	bundle, _, _ := ParseBundleCmdline(cmdline)
 	applySharesFromCmdline(w, d, cmdline, bundle != "")
-	// Port-forwarders (and future attach listeners) must come up
+	// Port-forwarders and the attach listener must come up
 	// BEFORE the container so a long-running workload like
 	// `bash` doesn't block the agent's main goroutine forever
 	// before any listener is ready. Each helper spawns its own
 	// goroutines and returns immediately; the listeners live for
 	// the agent's lifetime.
 	startPortForwardersFromCmdline(ctx, w, d, cmdline)
+	startAttachListenerFromCmdline(ctx, w, d, cmdline)
 	runContainerFromCmdline(ctx, w, d, cmdline)
 	bootSpan.End()
 
