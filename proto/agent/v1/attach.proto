@@ -9,8 +9,6 @@
 // Inner mTLS is NOT layered on top of this channel: vsock dials are
 // pinned to a single VM by the hypervisor; the agent process inside
 // is the trust boundary.
-//
-// See PLAN.md Slice D2b.
 syntax = "proto3";
 
 package daft.agent.v1;

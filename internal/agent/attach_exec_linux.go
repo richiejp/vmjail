@@ -169,15 +169,13 @@ func (p *ptyAttachProcess) Resize(cols, rows uint32) error {
 func (p *ptyAttachProcess) Close() error {
 	p.closeOnce.Do(func() {
 		// Closing the master sends SIGHUP to the foreground process
-		// group of the slave (the child's session, given the
-		// Setsid+Setctty above). Belt-and-braces: also signal the
-		// process group directly with SIGKILL, so a workload that
-		// ignores SIGHUP doesn't pin the agent's Wait() indefinitely.
+		// group, but workloads that ignore SIGHUP (and at least one
+		// tested cat binary does) will pin Wait() indefinitely.
+		// SIGKILL to the process group — negative PID, possible
+		// because of Setsid above — is the actual termination
+		// mechanism. ESRCH for an already-exited group is benign.
 		p.closeErr = p.master.Close()
 		if p.cmd.Process != nil {
-			// Negative PID targets the process group (because of
-			// Setsid). Errors from a process that already exited
-			// are expected; ignore them.
 			_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
 		}
 	})

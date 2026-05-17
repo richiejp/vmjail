@@ -36,21 +36,7 @@ func FormatAttachPortCmdline(port uint32) string {
 // the "no attach listener" path. Malformed (non-numeric, zero) is
 // an error so a typo on the host surfaces.
 func ParseAttachPortCmdline(cmdline string) (port uint32, ok bool, err error) {
-	val, ok := findCmdlineValue(cmdline, AttachPortCmdlineKey)
-	if !ok {
-		return 0, false, nil
-	}
-	if val == "" {
-		return 0, false, fmt.Errorf("agent: %s value is empty", AttachPortCmdlineKey)
-	}
-	n, perr := strconv.ParseUint(val, 10, 32)
-	if perr != nil {
-		return 0, false, fmt.Errorf("agent: %s=%q: %w", AttachPortCmdlineKey, val, perr)
-	}
-	if n == 0 {
-		return 0, false, fmt.Errorf("agent: %s must be non-zero", AttachPortCmdlineKey)
-	}
-	return uint32(n), true, nil
+	return parseNonZeroUintCmdline(cmdline, AttachPortCmdlineKey)
 }
 
 // attachReportPrefix is the console prefix for attach-listener
@@ -115,11 +101,9 @@ type attachDeps struct {
 }
 
 // ErrAttachExecUnavailable is the error unavailableAttachExec
-// returns on non-Linux builds (see attach_exec_other.go). PTY +
-// crun are Linux-kernel features; the agent only ships for Linux.
-// On Linux the real ptyAttachExec replaces this stub. The error
-// is surfaced to the attaching client as the AgentAttachExit
-// error string so the failure is visible end-to-end.
+// returns on non-Linux builds (see attach_exec_other.go). It
+// surfaces to the attaching client as the AgentAttachExit error
+// string so the failure is visible end-to-end.
 var ErrAttachExecUnavailable = errors.New("agent: attach exec unsupported off Linux")
 
 type unavailableAttachExec struct{}
@@ -255,10 +239,6 @@ func pumpAttachProcess(ctx context.Context, w io.Writer, conn net.Conn, exec Exe
 	// (if any) don't outlive us.
 	oops.Skip("agent: close attach conn (post-exit)", conn.Close(), net.ErrClosed)
 	<-clientDone
-
-	// ctx is observed via the agent's lifetime; nothing here loops
-	// independently of it.
-	_ = ctx
 }
 
 // pumpAttachConnToProcess reads frames off the conn and dispatches:
@@ -376,8 +356,8 @@ func readAttachPayload(r io.Reader) ([]byte, error) {
 }
 
 // WriteAttachHello marshals + length-prefixes the Hello onto w.
-// Exported so the sandboxd-side AttachBridger (Slice D2b.3) can
-// use the same framing without duplicating the encode loop.
+// Exported so the sandboxd-side AttachBridger can use the same
+// framing without duplicating the encode loop.
 func WriteAttachHello(w io.Writer, hello *agentv1.AgentAttachHello) error {
 	payload, err := proto.Marshal(hello)
 	if err != nil {
@@ -423,21 +403,27 @@ func writeAttachExit(w io.Writer, code int32, errMsg string) {
 }
 
 // writeAttachLenPrefixed writes the 4-byte BE length prefix
-// followed by payload as a single Write. Combining them keeps a
-// zero-length-payload write from blocking on a synchronous
-// transport like net.Pipe (Write of an empty slice waits for a
-// matching Read), and avoids an unnecessary syscall on the
-// production vsock path.
+// followed by payload. The header is on the stack; the payload is
+// the caller's existing buffer. Two separate Writes match the
+// trace stream's pattern and avoid an allocation per frame on the
+// data hot path. A zero-length payload skips the second Write —
+// otherwise a synchronous transport like net.Pipe in tests would
+// block on the empty Write waiting for a matching Read.
 func writeAttachLenPrefixed(w io.Writer, payload []byte) error {
 	if len(payload) > attachMaxFrame {
 		return fmt.Errorf("agent: attach payload %d > cap %d", len(payload), attachMaxFrame)
 	}
-	buf := make([]byte, attachLenPrefix+len(payload))
+	var hdr [attachLenPrefix]byte
 	// len(payload) was just bounds-checked above.
-	binary.BigEndian.PutUint32(buf[:attachLenPrefix], uint32(len(payload))) //nolint:gosec // G115: bounded by attachMaxFrame above
-	copy(buf[attachLenPrefix:], payload)
-	if _, err := w.Write(buf); err != nil {
-		return fmt.Errorf("write attach frame: %w", err)
+	binary.BigEndian.PutUint32(hdr[:], uint32(len(payload))) //nolint:gosec // G115: bounded by attachMaxFrame above
+	if _, err := w.Write(hdr[:]); err != nil {
+		return fmt.Errorf("write length prefix: %w", err)
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	if _, err := w.Write(payload); err != nil {
+		return fmt.Errorf("write payload: %w", err)
 	}
 	return nil
 }

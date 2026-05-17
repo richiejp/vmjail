@@ -51,19 +51,28 @@ func FormatVsockTracePortCmdline(port uint32) string {
 // is the "feature not requested" path. Malformed value (non-numeric,
 // out of range) is an error so a typo on the host surfaces.
 func ParseVsockTracePortCmdline(cmdline string) (port uint32, ok bool, err error) {
-	val, ok := findCmdlineValue(cmdline, VsockTracePortCmdlineKey)
+	return parseNonZeroUintCmdline(cmdline, VsockTracePortCmdlineKey)
+}
+
+// parseNonZeroUintCmdline parses `<key>=<uint32>` from cmdline.
+// Absent token ⇒ (0, false, nil). Present-but-malformed (empty,
+// non-numeric, zero) ⇒ (0, false, err). Shared by every cmdline
+// parameter whose validation shape is "must be a non-zero uint32"
+// (currently the trace and attach vsock-port keys).
+func parseNonZeroUintCmdline(cmdline, key string) (value uint32, ok bool, err error) {
+	val, ok := findCmdlineValue(cmdline, key)
 	if !ok {
 		return 0, false, nil
 	}
 	if val == "" {
-		return 0, false, fmt.Errorf("agent: %s value is empty", VsockTracePortCmdlineKey)
+		return 0, false, fmt.Errorf("agent: %s value is empty", key)
 	}
 	n, perr := strconv.ParseUint(val, 10, 32)
 	if perr != nil {
-		return 0, false, fmt.Errorf("agent: %s=%q: %w", VsockTracePortCmdlineKey, val, perr)
+		return 0, false, fmt.Errorf("agent: %s=%q: %w", key, val, perr)
 	}
 	if n == 0 {
-		return 0, false, fmt.Errorf("agent: %s must be non-zero", VsockTracePortCmdlineKey)
+		return 0, false, fmt.Errorf("agent: %s must be non-zero", key)
 	}
 	return uint32(n), true, nil
 }
