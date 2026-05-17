@@ -197,7 +197,7 @@ func TestParseAttachPortCmdlineRejectsBadInput(t *testing.T) {
 func TestAttachFrameRoundtrip(t *testing.T) {
 	var buf bytes.Buffer
 	hello := &agentv1.AgentAttachHello{
-		Command: []string{"/bin/sh", "-l"},
+		Command: []string{testShellPath, "-l"},
 		Tty:     true,
 		Cols:    80,
 		Rows:    24,
@@ -283,7 +283,7 @@ func TestHandleAttachSplicesBothWays(t *testing.T) {
 	}()
 
 	hello := &agentv1.AgentAttachHello{
-		Command: []string{"/bin/sh"},
+		Command: []string{testShellPath},
 		Tty:     true,
 		Cols:    80,
 		Rows:    24,
@@ -614,6 +614,11 @@ func TestStartAttachListenerFromCmdlineWiringHappyPath(t *testing.T) {
 	cancel()
 }
 
+// testShellPath is the literal `/bin/sh` reused across attach
+// test fixtures, extracted to a const so goconst doesn't flag
+// the repetition.
+const testShellPath = "/bin/sh"
+
 // errShouldNotListen is the sentinel returned by the listenVsock
 // fakes in absent-token / malformed-cmdline tests, so a bug that
 // reaches the call surfaces as a clear error rather than a
@@ -786,6 +791,123 @@ type procReadFailing struct {
 
 func (p *procReadFailing) Read([]byte) (int, error) { return 0, p.err }
 
+// errFakeListener returns the canned error from Accept once, and
+// blocks on Accept thereafter. Drives the non-ErrClosed branch of
+// attachAcceptLoop.
+type errFakeListener struct {
+	once sync.Once
+	err  error
+	done chan struct{}
+}
+
+func newErrFakeListener(err error) *errFakeListener {
+	return &errFakeListener{err: err, done: make(chan struct{})}
+}
+
+func (l *errFakeListener) Accept() (net.Conn, error) {
+	var fire bool
+	l.once.Do(func() { fire = true })
+	if fire {
+		return nil, l.err
+	}
+	<-l.done
+	return nil, net.ErrClosed
+}
+func (l *errFakeListener) Close() error   { close(l.done); return nil }
+func (l *errFakeListener) Addr() net.Addr { return fakeAddr{net: "fake", str: "fake"} }
+
+// TestAttachAcceptLoopReportsNonClosedError pins the console
+// report path when Accept yields an unexpected error.
+func TestAttachAcceptLoopReportsNonClosedError(t *testing.T) {
+	ln := newErrFakeListener(errors.New("accept: too many open files"))
+	t.Cleanup(func() { _ = ln.Close() })
+
+	var w bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		attachAcceptLoop(context.Background(), &w, ln, &fakeAttachExec{})
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("accept loop did not return on unexpected error")
+	}
+	if !strings.Contains(w.String(), "too many open files") {
+		t.Errorf("console output %q missing accept error", w.String())
+	}
+}
+
+// TestPumpAttachConnToProcessReadFrameError pins the log branch
+// where the conn yields a non-pump-exit read error (an oversized
+// length prefix triggers readAttachPayload's cap check).
+func TestPumpAttachConnToProcessReadFrameError(t *testing.T) {
+	proc := newFakeAttachProcess(0)
+	t.Cleanup(func() { _ = proc.Close() })
+
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = client.Close() })
+
+	done := make(chan struct{})
+	var w bytes.Buffer
+	go func() {
+		defer close(done)
+		pumpAttachConnToProcess(&w, server, proc)
+	}()
+
+	// Send a length prefix that exceeds attachMaxFrame.
+	var hdr [4]byte
+	binary.BigEndian.PutUint32(hdr[:], attachMaxFrame+1)
+	go func() { _, _ = client.Write(hdr[:]) }()
+
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pump did not return on oversized frame")
+	}
+	if !strings.Contains(w.String(), "read frame") {
+		t.Errorf("console output %q missing 'read frame' log", w.String())
+	}
+}
+
+// failingConn always errors on Write so we can drive the
+// writeAttachData error branch in pumpAttachProcessToConn.
+type failingConn struct {
+	net.Conn
+	writeErr error
+}
+
+func (c *failingConn) Write([]byte) (int, error) { return 0, c.writeErr }
+
+// TestPumpAttachProcessToConnWriteFrameError pins the path where
+// the conn's Write fails mid-pump (non-pump-exit error) — the
+// console gets a single "write data frame" log line and the pump
+// exits.
+func TestPumpAttachProcessToConnWriteFrameError(t *testing.T) {
+	proc := newFakeAttachProcess(0)
+	t.Cleanup(func() { _ = proc.Close() })
+
+	_, server := net.Pipe()
+	fail := &failingConn{Conn: server, writeErr: errors.New("nic offline")}
+
+	done := make(chan struct{})
+	var w bytes.Buffer
+	go func() {
+		defer close(done)
+		pumpAttachProcessToConn(&w, fail, proc)
+	}()
+	// Drive a write through the proc.
+	go func() { _, _ = proc.stdoutW.Write([]byte("data")) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("pump did not return on conn write error")
+	}
+	if !strings.Contains(w.String(), "nic offline") {
+		t.Errorf("console output %q missing conn write error", w.String())
+	}
+}
+
 // TestPumpAttachProcessToConnReadError pins the non-EOF proc.Read
 // error branch.
 func TestPumpAttachProcessToConnReadError(t *testing.T) {
@@ -809,6 +931,20 @@ func TestPumpAttachProcessToConnReadError(t *testing.T) {
 	}
 	if !strings.Contains(w.String(), "ENXIO") {
 		t.Errorf("console output %q missing proc read error", w.String())
+	}
+}
+
+// TestReadAttachPayloadTruncated pins the partial-payload error
+// branch: a valid length prefix promising N bytes followed by
+// fewer than N bytes surfaces an io.ErrUnexpectedEOF wrap.
+func TestReadAttachPayloadTruncated(t *testing.T) {
+	var buf bytes.Buffer
+	var hdr [4]byte
+	binary.BigEndian.PutUint32(hdr[:], 100)
+	buf.Write(hdr[:])
+	buf.Write([]byte("only-12-bytes")) // less than 100
+	if _, err := readAttachPayload(&buf); err == nil {
+		t.Fatal("expected error on truncated payload")
 	}
 }
 

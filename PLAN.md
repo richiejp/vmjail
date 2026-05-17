@@ -660,9 +660,23 @@ the user-host or in CI today.
       the real crun-exec-with-PTY. The listener is started
       before the container in `runWith`, same lifecycle
       rule the port-forwarders follow (D-pre).
-    - D2b.2: production `ExecAttach` implementation —
-      `crun exec -t <id> <cmd...>` with PTY allocation, PTY
-      master ↔ frame splicing, TIOCSWINSZ for resize.
+    - D2b.2 (landed): production `ExecAttach`
+      implementation in `internal/agent/attach_exec_linux.go`.
+      Opens `/dev/ptmx`, unlocks + opens the matching
+      `/dev/pts/<n>` slave, wires both halves to the child
+      stdio via `Setsid`+`Setctty`, returns a
+      `ptyAttachProcess` that proxies Read/Write over the
+      master fd, Resize over `TIOCSWINSZ`, and Wait over
+      `cmd.Wait`. Close sends SIGHUP via master-close and
+      SIGKILL to the process group as a safety net so a
+      workload that ignores SIGHUP can't pin the agent. The
+      cmd-builder is split out behind `newCmd` so tests
+      substitute `/bin/cat` for crun and exercise the PTY
+      plumbing without a running container; the production
+      builder constructs `crun exec -t <ContainerID>
+      <argv...>` (defaulting to `/bin/sh -l` for an empty
+      command). New `golang.org/x/sys` direct dep. Non-Linux
+      builds keep the unavailableAttachExec stub.
     - D2b.3: sandboxd-side `AttachBridger` that implements
       `sandboxgateway.AttachBridger` by dialing the agent's
       attach vsock, sending the Hello, and adapting the

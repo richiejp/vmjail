@@ -114,23 +114,13 @@ type attachDeps struct {
 	exec        ExecAttach
 }
 
-// defaultAttachDeps wires the production AF_VSOCK listener and a
-// stub ExecAttach that returns ErrAttachExecUnavailable. The real
-// PTY+crun exec lands in Slice D2b.2; until then the listener is
-// the only thing wired up so the host side can be tested against
-// a running agent.
-func defaultAttachDeps() attachDeps {
-	return attachDeps{
-		listenVsock: vsockListenGuest,
-		exec:        unavailableAttachExec{},
-	}
-}
-
-// ErrAttachExecUnavailable is the placeholder error
-// unavailableAttachExec returns until D2b.2 wires the real PTY+crun
-// exec. Reported to the attaching client as the AgentAttachExit
-// error so the failure is visible end-to-end.
-var ErrAttachExecUnavailable = errors.New("agent: attach exec not yet implemented")
+// ErrAttachExecUnavailable is the error unavailableAttachExec
+// returns on non-Linux builds (see attach_exec_other.go). PTY +
+// crun are Linux-kernel features; the agent only ships for Linux.
+// On Linux the real ptyAttachExec replaces this stub. The error
+// is surfaced to the attaching client as the AgentAttachExit
+// error string so the failure is visible end-to-end.
+var ErrAttachExecUnavailable = errors.New("agent: attach exec unsupported off Linux")
 
 type unavailableAttachExec struct{}
 

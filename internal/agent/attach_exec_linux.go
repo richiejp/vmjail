@@ -1,0 +1,204 @@
+//go:build linux
+
+package agent
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"sync"
+	"syscall"
+
+	"golang.org/x/sys/unix"
+)
+
+// defaultAttachDeps wires the production AF_VSOCK listener and the
+// crun-exec-with-PTY implementation of ExecAttach. Production uses
+// Run() through this; tests inject their own attachDeps directly.
+func defaultAttachDeps() attachDeps {
+	return attachDeps{
+		listenVsock: vsockListenGuest,
+		exec:        newDefaultPtyAttachExec(),
+	}
+}
+
+// ptyAttachExec is the production ExecAttach. It allocates a
+// PTY pair, builds the exec command (default: `crun exec -t
+// <ContainerID> <argv...>`), and wires the command's stdio to the
+// PTY slave. Tests substitute newCmd to swap crun for a benign
+// binary like /bin/cat so the PTY plumbing can be exercised
+// without a running container.
+type ptyAttachExec struct {
+	newCmd func(ctx context.Context, req AttachExecRequest) *exec.Cmd
+}
+
+func newDefaultPtyAttachExec() *ptyAttachExec {
+	return &ptyAttachExec{newCmd: defaultAttachCmd}
+}
+
+// crunExecSubcommand and defaultAttachShell are split out so the
+// argv-builder tests can assert against the same strings without
+// the linter flagging the literals as goconst targets.
+const (
+	crunExecSubcommand = "exec"
+	defaultAttachShell = "/bin/sh"
+)
+
+// defaultAttachCmd builds the production exec command. Empty
+// req.Command falls back to /bin/sh -l so an attach with no
+// arguments lands in a login shell — the v0 ergonomic for "give
+// me a prompt inside the container."
+func defaultAttachCmd(ctx context.Context, req AttachExecRequest) *exec.Cmd {
+	argv := []string{crunExecSubcommand, "-t", ContainerID}
+	if len(req.Command) == 0 {
+		argv = append(argv, defaultAttachShell, "-l")
+	} else {
+		argv = append(argv, req.Command...)
+	}
+	// #nosec G204 — argv is wholly composed of constants
+	// (ContainerRuntime, ContainerID, the shell fallback) plus
+	// req.Command, which the orchestrator authenticated at the
+	// AttachSandbox RPC boundary. No untrusted host input flows
+	// into this exec.
+	return exec.CommandContext(ctx, ContainerRuntime, argv...)
+}
+
+// Start opens a fresh PTY, sets initial window size when the
+// request is TTY-shaped, spawns the command with the slave as its
+// controlling tty, and returns a ptyAttachProcess wrapping the
+// master fd.
+func (e *ptyAttachExec) Start(ctx context.Context, req AttachExecRequest) (AttachProcess, error) {
+	master, slave, err := openPtyPair()
+	if err != nil {
+		return nil, fmt.Errorf("agent: open pty: %w", err)
+	}
+	if req.TTY && req.Cols > 0 && req.Rows > 0 {
+		// Failure here is non-fatal — the PTY still works at its
+		// default 80x24, just sized wrong; a follow-up Resize
+		// from the client will recover.
+		_ = unix.IoctlSetWinsize(int(master.Fd()), unix.TIOCSWINSZ, attachWinsize(req.Cols, req.Rows))
+	}
+	cmd := e.newCmd(ctx, req)
+	cmd.Stdin = slave
+	cmd.Stdout = slave
+	cmd.Stderr = slave
+	// Setsid + Setctty: child becomes the session leader and the
+	// slave fd is its controlling tty. Without these, the child
+	// would inherit the agent's (init's) tty and signal-handling
+	// (Ctrl-C, window-resize) wouldn't propagate through the PTY.
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid:  true,
+		Setctty: true,
+	}
+	if startErr := cmd.Start(); startErr != nil {
+		_ = master.Close()
+		_ = slave.Close()
+		return nil, fmt.Errorf("agent: start exec: %w", startErr)
+	}
+	// Close the parent's copy of the slave fd: the child has its
+	// own dup, and keeping the parent's open would block SIGHUP
+	// delivery when the master closes.
+	_ = slave.Close()
+	return &ptyAttachProcess{cmd: cmd, master: master}, nil
+}
+
+// attachWinsize packs cols/rows into a Winsize, truncating to
+// uint16 (the ioctl's wire width). Oversized values from the wire
+// were already a no-op on a real terminal — truncation matches
+// what xterm and friends do.
+func attachWinsize(cols, rows uint32) *unix.Winsize {
+	const maxDim = uint32(^uint16(0))
+	c := min(cols, maxDim)
+	r := min(rows, maxDim)
+	return &unix.Winsize{Col: uint16(c), Row: uint16(r)} //nolint:gosec // G115: bounded by maxDim above
+}
+
+// openPtyPair opens /dev/ptmx, unlocks the slave, and opens the
+// matching /dev/pts/<n>. Returns the master + slave as *os.File so
+// callers can use the stdlib io.Reader/Writer/Closer surface.
+func openPtyPair() (master, slave *os.File, err error) {
+	fd, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open /dev/ptmx: %w", err)
+	}
+	master = os.NewFile(uintptr(fd), "/dev/ptmx")
+	if uerr := unix.IoctlSetPointerInt(fd, unix.TIOCSPTLCK, 0); uerr != nil {
+		_ = master.Close()
+		return nil, nil, fmt.Errorf("unlockpt: %w", uerr)
+	}
+	n, gerr := unix.IoctlGetInt(fd, unix.TIOCGPTN)
+	if gerr != nil {
+		_ = master.Close()
+		return nil, nil, fmt.Errorf("ptsname: %w", gerr)
+	}
+	slavePath := fmt.Sprintf("/dev/pts/%d", n)
+	sfd, oerr := unix.Open(slavePath, unix.O_RDWR|unix.O_NOCTTY, 0)
+	if oerr != nil {
+		_ = master.Close()
+		return nil, nil, fmt.Errorf("open %s: %w", slavePath, oerr)
+	}
+	slave = os.NewFile(uintptr(sfd), slavePath)
+	return master, slave, nil
+}
+
+// ptyAttachProcess implements AttachProcess on top of a PTY master
+// fd + a running exec.Cmd. Read/Write are passthroughs; Resize is
+// TIOCSWINSZ on the master; Close closes the master (the child
+// receives SIGHUP on its slave-side input and exits naturally,
+// at which point cmd.Wait returns).
+type ptyAttachProcess struct {
+	cmd    *exec.Cmd
+	master *os.File
+
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (p *ptyAttachProcess) Read(b []byte) (int, error)  { return p.master.Read(b) }
+func (p *ptyAttachProcess) Write(b []byte) (int, error) { return p.master.Write(b) }
+
+func (p *ptyAttachProcess) Resize(cols, rows uint32) error {
+	if err := unix.IoctlSetWinsize(int(p.master.Fd()), unix.TIOCSWINSZ, attachWinsize(cols, rows)); err != nil {
+		return fmt.Errorf("agent: TIOCSWINSZ: %w", err)
+	}
+	return nil
+}
+
+func (p *ptyAttachProcess) Close() error {
+	p.closeOnce.Do(func() {
+		// Closing the master sends SIGHUP to the foreground process
+		// group of the slave (the child's session, given the
+		// Setsid+Setctty above). Belt-and-braces: also signal the
+		// process group directly with SIGKILL, so a workload that
+		// ignores SIGHUP doesn't pin the agent's Wait() indefinitely.
+		p.closeErr = p.master.Close()
+		if p.cmd.Process != nil {
+			// Negative PID targets the process group (because of
+			// Setsid). Errors from a process that already exited
+			// are expected; ignore them.
+			_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
+		}
+	})
+	return p.closeErr
+}
+
+// Wait blocks until the exec'd command exits and returns its exit
+// code. A non-zero status from cmd.Wait is folded into the
+// returned code; a wholly unexpected wait error (no ExitError)
+// surfaces as a non-nil error so the listener can report it on
+// the Exit frame.
+func (p *ptyAttachProcess) Wait() (int32, error) {
+	err := p.cmd.Wait()
+	if err == nil {
+		// Bounded by Go's exit-code semantics (0..255); fits int32.
+		return int32(p.cmd.ProcessState.ExitCode()), nil //nolint:gosec // G115: exit code 0..255
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		// Bounded by Go's exit-code semantics (0..255); fits int32.
+		return int32(exitErr.ExitCode()), nil //nolint:gosec // G115: exit code 0..255
+	}
+	return 1, err
+}
