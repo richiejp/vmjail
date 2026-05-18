@@ -148,12 +148,20 @@ func emptyCapabilities() runtimeCapabilities {
 
 func defaultRuntimeLinuxConfig() runtimeLinuxConfig {
 	return runtimeLinuxConfig{
+		// `network` is intentionally omitted: the v0 design is one
+		// container per sandbox VM, and the VM is the security
+		// boundary, so the container shares the VM's loopback
+		// instead of getting its own netns. This is load-bearing
+		// for `daft workspace forward`, where the agent dials the
+		// container's port via 127.0.0.1 from inside the VM's
+		// init namespace — a separate container netns would put
+		// the container's listener out of reach of that dial.
+		// Slice D5 (multi-container per VM) will need to revisit.
 		Namespaces: []runtimeNamespace{
 			{Type: "pid"},
 			{Type: "ipc"},
 			{Type: "uts"},
 			{Type: "mount"},
-			{Type: "network"},
 			{Type: "cgroup"},
 		},
 		MaskedPaths: []string{

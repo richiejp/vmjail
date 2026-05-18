@@ -151,7 +151,7 @@
             pname = name;
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-8YS/GSe85WpSdhgNU9PdPUcmPH3GljNT2s0NuF3akXQ=";
+            vendorHash = "sha256-/KsYiRXfsDt8vLvKADlnsdM2e6xI4Mc/4xuLS0UVCvU=";
             env.CGO_ENABLED = if cgoEnabled then "1" else "0";
             ldflags = [
               "-s" "-w"
@@ -205,6 +205,18 @@
             platforms = pkgs.lib.platforms.linux;
           };
 
+          # daft-hello-server is the D6b.4 dev-server proof
+          # workload: a static HTTP listener with a known body.
+          # Baked into the nix-shell-image so the integration test
+          # can `daft workspace exec` it and then prove the
+          # port-forward path end to end.
+          daft-hello-server = mkDaftBinary {
+            name = "daft-hello-server";
+            subPackage = "cmd/daft-hello-server";
+            description = "darkaifactory hello-world HTTP server (test workload)";
+            platforms = pkgs.lib.platforms.linux;
+          };
+
           # nix-shell-image is a minimal Nix-built OCI image used by
           # the D6b.3 integration test. It carries dash + coreutils
           # (so /bin/sh and /bin/sleep resolve inside the container)
@@ -222,7 +234,13 @@
           nix-shell-image = pkgs.dockerTools.buildLayeredImage {
             name = "daft-nix-shell";
             tag = "v1";
-            contents = [ pkgs.dash pkgs.coreutils ];
+            # daft-hello-server is the D6b.4 dev-server workload —
+            # exec'd via `daft workspace exec` after the container
+            # is up so the port-forward test has something to GET
+            # against. Its /bin/daft-hello-server lands here via
+            # the same dockerTools buildEnv symlink mechanism as
+            # dash and coreutils.
+            contents = [ pkgs.dash pkgs.coreutils daft-hello-server ];
             # The entrypoint prints a readiness sentinel on container
             # startup, then execs sleep so the container stays alive.
             # The sentinel travels container stdout → agent → vsock →
