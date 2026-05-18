@@ -34,6 +34,7 @@ const (
 	pullSubName      = "pull"
 	attachSubName    = "attach"
 	diffSubName      = "diff"
+	execSubName      = "exec"
 )
 
 // newWorkspaceCmd returns the `daft workspace` subtree: `serve`
@@ -59,6 +60,7 @@ func newWorkspaceCmd() *cobra.Command {
 	cmd.AddCommand(newWorkspaceAttachCmd())
 	cmd.AddCommand(newWorkspaceDiffCmd())
 	cmd.AddCommand(newWorkspaceForwardCmd())
+	cmd.AddCommand(newWorkspaceExecCmd())
 	return cmd
 }
 

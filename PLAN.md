@@ -715,10 +715,27 @@ the user-host or in CI today.
         call now flows orch → sandboxd
         → executor's registered dial → in-VM agent's PTY,
         with no missing seam.
-  - D2c: user-host CLI. `daft workspace attach` puts the
-    local terminal into raw mode, ships SIGWINCH-derived
-    Resize frames, splices stdin/stdout to the
-    `AttachSandbox` RPC.
+  - D2c (landed): user-host CLI. New
+    `daft workspace exec <workspace> [-- cmd args...]` —
+    chosen over `attach` because the existing
+    `daft workspace attach` is the brokered sandbox-pairing
+    command from Phase 3.5 and renaming it would churn the
+    older workflow's tests. `exec` matches the
+    docker/kubectl convention. New
+    `internal/cli/workspace_exec.go` opens the
+    `AttachSandbox` bidi RPC, sends the Hello with the
+    workspace handle + initial winsize, then drives three
+    concurrent pumps: stdin → Data frames, Data frames →
+    stdout, SIGWINCH → Resize frames. Local terminal goes
+    into raw mode via a small termios helper in
+    `workspace_exec_terminal_unix.go` (linux || darwin); the
+    raw-mode restore is deferred so a Ctrl-C cooked-mode
+    restore is guaranteed. Falls back to cooked mode when
+    raw-mode fails (warns on stderr), and to piped mode
+    when stdin isn't a TTY. `execDeps` + `execTerminal` are
+    injectable seams; unit tests drive the full session
+    against an in-process fake stream and a PTY-backed
+    terminal harness.
   - D2d: full-stack e2e test (parallel to C3.3) booting a
     real VM, attaching, running `echo hello`, asserting byte
     round-trip.
