@@ -389,6 +389,42 @@ func TestNewWorkspaceExecCmdRoundtrip(t *testing.T) {
 	}
 }
 
+// TestPumpExecResizeNilChanReturns: a terminal that yields a nil
+// resize channel (the IsTTY=false case in production) must exit
+// pumpExecResize immediately without doing anything.
+func TestPumpExecResizeNilChanReturns(t *testing.T) {
+	stream := newFakeExecStream()
+	term := newFakeExecTerminal(false, 0, 0) // !isTTY → Resize returns nil
+	done := make(chan struct{})
+	pumpExecResize(context.Background(), term, stream, done)
+	if frames := stream.sentFrames(); len(frames) != 0 {
+		t.Errorf("expected no frames sent for nil resize chan, got %d", len(frames))
+	}
+}
+
+// TestPumpExecResizeWinsizeErrorExits: when the terminal yields a
+// resize event but Winsize errors, the pump exits cleanly (no
+// Resize frame, no goroutine pin).
+func TestPumpExecResizeWinsizeErrorExits(t *testing.T) {
+	stream := newFakeExecStream()
+	term := newFakeExecTerminal(true, 80, 24)
+	done := make(chan struct{})
+	doneAfter := make(chan struct{})
+	go func() {
+		defer close(doneAfter)
+		pumpExecResize(context.Background(), term, stream, done)
+	}()
+	// First push a normal resize so Winsize gets called; then make
+	// it error so the next event yields the failure branch.
+	term.winsizeErr = errors.New("ioctl error")
+	term.resize <- struct{}{}
+	select {
+	case <-doneAfter:
+	case <-time.After(time.Second):
+		t.Fatal("pumpExecResize did not exit on Winsize error")
+	}
+}
+
 // TestDefaultExecDepsWiresProductionPlumbing pins that
 // defaultExecDeps returns non-nil fields for every seam. Catches
 // regressions where a refactor drops one of the production hooks.

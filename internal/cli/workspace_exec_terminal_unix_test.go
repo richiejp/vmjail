@@ -105,7 +105,7 @@ func TestUnixExecTerminalWinsizeOnRegularFileErrors(t *testing.T) {
 func TestUnixExecTerminalMakeRawRoundtrip(t *testing.T) {
 	_, slave := openTestPTY(t)
 	fd := int(slave.Fd())
-	original, err := unix.IoctlGetTermios(fd, ioctlGetTermiosReq)
+	original, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 	if err != nil {
 		t.Fatalf("get termios: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestUnixExecTerminalMakeRawRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MakeRaw: %v", err)
 	}
-	raw, err := unix.IoctlGetTermios(fd, ioctlGetTermiosReq)
+	raw, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 	if err != nil {
 		t.Fatalf("get termios after MakeRaw: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestUnixExecTerminalMakeRawRoundtrip(t *testing.T) {
 	if err := restore(); err != nil {
 		t.Fatalf("restore: %v", err)
 	}
-	restored, err := unix.IoctlGetTermios(fd, ioctlGetTermiosReq)
+	restored, err := unix.IoctlGetTermios(fd, unix.TCGETS)
 	if err != nil {
 		t.Fatalf("get termios after restore: %v", err)
 	}

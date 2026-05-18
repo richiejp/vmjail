@@ -9,6 +9,7 @@ import (
 	"os/signal"
 
 	"golang.org/x/sys/unix"
+	"golang.org/x/term"
 )
 
 // defaultExecTerminal wires the real termios + SIGWINCH backend
@@ -21,14 +22,13 @@ func defaultExecTerminal() execTerminal {
 // production execTerminal. Split out so tests can hand it a real
 // PTY slave fd rather than relying on os.Stdin being a tty.
 func newUnixExecTerminal(fd int) *unixExecTerminal {
-	_, err := unix.IoctlGetTermios(fd, ioctlGetTermiosReq)
-	return &unixExecTerminal{fd: fd, isTTY: err == nil}
+	return &unixExecTerminal{fd: fd, isTTY: term.IsTerminal(fd)}
 }
 
-// unixExecTerminal is the production execTerminal — IoctlGetTermios
-// for raw-mode toggling, IoctlGetWinsize for the initial + per-
-// SIGWINCH dimensions, signal.Notify(SIGWINCH) for the resize
-// channel.
+// unixExecTerminal is the production execTerminal. Termios + raw
+// mode delegate to golang.org/x/term so we don't reinvent the
+// cross-platform cfmakeraw flag mask. Winsize and SIGWINCH stay
+// on x/sys/unix because x/term doesn't expose either.
 type unixExecTerminal struct {
 	fd    int
 	isTTY bool
@@ -37,42 +37,33 @@ type unixExecTerminal struct {
 func (t *unixExecTerminal) IsTTY() bool { return t.isTTY }
 
 func (t *unixExecTerminal) Winsize() (cols, rows uint32, err error) {
-	ws, werr := unix.IoctlGetWinsize(t.fd, unix.TIOCGWINSZ)
-	if werr != nil {
-		return 0, 0, fmt.Errorf("ioctl TIOCGWINSZ: %w", werr)
+	w, h, err := term.GetSize(t.fd)
+	if err != nil {
+		return 0, 0, fmt.Errorf("term.GetSize: %w", err)
 	}
-	return uint32(ws.Col), uint32(ws.Row), nil
+	// w and h are int; terminal dims are 16-bit on the wire so a
+	// negative or oversized value from a synthetic fd would be a
+	// bug — clamp to uint32 and let the agent's ioctl truncate.
+	if w < 0 {
+		w = 0
+	}
+	if h < 0 {
+		h = 0
+	}
+	return uint32(w), uint32(h), nil
 }
 
-// MakeRaw saves the current termios, applies the standard raw-mode
-// mask, and returns a restore func that tcsetattrs the original
-// back. Mirrors golang.org/x/term.MakeRaw — the project deliberately
-// avoids the extra dependency.
 func (t *unixExecTerminal) MakeRaw() (func() error, error) {
 	if !t.isTTY {
 		return func() error { return nil }, nil
 	}
-	original, err := unix.IoctlGetTermios(t.fd, ioctlGetTermiosReq)
+	state, err := term.MakeRaw(t.fd)
 	if err != nil {
-		return nil, fmt.Errorf("ioctl get termios: %w", err)
+		return nil, fmt.Errorf("term.MakeRaw: %w", err)
 	}
-	raw := *original
-	// Match the standard raw-mode flags from POSIX cfmakeraw(3).
-	raw.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP |
-		unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
-	raw.Oflag &^= unix.OPOST
-	raw.Lflag &^= unix.ECHO | unix.ECHONL | unix.ICANON | unix.ISIG | unix.IEXTEN
-	raw.Cflag &^= unix.CSIZE | unix.PARENB
-	raw.Cflag |= unix.CS8
-	raw.Cc[unix.VMIN] = 1
-	raw.Cc[unix.VTIME] = 0
-	if err := unix.IoctlSetTermios(t.fd, ioctlSetTermiosReq, &raw); err != nil {
-		return nil, fmt.Errorf("ioctl set termios: %w", err)
-	}
-	saved := *original
 	return func() error {
-		if err := unix.IoctlSetTermios(t.fd, ioctlSetTermiosReq, &saved); err != nil {
-			return fmt.Errorf("ioctl restore termios: %w", err)
+		if rerr := term.Restore(t.fd, state); rerr != nil {
+			return fmt.Errorf("term.Restore: %w", rerr)
 		}
 		return nil
 	}, nil
