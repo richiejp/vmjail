@@ -793,17 +793,41 @@ the user-host or in CI today.
     will use this harness; D6a ships as the harness + smoke
     tests so flakiness in the harness itself surfaces on a
     handful of tiny tests rather than the full workflow proof.
-  - D6b: end-to-end nix-shell + dev-server proof. Push a
-    workspace fixture (a small dev app + `start.sh`), pull a
-    nix-based container image into the imagestore,
-    `daft workspace launch`, drive `daft workspace exec` via
-    the testtmux harness to invoke `start.sh`, open a port-
-    forward client, HTTP GET, assert response body. Spawning
-    `daft-orchestrator` + `daft-sandboxd` as subprocesses (not
-    in tmux) needs its own process-group + Setpgid +
-    Pdeathsig cleanup — distinct from the tmux-pane cleanup
-    D6a handles. Probably behind a separate build tag so the
-    default `make integration` stays under 30s.
+  - D6b is the end-to-end nix-shell + dev-server proof, sliced
+    further so each cut is reviewable:
+    - D6b.1 (landed): `internal/testdaemons` subprocess
+      harness. `NewCluster(t)` builds the daft / daft-
+      orchestrator / daft-sandboxd binaries lazily (sync.Once
+      shared across tests via `go build` + Go's build cache),
+      generates orchestrator + sandboxd + client identities,
+      cross-approves all four edges (orch↔sbx, orch↔client),
+      grabs a free loopback port, and spawns each daemon with
+      `Setpgid: true` + `Pdeathsig: SIGKILL`. Cleanup SIGTERMs
+      the process group and Waits with a bounded `WaitDelay`
+      so a daemon that leaks a goroutine pinning stdio can't
+      hang the test. Preflight checks the artefact env vars
+      (`DAFT_INITRAMFS` etc.) and fatals fast if they're
+      missing — otherwise sandboxd exits ~10ms after spawn and
+      the 15s WaitFor timeout becomes the user's first signal.
+      Smoke test (`TestClusterDaftNodeListShowsSandboxd`)
+      drives `daft node list` through a tmux pane and asserts
+      the sandboxd's fingerprint appears in the output —
+      proves the whole subprocess control plane (mTLS,
+      registration, CLI rendering) end to end in ~1.8s, no VM
+      involved. Makefile's `integration` target now runs
+      `./internal/testdaemons/` alongside `./internal/sandbox/`.
+    - D6b.2: workspace fixture + `daft workspace launch`
+      against the existing hello-bundle. First slice that
+      actually boots a VM through the subprocess control
+      plane. Reuses D6b.1's harness.
+    - D6b.3: nix-based container image. Pull (or pre-stage)
+      a small nix container, launch a workspace against it,
+      exec a real shell command via the testtmux harness.
+    - D6b.4: dev-server + port-forward proof. The full
+      original D6b shape: start a dev server inside the
+      container via `daft workspace exec`, run
+      `daft workspace forward` in a second tmux pane, HTTP
+      GET against the local listener, assert response body.
 - D5: **Multi-container per VM** (was the old D2). daft-agent
   vsock control stream: agent accepts `RunContainer(spec)` /
   `StopContainer(id)`, runs N crun children, isolates each by

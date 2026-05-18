@@ -1,0 +1,332 @@
+//go:build linux && integration
+
+// Package testdaemons spawns daft-orchestrator and daft-sandboxd
+// as real subprocesses for black-box workflow tests. Each
+// daemon runs in its own process group (Setpgid) and is
+// auto-killed on parent death (Pdeathsig=SIGKILL); the test's
+// Cleanup SIGTERMs the whole group, so VMs / pumps / connections
+// the daemons spawned inside themselves never outlive the test.
+//
+// Identities for orchestrator + sandboxd + client are generated
+// up front and cross-approved via internal/identity APIs before
+// any daemon starts. This is the same handshake the in-process
+// e2e tests do, lifted to the subprocess world.
+//
+// Outside the project's Nix dev shell the daft binaries are
+// rebuilt lazily via `go build` at test setup. The Go build
+// cache makes this a no-op on warm runs; the first run after a
+// source change is ~2s.
+package testdaemons
+
+import (
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/richiejp/darkaifactory/internal/identity"
+)
+
+// peersFile mirrors the daemon CLIs' own convention so the
+// bootstrap writes to exactly the same path they'll read from.
+const peersFile = "peers.json"
+
+// daemonReadyTimeout caps how long NewCluster waits for the
+// orchestrator's listener to accept connections.
+const daemonReadyTimeout = 10 * time.Second
+
+// Cluster is a one-test orchestrator + sandboxd pair plus a
+// pre-bootstrapped client config dir the test can hand to the
+// daft CLI via --config-dir / --orchestrator.
+type Cluster struct {
+	// DaftBin is the absolute path to the freshly-built daft CLI
+	// binary; tests typically prefix command lines with it.
+	DaftBin string
+	// OrchestratorURL is the https://host:port the orchestrator
+	// is listening on (loopback, OS-assigned port).
+	OrchestratorURL string
+	// ClientConfigDir is a fresh config dir holding the client's
+	// identity + a peer store that approves the orchestrator.
+	ClientConfigDir string
+
+	OrchestratorFP identity.Fingerprint
+	SandboxdFP     identity.Fingerprint
+	ClientFP       identity.Fingerprint
+}
+
+// NewCluster generates identities, cross-approves them, builds
+// the daft binaries (lazily, shared across tests in the same
+// process via sync.Once), spawns the orchestrator + sandboxd
+// subprocesses, and waits for the orchestrator's listener to be
+// reachable.
+//
+// Registers Cleanup that SIGTERMs each daemon's process group
+// and waits for exit; Pdeathsig=SIGKILL guarantees that even a
+// crashed test binary doesn't leak daemons.
+func NewCluster(t *testing.T) *Cluster {
+	t.Helper()
+
+	requireSandboxArtefacts(t)
+	bins := ensureBinaries(t)
+
+	base := t.TempDir()
+	orchDir := mkConfigDir(t, base, "orch")
+	sbxDir := mkConfigDir(t, base, "sbx")
+	cliDir := mkConfigDir(t, base, "cli")
+
+	orchID := mustLoadOrGen(t, orchDir, identity.RoleOrchestrator)
+	sbxID := mustLoadOrGen(t, sbxDir, identity.RoleSandboxHost)
+	cliID := mustLoadOrGen(t, cliDir, identity.RoleClient)
+
+	// Four-way cross-approval: each side trusts the others it
+	// will interact with. Orchestrator talks to sandboxd + client;
+	// sandboxd + client both dial the orchestrator.
+	approvePeer(t, orchDir, sbxID.Fingerprint())
+	approvePeer(t, orchDir, cliID.Fingerprint())
+	approvePeer(t, sbxDir, orchID.Fingerprint())
+	approvePeer(t, cliDir, orchID.Fingerprint())
+
+	addr := freeLoopbackAddr(t)
+	url := "https://" + addr
+
+	startDaemon(t, bins.orchestrator,
+		"serve", "--addr", addr, "--config-dir", orchDir)
+	waitForTCP(t, addr, daemonReadyTimeout)
+
+	startDaemon(t, bins.sandboxd,
+		"serve", "--orchestrator", url, "--config-dir", sbxDir)
+	// Sandboxd registration is asynchronous — the test asserts on
+	// daft node list output to decide when registration completed.
+
+	return &Cluster{
+		DaftBin:         bins.daft,
+		OrchestratorURL: url,
+		ClientConfigDir: cliDir,
+		OrchestratorFP:  orchID.Fingerprint(),
+		SandboxdFP:      sbxID.Fingerprint(),
+		ClientFP:        cliID.Fingerprint(),
+	}
+}
+
+// binaries holds absolute paths to the freshly-built daft, daft-
+// orchestrator, and daft-sandboxd binaries.
+type binaries struct {
+	daft         string
+	orchestrator string
+	sandboxd     string
+}
+
+//nolint:gochecknoglobals // sync.Once shared across tests in the same process so binaries build once.
+var (
+	binsOnce sync.Once
+	bins     binaries
+	binsErr  error
+)
+
+// ensureBinaries builds daft-* into a per-process temp dir on
+// the first call and returns the cached paths thereafter. Build
+// happens via `go build`, which uses Go's normal build cache.
+func ensureBinaries(t *testing.T) binaries {
+	t.Helper()
+	binsOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "daft-testdaemons-bin-")
+		if err != nil {
+			binsErr = fmt.Errorf("MkdirTemp: %w", err)
+			return
+		}
+		root, err := repoRoot()
+		if err != nil {
+			binsErr = err
+			return
+		}
+		built := binaries{}
+		targets := []struct{ name, pkg string }{
+			{"daft", "./cmd/daft"},
+			{"daft-orchestrator", "./cmd/daft-orchestrator"},
+			{"daft-sandboxd", "./cmd/daft-sandboxd"},
+		}
+		for _, tgt := range targets {
+			outPath := filepath.Join(dir, tgt.name)
+			//nolint:gosec // G204: tgt.name + tgt.pkg are package constants; test-only.
+			cmd := exec.Command("go", "build", "-o", outPath, tgt.pkg)
+			cmd.Dir = root
+			if out, berr := cmd.CombinedOutput(); berr != nil {
+				binsErr = fmt.Errorf("go build %s: %w\n%s", tgt.name, berr, out)
+				return
+			}
+			switch tgt.name {
+			case "daft":
+				built.daft = outPath
+			case "daft-orchestrator":
+				built.orchestrator = outPath
+			case "daft-sandboxd":
+				built.sandboxd = outPath
+			}
+		}
+		bins = built
+	})
+	if binsErr != nil {
+		t.Fatalf("testdaemons: build binaries: %v", binsErr)
+	}
+	return bins
+}
+
+// repoRoot returns the absolute path to the module root by
+// asking `go env GOMOD` for the active go.mod path.
+func repoRoot() (string, error) {
+	out, err := exec.Command("go", "env", "GOMOD").Output()
+	if err != nil {
+		return "", fmt.Errorf("go env GOMOD: %w", err)
+	}
+	modPath := strings.TrimSpace(string(out))
+	if modPath == "" || modPath == "/dev/null" {
+		return "", errors.New("testdaemons: not inside a Go module")
+	}
+	return filepath.Dir(modPath), nil
+}
+
+// requireSandboxArtefacts fatals if the env vars the daft-
+// sandboxd binary needs to start are not set. Without them
+// sandboxd would exit ~10ms after spawn and the test would only
+// notice via the WaitFor timeout 15s later. Failing fast here
+// also gives a clearer pointer ("run via make integration" vs.
+// a daemon stderr dump in the test log).
+func requireSandboxArtefacts(t *testing.T) {
+	t.Helper()
+	required := []string{
+		"DAFT_INITRAMFS", "DAFT_KERNEL", "DAFT_VIRTIOFSD",
+		"DAFT_CLOUD_HYPERVISOR",
+	}
+	var missing []string
+	for _, k := range required {
+		if os.Getenv(k) == "" {
+			missing = append(missing, k)
+		}
+	}
+	if len(missing) > 0 {
+		t.Fatalf("testdaemons: required env vars not set: %s\n"+
+			"run via `make integration` (which sets them) or "+
+			"`nix develop` + `make integration-build`",
+			strings.Join(missing, ", "))
+	}
+}
+
+func mkConfigDir(t *testing.T, base, name string) string {
+	t.Helper()
+	dir := filepath.Join(base, name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll %s: %v", dir, err)
+	}
+	return dir
+}
+
+func mustLoadOrGen(t *testing.T, dir string, role identity.Role) *identity.Identity {
+	t.Helper()
+	id, err := identity.LoadOrGenerate(dir, role)
+	if err != nil {
+		t.Fatalf("LoadOrGenerate(%s, %s): %v", dir, role, err)
+	}
+	return id
+}
+
+func approvePeer(t *testing.T, dir string, fp identity.Fingerprint) {
+	t.Helper()
+	store, err := identity.OpenPeerStore(filepath.Join(dir, peersFile))
+	if err != nil {
+		t.Fatalf("OpenPeerStore(%s): %v", dir, err)
+	}
+	if err := store.Add(identity.Peer{Fingerprint: fp}); err != nil {
+		t.Fatalf("PeerStore.Add(%s, %s): %v", dir, fp, err)
+	}
+}
+
+// freeLoopbackAddr binds 127.0.0.1:0, captures the OS-assigned
+// port, then closes the listener so the orchestrator can claim
+// it. Brief race with other processes; acceptable for tests.
+func freeLoopbackAddr(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	addr := ln.Addr().String()
+	if err := ln.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	return addr
+}
+
+// startDaemon spawns prog with args under its own process group,
+// wires stdout/stderr into the test log, and registers a Cleanup
+// that SIGTERMs the whole group then Waits with a bounded delay.
+// Pdeathsig=SIGKILL means a crashed test process can't leak the
+// daemon even if Cleanup never runs.
+func startDaemon(t *testing.T, prog string, args ...string) *exec.Cmd {
+	t.Helper()
+	//nolint:gosec // G204: prog + args are caller-controlled test-only paths.
+	cmd := exec.Command(prog, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid:   true,
+		Pdeathsig: syscall.SIGKILL,
+	}
+	cmd.Stdout = &testWriter{t: t, prefix: filepath.Base(prog) + " out"}
+	cmd.Stderr = &testWriter{t: t, prefix: filepath.Base(prog) + " err"}
+	// Bound how long cmd.Wait will tolerate a stuck pipe after
+	// the process itself has exited; without this, a daemon that
+	// leaves a goroutine pinning a stdio fd could hang Cleanup.
+	cmd.WaitDelay = 5 * time.Second
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start %s: %v", prog, err)
+	}
+	t.Cleanup(func() {
+		if cmd.Process == nil {
+			return
+		}
+		// Negative PID = whole process group. ESRCH for an
+		// already-exited group is benign.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		_ = cmd.Wait()
+	})
+	return cmd
+}
+
+// waitForTCP polls Dial("tcp", addr) until it succeeds or the
+// timeout expires. Used to gate test progress on the
+// orchestrator's listener being ready.
+func waitForTCP(t *testing.T, addr string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	//daft:lint:disable=forloopbound reason="bounded by deadline via the if-fatal below"
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waitForTCP %s: %v after %s", addr, err, timeout)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// testWriter forwards each Write line to the test log so daemon
+// output appears in the test trace on failure. Implements
+// io.Writer with the minimum semantics needed.
+type testWriter struct {
+	t      *testing.T
+	prefix string
+}
+
+func (w *testWriter) Write(p []byte) (int, error) {
+	w.t.Logf("[%s] %s", w.prefix, strings.TrimRight(string(p), "\n"))
+	return len(p), nil
+}
