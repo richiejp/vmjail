@@ -729,3 +729,43 @@ func TestHandleSandboxEventRegistersAndUnregistersAttachRoute(t *testing.T) {
 		t.Errorf("post-dispatch Attach err = %v, want ErrAttachNoRoute", err)
 	}
 }
+
+// TestRegisterAttachRouteDuplicateLogsAndSkipsRegistration pins
+// the executor-bug-class branch: if a uid is already in the
+// AttachRegistry (e.g. two concurrent dispatches racing on the
+// same uid), Register returns ErrAttachRouteExists, the executor
+// logs it to stdout, and the returned unregister is a no-op so
+// the original registration outlives this dispatch's defer.
+func TestRegisterAttachRouteDuplicateLogsAndSkipsRegistration(t *testing.T) {
+	ar := sandboxgateway.NewAttachRegistry()
+	// Pre-register sb-dup so the next registerAttachRoute call
+	// races into the duplicate branch.
+	originalDial := func(context.Context, sandboxgateway.AttachRequest) (sandboxgateway.AttachSession, error) {
+		return nil, errors.New("original")
+	}
+	if err := ar.Register("sb-dup", originalDial); err != nil {
+		t.Fatalf("pre-Register: %v", err)
+	}
+	var buf bytes.Buffer
+	e, err := New(Config{
+		Stdout:         &buf,
+		Runner:         noopRunner(),
+		AttachRegistry: ar,
+		VsockDir:       testVsockDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: "ws-dup"}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-dup", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if !strings.Contains(buf.String(), "register attach route") {
+		t.Errorf("stdout %q missing duplicate-route log", buf.String())
+	}
+	// Original registration must survive — the dispatch's defer
+	// got a no-op unregister.
+	if _, err := ar.Attach(t.Context(), sandboxgateway.AttachRequest{SandboxUID: "sb-dup"}); err == nil || errors.Is(err, sandboxgateway.ErrAttachNoRoute) {
+		t.Errorf("Attach after duplicate-route dispatch: err = %v; original registration should still be reachable", err)
+	}
+}

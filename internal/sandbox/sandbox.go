@@ -246,7 +246,7 @@ func (v *VsockConfig) validate() error {
 	if v.GuestCID < 3 {
 		return fmt.Errorf("sandbox: Vsock.GuestCID %d must be >= 3 (0/1/2 reserved)", v.GuestCID)
 	}
-	if v.TracePort != 0 && v.AttachPort != 0 && v.TracePort == v.AttachPort {
+	if v.TracePort != 0 && v.TracePort == v.AttachPort {
 		return fmt.Errorf("sandbox: Vsock.TracePort %d collides with Vsock.AttachPort", v.TracePort)
 	}
 	return nil
