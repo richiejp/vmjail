@@ -904,6 +904,43 @@ the user-host or in CI today.
       (where the agent already runs). D5 (multi-container per
       VM) will need to revisit; the runtime-spec comment
       flags it.
+  - D6c: real nix-shell workflow — the dev-server proof above
+    used a static Go HTTP listener baked into the image; the
+    user-facing story is "the container has the nix CLI, the
+    /workspace mount carries a flake, the user runs
+    `nix develop -c <web server>`". D6c covers that proof,
+    sliced again so each cut is reviewable:
+    - D6c.1: hermetic nix-CLI proof. Build a Nix-derived
+      image that includes `pkgs.nix` plus the closure of a
+      tiny pre-built devShell (a single tool, e.g. `python3
+      -m http.server`, so the closure stays small enough to
+      not blow up `make integration` time). The test mounts
+      a flake.nix that references the pre-baked tools by
+      store path (`builtins.storePath`) so no fetch is
+      needed. Exec `nix develop /workspace -c python3 -m
+      http.server <port>`; same port-forward + HTTP-GET
+      assertion as D6b.4. Proves nix CLI works inside the
+      container and that a `/workspace` flake drives the
+      shell. Does NOT prove arbitrary internet fetch.
+    - D6c.2: sandbox VM network. Adds virtio-net to the
+      cloud-hypervisor invocation, brings up `eth0` in the
+      agent (DHCP or static), and configures egress on the
+      host (tap + bridge or a userspace networking helper —
+      the exact path TBD; cloud-hypervisor doesn't ship a
+      slirp/usermode option, so this likely needs a tap with
+      a setuid helper or a privileged sandboxd). The
+      container inherits the VM's loopback today; once eth0
+      is up it can also reach cache.nixos.org. Test: agent
+      reports the assigned address; container reaches an
+      external HTTPS endpoint. Connectivity allowlists
+      (C4 in PLAN.md's Phase C) layer on top later.
+    - D6c.3: full vision. nixos/nix:latest pulled at
+      integration setup (`make` target with a local cache so
+      cold-run cost stays bounded). /workspace mounts a real
+      flake that uses a typical dev-shell dependency
+      (e.g. Bun or Vite). Exec `nix develop -c bun dev`;
+      port-forward + HTTP-GET as before. This is the
+      reference dev loop a real user would experience.
 - D5: **Multi-container per VM** (was the old D2). daft-agent
   vsock control stream: agent accepts `RunContainer(spec)` /
   `StopContainer(id)`, runs N crun children, isolates each by
