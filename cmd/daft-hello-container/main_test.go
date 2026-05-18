@@ -116,43 +116,34 @@ func TestRunWorkspaceErrorSkipsBlock(t *testing.T) {
 	}
 }
 
-// TestBlockUntilTerminationSignalReturnsOnInjectedSignal exercises
-// blockUntilTerminationSignal via the installTerminationSignal seam.
-// The production seam is covered by TestRealInstallTerminationSignal.
-func TestBlockUntilTerminationSignalReturnsOnInjectedSignal(t *testing.T) {
-	old := installTerminationSignal
-	defer func() { installTerminationSignal = old }()
-	ch := make(chan os.Signal, 1)
-	installTerminationSignal = func() <-chan os.Signal { return ch }
+// TestBlockUntilTerminationSignalReturnsOnSignal pins the
+// production wait: blockUntilTerminationSignal subscribes to
+// SIGINT/SIGTERM, blocks, and returns once one arrives. SIGINT is
+// the only safe signal of the two to deliver from a test —
+// signal.Notify intercepts it before the default handler (process
+// termination) can fire, so synchronous Kill-after-call is race-
+// free.
+func TestBlockUntilTerminationSignalReturnsOnSignal(t *testing.T) {
 	done := make(chan struct{})
+	ready := make(chan struct{})
 	go func() {
 		defer close(done)
+		close(ready)
 		blockUntilTerminationSignal()
 	}()
-	ch <- syscall.SIGTERM
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("blockUntilTerminationSignal did not return on injected signal")
-	}
-}
-
-// TestRealInstallTerminationSignal exercises the production signal
-// subscriber by sending SIGUSR1-spec... wait, no — it has to be one
-// of the two signals the function registers, otherwise nothing fires.
-// SIGINT is the safer of {SIGTERM, SIGINT} to deliver to a test
-// process: signal.Notify intercepts it before the default handler
-// (process termination) can fire, so as long as the subscriber is
-// installed before we Kill, we observe the signal cleanly.
-func TestRealInstallTerminationSignal(t *testing.T) {
-	ch := realInstallTerminationSignal()
+	<-ready
+	// The goroutine has been scheduled but signal.Notify may not
+	// yet have installed the handler; a brief sleep here is the
+	// pragmatic guard. If it ever flakes, push the readiness gate
+	// into blockUntilTerminationSignal itself.
+	time.Sleep(50 * time.Millisecond)
 	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
 		t.Fatalf("Kill SIGINT: %v", err)
 	}
 	select {
-	case <-ch:
+	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("never received SIGINT on returned channel")
+		t.Fatal("blockUntilTerminationSignal did not return on SIGINT")
 	}
 }
 

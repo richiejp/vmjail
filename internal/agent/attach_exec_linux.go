@@ -15,8 +15,7 @@ import (
 )
 
 // defaultAttachDeps wires the production AF_VSOCK listener and the
-// crun-exec-with-PTY implementation of ExecAttach. Production uses
-// Run() through this; tests inject their own attachDeps directly.
+// crun-exec-with-PTY implementation of ExecAttach.
 func defaultAttachDeps() attachDeps {
 	return attachDeps{
 		listenVsock: vsockListenGuest,

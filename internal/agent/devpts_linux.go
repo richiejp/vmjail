@@ -16,11 +16,9 @@ import (
 // the multiplexer; per-slave nodes appear at /dev/pts/N.
 const devPtsTarget = "/dev/pts"
 
-// devPtsPtmx is the path openPtyPair opens to allocate a fresh
-// PTY pair. Using the per-mount path (not /dev/ptmx) means the
-// agent doesn't depend on whatever the initramfs decided to
-// stick at /dev/ptmx — a missing char-dev was the symptom that
-// surfaced in the D2 attach e2e.
+// devPtsPtmx is the per-mount path to the PTY multiplexer. Using
+// it (not /dev/ptmx) means the agent doesn't depend on whatever
+// node — or absence of node — the initramfs left at /dev/ptmx.
 const devPtsPtmx = "/dev/pts/ptmx"
 
 // devPtsMountOpts follows the modern Linux convention:

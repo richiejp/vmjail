@@ -26,28 +26,8 @@ import (
 // 1, dial the in-VM daft-agent's attach listener over hybrid-
 // vsock, execute `/hello` inside the running container via the
 // attach session, and assert the container's banner round-trips
-// back over the PTY tunnel.
-//
-// What is being exercised:
-//
-//   - sandbox.Serve boots the VMM and keeps it up while the
-//     container (daft-hello-container --keepalive) blocks as PID 1.
-//   - Vsock.AttachPort is plumbed onto the kernel cmdline; the
-//     in-VM agent's attach listener binds it during boot.
-//   - DialGuestVsock speaks the CH hybrid-vsock CONNECT protocol
-//     to open a raw byte tunnel to the agent.
-//   - sandboxattach.OpenSession sends the Hello and adapts the
-//     framed stream to a net.Conn-shaped AttachSession.
-//   - The agent's ptyAttachExec allocates a PTY pair, runs
-//     `crun exec daft-container /hello` against the live
-//     container with the PTY slave as the child's stdio, and
-//     splices the PTY master into the session.
-//   - The /hello binary inside the container prints
-//     agent.ContainerBanner and exits 0; the agent sends an Exit
-//     frame; the session collapses Exit to io.EOF.
-//
-// The whole chain is real: real KVM, real CH, real virtiofsd,
-// real crun, real PTY, real vsock. There are no stubs.
+// back over the PTY tunnel. Every layer is real — KVM, CH,
+// virtiofsd, crun, PTY, vsock; no stubs.
 func TestAttachExecE2E(t *testing.T) {
 	cfg := resolveArtifacts(t)
 	srcBundle := resolveBundle(t)
