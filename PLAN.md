@@ -839,9 +839,40 @@ the user-host or in CI today.
       The Nix-built binary still uses the embedded assets;
       this fallback only fires on dev builds. Test runs in
       ~3.1s end-to-end via `make integration`.
-    - D6b.3: nix-based container image. Pull (or pre-stage)
-      a small nix container, launch a workspace against it,
-      exec a real shell command via the testtmux harness.
+    - D6b.3 (landed): nix-based container image + workspace
+      exec. flake.nix gained a `nix-shell-image` derivation
+      (dockerTools.buildLayeredImage of dash + coreutils with
+      a `sleep infinity` entrypoint that prints a readiness
+      sentinel on startup); the dev shell exports
+      `DAFT_NIX_IMAGE` pointing at the realised tarball. The
+      new integration test loads the tarball into an in-process
+      OCI registry, drives the full `daft workspace create /
+      image / mount / target / launch` sequence through the
+      tmux pane (same arithmetic-sentinel pattern as D6b.2),
+      waits for the readiness sentinel on the sandboxd's
+      stdout, then issues `daft workspace exec --tty=false
+      ws -- /bin/dash -c 'echo D6B3-EXEC-$((6000+$?))'` and
+      asserts the output appears in the pane. End-to-end in
+      ~4.2s. Surfaced and fixed three real bugs along the way:
+      (i) `internal/imagestore.writeTarEntry` honoured the tar
+      header's directory mode, so Nix-built images that ship
+      0o555 dirs blocked subsequent-layer extractions with
+      EACCES; the extractor now relaxes ancestor dirs to u+rwx
+      during extraction (rootfs is readonly at runtime, so
+      on-disk modes don't affect container security);
+      (ii) `cli.pumpExecSession` waited on both stdin and
+      stream goroutines, deadlocking when the local stdin
+      was a never-EOFing TTY (Go can't interrupt a blocked
+      Read syscall) — the stream pump is now the lifecycle
+      owner and the stdin pump is fire-and-forget;
+      (iii) `nodectrlclient.dispatchEvent` ran sandbox events
+      inline, freezing the registration-stream loop for the
+      VM's full lifetime so AttachRequest / OpenPort events
+      could never reach `handleAttach` / `handleOpenPort` —
+      sandbox events now run in their own goroutine like the
+      other event kinds, with handler errors surfaced via the
+      log sink instead of tearing the stream down (one broken
+      sandbox shouldn't punish concurrent dispatches).
     - D6b.4: dev-server + port-forward proof. The full
       original D6b shape: start a dev server inside the
       container via `daft workspace exec`, run

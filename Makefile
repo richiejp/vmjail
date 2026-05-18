@@ -226,6 +226,7 @@ integration-build: build-initramfs build-hello-bundle
 	@: "$${DAFT_CLOUD_HYPERVISOR:?DAFT_CLOUD_HYPERVISOR not set — enter the Nix dev shell}"
 	@: "$${DAFT_KERNEL:?DAFT_KERNEL not set — enter the Nix dev shell}"
 	@: "$${DAFT_VIRTIOFSD:?DAFT_VIRTIOFSD not set — enter the Nix dev shell}"
+	@: "$${DAFT_NIX_IMAGE:?DAFT_NIX_IMAGE not set — enter the Nix dev shell}"
 
 integration: integration-build
 	@echo "[e2e] booting real VMs against /dev/kvm..."

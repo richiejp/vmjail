@@ -206,7 +206,7 @@ func untarTo(r io.Reader, dst string) error {
 		if err != nil {
 			return err
 		}
-		if err := writeTarEntry(tr, hdr, target); err != nil {
+		if err := writeTarEntry(tr, hdr, target, dst); err != nil {
 			return fmt.Errorf("imagestore: write %s: %w", hdr.Name, err)
 		}
 	}
@@ -224,15 +224,33 @@ func safeJoin(dst, name string) (string, error) {
 	return target, nil
 }
 
-func writeTarEntry(tr *tar.Reader, hdr *tar.Header, target string) error {
+func writeTarEntry(tr *tar.Reader, hdr *tar.Header, target, root string) error {
+	// Every write path goes through an existing ancestor of
+	// `target`. Nix-built images carry directory entries at
+	// mode 0o555 (read-only); without relaxing those during
+	// extraction, a later layer adding files under a Nix
+	// store path fails with EACCES. The rootfs is mounted
+	// readonly at runtime (see buildRuntimeConfig), so the
+	// on-disk dir modes don't affect container security —
+	// only this extraction.
+	if err := ensureWritableAncestors(filepath.Dir(target), root); err != nil {
+		return err
+	}
 	switch hdr.Typeflag {
 	case tar.TypeDir:
-		return os.MkdirAll(target, hdr.FileInfo().Mode().Perm())
+		// #nosec G301 — see writableDirMode doc.
+		if err := os.MkdirAll(target, writableDirMode); err != nil {
+			return err
+		}
+		// Idempotent: a later layer re-emitting the same dir
+		// with a different mode would otherwise leave a
+		// read-only dir behind that blocks subsequent writes.
+		return os.Chmod(target, writableDirMode)
 	case tar.TypeReg:
 		// #nosec G301 — same justification as the rootfs MkdirAll
 		// above: 0755 lets crun's container uid traverse the path
 		// regardless of who owns the bundle dir.
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(target), writableDirMode); err != nil {
 			return err
 		}
 		// #nosec G304 — `target` came through safeJoin which
@@ -273,5 +291,49 @@ func writeTarEntry(tr *tar.Reader, hdr *tar.Header, target string) error {
 		// Devices, fifos, etc. are skipped — the rootfs runs
 		// unprivileged inside the VM and can't usefully use them.
 		return nil
+	}
+}
+
+// writableDirMode is the mode used for every directory created
+// during tar extraction. The image's tar-header dir modes are
+// ignored: Nix-built images ship 0o555 dirs which would block
+// subsequent layers from writing inside, and the runtime spec
+// already marks the rootfs readonly at mount time so the on-disk
+// owner perms don't affect container security.
+const writableDirMode os.FileMode = 0o755
+
+// ensureWritableAncestors walks up from dir to root and chmods
+// any existing directory that doesn't already grant the daemon
+// uid u+rwx. This is a no-op for greenfield extractions and only
+// fires when a later layer needs to extend a directory tree that
+// an earlier layer materialised read-only. Stops at root so we
+// can't accidentally chmod the user's cache dir.
+func ensureWritableAncestors(dir, root string) error {
+	rootClean := filepath.Clean(root)
+	dir = filepath.Clean(dir)
+	//daft:lint:disable=forloopbound reason="terminates when dir reaches root or filesystem root; bounded by path depth"
+	for {
+		if dir == rootClean || !strings.HasPrefix(dir, rootClean+string(filepath.Separator)) {
+			return nil
+		}
+		info, err := os.Stat(dir)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				// MkdirAll will create this with writableDirMode.
+				dir = filepath.Dir(dir)
+				continue
+			}
+			return err
+		}
+		if info.IsDir() && info.Mode().Perm()&0o700 != 0o700 {
+			if err := os.Chmod(dir, info.Mode().Perm()|0o700); err != nil {
+				return err
+			}
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return nil
+		}
+		dir = parent
 	}
 }

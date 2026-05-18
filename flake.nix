@@ -30,7 +30,7 @@
             # under bin/ via Make. See PLAN.md "Dev-shell artefacts"
             # for the rationale.
             inherit (self.packages.${system})
-              cloud-hypervisor kernel virtiofsd crun u-root;
+              cloud-hypervisor kernel virtiofsd crun u-root nix-shell-image;
           in
           pkgs.mkShell {
             buildInputs = with pkgs; [
@@ -97,6 +97,13 @@
               export DAFT_CRUN="${crun}/bin/crun"
               export DAFT_UROOT="${u-root}/bin/u-root"
               export DAFT_UROOT_SRC="${./third_party/u-root}"
+              # OCI image tarball for D6b.3+ tests: dash + coreutils
+              # (no nix binary yet — D6b.4 will swap in a full nix
+              # toolchain). The path points at the docker-format
+              # tarball; tests load it via go-containerregistry's
+              # tarball.ImageFromPath and push to an in-process
+              # registry the sandboxd can pull from.
+              export DAFT_NIX_IMAGE="${nix-shell-image}"
 
               echo "darkaifactory dev shell ready (version ${version})"
               echo "  make fmt          - format Go code"
@@ -196,6 +203,40 @@
             subPackage = "cmd/daft-hello-container";
             description = "darkaifactory hello-world container workload";
             platforms = pkgs.lib.platforms.linux;
+          };
+
+          # nix-shell-image is a minimal Nix-built OCI image used by
+          # the D6b.3 integration test. It carries dash + coreutils
+          # (so /bin/sh and /bin/sleep resolve inside the container)
+          # and an Entrypoint of `sleep infinity` so the container
+          # stays alive long enough for `daft workspace exec` to
+          # crun-exec into it. dockerTools.buildLayeredImage produces
+          # a docker-format tarball; the test loads it with
+          # go-containerregistry's tarball.ImageFromPath, pushes to
+          # an in-process registry, and points the workspace at that
+          # registry ref.
+          #
+          # D6b.4 will replace this with a nix-tooling image so the
+          # dev-server proof can actually invoke `nix develop` /
+          # `nix run` inside the sandbox.
+          nix-shell-image = pkgs.dockerTools.buildLayeredImage {
+            name = "daft-nix-shell";
+            tag = "v1";
+            contents = [ pkgs.dash pkgs.coreutils ];
+            # The entrypoint prints a readiness sentinel on container
+            # startup, then execs sleep so the container stays alive.
+            # The sentinel travels container stdout → agent → vsock →
+            # sandboxd stdout, where the D6b.3 test waits on it via
+            # Cluster.WaitForSandboxdOutput before driving
+            # `daft workspace exec`. Mirrors the role of
+            # agent.ContainerBanner for the hello bundle.
+            config = {
+              Entrypoint = [
+                "/bin/dash" "-c"
+                "echo daft-nix-shell ready; exec /bin/sleep infinity"
+              ];
+              Env = [ "PATH=/bin" ];
+            };
           };
 
           # hello-bundle is the OCI runtime bundle the agent feeds to

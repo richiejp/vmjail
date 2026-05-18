@@ -197,14 +197,18 @@ func buildExecHello(opts workspaceExecOpts, useTTY bool, term execTerminal) (*wo
 
 // pumpExecSession runs three concurrent goroutines: stdin → Data
 // frames, Data frames → stdout, and (when useTTY) SIGWINCH →
-// Resize frames. Returns when any direction errors or the ctx
-// fires.
+// Resize frames. The stream pump is the lifecycle owner —
+// pumpExecSession returns as soon as it sees the server close
+// the response (i.e. the in-VM command has exited). The stdin
+// pump is fire-and-forget: for a one-shot non-interactive exec
+// the local stdin is a never-EOFing TTY, and Go's runtime can't
+// interrupt a blocking Read syscall, so we let the goroutine
+// remain parked until the process exits.
 func pumpExecSession(
 	ctx context.Context,
 	stdin io.Reader, stdout io.Writer,
 	stream execClientStream, useTTY bool, term execTerminal,
 ) error {
-	errCh := make(chan error, 3)
 	done := make(chan struct{})
 	var doneOnce sync.Once
 	signalDone := func() { doneOnce.Do(func() { close(done) }) }
@@ -214,34 +218,23 @@ func pumpExecSession(
 		oops.Skip("daft workspace exec: ctx-close stream recv", stream.CloseResponse(), io.EOF)
 	}()
 
-	var wg sync.WaitGroup
-	wg.Add(2)
 	go func() {
-		defer wg.Done()
-		defer signalDone()
-		errCh <- pumpExecStdinToStream(stdin, stream)
-	}()
-	go func() {
-		defer wg.Done()
-		defer signalDone()
-		errCh <- pumpExecStreamToStdout(stream, stdout)
+		// On clean EOF (interactive user hit Ctrl-D, or stdin
+		// is a finite pipe), signal "no more sends" so the
+		// server can react. Other errors fall through — the
+		// process is about to exit anyway.
+		err := pumpExecStdinToStream(stdin, stream)
+		if err == nil || errors.Is(err, io.EOF) {
+			oops.Skip("daft workspace exec: close stream request after stdin EOF",
+				stream.CloseRequest(), io.EOF)
+		}
 	}()
 	if useTTY && term != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			pumpExecResize(ctx, term, stream, done)
-		}()
+		go pumpExecResize(ctx, term, stream, done)
 	}
-	wg.Wait()
-	close(errCh)
-	for err := range errCh {
-		if err == nil {
-			continue
-		}
-		if oops.IsExpectedPumpExit(err) {
-			continue
-		}
+	err := pumpExecStreamToStdout(stream, stdout)
+	signalDone()
+	if err != nil && !oops.IsExpectedPumpExit(err) {
 		return err
 	}
 	return nil

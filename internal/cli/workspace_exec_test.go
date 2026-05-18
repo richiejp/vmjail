@@ -371,6 +371,118 @@ func TestRunWorkspaceExecHelloSendError(t *testing.T) {
 	}
 }
 
+// TestPumpExecStreamToStdoutSkipsEmptyFrames covers the
+// "len(data) == 0 → continue" branch — orchestrator-side Hello-
+// less first frames and stray Resize echoes never reach stdout.
+// Frames must be enqueued before EOF (the fakeExecStream's
+// select randomises across ready channels).
+func TestPumpExecStreamToStdoutSkipsEmptyFrames(t *testing.T) {
+	stream := newFakeExecStream()
+	stream.recvCh <- &workspacev1.AttachFrame{
+		Body: &workspacev1.AttachFrame_Data{Data: nil},
+	}
+	stream.recvCh <- &workspacev1.AttachFrame{
+		Body: &workspacev1.AttachFrame_Data{Data: []byte("payload")},
+	}
+
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = pumpExecStreamToStdout(stream, &buf)
+	}()
+	// Wait for both frames to flow through, then trip the EOF.
+	waitFor(t, time.Second, func() bool { return buf.Len() >= len("payload") })
+	stream.recvErr <- io.EOF
+	<-done
+	if got := buf.String(); got != "payload" {
+		t.Errorf("stdout = %q, want %q", got, "payload")
+	}
+}
+
+// TestPumpExecStdinToStreamSurfacesSendError covers the Send-
+// failure return path: a Send error mid-pump aborts the pump and
+// bubbles up.
+func TestPumpExecStdinToStreamSurfacesSendError(t *testing.T) {
+	want := errors.New("synthetic send fail")
+	stream := &helloFailingStream{sendErr: want}
+	err := pumpExecStdinToStream(bytes.NewReader([]byte("hello")), stream)
+	if !errors.Is(err, want) {
+		t.Errorf("err = %v, want wrap of %v", err, want)
+	}
+}
+
+// TestPumpExecResizeExitsOnResizeChannelClosed covers the
+// !ok branch of the resize channel select: a terminal whose
+// Resize channel is closed (rather than producing a struct{})
+// should exit the pump cleanly.
+func TestPumpExecResizeExitsOnResizeChannelClosed(t *testing.T) {
+	stream := newFakeExecStream()
+	term := newFakeExecTerminal(true, 80, 24)
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		pumpExecResize(context.Background(), term, stream, done)
+	}()
+	close(term.resize)
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("pumpExecResize did not exit on resize channel close")
+	}
+}
+
+// TestPumpExecResizeExitsOnCtxDone covers the ctx.Done() branch
+// of pumpExecResize: when the surrounding context fires before
+// `done` does, the pump returns without sending more Resize
+// frames. Separately from pumpExecResize's other tests because
+// they all hit the `done` channel path.
+func TestPumpExecResizeExitsOnCtxDone(t *testing.T) {
+	stream := newFakeExecStream()
+	term := newFakeExecTerminal(true, 80, 24)
+	done := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		pumpExecResize(ctx, term, stream, done)
+	}()
+	cancel()
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("pumpExecResize did not exit on ctx cancellation")
+	}
+}
+
+// TestPumpExecSessionReturnsUnexpectedStreamError pins the
+// stream-pump-error branch in pumpExecSession: when the server's
+// Receive returns something other than an expected pump-exit
+// error (canceled / EOF), pumpExecSession surfaces it instead
+// of treating it as a normal end.
+func TestPumpExecSessionReturnsUnexpectedStreamError(t *testing.T) {
+	stream := newFakeExecStream()
+	term := newFakeExecTerminal(false, 0, 0)
+	want := errors.New("synthetic server fail")
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- pumpExecSession(context.Background(),
+			&slowReader{block: make(chan struct{})},
+			io.Discard, stream, false, term)
+	}()
+	stream.recvErr <- want
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, want) {
+			t.Fatalf("err = %v, want wrap of %v", err, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pumpExecSession did not return on unexpected stream error")
+	}
+}
+
 // TestNewWorkspaceExecCmdRoundtrip drives the cobra surface
 // through runWorkspaceExec → defaultExecDeps's dialOrchestrator,
 // which fails dialing the unreachable URL. Verifies the cobra

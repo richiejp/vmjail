@@ -209,7 +209,7 @@ func TestWriteTarEntryHandlesHardlink(t *testing.T) {
 
 	link := &tar.Header{Typeflag: tar.TypeLink, Linkname: "source"}
 	target := filepath.Join(dst, "linked")
-	if err := writeTarEntry(nil, link, target); err != nil {
+	if err := writeTarEntry(nil, link, target, dst); err != nil {
 		t.Fatalf("hardlink: %v", err)
 	}
 	// #nosec G304 — test-only.
@@ -250,7 +250,7 @@ func TestWriteTarEntryRegularFile(t *testing.T) {
 		t.Fatalf("read hdr: %v", err)
 	}
 	target := filepath.Join(dst, "regular")
-	if err := writeTarEntry(tr, read, target); err != nil {
+	if err := writeTarEntry(tr, read, target, dst); err != nil {
 		t.Fatalf("writeTarEntry: %v", err)
 	}
 	// #nosec G304 — test-only.
@@ -304,7 +304,7 @@ func TestWriteTarEntryHandlesSymlinkAndDir(t *testing.T) {
 		t.Fatalf("dir header: %v", err)
 	}
 	dirEntry.Typeflag = tar.TypeDir
-	if err := writeTarEntry(nil, dirEntry, filepath.Join(dst, "subdir")); err != nil {
+	if err := writeTarEntry(nil, dirEntry, filepath.Join(dst, "subdir"), dst); err != nil {
 		t.Fatalf("dir: %v", err)
 	}
 	if fi, err := os.Stat(filepath.Join(dst, "subdir")); err != nil || !fi.IsDir() {
@@ -312,7 +312,7 @@ func TestWriteTarEntryHandlesSymlinkAndDir(t *testing.T) {
 	}
 
 	link := &tar.Header{Typeflag: tar.TypeSymlink, Linkname: "subdir"}
-	if err := writeTarEntry(nil, link, filepath.Join(dst, "link")); err != nil {
+	if err := writeTarEntry(nil, link, filepath.Join(dst, "link"), dst); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
 	target, err := os.Readlink(filepath.Join(dst, "link"))
@@ -322,7 +322,7 @@ func TestWriteTarEntryHandlesSymlinkAndDir(t *testing.T) {
 
 	// Default branch: a fifo / device entry is silently skipped.
 	fifo := &tar.Header{Typeflag: tar.TypeFifo}
-	if err := writeTarEntry(nil, fifo, filepath.Join(dst, "fifo-skip")); err != nil {
+	if err := writeTarEntry(nil, fifo, filepath.Join(dst, "fifo-skip"), dst); err != nil {
 		t.Errorf("fifo skip: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "fifo-skip")); !os.IsNotExist(err) {
@@ -332,6 +332,230 @@ func TestWriteTarEntryHandlesSymlinkAndDir(t *testing.T) {
 
 func newTarHeader(entryName string, mode int64) (*tar.Header, error) {
 	return &tar.Header{Name: entryName, Mode: mode}, nil
+}
+
+// TestWriteTarEntryRelaxesReadOnlyAncestors covers the Nix-image
+// regression: layer A emits a 0o555 directory, layer B emits a
+// file inside it. Without the writable-ancestor walk, the second
+// extraction fails with EACCES because Go's MkdirAll honours
+// existing dir modes. We simulate the pattern by hand — TypeDir
+// at 0o555, then TypeReg under it — and assert the file lands.
+func TestWriteTarEntryRelaxesReadOnlyAncestors(t *testing.T) {
+	dst := t.TempDir()
+
+	// Layer A: a read-only Nix-style directory.
+	dirHdr := &tar.Header{
+		Name:     "nix/store/abc-pkg",
+		Mode:     0o555,
+		Typeflag: tar.TypeDir,
+	}
+	dirTarget := filepath.Join(dst, "nix", "store", "abc-pkg")
+	if err := writeTarEntry(nil, dirHdr, dirTarget, dst); err != nil {
+		t.Fatalf("dir entry: %v", err)
+	}
+
+	// Layer B: a regular file two levels below the read-only dir,
+	// with the intermediate bin/ also missing — the realistic
+	// pattern dockerTools layered images produce.
+	body := []byte("#!/bin/sh\n")
+	fileHdr := &tar.Header{
+		Name:     "nix/store/abc-pkg/bin/hello",
+		Mode:     0o755,
+		Size:     int64(len(body)),
+		Typeflag: tar.TypeReg,
+	}
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(fileHdr); err != nil {
+		t.Fatalf("tar write header: %v", err)
+	}
+	if _, err := tw.Write(body); err != nil {
+		t.Fatalf("tar write body: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close: %v", err)
+	}
+	tr := tar.NewReader(&buf)
+	read, err := tr.Next()
+	if err != nil {
+		t.Fatalf("tar next: %v", err)
+	}
+	fileTarget := filepath.Join(dst, "nix", "store", "abc-pkg", "bin", "hello")
+	if err := writeTarEntry(tr, read, fileTarget, dst); err != nil {
+		t.Fatalf("file entry under read-only ancestor: %v", err)
+	}
+
+	got, err := os.ReadFile(fileTarget) //nolint:gosec // fileTarget is under t.TempDir(); test-only.
+	if err != nil {
+		t.Fatalf("read extracted file: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Errorf("extracted file body = %q, want %q", got, body)
+	}
+}
+
+// TestEnsureWritableAncestorsStopsAtRoot guards the walk against
+// climbing past the bundle root and chmod'ing the caller's cache
+// dir or worse. We point root at a subdir of dst, plant a
+// read-only sibling above root, and assert the function leaves it
+// alone.
+func TestEnsureWritableAncestorsStopsAtRoot(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "bundle")
+	innerB := filepath.Join(root, "a", "b")
+	// #nosec G301 — bundle dirs are extraction targets, not
+	// configuration paths; relaxed perms mirror writableDirMode.
+	if err := os.MkdirAll(innerB, 0o755); err != nil {
+		t.Fatalf("mkdir root tree: %v", err)
+	}
+	// Plant a read-only outside-root dir; the walk must not touch it.
+	outside := filepath.Join(parent, "outside")
+	// #nosec G301 — synthetic read-only barrier, never real perms.
+	if err := os.Mkdir(outside, 0o555); err != nil {
+		t.Fatalf("mkdir outside: %v", err)
+	}
+	// #nosec G302 — same: per-test scratch dir, no real-world perms.
+	t.Cleanup(func() { _ = os.Chmod(outside, 0o755) })
+
+	// Make root/a read-only so the walk has something to relax.
+	// #nosec G302 — same: deliberately recreating the on-disk
+	// mode an OCI image carries.
+	if err := os.Chmod(filepath.Join(root, "a"), 0o555); err != nil {
+		t.Fatalf("chmod a: %v", err)
+	}
+
+	if err := ensureWritableAncestors(innerB, root); err != nil {
+		t.Fatalf("ensureWritableAncestors: %v", err)
+	}
+
+	if fi, _ := os.Stat(filepath.Join(root, "a")); fi.Mode().Perm()&0o700 != 0o700 {
+		t.Errorf("a perms = %o, want u+rwx", fi.Mode().Perm())
+	}
+	if fi, _ := os.Stat(outside); fi.Mode().Perm() != 0o555 {
+		t.Errorf("outside perms = %o, want 0o555 (walk should not have touched)", fi.Mode().Perm())
+	}
+}
+
+// TestWriteTarEntryRegularFileSurfacesMkdirError covers the
+// MkdirAll-error branch of writeTarEntry's TypeReg path: when
+// the would-be parent dir of the file collides with an existing
+// non-directory entry, os.MkdirAll returns ENOTDIR and the
+// function bubbles it up.
+func TestWriteTarEntryRegularFileSurfacesMkdirError(t *testing.T) {
+	dst := t.TempDir()
+	// Plant a regular file at dst/blocker — a child entry under
+	// it ("blocker/child") can't have its parent dir created.
+	blocker := filepath.Join(dst, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
+	hdr := &tar.Header{
+		Name:     "blocker/child",
+		Mode:     0o644,
+		Typeflag: tar.TypeReg,
+	}
+	err := writeTarEntry(nil, hdr, filepath.Join(dst, "blocker", "child"), dst)
+	if err == nil {
+		t.Fatal("expected MkdirAll error for file-under-file path")
+	}
+}
+
+// TestWriteTarEntryDirSurfacesMkdirError covers the MkdirAll-
+// failure branch of writeTarEntry's TypeDir path — same
+// file-blocks-dir shape as the TypeReg test, but for a directory
+// entry. Distinct from the TypeReg test because the two switch
+// cases own their own MkdirAll call.
+func TestWriteTarEntryDirSurfacesMkdirError(t *testing.T) {
+	dst := t.TempDir()
+	blocker := filepath.Join(dst, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
+	hdr := &tar.Header{
+		Name:     "blocker/inside",
+		Mode:     0o755,
+		Typeflag: tar.TypeDir,
+	}
+	err := writeTarEntry(nil, hdr,
+		filepath.Join(dst, "blocker", "inside"), dst)
+	if err == nil {
+		t.Fatal("expected MkdirAll error for dir-under-file path")
+	}
+}
+
+// TestEnsureWritableAncestorsSurfacesStatError covers the
+// non-ENOENT branch of os.Stat: when an ancestor directory exists
+// but its parent has been chmod'd to mode 0 — denying traversal —
+// Stat returns EACCES, which the walk must surface rather than
+// papering over.
+func TestEnsureWritableAncestorsSurfacesStatError(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root bypasses dir-traverse perms")
+	}
+	root := t.TempDir()
+	// /root/locked exists; /root/locked/inner exists but is
+	// unreachable via Stat after we lock /root/locked.
+	locked := filepath.Join(root, "locked")
+	// #nosec G301 — scratch dirs in test scope.
+	if err := os.MkdirAll(filepath.Join(locked, "inner"), 0o755); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	// #nosec G302 — synthesizing the EACCES condition.
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatalf("chmod 0: %v", err)
+	}
+	// #nosec G302 — cleanup so t.TempDir can remove the tree.
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	err := ensureWritableAncestors(
+		filepath.Join(root, "locked", "inner", "child"), root,
+	)
+	if err == nil {
+		t.Fatal("expected Stat EACCES under mode-0 parent")
+	}
+}
+
+// TestEnsureWritableAncestorsHandlesMissingMidPath covers the
+// fs.ErrNotExist branch: when an ancestor doesn't yet exist on
+// disk (because MkdirAll will create it on the way down), the
+// walk silently skips that level and keeps climbing.
+func TestEnsureWritableAncestorsHandlesMissingMidPath(t *testing.T) {
+	root := t.TempDir()
+	// /root/a exists (read-only), /root/a/b does not.
+	// #nosec G301 — bundle scratch, not production perms.
+	if err := os.Mkdir(filepath.Join(root, "a"), 0o555); err != nil {
+		t.Fatalf("mkdir a: %v", err)
+	}
+	// Target the never-existed leaf b — walk steps up via
+	// the ErrNotExist branch and chmods a on the way past.
+	if err := ensureWritableAncestors(filepath.Join(root, "a", "b", "c"), root); err != nil {
+		t.Fatalf("ensureWritableAncestors: %v", err)
+	}
+	if fi, _ := os.Stat(filepath.Join(root, "a")); fi.Mode().Perm()&0o700 != 0o700 {
+		t.Errorf("a perms = %o, walk should have relaxed it", fi.Mode().Perm())
+	}
+}
+
+// TestEnsureWritableAncestorsReturnsAtRoot covers the
+// dir == rootClean fast-exit: when the start dir is exactly root,
+// the loop returns immediately without stat'ing anything.
+func TestEnsureWritableAncestorsReturnsAtRoot(t *testing.T) {
+	root := t.TempDir()
+	// Plant a read-only barrier at root itself; the walk must
+	// NOT touch it (root is the floor).
+	// #nosec G302 — test scaffolding.
+	if err := os.Chmod(root, 0o555); err != nil {
+		t.Fatalf("chmod root: %v", err)
+	}
+	// #nosec G302 — cleanup so t.TempDir's rm-rf succeeds.
+	t.Cleanup(func() { _ = os.Chmod(root, 0o755) })
+
+	if err := ensureWritableAncestors(root, root); err != nil {
+		t.Fatalf("ensureWritableAncestors(root, root): %v", err)
+	}
+	if fi, _ := os.Stat(root); fi.Mode().Perm()&0o700 == 0o700 {
+		t.Errorf("root perms = %o, walk should not have touched root", fi.Mode().Perm())
+	}
 }
 
 // TestBundleHonoursWorkingDirAndEnvFromImage covers the path where
@@ -429,7 +653,7 @@ func TestWriteTarEntryRejectsCopyError(t *testing.T) {
 		t.Fatalf("tar.Next: %v", err)
 	}
 	target := filepath.Join(dst, "outfile")
-	if err := writeTarEntry(tr, read, target); err == nil {
+	if err := writeTarEntry(tr, read, target, dst); err == nil {
 		t.Fatal("expected error when tar body is short")
 	}
 }
@@ -452,7 +676,7 @@ func TestWriteTarEntrySymlinkOverwritesExistingTarget(t *testing.T) {
 		t.Fatalf("seed file: %v", err)
 	}
 	link := &tar.Header{Typeflag: tar.TypeSymlink, Linkname: "elsewhere"}
-	if err := writeTarEntry(nil, link, target); err != nil {
+	if err := writeTarEntry(nil, link, target, dst); err != nil {
 		t.Fatalf("symlink overwrite: %v", err)
 	}
 	got, err := os.Readlink(target)
@@ -484,7 +708,7 @@ func TestWriteTarEntryRegularMkdirPathExercised(t *testing.T) {
 	tr := tar.NewReader(&buf)
 	read, _ := tr.Next()
 	target := filepath.Join(dst, "deep", "nested", "file")
-	if err := writeTarEntry(tr, read, target); err != nil {
+	if err := writeTarEntry(tr, read, target, dst); err != nil {
 		t.Fatalf("nested write: %v", err)
 	}
 	// #nosec G304 — test-only.

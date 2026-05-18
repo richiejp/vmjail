@@ -1,10 +1,12 @@
 package nodectrlclient_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +18,25 @@ import (
 	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
 	"github.com/richiejp/darkaifactory/internal/orchestrator"
 )
+
+// syncBuffer is a thread-safe bytes.Buffer for capturing
+// concurrent log output from goroutine-driven event handlers.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
 
 const (
 	testListenAddr = "127.0.0.1:0"
@@ -348,16 +369,22 @@ func TestRegisterAndServeDeliversSandboxEventToHandler(t *testing.T) {
 	}
 }
 
-// TestRegisterAndServeSurfacesSandboxEventError covers the failure
-// branch of consumeStream's handler call: a non-nil return tears
-// the registration down.
-func TestRegisterAndServeSurfacesSandboxEventError(t *testing.T) {
+// TestRegisterAndServeLogsSandboxEventError pins consumeStream's
+// failure branch for sandbox events: a non-nil return is logged
+// to Stderr and the registration stream stays up. Earlier the
+// loop tore the stream down on any handler error, but the
+// dispatch was switched to a goroutine in D6b.3 so unrelated
+// AttachRequest / OpenPort events for other sandboxes keep
+// flowing instead of being collateral damage of one sandbox's
+// local failure.
+func TestRegisterAndServeLogsSandboxEventError(t *testing.T) {
 	rig := newE2ERig(t)
 	want := errors.New("synthetic handler failure")
 	handler := nodectrlclient.SandboxEventHandlerFunc(func(context.Context, *nodectrlv1.SandboxWatchEvent) error {
 		return want
 	})
 
+	var stderr syncBuffer
 	client, err := nodectrlclient.New(nodectrlclient.Config{
 		URL:               rig.url,
 		Identity:          rig.sbID,
@@ -365,6 +392,7 @@ func TestRegisterAndServeSurfacesSandboxEventError(t *testing.T) {
 		Version:           testFixtureVer,
 		HeartbeatInterval: 5 * time.Second,
 		SandboxEvents:     handler,
+		Stderr:            &stderr,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -383,13 +411,25 @@ func TestRegisterAndServeSurfacesSandboxEventError(t *testing.T) {
 		Spec:     &sandboxv1.SandboxSpec{},
 	})
 
+	deadline := time.Now().Add(2 * time.Second)
+	//daft:lint:disable=forloopbound reason="bounded 2s deadline; exits when stderr contains the error string or via t.Fatalf below"
+	for time.Now().Before(deadline) {
+		if strings.Contains(stderr.String(), "synthetic handler failure") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(stderr.String(), "synthetic handler failure") {
+		t.Fatalf("handler error never logged within 2s; stderr=%q", stderr.String())
+	}
+
+	// Stream must NOT have torn down — RegisterAndServe should
+	// still be running, ready to dispatch follow-up events.
 	select {
 	case err := <-served:
-		if err == nil {
-			t.Error("RegisterAndServe returned nil, want handler error to propagate")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("RegisterAndServe did not return after handler error")
+		t.Fatalf("RegisterAndServe returned early: %v", err)
+	case <-time.After(200 * time.Millisecond):
+		// Expected: still running.
 	}
 }
 

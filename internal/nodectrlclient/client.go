@@ -264,9 +264,20 @@ func (c *Client) dispatchEvent(ctx context.Context, msg *nodectrlv1.NodeEvent) e
 		if c.cfg.SandboxEvents == nil {
 			return nil
 		}
-		if err := c.cfg.SandboxEvents.HandleSandboxEvent(ctx, sb); err != nil {
-			return fmt.Errorf("nodectrlclient: sandbox-event handler: %w", err)
-		}
+		// A sandbox handler blocks for the VM's lifetime; running
+		// it inline would freeze the registration-stream loop and
+		// every follow-up AttachRequest / OpenPort would hang
+		// until the sandbox exited. Spawn it like the other event
+		// kinds. Handler errors that previously tore the stream
+		// down now surface via the log sink — losing the stream
+		// for an unrelated dispatch would be a worse failure mode
+		// than a logged error per dispatch.
+		go func() {
+			if err := c.cfg.SandboxEvents.HandleSandboxEvent(ctx, sb); err != nil {
+				_, _ = fmt.Fprintf(c.cfg.openPortLogSink(),
+					"nodectrlclient: sandbox-event handler: %v\n", err)
+			}
+		}()
 		return nil
 	}
 	if op := msg.GetOpenPort(); op != nil {
