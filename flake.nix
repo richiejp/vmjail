@@ -58,6 +58,14 @@
               # `make build-initramfs` calls u-root + gzip + cpio.
               gzip
               cpio
+
+              # internal/testtmux drives a real CLI through a tmux
+              # pane running dash. Required by the D6 black-box
+              # workflow tests; running unit tests outside the dev
+              # shell without these is unsupported by design (same
+              # convention as the KVM-required integration tests).
+              tmux
+              dash
             ] ++ [
               # The slow-moving artefacts as build inputs so their
               # store paths are realised when the shell starts and

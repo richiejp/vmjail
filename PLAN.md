@@ -765,6 +765,45 @@ the user-host or in CI today.
 - D4: `--isolation strict` opt-out from sharing — 1 VM per
   workspace even with `--gpu`. Same control surface as CPU
   mode.
+- D6: **Black-box workflow harness.** Tests drive the real
+  `daft` CLI through tmux on the host and assert on captured
+  pane state, exactly as a human user would type and read at a
+  terminal. The pane is always a real PTY (tmux allocates one)
+  so any CLI driven through it exercises its raw-mode +
+  winsize code path just like in production.
+  - D6a (landed): `internal/testtmux` package. Each Session
+    owns its own tmux server (via `-S <t.TempDir()>/tmux.sock`
+    so nothing leaks into the user's user-default tmux). The
+    pane shell is **dash** — POSIX-strict, predictable signal
+    handling, no readline / history quirks that bash and zsh
+    inject. Exposes `Send` (raw tmux key vocabulary), `Enter`
+    (literal text + Enter), `Capture` (pane + scrollback),
+    `WaitFor` (poll until substring matches, fatal on
+    timeout). Boot handshake uses a shell-arithmetic sentinel
+    (`printf 'TESTTMUX-READY-%d\n' $((1+2))`) so WaitFor only
+    fires once dash has actually processed PS1 setup — a
+    plain echo would be matched by WaitFor on the typed-
+    command echo before dash had run it. Cleanup is
+    `tmux kill-server` per Session, which reaps the pane's
+    entire shell-tree. `tmux` and `dash` added to flake.nix's
+    devShell; running these tests outside the dev shell is
+    unsupported by design (same convention as the KVM-
+    required integration tests refuse to skip when /dev/kvm
+    is missing — skipping would zero the coverage gate). D6b
+    will use this harness; D6a ships as the harness + smoke
+    tests so flakiness in the harness itself surfaces on a
+    handful of tiny tests rather than the full workflow proof.
+  - D6b: end-to-end nix-shell + dev-server proof. Push a
+    workspace fixture (a small dev app + `start.sh`), pull a
+    nix-based container image into the imagestore,
+    `daft workspace launch`, drive `daft workspace exec` via
+    the testtmux harness to invoke `start.sh`, open a port-
+    forward client, HTTP GET, assert response body. Spawning
+    `daft-orchestrator` + `daft-sandboxd` as subprocesses (not
+    in tmux) needs its own process-group + Setpgid +
+    Pdeathsig cleanup — distinct from the tmux-pane cleanup
+    D6a handles. Probably behind a separate build tag so the
+    default `make integration` stays under 30s.
 - D5: **Multi-container per VM** (was the old D2). daft-agent
   vsock control stream: agent accepts `RunContainer(spec)` /
   `StopContainer(id)`, runs N crun children, isolates each by
