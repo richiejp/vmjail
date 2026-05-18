@@ -25,10 +25,8 @@ func newUnixExecTerminal(fd int) *unixExecTerminal {
 	return &unixExecTerminal{fd: fd, isTTY: term.IsTerminal(fd)}
 }
 
-// unixExecTerminal is the production execTerminal. Termios + raw
-// mode delegate to golang.org/x/term so we don't reinvent the
-// cross-platform cfmakeraw flag mask. Winsize and SIGWINCH stay
-// on x/sys/unix because x/term doesn't expose either.
+// unixExecTerminal is the production execTerminal. Winsize and
+// SIGWINCH stay on x/sys/unix because x/term doesn't expose either.
 type unixExecTerminal struct {
 	fd    int
 	isTTY bool
@@ -41,15 +39,7 @@ func (t *unixExecTerminal) Winsize() (cols, rows uint32, err error) {
 	if err != nil {
 		return 0, 0, fmt.Errorf("term.GetSize: %w", err)
 	}
-	// w and h are int; terminal dims are 16-bit on the wire so a
-	// negative or oversized value from a synthetic fd would be a
-	// bug — clamp to uint32 and let the agent's ioctl truncate.
-	if w < 0 {
-		w = 0
-	}
-	if h < 0 {
-		h = 0
-	}
+	//nolint:gosec // G115: x/term returns int(uint16) — never negative or oversized.
 	return uint32(w), uint32(h), nil
 }
 

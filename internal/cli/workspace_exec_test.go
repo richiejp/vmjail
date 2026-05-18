@@ -414,8 +414,9 @@ func TestPumpExecResizeWinsizeErrorExits(t *testing.T) {
 		defer close(doneAfter)
 		pumpExecResize(context.Background(), term, stream, done)
 	}()
-	// First push a normal resize so Winsize gets called; then make
-	// it error so the next event yields the failure branch.
+	// Arm winsizeErr first; the channel send happens-before the
+	// pump's Winsize call, so the next event hits the error branch
+	// and the goroutine returns.
 	term.winsizeErr = errors.New("ioctl error")
 	term.resize <- struct{}{}
 	select {
