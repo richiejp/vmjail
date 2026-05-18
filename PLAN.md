@@ -816,10 +816,29 @@ the user-host or in CI today.
       registration, CLI rendering) end to end in ~1.8s, no VM
       involved. Makefile's `integration` target now runs
       `./internal/testdaemons/` alongside `./internal/sandbox/`.
-    - D6b.2: workspace fixture + `daft workspace launch`
-      against the existing hello-bundle. First slice that
+    - D6b.2 (landed): workspace fixture + `daft workspace
+      launch` against the hello bundle. First slice that
       actually boots a VM through the subprocess control
-      plane. Reuses D6b.1's harness.
+      plane. Stands up an in-process OCI registry, pushes the
+      daft-hello-container binary as a single-layer image,
+      drives `daft workspace create / image / mount / target /
+      launch` through a tmux pane (sentinel-pattern per step:
+      `printf 'D6B-%d\n' $((<base>+$?))` so the success token
+      only appears in command output, not the typed-line
+      echo). Asserts `Status: Dispatched` in launch's CLI
+      response, then waits for the in-VM container banner to
+      surface through the sandboxd's stdout — the testdaemons
+      `outputCapture` (added in this slice) accumulates a
+      thread-safe view of daemon output alongside the t.Log
+      forwarding so tests can assert on it. Required one
+      small production change: the `daft-sandboxd serve`
+      wiring now wraps `bundled.Extract` with
+      `extractWithEnvFallback`, which lets a plain
+      `go build`-produced sandboxd boot VMs using the env-var-
+      pointed artefacts when its embedded assets are stubs.
+      The Nix-built binary still uses the embedded assets;
+      this fallback only fires on dev builds. Test runs in
+      ~3.1s end-to-end via `make integration`.
     - D6b.3: nix-based container image. Pull (or pre-stage)
       a small nix container, launch a workspace against it,
       exec a real shell command via the testtmux harness.

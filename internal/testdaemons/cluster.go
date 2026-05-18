@@ -19,6 +19,7 @@
 package testdaemons
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -59,6 +60,34 @@ type Cluster struct {
 	OrchestratorFP identity.Fingerprint
 	SandboxdFP     identity.Fingerprint
 	ClientFP       identity.Fingerprint
+
+	// sandboxdOut accumulates everything the sandboxd subprocess
+	// writes to stdout/stderr (in addition to t.Log forwarding).
+	// Tests assert on it via WaitForSandboxdOutput.
+	sandboxdOut *outputCapture
+}
+
+// WaitForSandboxdOutput polls the captured sandboxd output until
+// substr appears, or fatals the test on timeout (dumping the
+// whole capture for diagnosis). Used by tests that need to wait
+// on async daemon-side events — like the in-VM container
+// banner — that don't surface through the tmux pane.
+func (c *Cluster) WaitForSandboxdOutput(t *testing.T, substr string, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	//daft:lint:disable=forloopbound reason="bounded by deadline via the if-fatal below"
+	for {
+		got := c.sandboxdOut.Snapshot()
+		if strings.Contains(got, substr) {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("WaitForSandboxdOutput %q: timeout after %s\n"+
+				"--- sandboxd capture ---\n%s",
+				substr, timeout, got)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // NewCluster generates identities, cross-approves them, builds
@@ -96,11 +125,14 @@ func NewCluster(t *testing.T) *Cluster {
 	addr := freeLoopbackAddr(t)
 	url := "https://" + addr
 
-	startDaemon(t, bins.orchestrator,
+	orchOut := newOutputCapture(t, "daft-orchestrator")
+	sbxOut := newOutputCapture(t, "daft-sandboxd")
+
+	startDaemon(t, orchOut, bins.orchestrator,
 		"serve", "--addr", addr, "--config-dir", orchDir)
 	waitForTCP(t, addr, daemonReadyTimeout)
 
-	startDaemon(t, bins.sandboxd,
+	startDaemon(t, sbxOut, bins.sandboxd,
 		"serve", "--orchestrator", url, "--config-dir", sbxDir)
 	// Sandboxd registration is asynchronous — the test asserts on
 	// daft node list output to decide when registration completed.
@@ -112,6 +144,7 @@ func NewCluster(t *testing.T) *Cluster {
 		OrchestratorFP:  orchID.Fingerprint(),
 		SandboxdFP:      sbxID.Fingerprint(),
 		ClientFP:        cliID.Fingerprint(),
+		sandboxdOut:     sbxOut,
 	}
 }
 
@@ -264,11 +297,12 @@ func freeLoopbackAddr(t *testing.T) string {
 }
 
 // startDaemon spawns prog with args under its own process group,
-// wires stdout/stderr into the test log, and registers a Cleanup
-// that SIGTERMs the whole group then Waits with a bounded delay.
-// Pdeathsig=SIGKILL means a crashed test process can't leak the
-// daemon even if Cleanup never runs.
-func startDaemon(t *testing.T, prog string, args ...string) *exec.Cmd {
+// forwards stdout/stderr through the provided outputCapture (so
+// the test can both Log and assert on what the daemon wrote),
+// and registers a Cleanup that SIGTERMs the whole group then
+// Waits with a bounded delay. Pdeathsig=SIGKILL means a crashed
+// test process can't leak the daemon even if Cleanup never runs.
+func startDaemon(t *testing.T, out *outputCapture, prog string, args ...string) *exec.Cmd {
 	t.Helper()
 	//nolint:gosec // G204: prog + args are caller-controlled test-only paths.
 	cmd := exec.Command(prog, args...)
@@ -276,8 +310,8 @@ func startDaemon(t *testing.T, prog string, args ...string) *exec.Cmd {
 		Setpgid:   true,
 		Pdeathsig: syscall.SIGKILL,
 	}
-	cmd.Stdout = &testWriter{t: t, prefix: filepath.Base(prog) + " out"}
-	cmd.Stderr = &testWriter{t: t, prefix: filepath.Base(prog) + " err"}
+	cmd.Stdout = out
+	cmd.Stderr = out
 	// Bound how long cmd.Wait will tolerate a stuck pipe after
 	// the process itself has exited; without this, a daemon that
 	// leaves a goroutine pinning a stdio fd could hang Cleanup.
@@ -318,15 +352,31 @@ func waitForTCP(t *testing.T, addr string, timeout time.Duration) {
 	}
 }
 
-// testWriter forwards each Write line to the test log so daemon
-// output appears in the test trace on failure. Implements
-// io.Writer with the minimum semantics needed.
-type testWriter struct {
+// outputCapture forwards every Write to t.Logf (so daemon output
+// shows in the test trace on failure) AND accumulates into a
+// thread-safe buffer Snapshot can return. The two-roles split
+// lets tests both see daemon-side messages live and assert on
+// them with WaitForSandboxdOutput's substring search.
+type outputCapture struct {
 	t      *testing.T
 	prefix string
+	mu     sync.Mutex
+	buf    bytes.Buffer
 }
 
-func (w *testWriter) Write(p []byte) (int, error) {
-	w.t.Logf("[%s] %s", w.prefix, strings.TrimRight(string(p), "\n"))
-	return len(p), nil
+func newOutputCapture(t *testing.T, prefix string) *outputCapture {
+	return &outputCapture{t: t, prefix: prefix}
+}
+
+func (o *outputCapture) Write(p []byte) (int, error) {
+	o.t.Logf("[%s] %s", o.prefix, strings.TrimRight(string(p), "\n"))
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.Write(p)
+}
+
+func (o *outputCapture) Snapshot() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.String()
 }

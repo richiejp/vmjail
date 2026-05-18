@@ -173,7 +173,7 @@ var buildDispatcher = func(
 	assembler := sandboxexec.ProductionAssembler(sandboxboot.Deps{
 		OpenStore: openSandboxbootStore,
 		CacheDir:  userCacheDir,
-		Extract:   bundled.Extract,
+		Extract:   extractWithEnvFallback(base),
 	})
 	return sandboxexec.New(sandboxexec.Config{
 		Base:           base,
@@ -183,6 +183,35 @@ var buildDispatcher = func(
 		AttachRegistry: attachRegistry,
 		VsockDir:       vsockDir,
 	})
+}
+
+// extractWithEnvFallback wraps bundled.Extract: when the binary
+// has the artefacts embedded (Nix build) it returns those;
+// otherwise (plain `go build`) it falls back to the artefact
+// paths sandbox.ConfigFromEnv resolved into base. This is the
+// "callers should fall back to env-var-supplied paths" pattern
+// the bundled package's doc comment specifies. Returns the
+// embed error untouched when neither source is available, so a
+// genuinely misconfigured daemon still produces a clean
+// ErrNotBundled at dispatch time.
+func extractWithEnvFallback(base sandbox.Config) func(dir string) (bundled.Paths, error) {
+	return func(dir string) (bundled.Paths, error) {
+		paths, err := bundled.Extract(dir)
+		if !errors.Is(err, bundled.ErrNotBundled) {
+			return paths, err
+		}
+		envPaths := bundled.Paths{
+			CloudHypervisor: base.CloudHypervisor,
+			Kernel:          base.Kernel,
+			Initramfs:       base.Initramfs,
+			Virtiofsd:       base.Virtiofsd,
+		}
+		if envPaths.CloudHypervisor == "" || envPaths.Kernel == "" ||
+			envPaths.Initramfs == "" || envPaths.Virtiofsd == "" {
+			return bundled.Paths{}, err
+		}
+		return envPaths, nil
+	}
 }
 
 // resolveVsockDir returns the absolute, mkdir'd parent directory

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/richiejp/darkaifactory/internal/bundled"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
@@ -324,5 +325,39 @@ func TestResolveVsockDirMkdirError(t *testing.T) {
 	}
 	if _, err := resolveVsockDir(blocker + "/sub"); err == nil {
 		t.Fatal("expected error when mkdir fails")
+	}
+}
+
+// TestExtractWithEnvFallbackUsesBaseWhenStubAssets pins the
+// dev-build path: a plain `go build` daft-sandboxd has stub
+// assets, so bundled.Extract returns ErrNotBundled and the
+// wrapper should hand back the env-resolved paths from base.
+func TestExtractWithEnvFallbackUsesBaseWhenStubAssets(t *testing.T) {
+	base := sandbox.Config{
+		CloudHypervisor: "/p/ch",
+		Kernel:          "/p/kernel",
+		Initramfs:       "/p/initramfs",
+		Virtiofsd:       "/p/virtiofsd",
+	}
+	paths, err := extractWithEnvFallback(base)(t.TempDir())
+	if err != nil {
+		t.Fatalf("extract: %v", err)
+	}
+	if paths.CloudHypervisor != base.CloudHypervisor ||
+		paths.Kernel != base.Kernel ||
+		paths.Initramfs != base.Initramfs ||
+		paths.Virtiofsd != base.Virtiofsd {
+		t.Errorf("paths = %+v, want %+v", paths, base)
+	}
+}
+
+// TestExtractWithEnvFallbackReturnsErrNotBundledWhenBaseEmpty
+// pins the misconfigured-daemon path: stub assets AND no env
+// fallback should surface the embed-package's ErrNotBundled
+// so the caller sees a clean diagnostic.
+func TestExtractWithEnvFallbackReturnsErrNotBundledWhenBaseEmpty(t *testing.T) {
+	_, err := extractWithEnvFallback(sandbox.Config{})(t.TempDir())
+	if !errors.Is(err, bundled.ErrNotBundled) {
+		t.Errorf("err = %v, want ErrNotBundled", err)
 	}
 }
