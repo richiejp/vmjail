@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"io/fs"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
 )
@@ -13,7 +16,7 @@ import (
 func TestRunPrintsBannerAndReturnsZero(t *testing.T) {
 	withNoWorkspace(t)
 	var buf bytes.Buffer
-	if code := run(&buf); code != 0 {
+	if code := run(&buf, false); code != 0 {
 		t.Errorf("code = %d, want 0", code)
 	}
 	if !strings.Contains(buf.String(), agent.ContainerBanner) {
@@ -28,15 +31,16 @@ func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("nope") }
 
 func TestRunReturnsOneOnWriteError(t *testing.T) {
 	withNoWorkspace(t)
-	if code := run(failingWriter{}); code != 1 {
+	if code := run(failingWriter{}, false); code != 1 {
 		t.Errorf("code = %d, want 1", code)
 	}
 }
 
 func TestMainCallsRunAndOsExit(t *testing.T) {
 	withNoWorkspace(t)
-	oldExit, oldOut := osExit, stdout
-	defer func() { osExit, stdout = oldExit, oldOut }()
+	oldExit, oldOut, oldArgs := osExit, stdout, os.Args
+	defer func() { osExit, stdout, os.Args = oldExit, oldOut, oldArgs }()
+	os.Args = []string{"daft-hello-container"}
 	var buf bytes.Buffer
 	stdout = &buf
 	code := -1
@@ -52,12 +56,112 @@ func TestMainCallsRunAndOsExit(t *testing.T) {
 	}
 }
 
+// TestMainKeepaliveFromArgsTriggersBlock pins the argv parse: a
+// `--keepalive` token in os.Args flips main() into the long-running
+// branch and calls block() exactly once before exiting.
+func TestMainKeepaliveFromArgsTriggersBlock(t *testing.T) {
+	withNoWorkspace(t)
+	oldExit, oldOut, oldArgs, oldBlock := osExit, stdout, os.Args, block
+	defer func() { osExit, stdout, os.Args, block = oldExit, oldOut, oldArgs, oldBlock }()
+	os.Args = []string{"daft-hello-container", "--keepalive"}
+	var buf bytes.Buffer
+	stdout = &buf
+	blockCalls := 0
+	block = func() { blockCalls++ }
+	code := -1
+	osExit = func(c int) { code = c }
+
+	main()
+
+	if code != 0 {
+		t.Errorf("osExit called with %d, want 0", code)
+	}
+	if blockCalls != 1 {
+		t.Errorf("block called %d times, want 1", blockCalls)
+	}
+}
+
+// TestRunKeepaliveCallsBlock pins the keepalive parameter wiring at
+// the run() level (independent of os.Args).
+func TestRunKeepaliveCallsBlock(t *testing.T) {
+	withNoWorkspace(t)
+	oldBlock := block
+	defer func() { block = oldBlock }()
+	called := false
+	block = func() { called = true }
+	var buf bytes.Buffer
+	if code := run(&buf, true); code != 0 {
+		t.Errorf("code = %d, want 0", code)
+	}
+	if !called {
+		t.Error("block was not called for keepalive=true")
+	}
+}
+
+// TestRunWorkspaceErrorSkipsBlock pins that a workspace failure
+// returns immediately without entering the keepalive hold — the
+// caller (the OCI runtime) needs the non-zero exit promptly.
+func TestRunWorkspaceErrorSkipsBlock(t *testing.T) {
+	oldRead, oldBlock := fsRead, block
+	defer func() { fsRead, block = oldRead, oldBlock }()
+	fsRead = func(string) ([]byte, error) { return nil, errors.New("synthetic") }
+	called := false
+	block = func() { called = true }
+	var buf bytes.Buffer
+	if code := run(&buf, true); code != 2 {
+		t.Errorf("code = %d, want 2", code)
+	}
+	if called {
+		t.Error("block was called even though workspace round-trip failed")
+	}
+}
+
+// TestBlockUntilTerminationSignalReturnsOnInjectedSignal exercises
+// blockUntilTerminationSignal via the installTerminationSignal seam.
+// The production seam is covered by TestRealInstallTerminationSignal.
+func TestBlockUntilTerminationSignalReturnsOnInjectedSignal(t *testing.T) {
+	old := installTerminationSignal
+	defer func() { installTerminationSignal = old }()
+	ch := make(chan os.Signal, 1)
+	installTerminationSignal = func() <-chan os.Signal { return ch }
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		blockUntilTerminationSignal()
+	}()
+	ch <- syscall.SIGTERM
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blockUntilTerminationSignal did not return on injected signal")
+	}
+}
+
+// TestRealInstallTerminationSignal exercises the production signal
+// subscriber by sending SIGUSR1-spec... wait, no — it has to be one
+// of the two signals the function registers, otherwise nothing fires.
+// SIGINT is the safer of {SIGTERM, SIGINT} to deliver to a test
+// process: signal.Notify intercepts it before the default handler
+// (process termination) can fire, so as long as the subscriber is
+// installed before we Kill, we observe the signal cleanly.
+func TestRealInstallTerminationSignal(t *testing.T) {
+	ch := realInstallTerminationSignal()
+	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
+		t.Fatalf("Kill SIGINT: %v", err)
+	}
+	select {
+	case <-ch:
+	case <-time.After(2 * time.Second):
+		t.Fatal("never received SIGINT on returned channel")
+	}
+}
+
 func TestRunWorkspaceRoundTrip(t *testing.T) {
 	wrote := withWorkspace(t, map[string][]byte{
 		agent.WorkspaceInPath: []byte("hello-from-host"),
 	})
 	var buf bytes.Buffer
-	if code := run(&buf); code != 0 {
+	if code := run(&buf, false); code != 0 {
 		t.Fatalf("code = %d, want 0", code)
 	}
 	got, ok := wrote[agent.WorkspaceOutPath]
@@ -78,7 +182,7 @@ func TestRunWorkspaceReadErrorNonNotExist(t *testing.T) {
 	defer func() { fsRead = oldRead }()
 	fsRead = func(string) ([]byte, error) { return nil, errors.New("synthetic read fail") }
 	var buf bytes.Buffer
-	if code := run(&buf); code != 2 {
+	if code := run(&buf, false); code != 2 {
 		t.Errorf("code = %d, want 2 on non-ErrNotExist read failure", code)
 	}
 	if !strings.Contains(buf.String(), "workspace round-trip error") {
@@ -92,7 +196,7 @@ func TestRunWorkspaceWriteError(t *testing.T) {
 	fsRead = func(string) ([]byte, error) { return []byte("data"), nil }
 	fsWrite = func(string, []byte, fs.FileMode) error { return errors.New("write fail") }
 	var buf bytes.Buffer
-	if code := run(&buf); code != 2 {
+	if code := run(&buf, false); code != 2 {
 		t.Errorf("code = %d, want 2 on write failure", code)
 	}
 }

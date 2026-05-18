@@ -50,8 +50,16 @@ const (
 // req.Command falls back to /bin/sh -l so an attach with no
 // arguments lands in a login shell — the v0 ergonomic for "give
 // me a prompt inside the container."
+//
+// `-t` is intentionally NOT passed: with -t, crun opens
+// /dev/ptmx in the container's mount namespace to allocate its
+// own PTY, but the v0 hello-bundle (and many minimal bundles)
+// mount /dev as an empty tmpfs with no ptmx node. The agent
+// already owns a host-side PTY (see Start) and hands the slave
+// fd in as the child's stdio, so the in-container process sees
+// a real TTY without crun needing one of its own.
 func defaultAttachCmd(ctx context.Context, req AttachExecRequest) *exec.Cmd {
-	argv := []string{crunExecSubcommand, "-t", ContainerID}
+	argv := []string{crunExecSubcommand, ContainerID}
 	if len(req.Command) == 0 {
 		argv = append(argv, defaultAttachShell, "-l")
 	} else {
@@ -115,15 +123,21 @@ func attachWinsize(cols, rows uint32) *unix.Winsize {
 	return &unix.Winsize{Col: uint16(c), Row: uint16(r)} //nolint:gosec // G115: bounded by maxDim above
 }
 
-// openPtyPair opens /dev/ptmx, unlocks the slave, and opens the
-// matching /dev/pts/<n>. Returns the master + slave as *os.File so
-// callers can use the stdlib io.Reader/Writer/Closer surface.
+// openPtyPair opens the devpts multiplexer, unlocks the slave,
+// and opens the matching /dev/pts/<n>. Returns the master +
+// slave as *os.File so callers can use the stdlib io.Reader/
+// Writer/Closer surface. ensureDevPts is called first because
+// the u-root initramfs doesn't pre-mount devpts; on hosts where
+// /dev/pts/ptmx already exists the call is a no-op.
 func openPtyPair() (master, slave *os.File, err error) {
-	fd, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY, 0)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open /dev/ptmx: %w", err)
+	if perr := ensureDevPts(); perr != nil {
+		return nil, nil, fmt.Errorf("ensure devpts: %w", perr)
 	}
-	master = os.NewFile(uintptr(fd), "/dev/ptmx")
+	fd, err := unix.Open(devPtsPtmx, unix.O_RDWR|unix.O_NOCTTY, 0)
+	if err != nil {
+		return nil, nil, fmt.Errorf("open %s: %w", devPtsPtmx, err)
+	}
+	master = os.NewFile(uintptr(fd), devPtsPtmx)
 	if uerr := unix.IoctlSetPointerInt(fd, unix.TIOCSPTLCK, 0); uerr != nil {
 		_ = master.Close()
 		return nil, nil, fmt.Errorf("unlockpt: %w", uerr)

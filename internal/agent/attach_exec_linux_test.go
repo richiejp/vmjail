@@ -288,8 +288,10 @@ func TestOpenPtyPairOpensSomething(t *testing.T) {
 }
 
 // TestDefaultAttachCmdBuildsCrunArgs pins the production argv:
-// `crun exec -t <ContainerID> <argv...>` (or the /bin/sh -l
-// fallback when argv is empty).
+// `crun exec <ContainerID> <argv...>` (or the /bin/sh -l
+// fallback when argv is empty). `-t` is intentionally absent —
+// see defaultAttachCmd's doc-comment for the in-container
+// /dev/ptmx rationale.
 func TestDefaultAttachCmdBuildsCrunArgs(t *testing.T) {
 	cases := []struct {
 		name string
@@ -299,12 +301,12 @@ func TestDefaultAttachCmdBuildsCrunArgs(t *testing.T) {
 		{
 			name: "with-command",
 			req:  AttachExecRequest{Command: []string{"echo", "hi"}, TTY: true},
-			want: []string{ContainerRuntime, crunExecSubcommand, "-t", ContainerID, "echo", "hi"},
+			want: []string{ContainerRuntime, crunExecSubcommand, ContainerID, "echo", "hi"},
 		},
 		{
 			name: "empty-command-falls-back-to-shell",
 			req:  AttachExecRequest{TTY: true},
-			want: []string{ContainerRuntime, crunExecSubcommand, "-t", ContainerID, defaultAttachShell, "-l"},
+			want: []string{ContainerRuntime, crunExecSubcommand, ContainerID, defaultAttachShell, "-l"},
 		},
 	}
 	for _, tc := range cases {

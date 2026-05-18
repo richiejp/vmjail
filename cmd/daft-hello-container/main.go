@@ -11,6 +11,11 @@
 // a real container in a real VM can write to the virtiofs share
 // and the host sees the result.
 //
+// With --keepalive the binary prints the banner and then blocks
+// until SIGTERM/SIGINT. This makes the same binary usable as the
+// long-running PID 1 of a container that the D2 attach e2e test
+// can `crun exec` into.
+//
 // The agent's banner-scanner on the host watches for the banner
 // string (see internal/agent.ContainerBanner), so don't change it
 // without updating that constant.
@@ -22,7 +27,9 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/signal"
 	"slices"
+	"syscall"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
 )
@@ -37,6 +44,11 @@ func writeErrf(out io.Writer, format string, args ...any) {
 	}
 }
 
+// keepaliveFlag is the argv token that flips main() into the
+// long-running PID-1 mode used by the D2 attach e2e rig.
+const keepaliveFlag = "--keepalive"
+
+//nolint:gochecknoglobals // test seams: tests stub these to avoid blocking on real signals or touching the real fs.
 var (
 	osExit           = os.Exit
 	stdout io.Writer = os.Stdout
@@ -44,20 +56,48 @@ var (
 	// boundary without needing a real /workspace.
 	fsRead  = os.ReadFile
 	fsWrite = os.WriteFile
+	// block waits for a SIGTERM/SIGINT and returns. Stubbed in
+	// tests so they don't actually pin the test process.
+	block = blockUntilTerminationSignal
+	// installTerminationSignal hands back a channel that fires on
+	// SIGTERM/SIGINT. Split out so block can be exercised in a
+	// unit test without sending a real signal.
+	installTerminationSignal = realInstallTerminationSignal
 )
 
 func main() {
-	osExit(run(stdout))
+	osExit(run(stdout, slices.Contains(os.Args[1:], keepaliveFlag)))
 }
 
-func run(out io.Writer) int {
+func run(out io.Writer, keepalive bool) int {
 	if code := workspaceRoundTrip(out); code != 0 {
 		return code
 	}
 	if _, err := fmt.Fprintln(out, agent.ContainerBanner); err != nil {
 		return 1
 	}
+	if keepalive {
+		block()
+	}
 	return 0
+}
+
+// blockUntilTerminationSignal waits until SIGTERM or SIGINT
+// arrives. Used as the PID-1 hold so the container stays alive
+// for `crun exec` attach sessions; teardown comes from the VM
+// shutting down (crun kill → SIGTERM).
+func blockUntilTerminationSignal() {
+	ch := installTerminationSignal()
+	<-ch
+}
+
+// realInstallTerminationSignal subscribes to SIGTERM/SIGINT and
+// returns the resulting channel. The defer-Stop is intentionally
+// omitted: the process exits immediately after the channel fires.
+func realInstallTerminationSignal() <-chan os.Signal {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT)
+	return ch
 }
 
 // workspaceRoundTrip is the optional in-VM half of the workspace

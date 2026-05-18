@@ -736,9 +736,29 @@ the user-host or in CI today.
     injectable seams; unit tests drive the full session
     against an in-process fake stream and a PTY-backed
     terminal harness.
-  - D2d: full-stack e2e test (parallel to C3.3) booting a
-    real VM, attaching, running `echo hello`, asserting byte
-    round-trip.
+  - D2d (landed): full-stack attach e2e test
+    (`internal/sandbox/integration_attach_test.go`). Boots a
+    real Cloud Hypervisor VM via `sandbox.Serve` with a
+    long-running container as PID 1 (the existing
+    daft-hello-container gained a `--keepalive` flag that
+    prints the banner and then blocks on SIGTERM/SIGINT, so
+    the same binary is both the in-VM PID 1 *and* the exec
+    target for attach). The test dials the agent's attach
+    vsock listener via `DialGuestVsock`, opens a session with
+    `sandboxattach.OpenSession`, asks the agent to exec
+    `/hello` in the running container, and asserts
+    `agent.ContainerBanner` round-trips back through the PTY
+    tunnel. Surfaced two real bugs in the D2b implementation
+    that unit tests on the host couldn't see: (a) the u-root
+    initramfs doesn't mount devpts, so the agent's
+    `openPtyPair` opening `/dev/ptmx` failed in the VM —
+    fixed by a small `ensureDevPts` helper that the PTY
+    allocator calls lazily, and by switching the path to
+    `/dev/pts/ptmx`; (b) `crun exec -t` opens `/dev/ptmx` in
+    the **container's** mount namespace, which is an empty
+    tmpfs in v0 bundles — fixed by dropping `-t` (the agent's
+    PTY slave is already a real TTY that crun-exec hands
+    directly to the child).
 - D3: GPU-bound VM lifecycle: orchestrator keeps the VM up
   while ≥1 workspace targets it; stops it when idle for $TTL
   (default 10 min) or on operator command.
