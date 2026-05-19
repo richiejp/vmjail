@@ -120,6 +120,7 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	// the agent's lifetime.
 	startPortForwardersFromCmdline(ctx, w, d, cmdline)
 	startAttachListenerFromCmdline(ctx, w, d, cmdline)
+	startNetBridgeFromCmdline(ctx, w, d, cmdline)
 	runContainerFromCmdline(ctx, w, d, cmdline)
 	bootSpan.End()
 

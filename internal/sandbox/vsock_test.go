@@ -75,6 +75,36 @@ func TestBuildKernelCmdlineEmitsVsockTracePort(t *testing.T) {
 	}
 }
 
+// TestBuildKernelCmdlineEmitsNetPort confirms the agent sees
+// daft.net_port on the cmdline when NetPort is set.
+func TestBuildKernelCmdlineEmitsNetPort(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.Vsock = &VsockConfig{
+		HostSocket: testHostSocketPath,
+		GuestCID:   3,
+		NetPort:    9100,
+	}
+	got := buildKernelCmdline(cfg)
+	if !strings.Contains(got, "daft.net_port=9100") {
+		t.Errorf("cmdline %q missing net_port", got)
+	}
+}
+
+// TestBuildKernelCmdlineSkipsNetPortWhenZero confirms a VsockConfig
+// with NetPort=0 leaves the cmdline clean.
+func TestBuildKernelCmdlineSkipsNetPortWhenZero(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.Vsock = &VsockConfig{
+		HostSocket: testHostSocketPath,
+		GuestCID:   3,
+		NetPort:    0,
+	}
+	got := buildKernelCmdline(cfg)
+	if strings.Contains(got, "daft.net_port") {
+		t.Errorf("cmdline %q has net_port despite zero", got)
+	}
+}
+
 // TestBuildKernelCmdlineSkipsVsockTracePortWhenZero confirms a
 // VsockConfig with TracePort=0 (channel exists but no trace
 // shipping wanted) doesn't pollute the cmdline.

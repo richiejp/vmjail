@@ -971,11 +971,20 @@ the user-host or in CI today.
            a UDS listener at `<HostSocket>_<NetPort>` into
            the network on accept; round-trip pinned by
            TestStartVsockNetReceiverRoundTrip.
-        2. agent-side: add an "egress" mode driven by a new
-           daft.vsock.net_port cmdline key. Dial CID 2 port
-           net_port, create tap0, run the rx/tx bridge.
-           Configure tap0 inside the VM (link up, optionally
-           DHCP via the gvproxy-embedded server).
+        2a. agent-side wire path: new daft.net_port cmdline
+            key, sandboxboot emits it from cfg.Vsock.NetPort,
+            agent parses + dials AF_VSOCK CID 2 port net_port
+            via StartNetBridge, holding the conn for the slice-2b
+            pumps to plug into. No tap yet — this slice validates
+            the byte path end-to-end against the slice-1 listener
+            without pulling in tap/netlink deps. **Landed.**
+        2b. agent-side tap + bridge: create tap0 via TUNSETIFF
+            (or songgao/water), bring up the link via rtnetlink
+            (or vishvananda/netlink), and run the rx/tx pump loops
+            with HyperKit framing (2-byte LE size prefix) between
+            tap0 and the slice-2a vsock conn. Optionally drive
+            DHCP via udhcpc/dhclient against the gvproxy-embedded
+            server.
         3. container netns wiring: today the container shares
            the VM's loopback; for D6c.2 it also needs an
            egress route via tap0. Likely via crun's network

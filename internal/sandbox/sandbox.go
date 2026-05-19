@@ -496,6 +496,9 @@ func buildKernelCmdline(cfg Config) string {
 	if cfg.Vsock != nil && cfg.Vsock.AttachPort != 0 {
 		parts = append(parts, agent.FormatAttachPortCmdline(cfg.Vsock.AttachPort))
 	}
+	if cfg.Vsock != nil && cfg.Vsock.NetPort != 0 {
+		parts = append(parts, agent.FormatNetPortCmdline(cfg.Vsock.NetPort))
+	}
 	for _, pf := range cfg.PortForwards {
 		parts = append(parts, agent.FormatPortForwardCmdline(agent.PortForwardSpec{
 			VsockPort:     pf.VsockPort,
