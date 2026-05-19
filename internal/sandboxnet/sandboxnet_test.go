@@ -1,20 +1,3 @@
-// Package sandboxnet is a spike for D6c.2: prove that
-// gvisor-tap-vsock's VirtualNetwork can accept a plain net.Conn,
-// run gVisor netstack as the gateway, and round-trip an Ethernet
-// frame through the StdioProtocol (2-byte little-endian length
-// prefix, no HTTP handshake). This is the byte shape we'd get on
-// the host side of Cloud Hypervisor's hybrid-vsock UDS hop, where
-// the guest dials AF_VSOCK CID 2 port N and CH proxies that
-// stream onto a host Unix socket sandboxd owns. No CH or VM in
-// this test — just the in-process library wiring.
-//
-// Asserts: the netstack answers an ARP request for the gateway
-// IP with a correctly-shaped ARP reply. That proves the conn
-// is being read, parsed, fed to the netstack, the netstack
-// generates a response, and the response is framed back onto
-// the conn. Enough to green-light wiring this library into the
-// real path; everything beyond (TCP through to host net.Dial,
-// DHCP server replies, etc.) is gvproxy's own scope.
 package sandboxnet
 
 import (
@@ -23,41 +6,80 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/containers/gvisor-tap-vsock/pkg/types"
-	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
 )
 
-// virtualNetwork configuration constants for the spike. Values
-// are arbitrary — they only need to be self-consistent and avoid
-// conflicting with anything else on the host (no kernel route is
-// installed; this all lives inside gvisor netstack).
-const (
-	spikeSubnet      = "192.168.127.0/24"
-	spikeGatewayIP   = "192.168.127.1"
-	spikeGatewayMAC  = "5a:94:ef:e4:0c:dd"
-	spikeMTU         = 1500
-	spikeReadTimeout = 5 * time.Second
-)
+const readTimeout = 5 * time.Second
 
 // fake guest constants
 var (
-	spikeGuestMAC = [6]byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x01}
-	spikeGuestIP  = [4]byte{192, 168, 127, 2}
+	testGuestMAC = [6]byte{0x02, 0x00, 0x00, 0x00, 0x00, 0x01}
+	testGuestIP  = [4]byte{192, 168, 127, 2}
 )
 
-func TestSpikeARPRoundTripsThroughStdioProtocol(t *testing.T) {
-	vn, err := virtualnetwork.New(&types.Configuration{
-		Subnet:            spikeSubnet,
-		GatewayIP:         spikeGatewayIP,
-		GatewayMacAddress: spikeGatewayMAC,
-		MTU:               spikeMTU,
-		Protocol:          types.StdioProtocol,
-	})
+// TestNewDefaults verifies zero-valued Config fields fall back to
+// the package defaults rather than producing a broken netstack.
+func TestNewDefaults(t *testing.T) {
+	n, err := New(Config{})
 	if err != nil {
-		t.Fatalf("virtualnetwork.New: %v", err)
+		t.Fatalf("New(zero): %v", err)
+	}
+	if n == nil {
+		t.Fatal("New returned nil Network")
+	}
+}
+
+// TestNewRejectsBadConfig pins the boundary-input branches. Each
+// case wires a single field to a known-bad value; New should
+// reject before constructing the netstack.
+func TestNewRejectsBadConfig(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want string
+	}{
+		{
+			name: "bad subnet",
+			cfg:  Config{Subnet: "not-a-cidr"},
+			want: "subnet",
+		},
+		{
+			name: "bad gateway IP",
+			cfg:  Config{GatewayIP: "not-an-ip"},
+			want: "gateway IP",
+		},
+		{
+			name: "bad gateway MAC",
+			cfg:  Config{GatewayMAC: "not-a-mac"},
+			want: "gateway MAC",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := New(tc.cfg)
+			if err == nil {
+				t.Fatalf("New(%+v): want error, got nil", tc.cfg)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("New error = %q, want substring %q", err.Error(), tc.want)
+			}
+		})
+	}
+}
+
+// TestAcceptRoundTripsARP pipes a net.Conn through Accept and
+// asserts an ARP request for the gateway IP comes back as an ARP
+// reply with the gateway MAC. The byte path exercised here is the
+// same one the production wiring uses on every accepted UDS conn:
+// read header, parse Ethernet, dispatch to netstack, frame response
+// back. If the library's protocol shape ever shifts under us, this
+// test will fail before any real VM is involved.
+func TestAcceptRoundTripsARP(t *testing.T) {
+	n, err := New(Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
 	}
 
 	hostSide, guestSide := net.Pipe()
@@ -71,30 +93,28 @@ func TestSpikeARPRoundTripsThroughStdioProtocol(t *testing.T) {
 
 	acceptErr := make(chan error, 1)
 	go func() {
-		acceptErr <- vn.AcceptStdio(ctx, hostSide)
+		acceptErr <- n.Accept(ctx, hostSide)
 	}()
 
-	frame := buildARPRequest(spikeGuestMAC[:], spikeGuestIP[:], net.ParseIP(spikeGatewayIP).To4())
+	frame := buildARPRequest(testGuestMAC[:], testGuestIP[:],
+		net.ParseIP(DefaultGatewayIP).To4())
 	writeFrame(t, guestSide, frame)
 
-	reply := readFrame(t, guestSide, spikeReadTimeout)
-	assertARPReply(t, reply, spikeGatewayMAC, spikeGuestMAC[:])
+	reply := readFrame(t, guestSide, readTimeout)
+	assertARPReply(t, reply, DefaultGatewayMAC, testGuestMAC[:])
 
 	cancel()
-	// AcceptStdio's rx loop unblocks when its context is cancelled
-	// or the conn is closed. Either way the goroutine should exit
-	// promptly; surface any unexpected error.
 	_ = hostSide.Close()
 	select {
 	case <-acceptErr:
-	case <-time.After(spikeReadTimeout):
-		t.Fatal("AcceptStdio did not return after cancel")
+	case <-time.After(readTimeout):
+		t.Fatal("Accept did not return after cancel")
 	}
 }
 
 // buildARPRequest assembles an Ethernet+ARP request asking for
-// targetIP's MAC. RFC 826 layout, hand-rolled to avoid pulling
-// a packet builder into the spike.
+// targetIP's MAC. Hand-rolled per RFC 826 to avoid pulling a
+// packet builder into the test.
 func buildARPRequest(srcMAC, srcIP, targetIP []byte) []byte {
 	const (
 		ethTypeARP   = 0x0806
@@ -119,7 +139,7 @@ func buildARPRequest(srcMAC, srcIP, targetIP []byte) []byte {
 	return buf
 }
 
-// writeFrame writes a StdioProtocol frame: 2-byte LE size, then
+// writeFrame writes one StdioProtocol frame: 2-byte LE size, then
 // the frame bytes. Mirrors gvforwarder's rx() loop.
 func writeFrame(t *testing.T, w io.Writer, frame []byte) {
 	t.Helper()
@@ -130,10 +150,7 @@ func writeFrame(t *testing.T, w io.Writer, frame []byte) {
 	}
 }
 
-// readFrame reads one StdioProtocol frame within timeout. Returns
-// the frame bytes (without the size header). Fatals on timeout or
-// short read — the test that calls this would have nothing
-// meaningful to say after either failure.
+// readFrame reads one StdioProtocol frame within timeout.
 func readFrame(t *testing.T, r net.Conn, timeout time.Duration) []byte {
 	t.Helper()
 	if err := r.SetReadDeadline(time.Now().Add(timeout)); err != nil {
@@ -155,7 +172,7 @@ func readFrame(t *testing.T, r net.Conn, timeout time.Duration) []byte {
 }
 
 // assertARPReply checks that frame is an Ethernet ARP-reply
-// addressed to wantDstMAC and sourced from wantSrcMAC.
+// addressed to wantDstMAC and sourced from wantSrcMACStr.
 func assertARPReply(t *testing.T, frame []byte, wantSrcMACStr string, wantDstMAC []byte) {
 	t.Helper()
 	if len(frame) < 42 {

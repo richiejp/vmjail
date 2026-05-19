@@ -614,6 +614,54 @@ func TestValidatePortForwardsRejectsTracePortCollision(t *testing.T) {
 	}
 }
 
+// TestValidatePortForwardsRejectsNetPortCollision pins the same
+// invariant for the D6c.2 NetPort: a PortForward.VsockPort that
+// equals Vsock.NetPort would race the sandboxnet listener for the
+// same guest-side bind.
+func TestValidatePortForwardsRejectsNetPortCollision(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.Vsock = &VsockConfig{
+		HostSocket: testHostSocketPath,
+		GuestCID:   3,
+		NetPort:    10000,
+	}
+	cfg.PortForwards = []PortForward{{VsockPort: 10000, ContainerPort: 80}}
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "NetPort") {
+		t.Fatalf("err = %v, want NetPort-collision error", err)
+	}
+}
+
+// TestVsockConfigValidateRejectsNetPortCollisionWithTracePort
+// pins the inter-port-field invariant on VsockConfig itself.
+func TestVsockConfigValidateRejectsNetPortCollisionWithTracePort(t *testing.T) {
+	v := &VsockConfig{
+		HostSocket: testHostSocketPath,
+		GuestCID:   3,
+		TracePort:  8000,
+		NetPort:    8000,
+	}
+	err := v.validate()
+	if err == nil || !strings.Contains(err.Error(), "NetPort") {
+		t.Fatalf("err = %v, want NetPort-collision error", err)
+	}
+}
+
+// TestVsockConfigValidateRejectsNetPortCollisionWithAttachPort —
+// same idea, against AttachPort.
+func TestVsockConfigValidateRejectsNetPortCollisionWithAttachPort(t *testing.T) {
+	v := &VsockConfig{
+		HostSocket: testHostSocketPath,
+		GuestCID:   3,
+		AttachPort: 9000,
+		NetPort:    9000,
+	}
+	err := v.validate()
+	if err == nil || !strings.Contains(err.Error(), "NetPort") {
+		t.Fatalf("err = %v, want NetPort-collision error", err)
+	}
+}
+
 func TestHelloRejectsRelativeBundle(t *testing.T) {
 	cfg := validCfg()
 	cfg.Bundle = "relative/bundle"

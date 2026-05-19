@@ -133,6 +133,14 @@ type VsockConfig struct {
 	// <HostSocket>_<AttachPort> through the CH hybrid-vsock CONNECT
 	// proxy. Conventionally agent.DefaultAttachVsockPort (9000).
 	AttachPort uint32
+
+	// NetPort, if non-zero, is the host-side AF_VSOCK port the
+	// guest agent dials to reach the per-VM userspace TCP/IP
+	// stack (internal/sandboxnet). CH proxies the dial onto
+	// <HostSocket>_<NetPort>; sandboxd accepts and hands the conn
+	// to (*sandboxnet.Network).Accept. Frames travel as
+	// StdioProtocol (<u16-le size><eth frame>).
+	NetPort uint32
 }
 
 // ShareConfig describes one host→guest virtiofs mount.
@@ -208,10 +216,11 @@ func (c *Config) validatePortForwards() error {
 		return nil
 	}
 	seen := make(map[uint32]bool, len(c.PortForwards))
-	var tracePort, attachPort uint32
+	var tracePort, attachPort, netPort uint32
 	if c.Vsock != nil {
 		tracePort = c.Vsock.TracePort
 		attachPort = c.Vsock.AttachPort
+		netPort = c.Vsock.NetPort
 	}
 	for i, pf := range c.PortForwards {
 		if pf.VsockPort == 0 {
@@ -229,6 +238,9 @@ func (c *Config) validatePortForwards() error {
 		}
 		if attachPort != 0 && pf.VsockPort == attachPort {
 			return fmt.Errorf("sandbox: PortForwards[%d].VsockPort %d collides with Vsock.AttachPort", i, pf.VsockPort)
+		}
+		if netPort != 0 && pf.VsockPort == netPort {
+			return fmt.Errorf("sandbox: PortForwards[%d].VsockPort %d collides with Vsock.NetPort", i, pf.VsockPort)
 		}
 	}
 	return nil
@@ -248,6 +260,12 @@ func (v *VsockConfig) validate() error {
 	}
 	if v.TracePort != 0 && v.TracePort == v.AttachPort {
 		return fmt.Errorf("sandbox: Vsock.TracePort %d collides with Vsock.AttachPort", v.TracePort)
+	}
+	if v.NetPort != 0 && v.NetPort == v.TracePort {
+		return fmt.Errorf("sandbox: Vsock.NetPort %d collides with Vsock.TracePort", v.NetPort)
+	}
+	if v.NetPort != 0 && v.NetPort == v.AttachPort {
+		return fmt.Errorf("sandbox: Vsock.NetPort %d collides with Vsock.AttachPort", v.NetPort)
 	}
 	return nil
 }
@@ -647,6 +665,12 @@ func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	defer stopVsock()
 
+	stopNet, err := startVsockNetReceiver(ctx, cfg)
+	if err != nil {
+		return trace.RecordError(ctx, err)
+	}
+	defer stopNet()
+
 	stdout, stop, err := runVMM(ctx, cfg, shareSockets, r)
 	if err != nil {
 		return trace.RecordError(ctx, err)
@@ -706,6 +730,12 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 		return trace.RecordError(ctx, err)
 	}
 	defer stopVsock()
+
+	stopNet, err := startVsockNetReceiver(ctx, cfg)
+	if err != nil {
+		return trace.RecordError(ctx, err)
+	}
+	defer stopNet()
 
 	stdout, stop, err := runVMM(runCtx, cfg, shareSockets, r)
 	if err != nil {

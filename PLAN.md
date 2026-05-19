@@ -964,6 +964,13 @@ the user-host or in CI today.
            startVsockTraceReceiver), run a per-VM
            VirtualNetwork, plumb accepted conns into
            AcceptStdio. Configure Subnet/GatewayIP per VM.
+           **Landed.** internal/sandboxnet exposes Config /
+           New / Accept around virtualnetwork. VsockConfig
+           gains NetPort with cross-port-collision
+           validation. sandbox.startVsockNetReceiver wires
+           a UDS listener at `<HostSocket>_<NetPort>` into
+           the network on accept; round-trip pinned by
+           TestStartVsockNetReceiverRoundTrip.
         2. agent-side: add an "egress" mode driven by a new
            daft.vsock.net_port cmdline key. Dial CID 2 port
            net_port, create tap0, run the rx/tx bridge.

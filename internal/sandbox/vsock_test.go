@@ -125,6 +125,8 @@ func TestVsockConfigValidateRequiresHostSocket(t *testing.T) {
 // TestStartVsockTraceReceiverNilWhenDisabled returns a no-op stop
 // when Vsock is nil or TracePort is zero. Caller can defer stop
 // unconditionally.
+//
+//nolint:dupl // structurally parallel to NetPort by design.
 func TestStartVsockTraceReceiverNilWhenDisabled(t *testing.T) {
 	cases := []struct {
 		name string
@@ -233,6 +235,8 @@ func TestStartVsockTraceReceiverWithoutTracerInContext(t *testing.T) {
 // TestStartVsockTraceReceiverPreCleansStaleSocket simulates a
 // previous run crashing while a stale socket file remained — the
 // new listener should remove it and bind successfully.
+//
+//nolint:dupl // structurally parallel to NetPort by design.
 func TestStartVsockTraceReceiverPreCleansStaleSocket(t *testing.T) {
 	dir := t.TempDir()
 	cfg := validCfg()
