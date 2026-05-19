@@ -45,21 +45,12 @@ const (
 )
 
 // Config describes the per-VM virtual network. Zero-valued
-// fields fall back to package defaults; see DefaultMTU /
-// DefaultSubnet / DefaultGatewayIP / DefaultGatewayMAC.
+// fields fall back to package defaults.
 type Config struct {
-	// Subnet is the CIDR the gateway serves. Frames whose dst IP
-	// falls inside this range route into the netstack; everything
-	// else gets NAT'd out via the host syscall layer.
-	Subnet string
-	// GatewayIP is the netstack's own address inside Subnet —
-	// also the default route the guest learns via DHCP.
-	GatewayIP string
-	// GatewayMAC is the L2 address the netstack uses on the
-	// virtual NIC. Must be a unicast MAC the guest can ARP-resolve.
+	Subnet     string
+	GatewayIP  string
 	GatewayMAC string
-	// MTU bounds the netstack's frame size. 0 → DefaultMTU.
-	MTU int
+	MTU        int
 }
 
 // Network is one VM's userspace TCP/IP stack. Construct with New,
@@ -109,11 +100,10 @@ func New(cfg Config) (*Network, error) {
 // Accept blocks until conn is closed or ctx is cancelled, ferrying
 // StdioProtocol frames between conn and the netstack switch. The
 // switch's CAM table learns the guest's MAC from the first frame;
-// subsequent traffic to that MAC routes back to this conn.
-//
-// On any I/O error the switch internally disconnects the conn from
-// the CAM table and returns; callers can re-Accept a fresh conn
-// (e.g. after a guest reboot) on the same Network.
+// subsequent traffic to that MAC routes back to this conn. On any
+// I/O error the switch internally disconnects the conn from the
+// CAM table — callers can re-Accept a fresh conn (guest reboot) on
+// the same Network.
 func (n *Network) Accept(ctx context.Context, conn net.Conn) error {
 	return n.vn.AcceptStdio(ctx, conn)
 }

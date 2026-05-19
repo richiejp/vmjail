@@ -614,10 +614,9 @@ func TestValidatePortForwardsRejectsTracePortCollision(t *testing.T) {
 	}
 }
 
-// TestValidatePortForwardsRejectsNetPortCollision pins the same
-// invariant for the D6c.2 NetPort: a PortForward.VsockPort that
-// equals Vsock.NetPort would race the sandboxnet listener for the
-// same guest-side bind.
+// TestValidatePortForwardsRejectsNetPortCollision — a
+// PortForward.VsockPort equal to Vsock.NetPort would race the
+// sandboxnet listener for the same guest-side bind.
 func TestValidatePortForwardsRejectsNetPortCollision(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	cfg.Vsock = &VsockConfig{
@@ -632,8 +631,6 @@ func TestValidatePortForwardsRejectsNetPortCollision(t *testing.T) {
 	}
 }
 
-// TestVsockConfigValidateRejectsNetPortCollisionWithTracePort
-// pins the inter-port-field invariant on VsockConfig itself.
 func TestVsockConfigValidateRejectsNetPortCollisionWithTracePort(t *testing.T) {
 	v := &VsockConfig{
 		HostSocket: testHostSocketPath,
@@ -647,8 +644,6 @@ func TestVsockConfigValidateRejectsNetPortCollisionWithTracePort(t *testing.T) {
 	}
 }
 
-// TestVsockConfigValidateRejectsNetPortCollisionWithAttachPort —
-// same idea, against AttachPort.
 func TestVsockConfigValidateRejectsNetPortCollisionWithAttachPort(t *testing.T) {
 	v := &VsockConfig{
 		HostSocket: testHostSocketPath,

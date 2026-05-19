@@ -3,7 +3,6 @@ package sandbox
 import (
 	"context"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
 	"os"
@@ -15,18 +14,9 @@ import (
 
 // startVsockNetReceiver opens a UDS listener at
 // <HostSocket>_<NetPort> and hands every accepted conn to a
-// per-VM sandboxnet.Network. Mirrors startVsockTraceReceiver
-// (same hybrid-vsock host-side convention: guest dials AF_VSOCK
-// CID 2 port NetPort, CH proxies onto <HostSocket>_<NetPort>).
-//
-// No-op (returns a do-nothing stop) when cfg has no Vsock or no
-// NetPort. The returned stop is always safe to call.
-//
-// Each accepted conn runs (*sandboxnet.Network).Accept on a
-// dedicated goroutine; the call returns when the conn is closed
-// or runCtx is cancelled. The switch inside Network learns the
-// guest's MAC from the first frame and dispatches replies back
-// to whichever conn currently owns that MAC.
+// per-VM sandboxnet.Network. No-op (returns a do-nothing stop)
+// when cfg has no Vsock or no NetPort. The returned stop is
+// always safe to call.
 func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), err error) {
 	if cfg.Vsock == nil || cfg.Vsock.NetPort == 0 {
 		return func() {}, nil
@@ -37,8 +27,6 @@ func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), err er
 	}
 
 	sockPath := fmt.Sprintf("%s_%d", cfg.Vsock.HostSocket, cfg.Vsock.NetPort)
-	// Pre-clean a stale socket from a crashed previous run; Listen
-	// would otherwise EADDRINUSE.
 	oops.Skip("remove stale vsock net socket", os.Remove(sockPath), fs.ErrNotExist)
 
 	listener, err := net.Listen("unix", sockPath)
@@ -46,21 +34,23 @@ func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), err er
 		return func() {}, fmt.Errorf("sandbox: listen %s: %w", sockPath, err)
 	}
 
-	// Detach from the request ctx the same way startVsockTraceReceiver
-	// does — sandbox.Serve passes its full-lifetime ctx, but we
-	// want explicit teardown via stop() rather than parent-cancel
-	// closing the listener mid-flight.
+	// Detached from ctx so stop() owns teardown — a request-scoped
+	// cancellation must not close the listener mid-VM.
 	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	conns := &connSet{}
 	var wg sync.WaitGroup
 	wg.Go(func() {
-		acceptVsockNetConns(runCtx, listener, network)
+		acceptVsockNetConns(runCtx, listener, network, conns)
 	})
 
 	stop = func() {
 		cancel()
-		// Closing the listener unblocks the Accept in
-		// acceptVsockNetConns; the loop sees the error and exits.
 		oops.Skip("close vsock net listener", listener.Close(), net.ErrClosed)
+		// Close any conns still owned by per-conn goroutines.
+		// gvproxy's rxStream parks in io.ReadFull and only checks
+		// ctx between reads — without an explicit Close the
+		// goroutine sits forever and wg.Wait below deadlocks.
+		conns.closeAll()
 		wg.Wait()
 		oops.Skip("remove vsock net socket on shutdown",
 			os.Remove(sockPath), fs.ErrNotExist)
@@ -68,11 +58,34 @@ func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), err er
 	return stop, nil
 }
 
+// connSet tracks accepted conns so stop() can close them all and
+// unblock the per-conn goroutines parked in the netstack's rx
+// read.
+type connSet struct {
+	mu sync.Mutex
+	cs []net.Conn
+}
+
+func (s *connSet) add(c net.Conn) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cs = append(s.cs, c)
+}
+
+func (s *connSet) closeAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, c := range s.cs {
+		oops.Skip("sandboxnet: close tracked conn",
+			c.Close(), net.ErrClosed)
+	}
+	s.cs = nil
+}
+
 // acceptVsockNetConns loops on listener.Accept and spawns a
 // goroutine per accepted conn to drive (*Network).Accept.
-// Returns when listener.Accept errors (which happens when the
-// listener is closed by stop()).
-func acceptVsockNetConns(ctx context.Context, listener net.Listener, network *sandboxnet.Network) {
+// Returns when listener.Accept errors.
+func acceptVsockNetConns(ctx context.Context, listener net.Listener, network *sandboxnet.Network, conns *connSet) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	//daft:lint:disable=forloopbound reason="bounded by listener.Close() in stop() — Accept returns ErrClosed"
@@ -81,16 +94,12 @@ func acceptVsockNetConns(ctx context.Context, listener net.Listener, network *sa
 		if err != nil {
 			return
 		}
+		conns.add(conn)
 		wg.Go(func() {
-			// EOF / ErrClosed / ErrClosedPipe are the normal
-			// "guest hung up" signals out of the netstack rx
-			// loop — guest reboots, sandbox teardown, conn
-			// drop. Anything else is by construction a real
-			// I/O failure that oops.Skip → Must escalates.
-			oops.Skip("sandboxnet: Accept loop exit",
-				network.Accept(ctx, conn),
-				io.EOF, net.ErrClosed, context.Canceled,
-				io.ErrClosedPipe)
+			acceptErr := network.Accept(ctx, conn)
+			if acceptErr != nil && !oops.IsExpectedPumpExit(acceptErr) {
+				oops.Log("sandboxnet: Accept loop exit", acceptErr)
+			}
 			oops.Skip("sandboxnet: close conn",
 				conn.Close(), net.ErrClosed)
 		})
