@@ -21,31 +21,23 @@ import (
 // running inside `nix run` inside the container is connected.
 const d6c1IndexMarker = "d6c1-hermetic-marker"
 
-// TestClusterWorkspaceForwardAgainstNixRun is the D6c.1 proof:
-// load DAFT_NIX_TOOLING_IMAGE (an OCI image carrying pkgs.nix +
-// python3 + an initialised nix DB), mount a tiny flake fixture
-// whose `serve` app's program is python3 referenced by store
-// path, launch the workspace, then drive
+// TestClusterWorkspaceForwardAgainstNixRun loads the nix-tooling
+// OCI image, mounts a flake fixture whose `serve` app points at a
+// pre-baked python3, and drives:
 //
 //	daft workspace exec ws -- /bin/nix run /workspace#serve -- \
 //	    -m http.server <port>
 //
-// inside the container — proving the nix CLI works hermetically
-// (no substituters, no network, no extra fetch) and that a flake
-// at /workspace drives which program runs. The forwarded HTTP
-// GET then asserts the response body surfaces back through:
-//
-//	local listener → ForwardPort RPC → orchestrator → sandboxd
-//	→ vsock → agent → container → nix-evaluated python3 →
-//	http.server → response
-//
-// The same forward + GET assertion as D6b.4, lifted onto the nix
-// CLI. D6c.2 will give the container actual network, so a real
-// `nix flake update` or `nix shell nixpkgs#foo` works.
+// Proves the nix CLI works hermetically inside the container (no
+// substituters, no network, no extra fetch) and that a /workspace
+// flake drives which program runs. The forwarded HTTP GET asserts
+// the response body surfaces back through the full byte path:
+// local listener → ForwardPort RPC → orchestrator → sandboxd →
+// vsock → agent → container → nix-evaluated python3 → http.server.
 func TestClusterWorkspaceForwardAgainstNixRun(t *testing.T) {
-	imgPath := requireEnvImage(t, "DAFT_NIX_TOOLING_IMAGE",
+	imgPath := requireEnvPath(t, "DAFT_NIX_TOOLING_IMAGE",
 		"nix build .#nix-tooling-image -o bin/nix-tooling-image")
-	fixtureDir := requireEnvImage(t, "DAFT_NIX_FLAKE_FIXTURE",
+	fixtureDir := requireEnvPath(t, "DAFT_NIX_FLAKE_FIXTURE",
 		"nix build .#d6c1-flake-fixture -o bin/d6c1-flake-fixture")
 	ref := pushDockerTarballToRegistry(t, imgPath, "test/d6c1-tooling:v1")
 
@@ -67,42 +59,32 @@ func TestClusterWorkspaceForwardAgainstNixRun(t *testing.T) {
 		c.DaftBin, c.ClientConfigDir)
 	orch := "--orchestrator " + c.OrchestratorURL
 
-	type step struct {
-		label string
-		cmd   string
-	}
-	steps := []step{
-		{"create", fmt.Sprintf(
+	testdaemons.RunWorkspaceSteps(t, s, "D6C1", []testdaemons.WorkspaceStep{
+		{Label: "create", Cmd: fmt.Sprintf(
 			"%s workspace create --name %s %s",
 			prefix, wsName, orch,
 		)},
-		{"image", fmt.Sprintf(
+		{Label: "image", Cmd: fmt.Sprintf(
 			"%s workspace image %s --name %s %s",
 			prefix, ref, wsName, orch,
 		)},
-		{"mount", fmt.Sprintf(
+		{Label: "mount", Cmd: fmt.Sprintf(
 			"%s workspace mount add /workspace --source %s --name %s %s",
 			prefix, mountSrc, wsName, orch,
 		)},
-		{"port", fmt.Sprintf(
+		{Label: "port", Cmd: fmt.Sprintf(
 			"%s workspace port add %d --name %s %s",
 			prefix, containerPort, wsName, orch,
 		)},
-		{"target", fmt.Sprintf(
+		{Label: "target", Cmd: fmt.Sprintf(
 			"%s workspace target %s --name %s %s",
 			prefix, c.SandboxdFP, wsName, orch,
 		)},
-		{"launch", fmt.Sprintf(
+		{Label: "launch", Cmd: fmt.Sprintf(
 			"%s workspace launch --name %s %s",
 			prefix, wsName, orch,
 		)},
-	}
-	for i, st := range steps {
-		base := (i + 1) * 1000
-		full := fmt.Sprintf(`%s; printf 'D6C1-%%d\n' $((%d+$?))`, st.cmd, base)
-		s.Enter(full)
-		s.WaitFor(fmt.Sprintf("D6C1-%d", base), 30*time.Second)
-	}
+	}, 30*time.Second)
 
 	c.WaitForSandboxdOutput(t, "daft-nix-tooling ready", 60*time.Second)
 

@@ -25,6 +25,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/imagestore"
 	"github.com/richiejp/darkaifactory/internal/oops"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspace"
 )
@@ -573,9 +574,10 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 	if err != nil {
 		return sandbox.Config{}, nil, fmt.Errorf("daft-sandboxd: pull %s: %w", opts.ref, err)
 	}
+	uid, gid := sandboxboot.HostProcessIDs()
 	bundleOpts := imagestore.BundleOptions{
-		HostUID: os.Geteuid(),
-		HostGID: os.Getegid(),
+		HostUID: uid,
+		HostGID: gid,
 	}
 	if len(opts.cmdArgs) > 0 {
 		bundleOpts.Args = opts.cmdArgs

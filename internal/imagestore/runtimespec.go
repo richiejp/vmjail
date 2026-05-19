@@ -257,11 +257,10 @@ const (
 // on per-call data (env, cwd) anyway, so the whole document is built
 // programmatically.
 //
-// /tmp is mounted as tmpfs because the rootfs is read-only; without
-// it any program that needs a writable scratch dir (nix, gcc, most
-// build tools) fails with EROFS. Sized loosely at 256M — large
-// enough for nix's evaluation cache + lock files in the D6c.1
-// proof, small enough that a runaway writer can't OOM the host.
+// /tmp is mounted as a 256M tmpfs because most build tools (nix,
+// gcc) need a writable scratch dir and the rootfs may be read-
+// only depending on the OCI spec. Size capped so a runaway writer
+// can't OOM the host.
 func defaultRuntimeMounts() []runtimeMount {
 	return []runtimeMount{
 		{Destination: "/proc", Type: "proc", Source: "proc"},
@@ -277,15 +276,11 @@ func defaultRuntimeMounts() []runtimeMount {
 			Destination: "/tmp", Type: mountTypeTmpfs, Source: mountTypeTmpfs,
 			Options: []string{mountOptNosuid, mountOptNodev, "mode=1777", "size=268435456"},
 		},
-		// /nix/store/.links: nix's LocalStore unconditionally
-		// mkdirs this on first run for hash-link dedup. The image's
-		// /nix/store is served via virtiofs which doesn't honour
-		// the container's CAP_DAC_OVERRIDE, so even uid 0 inside
-		// the container gets EPERM trying to add new entries under
-		// it. A tmpfs here is invisible to nix (mkdir returns
-		// EEXIST, which nix tolerates) and gives it a writable
-		// scratch dir for the very few side effects an offline
-		// evaluation produces.
+		// /nix/store/.links is a tmpfs because nix's LocalStore
+		// unconditionally mkdirs this on first run, and the
+		// virtiofs-served /nix/store can't be modified by the
+		// container (the daemon executes as its own host uid).
+		// Empty tmpfs is a no-op for non-nix images.
 		{
 			Destination: "/nix/store/.links", Type: mountTypeTmpfs, Source: mountTypeTmpfs,
 			Options: []string{mountOptNosuid, mountOptNodev, "mode=0755", "size=16777216"},

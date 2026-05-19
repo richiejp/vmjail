@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/richiejp/darkaifactory/internal/bundled"
@@ -32,11 +33,9 @@ const (
 	BundlesTag   = "bundles"
 )
 
-// workspaceMountTagPrefix is the virtiofs Tag prefix BuildBundleConfig
-// hands each spec.Mount entry. Distinct from BundlesTag so the
-// agent's share-mount loop never collides with the bundle share.
-// The tag suffix is the mount's declaration index, so two mounts
-// with the same Target on different sandboxes never share a tag.
+// workspaceMountTagPrefix prefixes each spec.Mount's virtiofs Tag
+// — distinct from BundlesTag so the agent's share-mount loop
+// never collides with the bundle share.
 const workspaceMountTagPrefix = "wsmnt"
 
 // Mount is the per-mount slice of a sandbox spec the executor
@@ -57,17 +56,21 @@ type Mount struct {
 }
 
 // BootOptions carry the spec-derived knobs BuildBundleConfig
-// honours alongside the image ref. Today only Mounts is wired;
-// env / GPU / isolation join when their slices land.
+// honours alongside the image ref.
 type BootOptions struct {
 	Mounts []Mount
-	// HostUID / HostGID forward to imagestore.BundleOptions and
-	// drive the container's user-namespace mapping. See
-	// imagestore.BundleOptions for the full why; sandboxd-side
-	// callers populate these with os.Geteuid() / os.Getegid() so
-	// the container's uid 0 matches the virtiofsd process uid.
+	// HostUID / HostGID forward to imagestore.BundleOptions; see
+	// that type for the user-namespace rationale.
 	HostUID int
 	HostGID int
+}
+
+// HostProcessIDs returns the sandboxd process's effective uid/gid
+// — the values to plumb into BootOptions / BundleOptions so the
+// container's uid 0 maps to virtiofsd's host uid. Single seam so
+// callers don't each reinvent the os.Geteuid/Getegid pair.
+func HostProcessIDs() (uid, gid int) {
+	return os.Geteuid(), os.Getegid()
 }
 
 // Store is the imagestore surface BuildBundleConfig needs. Kept as
@@ -255,9 +258,6 @@ func bundleMountsFromSpec(mounts []Mount) []imagestore.BundleMount {
 	return out
 }
 
-// mountTag returns the virtiofs Tag for the i-th workspace mount.
-// `wsmnt0`, `wsmnt1`, ... distinct from BundlesTag so the agent's
-// mount loop never confuses them with the bundle share.
 func mountTag(i int) string {
 	return fmt.Sprintf("%s%d", workspaceMountTagPrefix, i)
 }

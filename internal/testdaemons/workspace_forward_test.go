@@ -47,7 +47,7 @@ import (
 // Roughly the longest e2e cycle in the project. Targets a
 // reference Dev Loop that mirrors what a real user would do.
 func TestClusterWorkspaceForwardAgainstNixServer(t *testing.T) {
-	imgPath := requireEnvImage(t, "DAFT_NIX_IMAGE",
+	imgPath := requireEnvPath(t, "DAFT_NIX_IMAGE",
 		"nix build .#nix-shell-image -o bin/nix-shell-image")
 	ref := pushDockerTarballToRegistry(t, imgPath, "test/d6b4-nix:v1")
 
@@ -66,42 +66,32 @@ func TestClusterWorkspaceForwardAgainstNixServer(t *testing.T) {
 		c.DaftBin, c.ClientConfigDir)
 	orch := "--orchestrator " + c.OrchestratorURL
 
-	type step struct {
-		label string
-		cmd   string
-	}
-	steps := []step{
-		{"create", fmt.Sprintf(
+	testdaemons.RunWorkspaceSteps(t, s, "D6B4", []testdaemons.WorkspaceStep{
+		{Label: "create", Cmd: fmt.Sprintf(
 			"%s workspace create --name %s %s",
 			prefix, wsName, orch,
 		)},
-		{"image", fmt.Sprintf(
+		{Label: "image", Cmd: fmt.Sprintf(
 			"%s workspace image %s --name %s %s",
 			prefix, ref, wsName, orch,
 		)},
-		{"mount", fmt.Sprintf(
+		{Label: "mount", Cmd: fmt.Sprintf(
 			"%s workspace mount add /workspace --source %s --name %s %s",
 			prefix, mountSrc, wsName, orch,
 		)},
-		{"port", fmt.Sprintf(
+		{Label: "port", Cmd: fmt.Sprintf(
 			"%s workspace port add %d --name %s %s",
 			prefix, containerPort, wsName, orch,
 		)},
-		{"target", fmt.Sprintf(
+		{Label: "target", Cmd: fmt.Sprintf(
 			"%s workspace target %s --name %s %s",
 			prefix, c.SandboxdFP, wsName, orch,
 		)},
-		{"launch", fmt.Sprintf(
+		{Label: "launch", Cmd: fmt.Sprintf(
 			"%s workspace launch --name %s %s",
 			prefix, wsName, orch,
 		)},
-	}
-	for i, st := range steps {
-		base := (i + 1) * 1000
-		full := fmt.Sprintf(`%s; printf 'D6B4-%%d\n' $((%d+$?))`, st.cmd, base)
-		s.Enter(full)
-		s.WaitFor(fmt.Sprintf("D6B4-%d", base), 30*time.Second)
-	}
+	}, 30*time.Second)
 
 	c.WaitForSandboxdOutput(t, "daft-nix-shell ready", 60*time.Second)
 

@@ -10,6 +10,19 @@ import (
 	"github.com/richiejp/darkaifactory/internal/imagestore"
 )
 
+// TestHostProcessIDs pins the helper that sandboxexec /
+// sandboxdcli call instead of inlining os.Geteuid/Getegid. The
+// values are non-negative; on Linux uid/gid are always uint32.
+func TestHostProcessIDs(t *testing.T) {
+	uid, gid := HostProcessIDs()
+	if uid < 0 {
+		t.Errorf("HostProcessIDs uid = %d, want >= 0", uid)
+	}
+	if gid < 0 {
+		t.Errorf("HostProcessIDs gid = %d, want >= 0", gid)
+	}
+}
+
 const (
 	testDigest = "sha256:abc"
 

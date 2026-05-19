@@ -36,7 +36,7 @@ import (
 // D6b.4 will swap the image for a full nix toolchain so a dev
 // server can run inside the container.
 func TestClusterWorkspaceExecAgainstNixImage(t *testing.T) {
-	imgPath := requireEnvImage(t, "DAFT_NIX_IMAGE",
+	imgPath := requireEnvPath(t, "DAFT_NIX_IMAGE",
 		"nix build .#nix-shell-image -o bin/nix-shell-image")
 	ref := pushDockerTarballToRegistry(t, imgPath, "test/d6b3-nix:v1")
 
@@ -49,44 +49,28 @@ func TestClusterWorkspaceExecAgainstNixImage(t *testing.T) {
 		c.DaftBin, c.ClientConfigDir)
 	orch := "--orchestrator " + c.OrchestratorURL
 
-	type step struct {
-		label string
-		cmd   string
-	}
-	steps := []step{
-		{"create", fmt.Sprintf(
+	testdaemons.RunWorkspaceSteps(t, s, "D6B3", []testdaemons.WorkspaceStep{
+		{Label: "create", Cmd: fmt.Sprintf(
 			"%s workspace create --name %s %s",
 			prefix, wsName, orch,
 		)},
-		{"image", fmt.Sprintf(
+		{Label: "image", Cmd: fmt.Sprintf(
 			"%s workspace image %s --name %s %s",
 			prefix, ref, wsName, orch,
 		)},
-		{"mount", fmt.Sprintf(
+		{Label: "mount", Cmd: fmt.Sprintf(
 			"%s workspace mount add /workspace --source %s --name %s %s",
 			prefix, mountSrc, wsName, orch,
 		)},
-		{"target", fmt.Sprintf(
+		{Label: "target", Cmd: fmt.Sprintf(
 			"%s workspace target %s --name %s %s",
 			prefix, c.SandboxdFP, wsName, orch,
 		)},
-		{"launch", fmt.Sprintf(
+		{Label: "launch", Cmd: fmt.Sprintf(
 			"%s workspace launch --name %s %s",
 			prefix, wsName, orch,
 		)},
-	}
-	// Same per-step sentinel pattern as D6b.2's workspace_launch
-	// test (`printf '<TAG>-%d\n' $((<base>+$?))`): the success
-	// literal renders only in command output, never in the typed-
-	// line echo, so a substring match in the pane buffer is
-	// unambiguous. Tag flipped to D6B3 so a stray D6B2 from a
-	// concurrent test couldn't false-match.
-	for i, st := range steps {
-		base := (i + 1) * 1000
-		full := fmt.Sprintf(`%s; printf 'D6B3-%%d\n' $((%d+$?))`, st.cmd, base)
-		s.Enter(full)
-		s.WaitFor(fmt.Sprintf("D6B3-%d", base), 30*time.Second)
-	}
+	}, 30*time.Second)
 
 	// The nix-shell-image entrypoint runs
 	//     echo daft-nix-shell ready; exec sleep infinity
@@ -115,13 +99,13 @@ func TestClusterWorkspaceExecAgainstNixImage(t *testing.T) {
 	s.WaitFor("D6B3-EXEC-6000", 60*time.Second)
 }
 
-// requireEnvImage fatals with a clear pointer when the named env
+// requireEnvPath fatals with a clear pointer when the named env
 // var is missing or its target doesn't exist. The dev shell
 // exports paths to the flake-realised image tarballs; outside the
 // dev shell, the test author has to nix-build the image manually.
 // hint is interpolated into the failure message as the suggested
 // `nix build` invocation.
-func requireEnvImage(t *testing.T, envVar, hint string) string {
+func requireEnvPath(t *testing.T, envVar, hint string) string {
 	t.Helper()
 	p := os.Getenv(envVar)
 	if p == "" {

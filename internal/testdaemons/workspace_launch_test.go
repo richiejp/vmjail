@@ -51,46 +51,28 @@ func TestClusterWorkspaceLaunchAgainstHelloBundle(t *testing.T) {
 		c.DaftBin, c.ClientConfigDir)
 	orch := "--orchestrator " + c.OrchestratorURL
 
-	type step struct {
-		label string
-		cmd   string
-	}
-	steps := []step{
-		{"create", fmt.Sprintf(
+	testdaemons.RunWorkspaceSteps(t, s, "D6B", []testdaemons.WorkspaceStep{
+		{Label: "create", Cmd: fmt.Sprintf(
 			"%s workspace create --name %s %s",
 			prefix, wsName, orch,
 		)},
-		{"image", fmt.Sprintf(
+		{Label: "image", Cmd: fmt.Sprintf(
 			"%s workspace image %s --name %s %s",
 			prefix, ref, wsName, orch,
 		)},
-		{"mount", fmt.Sprintf(
+		{Label: "mount", Cmd: fmt.Sprintf(
 			"%s workspace mount add /workspace --source %s --name %s %s",
 			prefix, mountSrc, wsName, orch,
 		)},
-		{"target", fmt.Sprintf(
+		{Label: "target", Cmd: fmt.Sprintf(
 			"%s workspace target %s --name %s %s",
 			prefix, c.SandboxdFP, wsName, orch,
 		)},
-		{"launch", fmt.Sprintf(
+		{Label: "launch", Cmd: fmt.Sprintf(
 			"%s workspace launch --name %s %s",
 			prefix, wsName, orch,
 		)},
-	}
-
-	for i, st := range steps {
-		// base is unique per step so the success sentinel
-		// (`D6B-<base>`) only appears in command output, never
-		// in the typed command echo. The shell arithmetic
-		// $((<base>+$?)) renders <base> in the output for
-		// exit-0 and <base>+1 for exit-1; matching on the
-		// success number alone fatals on failure via WaitFor
-		// timeout (the pane dump shows the actual sentinel).
-		base := (i + 1) * 1000
-		full := fmt.Sprintf(`%s; printf 'D6B-%%d\n' $((%d+$?))`, st.cmd, base)
-		s.Enter(full)
-		s.WaitFor(fmt.Sprintf("D6B-%d", base), 30*time.Second)
-	}
+	}, 30*time.Second)
 
 	// The launch command's response carries the updated workspace
 	// summary; `Status: Dispatched` is the proof that the

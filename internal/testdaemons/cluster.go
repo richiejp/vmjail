@@ -33,7 +33,33 @@ import (
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/testtmux"
 )
+
+// WorkspaceStep names one `daft workspace …` command in a test's
+// setup sequence. RunWorkspaceSteps wraps each Cmd in a unique
+// success sentinel before typing it into a tmux pane.
+type WorkspaceStep struct {
+	Label string
+	Cmd   string
+}
+
+// RunWorkspaceSteps types each step into pane and waits for a
+// per-index success sentinel `<tag>-<N*1000>`. The sentinel
+// renders only in command output (not the typed echo) because the
+// trailing printf expands shell arithmetic against the previous
+// command's $? — so a substring match in the pane buffer is
+// unambiguous. Per-step timeout is uniform; tests handle longer
+// post-launch waits (cold image pull, VM boot) separately.
+func RunWorkspaceSteps(t *testing.T, pane *testtmux.Session, tag string, steps []WorkspaceStep, timeout time.Duration) {
+	t.Helper()
+	for i, st := range steps {
+		base := (i + 1) * 1000
+		full := fmt.Sprintf(`%s; printf '%s-%%d\n' $((%d+$?))`, st.Cmd, tag, base)
+		pane.Enter(full)
+		pane.WaitFor(fmt.Sprintf("%s-%d", tag, base), timeout)
+	}
+}
 
 // peersFile mirrors the daemon CLIs' own convention so the
 // bootstrap writes to exactly the same path they'll read from.
