@@ -931,18 +931,52 @@ the user-host or in CI today.
       ~14s. Full byte path proven: local listener → ForwardPort
       → orchestrator → sandboxd → vsock → agent → container →
       `nix run` → python3 → http.server → response.
-    - D6c.2: sandbox VM network. Adds virtio-net to the
-      cloud-hypervisor invocation, brings up `eth0` in the
-      agent (DHCP or static), and configures egress on the
-      host (tap + bridge or a userspace networking helper —
-      the exact path TBD; cloud-hypervisor doesn't ship a
-      slirp/usermode option, so this likely needs a tap with
-      a setuid helper or a privileged sandboxd). The
-      container inherits the VM's loopback today; once eth0
-      is up it can also reach cache.nixos.org. Test: agent
-      reports the assigned address; container reaches an
-      external HTTPS endpoint. Connectivity allowlists
-      (C4 in PLAN.md's Phase C) layer on top later.
+    - D6c.2: sandbox VM network. The path: a gvisor-tap-vsock
+      userspace TCP/IP stack runs inside sandboxd, accessed by
+      the guest through the existing Cloud Hypervisor
+      hybrid-vsock device on a second port. Guest agent dials
+      AF_VSOCK CID 2 port N; CH proxies that stream onto a
+      host UDS sandboxd is listening on (same pattern the
+      trace exporter already uses); sandboxd hands the
+      accepted conn to `virtualnetwork.AcceptStdio`. Frames
+      are HyperKit-style: `<u16-le size><eth frame>`. The
+      guest agent runs a tap-and-bridge loop (port of
+      gvforwarder's ~150 LoC into daft-agent) between tap0
+      and the vsock conn; the container netns picks up
+      egress through tap0 via veth+bridge. No
+      CAP_NET_ADMIN on the host process, no slirp/passt
+      dependency — pure Go.
+    - D6c.2-spike: **landed**. internal/sandboxnet/spike_test.go
+      runs `virtualnetwork.New` in-process, pipes a net.Conn
+      to `AcceptStdio`, and confirms an ARP request is
+      reflected as an ARP reply with the gateway MAC.
+      gvisor-tap-vsock v0.8.9 added to go.mod;
+      vendorHash refreshed. Outstanding unknowns from
+      research now closed:
+        * Library accepts `net.Conn` directly (no HTTP /connect
+          dance needed) via `AcceptStdio` + StdioProtocol.
+        * Framing matches CH's UDS hop (raw byte stream, no
+          extra framing injected by CH).
+        * Building cleanly within our Nix Go module setup.
+      Real D6c.2 slices:
+        1. sandboxd-side: open `<HostSocket>_<netPort>` UDS
+           listener (lift the pattern from
+           startVsockTraceReceiver), run a per-VM
+           VirtualNetwork, plumb accepted conns into
+           AcceptStdio. Configure Subnet/GatewayIP per VM.
+        2. agent-side: add an "egress" mode driven by a new
+           daft.vsock.net_port cmdline key. Dial CID 2 port
+           net_port, create tap0, run the rx/tx bridge.
+           Configure tap0 inside the VM (link up, optionally
+           DHCP via the gvproxy-embedded server).
+        3. container netns wiring: today the container shares
+           the VM's loopback; for D6c.2 it also needs an
+           egress route via tap0. Likely via crun's network
+           namespace + a veth pair into a small bridge.
+        4. integration test: container reaches an external
+           HTTPS endpoint (start with httpbin or a known-good
+           cache.nixos.org GET).
+      Connectivity allowlists (C4 in Phase C) layer on top later.
     - D6c.3: full vision. nixos/nix:latest pulled at
       integration setup (`make` target with a local cache so
       cold-run cost stays bounded). /workspace mounts a real

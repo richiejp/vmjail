@@ -161,7 +161,7 @@
             pname = name;
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-/KsYiRXfsDt8vLvKADlnsdM2e6xI4Mc/4xuLS0UVCvU=";
+            vendorHash = "sha256-A5R50nw0FDS/CTfsvVpioIAHAfGpHDuRmwWUMSLLPG8=";
             env.CGO_ENABLED = if cgoEnabled then "1" else "0";
             ldflags = [
               "-s" "-w"
