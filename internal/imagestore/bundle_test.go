@@ -168,6 +168,152 @@ func TestBundleAppliesExtraMounts(t *testing.T) {
 	}
 }
 
+// TestParseImageUserHappy covers the empty/uid-only/uid:gid forms.
+func TestParseImageUserHappy(t *testing.T) {
+	cases := map[string]struct {
+		in      string
+		wantUID int
+		wantGID int
+	}{
+		"empty":   {"", 0, 0},
+		"uid":     {"1000", 1000, 0},
+		"uid:gid": {"1000:100", 1000, 100},
+		"root":    {"0:0", 0, 0},
+	}
+	for name, c := range cases {
+		got, err := parseImageUser(c.in)
+		if err != nil {
+			t.Errorf("%s: err = %v, want nil", name, err)
+			continue
+		}
+		if got.UID != c.wantUID || got.GID != c.wantGID {
+			t.Errorf("%s: got %+v, want uid=%d gid=%d",
+				name, got, c.wantUID, c.wantGID)
+		}
+	}
+}
+
+// TestParseImageUserErrors pins the failure paths: name-form users
+// and non-numeric gids both have to surface before any disk write.
+func TestParseImageUserErrors(t *testing.T) {
+	cases := map[string]string{
+		"name form":   "nobody",
+		"name:group":  "nobody:nogroup",
+		"empty uid":   ":100",
+		"bad gid":     "1000:abc",
+		"trailing ws": "1000 ",
+	}
+	for name, in := range cases {
+		_, err := parseImageUser(in)
+		if err == nil {
+			t.Errorf("%s: parseImageUser(%q) returned nil error", name, in)
+		}
+	}
+}
+
+// TestDefaultRuntimeMountsIncludesTmpfsScratch pins the writable
+// scratch mounts the rest of the runtime spec assumes exist: /tmp
+// and /nix/store/.links. Without these, nix and any build tool
+// hit EROFS on first write since the rootfs comes via virtiofs.
+func TestDefaultRuntimeMountsIncludesTmpfsScratch(t *testing.T) {
+	mounts := defaultRuntimeMounts()
+	wantDest := map[string]bool{
+		"/tmp":              false,
+		"/nix/store/.links": false,
+	}
+	for _, m := range mounts {
+		if _, ok := wantDest[m.Destination]; ok {
+			wantDest[m.Destination] = true
+			if m.Type != mountTypeTmpfs {
+				t.Errorf("%s: type = %q, want %q",
+					m.Destination, m.Type, mountTypeTmpfs)
+			}
+		}
+	}
+	for dest, found := range wantDest {
+		if !found {
+			t.Errorf("default mounts missing %s", dest)
+		}
+	}
+}
+
+// TestBuildRuntimeConfigRootfsWritable pins the rootfs Readonly
+// flag — load-bearing for nix-CLI workflows (see runtimespec.go
+// comment for the chain of constraints).
+func TestBuildRuntimeConfigRootfsWritable(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/rootfs-rw:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{Entrypoint: []string{testEntrypoint}})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+	bundle, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{})
+	if err != nil {
+		t.Fatalf("Bundle: %v", err)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+	if !strings.Contains(string(cfg), `"readonly": false`) {
+		t.Errorf("expected rootfs readonly:false in config.json:\n%s", cfg)
+	}
+}
+
+// TestBuildRuntimeConfigHonoursImageUser pins parseImageUser's
+// integration into the runtime spec: a numeric image User flows
+// through to process.user.{uid,gid}.
+func TestBuildRuntimeConfigHonoursImageUser(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/user-1000:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{
+		Entrypoint: []string{testEntrypoint},
+		User:       "1000:100",
+	})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+	bundle, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{})
+	if err != nil {
+		t.Fatalf("Bundle: %v", err)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+	if !strings.Contains(string(cfg), `"uid": 1000`) ||
+		!strings.Contains(string(cfg), `"gid": 100`) {
+		t.Errorf("expected uid:1000 gid:100 in config.json:\n%s", cfg)
+	}
+}
+
+// TestBuildRuntimeConfigRejectsNameFormUser covers the failure
+// surface: a non-numeric User shouldn't silently default to root.
+func TestBuildRuntimeConfigRejectsNameFormUser(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/user-name:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{
+		Entrypoint: []string{testEntrypoint},
+		User:       "nobody",
+	})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+	_, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{})
+	if err == nil || !strings.Contains(err.Error(), "User") {
+		t.Errorf("Bundle: err = %v, want error mentioning User", err)
+	}
+}
+
 func TestBundleAppliesOverrides(t *testing.T) {
 	host := localRegistry(t)
 	ref := host + "/test/override:v1"

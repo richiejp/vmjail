@@ -32,6 +32,37 @@ const (
 	BundlesTag   = "bundles"
 )
 
+// workspaceMountTagPrefix is the virtiofs Tag prefix BuildBundleConfig
+// hands each spec.Mount entry. Distinct from BundlesTag so the
+// agent's share-mount loop never collides with the bundle share.
+// The tag suffix is the mount's declaration index, so two mounts
+// with the same Target on different sandboxes never share a tag.
+const workspaceMountTagPrefix = "wsmnt"
+
+// Mount is the per-mount slice of a sandbox spec the executor
+// hands BuildBundleConfig. Target/Source/ReadOnly mirror the proto
+// schema; the executor projects sandboxv1.Mount onto this so the
+// bootassembler doesn't import the wire package.
+type Mount struct {
+	// Target is the in-container path the bind mount lands at. The
+	// VM mounts the share at the same path internally so the OCI
+	// bundle can bind-mount it straight through.
+	Target string
+	// Source is the absolute host-side path the share exports. The
+	// executor's caller is responsible for ensuring the path exists
+	// and is reachable from the sandboxd process.
+	Source string
+	// ReadOnly toggles between rw and ro bind options.
+	ReadOnly bool
+}
+
+// BootOptions carry the spec-derived knobs BuildBundleConfig
+// honours alongside the image ref. Today only Mounts is wired;
+// env / GPU / isolation join when their slices land.
+type BootOptions struct {
+	Mounts []Mount
+}
+
 // Store is the imagestore surface BuildBundleConfig needs. Kept as
 // an interface so tests can swap in fakes without standing up a
 // registry.
@@ -63,12 +94,18 @@ type Deps struct {
 // Unlock must be deferred by the caller; it releases the bundle's
 // imagestore lock once the boot is over so the LRU can evict.
 //
+// opts.Mounts becomes one virtiofs share per entry plus a matching
+// OCI bind mount in the bundle's config.json. Each share's tag is
+// `wsmntN` (declaration-order) so the agent's share-mount loop
+// finds it via the cmdline.
+//
 // On any error the returned unlock is the no-op (nil-safe to
 // call), and partial state in the imagestore is left alone so a
 // retry can pick up where this one stopped.
 func BuildBundleConfig(
 	ctx context.Context,
 	ref string,
+	opts BootOptions,
 	deps Deps,
 ) (cfg sandbox.Config, unlock func(), err error) {
 	unlock = func() {}
@@ -76,6 +113,9 @@ func BuildBundleConfig(
 		return sandbox.Config{}, unlock, errors.New("sandboxboot: empty image ref")
 	}
 	if err := validateDeps(deps); err != nil {
+		return sandbox.Config{}, unlock, err
+	}
+	if err := validateMounts(opts.Mounts); err != nil {
 		return sandbox.Config{}, unlock, err
 	}
 
@@ -87,7 +127,9 @@ func BuildBundleConfig(
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: pull %s: %w", ref, err)
 	}
-	bundle, err := store.Bundle(ctx, img.Digest, imagestore.BundleOptions{})
+	bundle, err := store.Bundle(ctx, img.Digest, imagestore.BundleOptions{
+		ExtraMounts: bundleMountsFromSpec(opts.Mounts),
+	})
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: bundle %s: %w", img.Digest, err)
 	}
@@ -125,6 +167,13 @@ func BuildBundleConfig(
 		}},
 		Bundle: filepath.Join(BundlesMount, filepath.Base(bundle.Path)),
 	}
+	for i, m := range opts.Mounts {
+		cfg.Shares = append(cfg.Shares, &sandbox.ShareConfig{
+			HostDir:    m.Source,
+			Tag:        mountTag(i),
+			Mountpoint: m.Target,
+		})
+	}
 	return cfg, bundleUnlock, nil
 }
 
@@ -138,4 +187,68 @@ func validateDeps(d Deps) error {
 		return errors.New("sandboxboot: nil Extract")
 	}
 	return nil
+}
+
+// validateMounts rejects malformed entries before we touch the
+// store, so a bad spec fails fast rather than leaking a partial
+// bundle. Empty Source/Target and non-absolute paths are the only
+// shapes that can break downstream — duplicates on the same
+// target are rejected too because they'd collide on the agent's
+// mount loop (same path, two shares).
+func validateMounts(mounts []Mount) error {
+	seen := make(map[string]struct{}, len(mounts))
+	for i, m := range mounts {
+		if !filepath.IsAbs(m.Target) {
+			return fmt.Errorf(
+				"sandboxboot: mounts[%d].Target %q must be absolute",
+				i, m.Target,
+			)
+		}
+		if !filepath.IsAbs(m.Source) {
+			return fmt.Errorf(
+				"sandboxboot: mounts[%d].Source %q must be absolute",
+				i, m.Source,
+			)
+		}
+		if _, dup := seen[m.Target]; dup {
+			return fmt.Errorf(
+				"sandboxboot: mounts[%d].Target %q duplicated",
+				i, m.Target,
+			)
+		}
+		seen[m.Target] = struct{}{}
+	}
+	return nil
+}
+
+// bundleMountsFromSpec projects the executor's view of the mounts
+// onto the imagestore's bundle-side type. Each spec entry becomes
+// one bind mount in the OCI runtime spec, with Source == Target
+// because the VM has already mounted the share at Target via
+// virtiofs (one path, no rewrites needed).
+func bundleMountsFromSpec(mounts []Mount) []imagestore.BundleMount {
+	if len(mounts) == 0 {
+		return nil
+	}
+	out := make([]imagestore.BundleMount, 0, len(mounts))
+	for _, m := range mounts {
+		bindOpt := "rw"
+		if m.ReadOnly {
+			bindOpt = "ro"
+		}
+		out = append(out, imagestore.BundleMount{
+			Destination: m.Target,
+			Type:        "bind",
+			Source:      m.Target,
+			Options:     []string{"rbind", bindOpt},
+		})
+	}
+	return out
+}
+
+// mountTag returns the virtiofs Tag for the i-th workspace mount.
+// `wsmnt0`, `wsmnt1`, ... distinct from BundlesTag so the agent's
+// mount loop never confuses them with the bundle share.
+func mountTag(i int) string {
+	return fmt.Sprintf("%s%d", workspaceMountTagPrefix, i)
 }

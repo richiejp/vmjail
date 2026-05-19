@@ -36,8 +36,9 @@ import (
 // D6b.4 will swap the image for a full nix toolchain so a dev
 // server can run inside the container.
 func TestClusterWorkspaceExecAgainstNixImage(t *testing.T) {
-	imgPath := requireNixImage(t)
-	ref := pushNixImage(t, imgPath)
+	imgPath := requireEnvImage(t, "DAFT_NIX_IMAGE",
+		"nix build .#nix-shell-image -o bin/nix-shell-image")
+	ref := pushDockerTarballToRegistry(t, imgPath, "test/d6b3-nix:v1")
 
 	c := testdaemons.NewCluster(t)
 	s := testtmux.New(t)
@@ -114,33 +115,36 @@ func TestClusterWorkspaceExecAgainstNixImage(t *testing.T) {
 	s.WaitFor("D6B3-EXEC-6000", 60*time.Second)
 }
 
-// requireNixImage fatals with a clear pointer when DAFT_NIX_IMAGE
-// is missing — the dev shell exports it from the
-// flake-realised nix-shell-image tarball, so running outside
-// the dev shell needs a manual nix build first.
-func requireNixImage(t *testing.T) string {
+// requireEnvImage fatals with a clear pointer when the named env
+// var is missing or its target doesn't exist. The dev shell
+// exports paths to the flake-realised image tarballs; outside the
+// dev shell, the test author has to nix-build the image manually.
+// hint is interpolated into the failure message as the suggested
+// `nix build` invocation.
+func requireEnvImage(t *testing.T, envVar, hint string) string {
 	t.Helper()
-	p := os.Getenv("DAFT_NIX_IMAGE")
+	p := os.Getenv(envVar)
 	if p == "" {
-		t.Fatalf("testdaemons: DAFT_NIX_IMAGE not set " +
-			"(enter `nix develop` or run " +
-			"`nix build .#nix-shell-image -o bin/nix-shell-image`)")
+		t.Fatalf("testdaemons: %s not set "+
+			"(enter `nix develop` or run `%s`)",
+			envVar, hint)
 	}
 	if _, err := os.Stat(p); err != nil {
-		t.Fatalf("testdaemons: stat DAFT_NIX_IMAGE %q: %v", p, err)
+		t.Fatalf("testdaemons: stat %s=%q: %v", envVar, p, err)
 	}
 	return p
 }
 
-// pushNixImage loads the docker-format tarball at imgPath into a
-// v1.Image, stands up an in-process OCI registry on a free
-// loopback port, pushes the image, and returns the registry ref
-// the sandboxd can pull from.
+// pushDockerTarballToRegistry loads the docker-format tarball at
+// imgPath into a v1.Image, stands up an in-process OCI registry
+// on a free loopback port, pushes the image under refName (e.g.
+// "test/d6b3-nix:v1"), and returns the full ref the sandboxd can
+// pull from.
 //
 // dockerTools.buildLayeredImage emits a gzipped tarball, but
 // go-containerregistry's tarball.ImageFromPath / crane.Load only
 // read raw tar — so we decompress into a temp file first.
-func pushNixImage(t *testing.T, imgPath string) string {
+func pushDockerTarballToRegistry(t *testing.T, imgPath, refName string) string {
 	t.Helper()
 
 	srv := httptest.NewServer(registry.New())
@@ -153,16 +157,16 @@ func pushNixImage(t *testing.T, imgPath string) string {
 	tarPath := decompressDockerTarball(t, imgPath)
 	img, err := tarball.ImageFromPath(tarPath, nil)
 	if err != nil {
-		t.Fatalf("load nix image %s: %v", tarPath, err)
+		t.Fatalf("load image %s: %v", tarPath, err)
 	}
 
-	ref := u.Host + "/test/d6b3-nix:v1"
+	ref := u.Host + "/" + refName
 	r, err := name.ParseReference(ref)
 	if err != nil {
 		t.Fatalf("parse ref: %v", err)
 	}
 	if err := crane.Push(img, r.String()); err != nil {
-		t.Fatalf("push nix image: %v", err)
+		t.Fatalf("push image %s: %v", ref, err)
 	}
 	return ref
 }

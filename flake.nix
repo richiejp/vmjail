@@ -30,7 +30,8 @@
             # under bin/ via Make. See PLAN.md "Dev-shell artefacts"
             # for the rationale.
             inherit (self.packages.${system})
-              cloud-hypervisor kernel virtiofsd crun u-root nix-shell-image;
+              cloud-hypervisor kernel virtiofsd crun u-root
+              nix-shell-image nix-tooling-image d6c1-flake-fixture;
           in
           pkgs.mkShell {
             buildInputs = with pkgs; [
@@ -104,6 +105,15 @@
               # tarball.ImageFromPath and push to an in-process
               # registry the sandboxd can pull from.
               export DAFT_NIX_IMAGE="${nix-shell-image}"
+              # D6c.1 hermetic nix-CLI proof. The tooling image
+              # carries pkgs.nix + python3 + the closure they need;
+              # the flake fixture is a tiny flake that exports a
+              # `serve` app whose program is python3 from the same
+              # closure (referenced by store path). Together these
+              # let the test drive `nix run /workspace#serve` inside
+              # the container with no network or substituters.
+              export DAFT_NIX_TOOLING_IMAGE="${nix-tooling-image}"
+              export DAFT_NIX_FLAKE_FIXTURE="${d6c1-flake-fixture}"
 
               echo "darkaifactory dev shell ready (version ${version})"
               echo "  make fmt          - format Go code"
@@ -256,6 +266,111 @@
               Env = [ "PATH=/bin" ];
             };
           };
+
+          # nix-tooling-image is the D6c.1 hermetic-nix-CLI image.
+          # It carries pkgs.nix + python3 + bashInteractive +
+          # coreutils + cacert, plus an initialized /nix/var/nix/db
+          # populated with the closure so `nix` can resolve the
+          # store paths the test's flake fixture references via
+          # `builtins.storePath`. /etc/nix/nix.conf enables the
+          # nix-command + flakes experimental features and disables
+          # all substituters — the container has no network, every
+          # path the test needs is already in /nix/store.
+          #
+          # ~500MB uncompressed (most of which is python3 + nix
+          # itself). dockerTools chunks the closure across many
+          # small layers so the test-side load + push to the in-
+          # process registry stays under a second on warm runs.
+          nix-tooling-image =
+            let
+              pyEnv = pkgs.buildEnv {
+                # pkgs.python3 by itself lands under
+                # /nix/store/<hash>-python3-<v> with the interpreter
+                # at .../bin/python3. The serve app references
+                # python3 directly via store path, so no env wrap
+                # is needed for the flake — but we still include it
+                # here as a "contents" root so its closure is in
+                # the image and registered with the nix db.
+                name = "d6c1-py-env";
+                paths = [ pkgs.python3 ];
+              };
+              closure = pkgs.closureInfo {
+                rootPaths = [
+                  pkgs.nix pkgs.bashInteractive pkgs.coreutils
+                  pkgs.dash pkgs.cacert pyEnv pkgs.python3
+                ];
+              };
+            in pkgs.dockerTools.buildLayeredImage {
+              name = "daft-nix-tooling";
+              tag = "v1";
+              contents = [
+                pkgs.dash pkgs.coreutils pkgs.bashInteractive
+                pkgs.nix pkgs.cacert pkgs.python3
+              ];
+              # fakeRootCommands runs inside a proot chroot rooted
+              # at the assembled image; /nix/store reflects the
+              # image's view, so paths registered here resolve
+              # correctly at runtime inside the container.
+              enableFakechroot = true;
+              fakeRootCommands = ''
+                mkdir -p /etc/nix /nix/var/nix/db \
+                  /nix/var/nix/profiles /nix/var/nix/gcroots \
+                  /tmp /etc/ssl/certs
+                cat > /etc/nix/nix.conf <<'CONF'
+                experimental-features = nix-command flakes
+                substituters =
+                require-sigs = false
+                build-users-group =
+                sandbox = false
+                # rootfs is mounted read-only and the container
+                # has no CAP_SYS_ADMIN, so nix can't mount-remount
+                # /nix/store rw. read-only-local-store tells nix
+                # to treat the store as immutable and skip the
+                # remount; fine for D6c.1 since everything the
+                # flake references is already in the store.
+                read-only-local-store = true
+                CONF
+                ${pkgs.nix}/bin/nix-store --load-db < ${closure}/registration
+                ln -sf ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
+                  /etc/ssl/certs/ca-bundle.crt
+              '';
+              config = {
+                # Entrypoint sentinel mirrors nix-shell-image's
+                # "daft-nix-shell ready" pattern so the test can
+                # wait on a stable string in sandboxd output.
+                Entrypoint = [
+                  "/bin/dash" "-c"
+                  "echo daft-nix-tooling ready; exec /bin/sleep infinity"
+                ];
+                Env = [
+                  "PATH=/bin"
+                  "HOME=/tmp"
+                  "USER=root"
+                  "NIX_PAGER=cat"
+                  "NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+                ];
+              };
+            };
+
+          # d6c1-flake-fixture is the tiny flake the D6c.1 test
+          # mounts at /workspace. Its `serve` app's `program`
+          # points at python3 inside the nix-tooling-image's
+          # closure via store path, so `nix run /workspace#serve`
+          # finds the binary without evaluating any other
+          # derivation. The fixture is shipped as a writeTextDir
+          # output so the test can `cp $DAFT_NIX_FLAKE_FIXTURE/
+          # flake.nix mountSrc/`.
+          d6c1-flake-fixture = pkgs.writeTextDir "flake.nix" ''
+            {
+              description = "D6c.1 hermetic dev shell";
+              outputs = { self }: {
+                apps.x86_64-linux.serve = {
+                  type = "app";
+                  program = "${pkgs.python3}/bin/python3";
+                };
+              };
+            }
+          '';
 
           # hello-bundle is the OCI runtime bundle the agent feeds to
           # crun: a directory containing config.json + rootfs/ with

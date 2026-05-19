@@ -47,8 +47,9 @@ import (
 // Roughly the longest e2e cycle in the project. Targets a
 // reference Dev Loop that mirrors what a real user would do.
 func TestClusterWorkspaceForwardAgainstNixServer(t *testing.T) {
-	imgPath := requireNixImage(t)
-	ref := pushNixImage(t, imgPath)
+	imgPath := requireEnvImage(t, "DAFT_NIX_IMAGE",
+		"nix build .#nix-shell-image -o bin/nix-shell-image")
+	ref := pushDockerTarballToRegistry(t, imgPath, "test/d6b4-nix:v1")
 
 	c := testdaemons.NewCluster(t)
 	s := testtmux.New(t)

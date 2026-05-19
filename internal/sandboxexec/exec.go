@@ -44,11 +44,11 @@ const (
 )
 
 // Assembler is the seam through which the Executor turns an OCI
-// image reference into the bootable sandbox.Config + a deferred
-// unlock for the bundle lock. Production wires
-// sandboxboot.BuildBundleConfig; tests pass fakes that don't
-// touch the imagestore.
-type Assembler func(ctx context.Context, ref string) (sandbox.Config, func(), error)
+// image reference + spec-derived BootOptions into the bootable
+// sandbox.Config + a deferred unlock for the bundle lock.
+// Production wires sandboxboot.BuildBundleConfig; tests pass fakes
+// that don't touch the imagestore.
+type Assembler func(ctx context.Context, ref string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error)
 
 // Runner is the function the Executor calls to boot a VM. The
 // default in production is sandbox.Serve — the long-running
@@ -232,8 +232,8 @@ func (e *Executor) markPhase(uid, phase string, exitCode int32) {
 // keeps the wiring in one place — `daft-sandboxd serve`
 // constructs one and hands it to New.
 func ProductionAssembler(deps sandboxboot.Deps) Assembler {
-	return func(ctx context.Context, ref string) (sandbox.Config, func(), error) {
-		return sandboxboot.BuildBundleConfig(ctx, ref, deps)
+	return func(ctx context.Context, ref string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		return sandboxboot.BuildBundleConfig(ctx, ref, opts, deps)
 	}
 }
 
@@ -284,8 +284,8 @@ func (e *Executor) HandleSandboxEvent(
 	defer span.End()
 
 	_, _ = fmt.Fprintf(e.stdout,
-		"daft-sandboxd: sandbox %s spec.workspace=%s image=%s\n",
-		uid, spec.GetWorkspaceUuid(), spec.GetImageRef())
+		"daft-sandboxd: sandbox %s spec.workspace=%s image=%s mounts=%d\n",
+		uid, spec.GetWorkspaceUuid(), spec.GetImageRef(), len(spec.GetMounts()))
 
 	e.markPhase(uid, phaseRunning, 0)
 
@@ -388,7 +388,7 @@ func (e *Executor) registerAttachRoute(cfg sandbox.Config, uid string) func() {
 // device the C1.3c ingress path will dial through. unlock is
 // always non-nil so callers can defer it unconditionally.
 func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) (sandbox.Config, func(), error) {
-	cfg, unlock, err := e.baseBootConfig(ctx, spec.GetImageRef())
+	cfg, unlock, err := e.baseBootConfig(ctx, spec)
 	if err != nil {
 		return sandbox.Config{}, func() {}, err
 	}
@@ -424,11 +424,33 @@ func (e *Executor) assignVsock(uid string) *sandbox.VsockConfig {
 // it; otherwise we fall back to the smoke-test baseline. Split out
 // so port-forward layering above stays a one-liner regardless of
 // which branch produced the cfg.
-func (e *Executor) baseBootConfig(ctx context.Context, imageRef string) (sandbox.Config, func(), error) {
+func (e *Executor) baseBootConfig(ctx context.Context, spec *sandboxv1.SandboxSpec) (sandbox.Config, func(), error) {
+	imageRef := spec.GetImageRef()
 	if imageRef == "" || e.assembler == nil {
 		return e.base, func() {}, nil
 	}
-	return e.assembler(ctx, imageRef)
+	return e.assembler(ctx, imageRef, sandboxboot.BootOptions{
+		Mounts: mountsFromSpec(spec.GetMounts()),
+	})
+}
+
+// mountsFromSpec projects the wire mounts onto sandboxboot's
+// Go-native type. The orchestrator validates Target absolute-ness
+// at AddMount time; sandboxboot revalidates here to keep its API
+// boundary self-contained.
+func mountsFromSpec(in []*sandboxv1.Mount) []sandboxboot.Mount {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]sandboxboot.Mount, 0, len(in))
+	for _, m := range in {
+		out = append(out, sandboxboot.Mount{
+			Target:   m.GetTarget(),
+			Source:   m.GetSource(),
+			ReadOnly: m.GetReadOnly(),
+		})
+	}
+	return out
 }
 
 // BaseVsockPort is the first AF_VSOCK port the executor hands out

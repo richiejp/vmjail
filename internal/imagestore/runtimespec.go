@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
@@ -91,10 +93,14 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 		mounts = append(mounts, runtimeMount(m))
 	}
 
+	user, err := parseImageUser(imgCfg.User)
+	if err != nil {
+		return runtimeSpec{}, err
+	}
 	return runtimeSpec{
 		OCIVersion: "1.0.2",
 		Process: runtimeProcess{
-			User:            runtimeUser{UID: 0, GID: 0},
+			User:            user,
 			Args:            args,
 			Env:             firstNonNil(opts.Env, imgCfg.Env),
 			Cwd:             firstNonEmpty(opts.Cwd, imgCfg.WorkingDir, "/"),
@@ -102,7 +108,14 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 			Rlimits:         []any{},
 			NoNewPrivileges: true,
 		},
-		Root:     runtimeRoot{Path: "rootfs", Readonly: true},
+		// Rootfs is mounted writable. v0 design puts the VM at
+		// the security boundary, so a writable container rootfs is
+		// fine. Load-bearing for nix: nix 2.34's LocalStore tries
+		// to mount-remount /nix/store rw when uid 0 and the store
+		// is ro (which it is when rootfs is ro). With empty Linux
+		// capabilities the remount fails. Writable rootfs means
+		// statvfs(/nix/store) reports rw and nix skips the remount.
+		Root:     runtimeRoot{Path: "rootfs", Readonly: false},
 		Hostname: firstNonEmpty(opts.Hostname, "", "daft-container"),
 		Mounts:   mounts,
 		Linux:    defaultRuntimeLinuxConfig(),
@@ -137,6 +150,37 @@ func firstNonEmpty(primary, secondary, fallback string) string {
 		return secondary
 	}
 	return fallback
+}
+
+// parseImageUser projects the OCI image-config `User` field onto
+// the runtime spec's numeric uid/gid pair. Empty string defaults
+// to 0:0 (root) which matches the historical pre-image behaviour.
+// Only numeric uid[:gid] is supported — symbolic names would
+// require /etc/passwd lookups inside the image, which we don't
+// stage. Returns an error on a name-form User or a malformed
+// integer; the bundler surfaces it before any disk write.
+func parseImageUser(u string) (runtimeUser, error) {
+	if u == "" {
+		return runtimeUser{UID: 0, GID: 0}, nil
+	}
+	uidStr, gidStr, _ := strings.Cut(u, ":")
+	uid, uerr := strconv.Atoi(uidStr)
+	if uerr != nil {
+		return runtimeUser{}, fmt.Errorf(
+			"imagestore: image User %q: only numeric uid[:gid] supported", u,
+		)
+	}
+	gid := 0
+	if gidStr != "" {
+		g, gerr := strconv.Atoi(gidStr)
+		if gerr != nil {
+			return runtimeUser{}, fmt.Errorf(
+				"imagestore: image User %q gid not numeric", u,
+			)
+		}
+		gid = g
+	}
+	return runtimeUser{UID: uid, GID: gid}, nil
 }
 
 func emptyCapabilities() runtimeCapabilities {
@@ -175,20 +219,50 @@ func defaultRuntimeLinuxConfig() runtimeLinuxConfig {
 	}
 }
 
+// Mount-option keywords reused across the default mount set.
+const (
+	mountOptNosuid = "nosuid"
+	mountOptNodev  = "nodev"
+	mountTypeTmpfs = "tmpfs"
+)
+
 // defaultRuntimeMounts mirrors contrib/hello-bundle/config.json. Kept
 // in code instead of an asset file because the runtime spec depends
 // on per-call data (env, cwd) anyway, so the whole document is built
 // programmatically.
+//
+// /tmp is mounted as tmpfs because the rootfs is read-only; without
+// it any program that needs a writable scratch dir (nix, gcc, most
+// build tools) fails with EROFS. Sized loosely at 256M — large
+// enough for nix's evaluation cache + lock files in the D6c.1
+// proof, small enough that a runaway writer can't OOM the host.
 func defaultRuntimeMounts() []runtimeMount {
 	return []runtimeMount{
 		{Destination: "/proc", Type: "proc", Source: "proc"},
 		{
-			Destination: "/dev", Type: "tmpfs", Source: "tmpfs",
-			Options: []string{"nosuid", "strictatime", "mode=755", "size=65536k"},
+			Destination: "/dev", Type: mountTypeTmpfs, Source: mountTypeTmpfs,
+			Options: []string{mountOptNosuid, "strictatime", "mode=755", "size=65536k"},
 		},
 		{
 			Destination: "/sys", Type: "sysfs", Source: "sysfs",
-			Options: []string{"nosuid", "noexec", "nodev", "ro"},
+			Options: []string{mountOptNosuid, "noexec", mountOptNodev, "ro"},
+		},
+		{
+			Destination: "/tmp", Type: mountTypeTmpfs, Source: mountTypeTmpfs,
+			Options: []string{mountOptNosuid, mountOptNodev, "mode=1777", "size=268435456"},
+		},
+		// /nix/store/.links: nix's LocalStore unconditionally
+		// mkdirs this on first run for hash-link dedup. The image's
+		// /nix/store is served via virtiofs which doesn't honour
+		// the container's CAP_DAC_OVERRIDE, so even uid 0 inside
+		// the container gets EPERM trying to add new entries under
+		// it. A tmpfs here is invisible to nix (mkdir returns
+		// EEXIST, which nix tolerates) and gives it a writable
+		// scratch dir for the very few side effects an offline
+		// evaluation produces.
+		{
+			Destination: "/nix/store/.links", Type: mountTypeTmpfs, Source: mountTypeTmpfs,
+			Options: []string{mountOptNosuid, mountOptNodev, "mode=0755", "size=16777216"},
 		},
 	}
 }

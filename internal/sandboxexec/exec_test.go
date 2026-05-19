@@ -14,6 +14,7 @@ import (
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 )
 
@@ -77,7 +78,7 @@ func TestHandleSandboxEventBareHelloPath(t *testing.T) {
 		return nil
 	}
 	assemblerCalled := false
-	asm := func(context.Context, string) (sandbox.Config, func(), error) {
+	asm := func(context.Context, string, sandboxboot.BootOptions) (sandbox.Config, func(), error) {
 		assemblerCalled = true
 		return sandbox.Config{}, func() {}, nil
 	}
@@ -114,7 +115,7 @@ func TestHandleSandboxEventAssemblerPath(t *testing.T) {
 	}
 	var seenRef string
 	unlockCalls := 0
-	asm := func(_ context.Context, ref string) (sandbox.Config, func(), error) {
+	asm := func(_ context.Context, ref string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
 		seenRef = ref
 		return bundled, func() { unlockCalls++ }, nil
 	}
@@ -147,7 +148,7 @@ func TestHandleSandboxEventAssemblerPath(t *testing.T) {
 // id must appear in the wrapped error.
 func TestHandleSandboxEventAssemblerError(t *testing.T) {
 	want := errors.New("synthetic pull failure")
-	asm := func(context.Context, string) (sandbox.Config, func(), error) {
+	asm := func(context.Context, string, sandboxboot.BootOptions) (sandbox.Config, func(), error) {
 		return sandbox.Config{}, func() {}, want
 	}
 	runCalls := 0
@@ -194,6 +195,49 @@ func TestHandleSandboxEventNoAssemblerFallback(t *testing.T) {
 	}
 	if seen.Kernel != base.Kernel {
 		t.Errorf("runner saw cfg %+v, want baseline (assembler absent)", seen)
+	}
+}
+
+// TestHandleSandboxEventPropagatesMounts pins D6c.1's mount
+// wiring: spec.Mounts flow through to the assembler as
+// sandboxboot.BootOptions.Mounts, in declaration order. Without
+// this seam, `daft workspace mount add /workspace` is a no-op
+// inside the container.
+func TestHandleSandboxEventPropagatesMounts(t *testing.T) {
+	var seenOpts sandboxboot.BootOptions
+	asm := func(_ context.Context, _ string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		seenOpts = opts
+		return sandbox.Config{}, func() {}, nil
+	}
+	e, err := New(Config{
+		Stdout:    io.Discard,
+		Runner:    noopRunner(),
+		Assembler: asm,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	evt := addedEvent("sb-mnt", &sandboxv1.SandboxSpec{
+		ImageRef: testImageRef,
+		Mounts: []*sandboxv1.Mount{
+			{Target: "/workspace", Source: "/host/ws"},
+			{Target: "/data", Source: "/host/data", ReadOnly: true},
+		},
+	})
+	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if len(seenOpts.Mounts) != 2 {
+		t.Fatalf("Mounts = %d, want 2", len(seenOpts.Mounts))
+	}
+	want := []sandboxboot.Mount{
+		{Target: "/workspace", Source: "/host/ws"},
+		{Target: "/data", Source: "/host/data", ReadOnly: true},
+	}
+	for i, m := range want {
+		if seenOpts.Mounts[i] != m {
+			t.Errorf("Mounts[%d] = %+v, want %+v", i, seenOpts.Mounts[i], m)
+		}
 	}
 }
 
