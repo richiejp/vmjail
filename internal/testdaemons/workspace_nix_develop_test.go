@@ -43,29 +43,6 @@ const d6c1IndexMarker = "d6c1-hermetic-marker"
 // CLI. D6c.2 will give the container actual network, so a real
 // `nix flake update` or `nix shell nixpkgs#foo` works.
 func TestClusterWorkspaceForwardAgainstNixRun(t *testing.T) {
-	// D6c.1 hits a virtiofsd-permissions wall: virtiofsd runs
-	// unprivileged on the host (as the dev-shell uid) and presents
-	// every file with its host-side owner unchanged. nix-as-uid-0-
-	// in-container then fails to open /nix/var/nix/db/big-lock
-	// (mode 0600, host-owned) even though the container's uid 0
-	// is conceptually "root". CAP_DAC_OVERRIDE inside the
-	// container is moot: virtiofsd executes every fs syscall as
-	// its own host uid, which doesn't have the override.
-	//
-	// The fix needs one of: (a) a user-namespace mapping so
-	// container uid 0 → VM uid X → virtiofsd uid X is *the file
-	// owner*; (b) an overlay over /nix that lets writes land in
-	// an in-VM tmpfs; or (c) running nix inside the container as
-	// the same uid virtiofsd runs as. All three need code beyond
-	// D6c.1's scope (D5 / D6c.1b territory).
-	//
-	// Skip leaves the test in place so the follow-up slice has a
-	// running starting point — the image build, the flake
-	// fixture, the mount wiring, and the runtime-spec tmpfs
-	// mounts in this commit are all real progress.
-	t.Skip("D6c.1: nix CLI inside the container blocked by " +
-		"virtiofs perms — see comment for blockers")
-
 	imgPath := requireEnvImage(t, "DAFT_NIX_TOOLING_IMAGE",
 		"nix build .#nix-tooling-image -o bin/nix-tooling-image")
 	fixtureDir := requireEnvImage(t, "DAFT_NIX_FLAKE_FIXTURE",

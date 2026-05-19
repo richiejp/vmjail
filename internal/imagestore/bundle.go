@@ -54,6 +54,23 @@ type BundleOptions struct {
 	// container rootfs (or for ensuring crun's mount call creates
 	// it via `nodev,nosuid,…` options when using bind mounts).
 	ExtraMounts []BundleMount
+	// HostUID / HostGID are the IDs in the runtime's parent
+	// user namespace that container uid 0 / gid 0 map to. When
+	// HostUID > 0 (or HostGID > 0), the generated spec adds a
+	// user-namespace plus one-entry uid/gid maps. This is the
+	// D6c.1b fix: virtiofsd runs unprivileged on the host (as
+	// the sandboxd uid) and performs every fs syscall as itself.
+	// Without the mapping the container's uid 0 appears to
+	// virtiofs as a stranger and gets EACCES on files owned by
+	// the sandboxd uid; with the mapping the request comes in
+	// as the file's owner and DAC checks pass.
+	//
+	// Zero / zero (the default) leaves the user namespace and
+	// mappings off — used by tests + the legacy attach path
+	// where the bundle's file ownership matches the container's
+	// uid 0 directly.
+	HostUID int
+	HostGID int
 }
 
 // BundleMount mirrors the subset of the OCI runtime-spec mount type

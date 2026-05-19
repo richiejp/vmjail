@@ -910,32 +910,27 @@ the user-host or in CI today.
     /workspace mount carries a flake, the user runs
     `nix develop -c <web server>`". D6c covers that proof,
     sliced again so each cut is reviewable:
-    - D6c.1: hermetic nix-CLI proof — **platform groundwork
-      landed; nix-CLI exec still blocked**. The image build
-      (`nix-tooling-image` + `d6c1-flake-fixture` in flake.nix),
-      the mount-spec wiring through the orchestrator path
-      (sandboxboot's BootOptions, sandboxexec mountsFromSpec),
-      and the runtime-spec writable-rootfs + `/tmp` /
-      `/nix/store/.links` tmpfs scaffolding + image-User parsing
-      all shipped in this slice. The integration test
-      (`TestClusterWorkspaceForwardAgainstNixRun`) is in place
-      but `t.Skip`'d.
-      Reason for skip: nix-as-uid-0-in-container can't open
-      `/nix/var/nix/db/big-lock` because virtiofsd runs
-      unprivileged on the host (as the dev-shell uid) and
-      executes every fs syscall as its own host uid. Container
-      CAP_DAC_OVERRIDE doesn't reach through. The unblock needs
-      one of: (a) a user-namespace mapping that aligns container
-      uid 0 with the host uid that owns the virtiofs-served
-      files; (b) an overlay over `/nix` so writes land in an
-      in-VM tmpfs; or (c) running nix inside the container as
-      the same uid virtiofsd runs as. All three are non-trivial
-      enough to warrant their own sub-slice (D6c.1b).
-    - D6c.1b: nix-CLI works in container (deferred). Pick one
-      of the three unblocks above; turn the t.Skip'd test
-      green. Likely the user-namespace mapping path since the
-      OCI runtime spec has first-class support and crun already
-      handles it.
+    - D6c.1: hermetic nix-CLI proof — **landed**. The image
+      build (`nix-tooling-image` + `d6c1-flake-fixture` in
+      flake.nix), the mount-spec wiring through the orchestrator
+      path (sandboxboot's BootOptions, sandboxexec
+      mountsFromSpec), and the runtime-spec writable-rootfs +
+      `/tmp` / `/nix/store/.links` tmpfs scaffolding +
+      image-User parsing all shipped in the first commit.
+      Integration test was initially t.Skip'd against a
+      virtiofs-perms wall.
+    - D6c.1b: virtiofs perms — **landed**. The unblock turned
+      out to be a one-entry user-namespace mapping in the OCI
+      spec: container uid 0 / gid 0 map to the sandboxd /
+      virtiofsd process uid/gid. virtiofsd's unprivileged fs
+      syscalls then come from the file owner so DAC checks
+      pass. BundleOptions.HostUID / HostGID drive it;
+      sandboxexec and sandboxdcli populate them with
+      os.Geteuid() / os.Getegid(). t.Skip removed,
+      `TestClusterWorkspaceForwardAgainstNixRun` green in
+      ~14s. Full byte path proven: local listener → ForwardPort
+      → orchestrator → sandboxd → vsock → agent → container →
+      `nix run` → python3 → http.server → response.
     - D6c.2: sandbox VM network. Adds virtio-net to the
       cloud-hypervisor invocation, brings up `eth0` in the
       agent (DHCP or static), and configures egress on the

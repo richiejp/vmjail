@@ -62,12 +62,20 @@ type runtimeMount struct {
 
 type runtimeLinuxConfig struct {
 	Namespaces    []runtimeNamespace `json:"namespaces"`
+	UIDMappings   []runtimeIDMapping `json:"uidMappings,omitempty"`
+	GIDMappings   []runtimeIDMapping `json:"gidMappings,omitempty"`
 	MaskedPaths   []string           `json:"maskedPaths"`
 	ReadonlyPaths []string           `json:"readonlyPaths"`
 }
 
 type runtimeNamespace struct {
 	Type string `json:"type"`
+}
+
+type runtimeIDMapping struct {
+	ContainerID int `json:"containerID"`
+	HostID      int `json:"hostID"`
+	Size        int `json:"size"`
 }
 
 // buildRuntimeConfig produces a runtime spec for img with overrides
@@ -97,6 +105,8 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 	if err != nil {
 		return runtimeSpec{}, err
 	}
+	linux := defaultRuntimeLinuxConfig()
+	applyUserNamespace(&linux, opts.HostUID, opts.HostGID)
 	return runtimeSpec{
 		OCIVersion: "1.0.2",
 		Process: runtimeProcess{
@@ -118,8 +128,24 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 		Root:     runtimeRoot{Path: "rootfs", Readonly: false},
 		Hostname: firstNonEmpty(opts.Hostname, "", "daft-container"),
 		Mounts:   mounts,
-		Linux:    defaultRuntimeLinuxConfig(),
+		Linux:    linux,
 	}, nil
+}
+
+// applyUserNamespace appends a `user` namespace and a one-entry
+// uid/gid map when the caller asked for one. See BundleOptions
+// HostUID / HostGID for the why.
+func applyUserNamespace(linux *runtimeLinuxConfig, hostUID, hostGID int) {
+	if hostUID == 0 && hostGID == 0 {
+		return
+	}
+	linux.Namespaces = append(linux.Namespaces, runtimeNamespace{Type: "user"})
+	linux.UIDMappings = []runtimeIDMapping{
+		{ContainerID: 0, HostID: hostUID, Size: 1},
+	}
+	linux.GIDMappings = []runtimeIDMapping{
+		{ContainerID: 0, HostID: hostGID, Size: 1},
+	}
 }
 
 // mergeArgs returns override unchanged when non-nil, otherwise

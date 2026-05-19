@@ -573,7 +573,10 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 	if err != nil {
 		return sandbox.Config{}, nil, fmt.Errorf("daft-sandboxd: pull %s: %w", opts.ref, err)
 	}
-	bundleOpts := imagestore.BundleOptions{}
+	bundleOpts := imagestore.BundleOptions{
+		HostUID: os.Geteuid(),
+		HostGID: os.Getegid(),
+	}
 	if len(opts.cmdArgs) > 0 {
 		bundleOpts.Args = opts.cmdArgs
 	}

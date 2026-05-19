@@ -61,6 +61,13 @@ type Mount struct {
 // env / GPU / isolation join when their slices land.
 type BootOptions struct {
 	Mounts []Mount
+	// HostUID / HostGID forward to imagestore.BundleOptions and
+	// drive the container's user-namespace mapping. See
+	// imagestore.BundleOptions for the full why; sandboxd-side
+	// callers populate these with os.Geteuid() / os.Getegid() so
+	// the container's uid 0 matches the virtiofsd process uid.
+	HostUID int
+	HostGID int
 }
 
 // Store is the imagestore surface BuildBundleConfig needs. Kept as
@@ -129,6 +136,8 @@ func BuildBundleConfig(
 	}
 	bundle, err := store.Bundle(ctx, img.Digest, imagestore.BundleOptions{
 		ExtraMounts: bundleMountsFromSpec(opts.Mounts),
+		HostUID:     opts.HostUID,
+		HostGID:     opts.HostGID,
 	})
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: bundle %s: %w", img.Digest, err)

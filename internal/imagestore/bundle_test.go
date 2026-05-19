@@ -314,6 +314,73 @@ func TestBuildRuntimeConfigRejectsNameFormUser(t *testing.T) {
 	}
 }
 
+// TestBuildRuntimeConfigUserNamespace pins the D6c.1b mapping:
+// when HostUID/HostGID is non-zero the runtime spec gains a
+// `user` namespace plus one-entry uid/gid maps. Without it,
+// virtiofs-served files would be inaccessible to nix-in-container
+// (see BundleOptions.HostUID for the chain of constraints).
+func TestBuildRuntimeConfigUserNamespace(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/userns:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{Entrypoint: []string{testEntrypoint}})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+	bundle, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{
+		HostUID: 1000,
+		HostGID: 100,
+	})
+	if err != nil {
+		t.Fatalf("Bundle: %v", err)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+	got := string(cfg)
+	for _, want := range []string{
+		`"type": "user"`,
+		`"hostID": 1000`,
+		`"hostID": 100`,
+		`"containerID": 0`,
+		`"size": 1`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("config.json missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestBuildRuntimeConfigNoUserNamespaceByDefault pins the inverse:
+// HostUID=0 + HostGID=0 leaves the spec free of the userns +
+// mapping clutter so the existing v0 attach path stays unchanged.
+func TestBuildRuntimeConfigNoUserNamespaceByDefault(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/no-userns:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{Entrypoint: []string{testEntrypoint}})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+	bundle, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{})
+	if err != nil {
+		t.Fatalf("Bundle: %v", err)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+	if strings.Contains(string(cfg), `"type": "user"`) {
+		t.Errorf("config.json has user namespace when HostUID=0:\n%s", cfg)
+	}
+	if strings.Contains(string(cfg), `uidMappings`) {
+		t.Errorf("config.json has uidMappings when HostUID=0:\n%s", cfg)
+	}
+}
+
 func TestBundleAppliesOverrides(t *testing.T) {
 	host := localRegistry(t)
 	ref := host + "/test/override:v1"

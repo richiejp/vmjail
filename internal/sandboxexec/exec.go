@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"slices"
 	"sync"
@@ -430,7 +431,9 @@ func (e *Executor) baseBootConfig(ctx context.Context, spec *sandboxv1.SandboxSp
 		return e.base, func() {}, nil
 	}
 	return e.assembler(ctx, imageRef, sandboxboot.BootOptions{
-		Mounts: mountsFromSpec(spec.GetMounts()),
+		Mounts:  mountsFromSpec(spec.GetMounts()),
+		HostUID: os.Geteuid(),
+		HostGID: os.Getegid(),
 	})
 }
 
