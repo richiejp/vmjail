@@ -82,6 +82,7 @@ func Run(ctx context.Context, w io.Writer) error {
 		dialVsock:   DialHostVsock,
 		portForward: defaultPortForwardDeps(),
 		attach:      defaultAttachDeps(),
+		tap:         defaultTapDeps(),
 	})
 }
 
@@ -102,6 +103,10 @@ type runDeps struct {
 	// attach is the test-substitutable surface for the D2b
 	// in-VM attach listener: vsock.Listen + ExecAttach.
 	attach attachDeps
+	// tap is the test-substitutable surface for the D6c.2 slice-2b
+	// tap bridge: /dev/net/tun open + netlink configure. Zero value
+	// disables the tap path (slice-2a conn-only behaviour).
+	tap tapDeps
 }
 
 func runWith(ctx context.Context, w io.Writer, d runDeps) error {

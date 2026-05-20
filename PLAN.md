@@ -979,12 +979,26 @@ the user-host or in CI today.
             the byte path end-to-end against the slice-1 listener
             without pulling in tap/netlink deps. **Landed.**
         2b. agent-side tap + bridge: create tap0 via TUNSETIFF
-            (or songgao/water), bring up the link via rtnetlink
-            (or vishvananda/netlink), and run the rx/tx pump loops
-            with HyperKit framing (2-byte LE size prefix) between
-            tap0 and the slice-2a vsock conn. Optionally drive
-            DHCP via udhcpc/dhclient against the gvproxy-embedded
-            server.
+            (raw ioctl, no songgao/water dep), bring up the link
+            via vishvananda/netlink (LinkSetMTU + AddrAdd +
+            LinkSetUp + RouteAdd default-via-gw), and run the
+            rx/tx pump loops with HyperKit framing (2-byte LE
+            size prefix) between tap0 and the slice-2a vsock
+            conn. Static address 192.168.127.2/24, default route
+            via 192.168.127.1 — matches sandboxnet's gvproxy
+            gateway. No DHCP yet; can layer udhcpc on top later
+            if the container needs DNS pushed by the embedded
+            DHCP server. **Landed.** internal/agent/netpump.go
+            holds the cross-platform framing pump;
+            internal/agent/tap_linux.go holds the Linux-only
+            TUNSETIFF + netlink wiring; net.go's tapDeps factors
+            the side-effect surface so unit tests substitute
+            net.Pipe pairs for the tap fd. Cross-port collision
+            still pinned by sandbox.VsockConfig.validate. Pump +
+            attachTapToBridge covered by unit tests; the
+            kernel-side tap-up path stays untested until the
+            slice-3 integration test exercises it with a real
+            netns (no root in test runners).
         3. container netns wiring: today the container shares
            the VM's loopback; for D6c.2 it also needs an
            egress route via tap0. Likely via crun's network

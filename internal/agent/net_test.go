@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -135,6 +136,175 @@ func TestStartNetBridgeFromCmdlineDialError(t *testing.T) {
 	}
 	if !strings.Contains(w.String(), "no host listener") {
 		t.Fatalf("output %q missing dial-error report", w.String())
+	}
+}
+
+func TestNetBridgeCloseWithBothEndsSet(t *testing.T) {
+	// NetBridge.Close has a tap-close branch that only runs when
+	// startNetBridgeFromCmdline's tap path was wired. The
+	// integration test exercises the conn-close branch via
+	// pumpFrames teardown but never calls bridge.Close directly,
+	// so we cover the both-set path here in isolation.
+	connHost, guestSide := net.Pipe()
+	tapHost, tapAgent := net.Pipe()
+	t.Cleanup(func() {
+		_ = connHost.Close()
+		_ = tapHost.Close()
+	})
+	b := &NetBridge{conn: guestSide, tap: tapAgent}
+	if err := b.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if b.conn != nil || b.tap != nil {
+		t.Fatalf("Close left state behind: conn=%v tap=%v", b.conn, b.tap)
+	}
+	// Idempotent.
+	if err := b.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestStartNetBridgeFromCmdlineWithTap(t *testing.T) {
+	// Cross-platform tap-path test: fake the tap deps with a
+	// net.Pipe pair so the unit test never needs /dev/net/tun or
+	// CAP_NET_ADMIN. Exercises attachTapToBridge + pumpFrames glue
+	// end-to-end: framed bytes on the vsock side land raw on the
+	// tap side after the bridge is up.
+	connHost, guestSide := net.Pipe()
+	tapHost, tapAgent := net.Pipe()
+	t.Cleanup(func() {
+		_ = connHost.Close()
+		_ = tapHost.Close()
+	})
+
+	var configured struct {
+		name    string
+		addr    string
+		gateway string
+		mtu     int
+	}
+	d := runDeps{
+		dialVsock: func(_ context.Context, port uint32) (net.Conn, error) {
+			if port != 9100 {
+				t.Fatalf("dial port=%d, want 9100", port)
+			}
+			return guestSide, nil
+		},
+		tap: tapDeps{
+			open: func(name string) (io.ReadWriteCloser, string, error) {
+				if name != DefaultTapName {
+					t.Fatalf("open(%q), want %q", name, DefaultTapName)
+				}
+				return tapAgent, name, nil
+			},
+			configure: func(name, addr, gw string, mtu int) error {
+				configured.name = name
+				configured.addr = addr
+				configured.gateway = gw
+				configured.mtu = mtu
+				return nil
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var w bytes.Buffer
+	b := startNetBridgeFromCmdline(ctx, &w, d, "daft.net_port=9100")
+	if b == nil {
+		t.Fatal("expected non-nil bridge")
+	}
+	if !strings.Contains(w.String(), "connected port=9100") ||
+		!strings.Contains(w.String(), "tap up name="+DefaultTapName) {
+		t.Fatalf("output %q missing connected + tap-up reports", w.String())
+	}
+	if configured.name != DefaultTapName ||
+		configured.addr != DefaultGuestIPNet ||
+		configured.gateway != DefaultGuestGw ||
+		configured.mtu != DefaultGuestMTU {
+		t.Fatalf("configure args = %+v", configured)
+	}
+
+	// Drive a frame conn → tap and verify the pump is running.
+	frame := []byte("ethernet-payload")
+	writeFramed(t, connHost, frame)
+	if err := tapHost.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	got := make([]byte, len(frame))
+	if _, err := io.ReadFull(tapHost, got); err != nil {
+		t.Fatalf("read tap: %v", err)
+	}
+	if !bytes.Equal(got, frame) {
+		t.Fatalf("tap got %q, want %q", got, frame)
+	}
+
+	// Cancel and confirm pumpFrames closes both halves.
+	cancel()
+	deadline := time.Now().Add(2 * time.Second)
+	if err := connHost.SetReadDeadline(deadline); err != nil {
+		t.Fatalf("set deadline conn: %v", err)
+	}
+	if _, err := connHost.Read(make([]byte, 1)); err == nil {
+		t.Fatal("expected conn close after cancel")
+	}
+}
+
+func TestStartNetBridgeFromCmdlineTapOpenError(t *testing.T) {
+	_, guestSide := net.Pipe()
+	t.Cleanup(func() { _ = guestSide.Close() })
+
+	var w bytes.Buffer
+	d := runDeps{
+		dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
+			return guestSide, nil
+		},
+		tap: tapDeps{
+			open: func(string) (io.ReadWriteCloser, string, error) {
+				return nil, "", errors.New("no /dev/net/tun")
+			},
+			configure: func(string, string, string, int) error {
+				t.Fatal("configure should not be called after open failure")
+				return nil
+			},
+		},
+	}
+	if got := startNetBridgeFromCmdline(t.Context(), &w, d, "daft.net_port=9100"); got != nil {
+		t.Fatal("expected nil bridge on tap open failure")
+	}
+	if !strings.Contains(w.String(), "no /dev/net/tun") {
+		t.Fatalf("output %q missing open-error report", w.String())
+	}
+}
+
+func TestStartNetBridgeFromCmdlineTapConfigureError(t *testing.T) {
+	_, guestSide := net.Pipe()
+	tapHost, tapAgent := net.Pipe()
+	t.Cleanup(func() {
+		_ = guestSide.Close()
+		_ = tapHost.Close()
+	})
+
+	var w bytes.Buffer
+	d := runDeps{
+		dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
+			return guestSide, nil
+		},
+		tap: tapDeps{
+			open: func(name string) (io.ReadWriteCloser, string, error) {
+				return tapAgent, name, nil
+			},
+			configure: func(string, string, string, int) error {
+				return errors.New("netlink: addr in use")
+			},
+		},
+	}
+	if got := startNetBridgeFromCmdline(t.Context(), &w, d, "daft.net_port=9100"); got != nil {
+		t.Fatal("expected nil bridge on configure failure")
+	}
+	if !strings.Contains(w.String(), "netlink: addr in use") {
+		t.Fatalf("output %q missing configure-error report", w.String())
 	}
 }
 
