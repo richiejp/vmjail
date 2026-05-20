@@ -56,3 +56,10 @@ make hooks        # install pre-commit hook into .git/hooks
   with `make bench` if a real perf change is intentional.
 - Tag pushes are validated against `version.txt` by CI — bump `version.txt`
   before tagging.
+- `flake.nix` reads submodule revs + upstream URLs from
+  `third_party/submodule-revs.json` (one fetchGit per submodule) rather than
+  scanning `./third_party/<sub>` on every eval. After `git submodule update`,
+  run `make check-submodule-revs` — it regenerates the JSON from `.gitmodules`
+  + `git submodule status` and fails (with the new file already on disk) if
+  anything drifted, so you can stage it and retry. The gate also runs as part
+  of `make check`.

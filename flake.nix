@@ -4,10 +4,14 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    # Pull submodule contents into the flake source tree. Nix flakes
-    # otherwise ignore submodules; with this set, ./third_party/<sub> is
-    # visible to derivations without the user needing `?submodules=1`.
-    self.submodules = true;
+    # Submodule contents are NOT pulled into the flake source — at
+    # ~1.9 GB across linux + u-root they made every flake eval scan
+    # the full tree. Each submodule is fetched from upstream via
+    # builtins.fetchGit, driven by third_party/submodule-revs.json
+    # (url + rev per submodule). A pre-commit hook keeps the JSON
+    # in sync with `git submodule status` + `.gitmodules`. fetchGit
+    # is content-addressed by rev, so the second eval is
+    # cache-instant; first eval on a fresh machine clones once.
   };
 
   outputs = { self, nixpkgs, flake-utils }:
@@ -15,6 +19,24 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         version = pkgs.lib.strings.removeSuffix "\n" (builtins.readFile ./version.txt);
+
+        # Submodule revs + upstream URLs come from a JSON file the
+        # pre-commit hook regenerates from `git submodule status`
+        # and `.gitmodules` — see
+        # scripts/hooks/check-submodule-revs.sh. fetchSubmodule
+        # clones each submodule from its upstream URL at the pinned
+        # rev; Nix caches the result by rev so subsequent evals are
+        # instant. Local-only submodule patches are not supported
+        # in this flow — push the rev before bumping.
+        submoduleRevs = builtins.fromJSON (builtins.readFile ./third_party/submodule-revs.json);
+        fetchSubmodule = name: builtins.fetchGit {
+          inherit (submoduleRevs.${name}) url rev;
+        };
+        linuxSrc = fetchSubmodule "linux";
+        uRootSrc = fetchSubmodule "u-root";
+        cloudHypervisorSrc = fetchSubmodule "cloud-hypervisor";
+        virtiofsdSrc = fetchSubmodule "virtiofsd";
+        crunSrc = fetchSubmodule "crun";
       in
       {
         devShells.default =
@@ -97,7 +119,7 @@
               export DAFT_VIRTIOFSD="${virtiofsd}/bin/virtiofsd"
               export DAFT_CRUN="${crun}/bin/crun"
               export DAFT_UROOT="${u-root}/bin/u-root"
-              export DAFT_UROOT_SRC="${./third_party/u-root}"
+              export DAFT_UROOT_SRC="${uRootSrc}"
               # OCI image tarball for D6b.3+ tests: dash + coreutils
               # (no nix binary yet — D6b.4 will swap in a full nix
               # toolchain). The path points at the docker-format
@@ -128,17 +150,20 @@
         packages = rec {
           default = daft;
 
-          # goSrc is the project source as Go's tooling sees it: our
-          # repo minus third_party/crun, which contains a stray
-          # validate.go (under libocispec/runtime-spec/schema/) that
-          # references a Go module dep we don't want in our go.sum.
-          # crun is a C project; its Go file is upstream test
-          # infrastructure, irrelevant to our build.
+          # goSrc is the project source as Go's tooling sees it. We
+          # drop the whole third_party/ tree — none of it is reachable
+          # from our Go build, and including it would (a) drag the
+          # ~1.9 GB linux + u-root checkouts into every flake eval, and
+          # (b) re-introduce the stray Go file in third_party/crun's
+          # libocispec/runtime-spec/schema/ that pulls in a module dep
+          # we don't want in go.sum. The kernel-config fragment and
+          # submodule-revs.json under third_party/ are read by other
+          # derivations directly, not via goSrc.
           goSrc = pkgs.lib.cleanSourceWith {
             src = ./.;
             filter = path: _type:
               let rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
-              in !(pkgs.lib.hasPrefix "third_party/crun" rel);
+              in !(pkgs.lib.hasPrefix "third_party/" rel);
           };
 
           # mkDaftBinary builds one of our two cmd/ binaries from the
@@ -450,7 +475,7 @@
             # its own module, so run from a writable copy of the checkout.
             # --no-preserve=mode lands the files writable so we don't need
             # a follow-up chmod -R u+w.
-            cp -r --no-preserve=mode ${./third_party/u-root} u-root-src
+            cp -r --no-preserve=mode ${uRootSrc} u-root-src
             cd u-root-src
 
             ${u-root}/bin/u-root \
@@ -473,7 +498,7 @@
             pname = "linux-daft";
             version = "6.19.14";
 
-            src = ./third_party/linux;
+            src = linuxSrc;
 
             nativeBuildInputs = with pkgs; [
               bc
@@ -547,10 +572,10 @@
             pname = "cloud-hypervisor";
             version = "51.1";
 
-            src = ./third_party/cloud-hypervisor;
+            src = cloudHypervisorSrc;
 
             cargoLock = {
-              lockFile = ./third_party/cloud-hypervisor/Cargo.lock;
+              lockFile = "${cloudHypervisorSrc}/Cargo.lock";
               outputHashes = {
                 "micro_http-0.1.0" = "sha256-7/4qOdb983JD70ZgpZv/fa5HFWMSQk5JseRpPQ0OU0k=";
               };
@@ -591,10 +616,10 @@
             pname = "virtiofsd";
             version = "1.9.0";
 
-            src = ./third_party/virtiofsd;
+            src = virtiofsdSrc;
 
             cargoLock = {
-              lockFile = ./third_party/virtiofsd/Cargo.lock;
+              lockFile = "${virtiofsdSrc}/Cargo.lock";
             };
 
             nativeBuildInputs = [ pkgs.pkg-config ];
@@ -630,14 +655,12 @@
             pname = "crun";
             version = "1.9.2";
 
-            # builtins.path copies the working-tree contents directly,
-            # which is what we want here: crun's libocispec submodule has
-            # its own deeper submodules (image-spec, runtime-spec, yajl)
-            # and Nix flakes' inputs.self.submodules only recurses one
-            # level. Using a path src side-steps the flake resolver.
-            src = builtins.path {
-              name = "crun-source";
-              path = ./third_party/crun;
+            # crun has deeper nested submodules (libocispec → image-spec
+            # / runtime-spec / yajl). fetchGit with submodules=true
+            # recurses through them at the pinned rev.
+            src = builtins.fetchGit {
+              inherit (submoduleRevs."crun") url rev;
+              submodules = true;
             };
 
             nativeBuildInputs = with pkgs; [
@@ -708,7 +731,7 @@
             pname = "u-root";
             version = "0.16.0";
 
-            src = ./third_party/u-root;
+            src = uRootSrc;
 
             # u-root checks in its vendored dependencies, so we don't need
             # Nix to pre-fetch a module cache for it.

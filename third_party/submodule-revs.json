@@ -1,0 +1,22 @@
+{
+  "cloud-hypervisor": {
+    "url": "https://github.com/cloud-hypervisor/cloud-hypervisor.git",
+    "rev": "9503e1ade908083ff0162d4cb40875894bd65943"
+  },
+  "crun": {
+    "url": "https://github.com/containers/crun.git",
+    "rev": "35274d346d2e9ffeacb22cc11590b0266a23d634"
+  },
+  "linux": {
+    "url": "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git",
+    "rev": "b9dbb4576bc8c69e87b4ca4caa2fb1c0db47d722"
+  },
+  "u-root": {
+    "url": "https://github.com/u-root/u-root.git",
+    "rev": "a9c0bf61c74128eceaed057ee98f4068b603c5f9"
+  },
+  "virtiofsd": {
+    "url": "https://gitlab.com/virtio-fs/virtiofsd.git",
+    "rev": "9accc39bc3c4020242aa68b29f663c858fb21abc"
+  }
+}
