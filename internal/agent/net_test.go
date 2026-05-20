@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/richiejp/darkaifactory/internal/sandboxnet/sandboxnettest"
 )
 
 func TestFormatNetPortCmdlineRoundTrips(t *testing.T) {
@@ -228,7 +230,7 @@ func TestStartNetBridgeFromCmdlineWithTap(t *testing.T) {
 
 	// Drive a frame conn → tap and verify the pump is running.
 	frame := []byte("ethernet-payload")
-	writeFramed(t, connHost, frame)
+	sandboxnettest.WriteFrame(t, connHost, frame)
 	if err := tapHost.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatalf("set deadline: %v", err)
 	}

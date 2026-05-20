@@ -9,38 +9,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/richiejp/darkaifactory/internal/sandboxnet/sandboxnettest"
 )
-
-// writeFramed writes a StdioProtocol frame (u16-le size + body) to w.
-func writeFramed(t *testing.T, w io.Writer, body []byte) {
-	t.Helper()
-	hdr := make([]byte, 2)
-	binary.LittleEndian.PutUint16(hdr, uint16(len(body))) //nolint:gosec // test payloads bounded by maxNetFrameSize.
-	if _, err := w.Write(append(hdr, body...)); err != nil {
-		t.Fatalf("write framed: %v", err)
-	}
-}
-
-// readFramed reads one StdioProtocol frame from r within timeout.
-func readFramed(t *testing.T, r net.Conn, timeout time.Duration) []byte {
-	t.Helper()
-	if err := r.SetReadDeadline(time.Now().Add(timeout)); err != nil {
-		t.Fatalf("set deadline: %v", err)
-	}
-	hdr := make([]byte, 2)
-	if _, err := io.ReadFull(r, hdr); err != nil {
-		t.Fatalf("read header: %v", err)
-	}
-	size := binary.LittleEndian.Uint16(hdr)
-	if size == 0 || size > maxNetFrameSize {
-		t.Fatalf("bad size %d", size)
-	}
-	buf := make([]byte, size)
-	if _, err := io.ReadFull(r, buf); err != nil {
-		t.Fatalf("read body: %v", err)
-	}
-	return buf
-}
 
 func TestPumpFramesConnToTap(t *testing.T) {
 	connHost, connAgent := net.Pipe()
@@ -60,7 +31,7 @@ func TestPumpFramesConnToTap(t *testing.T) {
 	}()
 
 	frame := []byte("hello-ethernet-frame")
-	writeFramed(t, connHost, frame)
+	sandboxnettest.WriteFrame(t, connHost, frame)
 
 	if err := tapHost.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatalf("set deadline: %v", err)
@@ -102,7 +73,7 @@ func TestPumpFramesTapToConn(t *testing.T) {
 	if _, err := tapHost.Write(raw); err != nil {
 		t.Fatalf("tap host write: %v", err)
 	}
-	got := readFramed(t, connHost, 2*time.Second)
+	got := sandboxnettest.ReadFrame(t, connHost, 2*time.Second)
 	if !bytes.Equal(got, raw) {
 		t.Fatalf("framed = %q, want %q", got, raw)
 	}

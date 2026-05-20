@@ -73,10 +73,9 @@ func realTunSetIff(fd uintptr, req *tapIfReq) error {
 	return nil
 }
 
-// openTapLinux creates a TAP device with the kernel-allocated name
-// (or `name` when non-empty) and returns the device file plus the
-// final interface name. IFF_NO_PI keeps Read/Write at one raw
-// Ethernet frame per call — no 4-byte packet-info header to strip.
+// openTapLinux creates a TAP device. IFF_NO_PI keeps Read/Write at
+// one raw Ethernet frame per call — no 4-byte packet-info header
+// to strip.
 func openTapLinux(name string) (*os.File, string, error) {
 	return openTapLinuxWith(name, defaultTapLinuxDeps())
 }
