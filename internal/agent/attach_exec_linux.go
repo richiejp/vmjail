@@ -14,6 +14,16 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// ptmxPath is the canonical Linux PTY multiplexer. Opening it
+// triggers ptmx_open() in the kernel, which allocates a master
+// from the current mount namespace's devpts — no per-mount perm
+// checks, no CAP_SYS_ADMIN required. u-root's libinit.CreateRootfs
+// (run as PID 1 in our initramfs before exec'ing daft-agent) mounts
+// devpts with newinstance + ptmxmode=666 and symlinks /dev/ptmx
+// here, so this path works equally on the agent and on any Linux
+// host running the unit tests.
+const ptmxPath = "/dev/ptmx"
+
 // defaultAttachDeps wires the production AF_VSOCK listener and the
 // crun-exec-with-PTY implementation of ExecAttach.
 func defaultAttachDeps() attachDeps {
@@ -122,21 +132,16 @@ func attachWinsize(cols, rows uint32) *unix.Winsize {
 	return &unix.Winsize{Col: uint16(c), Row: uint16(r)} //nolint:gosec // G115: bounded by maxDim above
 }
 
-// openPtyPair opens the devpts multiplexer, unlocks the slave,
-// and opens the matching /dev/pts/<n>. Returns the master +
-// slave as *os.File so callers can use the stdlib io.Reader/
-// Writer/Closer surface. ensureDevPts is called first because
-// the u-root initramfs doesn't pre-mount devpts; on hosts where
-// /dev/pts/ptmx already exists the call is a no-op.
+// openPtyPair opens /dev/ptmx, unlocks the allocated slave, and
+// opens the matching /dev/pts/<n>. Returns master + slave as
+// *os.File so callers can use the stdlib io.Reader/Writer/Closer
+// surface.
 func openPtyPair() (master, slave *os.File, err error) {
-	if perr := ensureDevPts(); perr != nil {
-		return nil, nil, fmt.Errorf("ensure devpts: %w", perr)
-	}
-	fd, err := unix.Open(devPtsPtmx, unix.O_RDWR|unix.O_NOCTTY, 0)
+	fd, err := unix.Open(ptmxPath, unix.O_RDWR|unix.O_NOCTTY, 0)
 	if err != nil {
-		return nil, nil, fmt.Errorf("open %s: %w", devPtsPtmx, err)
+		return nil, nil, fmt.Errorf("open %s: %w", ptmxPath, err)
 	}
-	master = os.NewFile(uintptr(fd), devPtsPtmx)
+	master = os.NewFile(uintptr(fd), ptmxPath)
 	if uerr := unix.IoctlSetPointerInt(fd, unix.TIOCSPTLCK, 0); uerr != nil {
 		_ = master.Close()
 		return nil, nil, fmt.Errorf("unlockpt: %w", uerr)
