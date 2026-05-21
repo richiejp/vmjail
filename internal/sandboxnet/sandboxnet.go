@@ -44,13 +44,12 @@ const (
 	DefaultGatewayMAC = "5a:94:ef:e4:0c:dd"
 
 	// DefaultHostLoopbackIP is the virtual IP the guest dials to
-	// reach the sandboxd process's 127.0.0.1 — the netstack's NAT
-	// rewrites the destination on the way out. .254 is the
-	// last-usable address in the /24 and the convention podman
-	// machine and gvproxy's own examples use for the host hop.
-	// The sandboxd-side integration test depends on this address
-	// to point a guest-side HTTPS client at an httptest.Server
-	// bound on host loopback without binding any real interface.
+	// reach the sandboxd process's 127.0.0.1 — the netstack's
+	// NAT rewrites the destination on the way out, and
+	// GatewayVirtualIPs makes the gateway answer ARP for it.
+	// Matches the convention podman machine and gvproxy use.
+	// Exported because the integration test points a guest-side
+	// HTTPS client at this exact address.
 	DefaultHostLoopbackIP = "192.168.127.254"
 
 	// hostLoopbackTarget is the host-side address the netstack

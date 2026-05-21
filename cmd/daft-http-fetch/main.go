@@ -1,10 +1,9 @@
-// daft-http-fetch is the D6c.2 slice-4 workload: a tiny HTTPS
-// client that GETs a URL, then prints a single readiness-sentinel
-// line the integration test waits on. Baked into the
-// nix-shell-image so the test can `daft workspace exec` it
-// against an httptest.NewTLSServer running on the host's
-// loopback, reached through sandboxnet's
-// DefaultHostLoopbackIP NAT.
+// daft-http-fetch is a tiny static HTTPS-GET workload for the
+// integration tests: it dials a URL, hashes the body, and prints
+// a single readiness-sentinel line the test waits on. Baked into
+// the nix-shell-image so the test can `daft workspace exec` it
+// against an httptest.NewTLSServer on the host's loopback,
+// reached through sandboxnet's DefaultHostLoopbackIP NAT.
 //
 // Flags:
 //
@@ -19,11 +18,9 @@
 //
 //	daft-http-fetch err: <message>
 //
-// and exits 1. The sentinel prefix is what the integration test
-// matches on, so the byte path container → tap0 → vsock →
-// sandboxnet → host is verified without making the test parse
-// HTTP bodies. sha256 lets the test cross-check that the bytes
-// received match the bytes the host wrote.
+// and exits 1. The sentinel format keeps the test from having to
+// parse HTTP bodies; sha256 lets the test cross-check that the
+// bytes the container received match the bytes the host wrote.
 package main
 
 import (
@@ -88,23 +85,22 @@ func run(args []string, out io.Writer) int {
 	return 0
 }
 
-// newClient builds the http.Client used by run. Pulled into a
-// helper so the --insecure branch is straightforward to cover.
-// G402: InsecureSkipVerify is explicitly opt-in via --insecure;
-// the slice-4 integration test depends on it for the host's
-// httptest self-signed cert.
+// newClient builds the http.Client used by run. When insecure is
+// false the cloned transport keeps Go's default TLSClientConfig
+// (system CAs, hostname verification); only --insecure swaps in
+// an InsecureSkipVerify config — leaving the verify-on path
+// untouched so a future CA-bundle wiring doesn't get silently
+// undone by an unconditional override here.
 //
-//nolint:gosec // G402: --insecure is opt-in; see comment above.
+//nolint:gosec // G402: InsecureSkipVerify is gated on the --insecure flag.
 func newClient(insecure bool) *http.Client {
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
-		// DefaultTransport is *http.Transport in every supported
-		// Go release; the assertion only fails if a test seam
-		// rewires it. Fall back to a fresh Transport so the
-		// branch stays exercisable.
 		base = &http.Transport{}
 	}
 	tr := base.Clone()
-	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: insecure}
+	if insecure {
+		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
 	return &http.Client{Transport: tr}
 }

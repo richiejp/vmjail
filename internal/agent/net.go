@@ -175,45 +175,37 @@ func startNetBridgeFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdl
 	}
 	writeReport(w, NetReportPrefix, fmt.Sprintf("connected port=%d", port))
 
+	// closeBridgeOnCancel both unblocks the host-side conn
+	// tracker on VM teardown AND pins the bridge wrapper for
+	// the agent's lifetime — without a live reference the
+	// *os.File finalizer on bridge.tap can close the tap fd,
+	// the kernel destroys daft0, and the container's
+	// /proc/net/route silently empties out. Used by both paths
+	// so the tap-up branch can't drift apart from the conn-only
+	// branch.
+	closeBridgeOnCancel := func() {
+		<-ctx.Done()
+		oops.Skip("close net bridge", bridge.Close(), net.ErrClosed)
+	}
+
 	if d.tap.open != nil {
 		if !attachTapToBridge(w, d.tap, bridge) {
 			return nil
 		}
-		// Keep the bridge wrapper reachable for the agent's
-		// lifetime. pumpFrames receives the underlying conn and
-		// tap directly, so without this goroutine the bridge
-		// goes out of scope as soon as runWith continues. The
-		// runtime's finalizer on *os.File would then close the
-		// tap fd as soon as GC saw the bridge as unreachable —
-		// destroying tap0 in the kernel and silently undoing the
-		// netlink configure, with no warning. Flake symptom:
-		// the container's /proc/net/route is empty and connect()
-		// returns ENETUNREACH. Holding the bridge here pins it
-		// to ctx so the tap survives the VM's lifetime.
-		go func() {
-			<-ctx.Done()
-			oops.Skip("close net bridge", bridge.Close(), net.ErrClosed)
-		}()
+		go closeBridgeOnCancel()
 		go pumpFrames(ctx, bridge.conn, bridge.tap)
 		return bridge
 	}
 
-	// Conn-only path (slice 2a): close on ctx so the host-side
-	// conn tracker unblocks promptly on VM teardown.
-	go func() {
-		<-ctx.Done()
-		oops.Skip("close net bridge", bridge.Close(), net.ErrClosed)
-	}()
+	go closeBridgeOnCancel()
 	return bridge
 }
 
 // WriteContainerResolvConf writes a minimal /etc/resolv.conf into
 // the OCI bundle's rootfs so the container resolves DNS via the
-// sandboxnet gateway. Called from runWith after the net bridge is
-// up and only when a bundle is configured. The container shares
-// the VM's init netns (per D6b.4) so it inherits tap0 + the default
-// route automatically; resolv.conf is the only remaining missing
-// piece for outbound DNS.
+// sandboxnet gateway. The container shares the VM's init netns
+// and inherits tap0 + the default route automatically; resolv.conf
+// is the only remaining piece needed for outbound DNS.
 //
 // Idempotent: the same constant content is safe to re-write across
 // VMs sharing the bundle. Failures are reported on w and don't
