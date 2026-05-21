@@ -21,7 +21,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/identity"
 )
 
 // ErrNoServe is returned by RequestAttach when no `daft workspace

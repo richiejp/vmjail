@@ -7,7 +7,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/localai-org/darkaifactory/internal/oops"
 )
 
 // NetPortCmdlineKey is the kernel cmdline parameter that asks

@@ -7,11 +7,11 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/richiejp/darkaifactory/internal/assert"
-	workspacebrokerv1 "github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/workspacebroker"
+	"github.com/localai-org/darkaifactory/internal/assert"
+	workspacebrokerv1 "github.com/localai-org/darkaifactory/internal/genpb/workspacebroker/v1"
+	"github.com/localai-org/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/workspacebroker"
 )
 
 // notifChanBuffer is the per-subscriber backlog. Several events

@@ -18,19 +18,19 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/richiejp/darkaifactory/internal/component"
-	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
-	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
-	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
-	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
-	"github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/mtls"
-	"github.com/richiejp/darkaifactory/internal/nodectrl"
-	"github.com/richiejp/darkaifactory/internal/reconciler"
-	"github.com/richiejp/darkaifactory/internal/trace"
-	"github.com/richiejp/darkaifactory/internal/workspacebroker"
-	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
+	"github.com/localai-org/darkaifactory/internal/component"
+	"github.com/localai-org/darkaifactory/internal/genpb/health/v1/healthv1connect"
+	"github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
+	"github.com/localai-org/darkaifactory/internal/genpb/trace/v1/tracev1connect"
+	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/localai-org/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/mtls"
+	"github.com/localai-org/darkaifactory/internal/nodectrl"
+	"github.com/localai-org/darkaifactory/internal/reconciler"
+	"github.com/localai-org/darkaifactory/internal/trace"
+	"github.com/localai-org/darkaifactory/internal/workspacebroker"
+	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
 )
 
 // Config holds everything the server needs to start up. Identity is

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/nodectrl"
 )
 
 func fp(b byte) identity.Fingerprint {

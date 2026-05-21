@@ -17,9 +17,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/orchestrator"
-	"github.com/richiejp/darkaifactory/internal/version"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/orchestrator"
+	"github.com/localai-org/darkaifactory/internal/version"
 )
 
 // configSubdir is appended to the user's config dir to derive the

@@ -7,7 +7,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/localai-org/darkaifactory/internal/oops"
 )
 
 // maxNetFrameSize caps a single Ethernet frame on the wire. 1600

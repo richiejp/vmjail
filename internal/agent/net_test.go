@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/sandboxnet/sandboxnettest"
+	"github.com/localai-org/darkaifactory/internal/sandboxnet/sandboxnettest"
 )
 
 func TestFormatNetPortCmdlineRoundTrips(t *testing.T) {

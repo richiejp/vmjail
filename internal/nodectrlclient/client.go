@@ -22,11 +22,11 @@ import (
 	"connectrpc.com/connect"
 	"golang.org/x/net/http2"
 
-	"github.com/richiejp/darkaifactory/internal/assert"
-	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/localai-org/darkaifactory/internal/assert"
+	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/nodectrl"
 )
 
 // DefaultHeartbeatInterval is the cadence at which RegisterAndServe

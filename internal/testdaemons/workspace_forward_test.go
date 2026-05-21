@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/testdaemons"
-	"github.com/richiejp/darkaifactory/internal/testtmux"
+	"github.com/localai-org/darkaifactory/internal/testdaemons"
+	"github.com/localai-org/darkaifactory/internal/testtmux"
 )
 
 // TestClusterWorkspaceForwardAgainstNixServer is the D6b.4

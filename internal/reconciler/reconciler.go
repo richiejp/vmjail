@@ -29,10 +29,10 @@ import (
 	"sync"
 	"time"
 
-	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/nodectrl"
-	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
+	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/nodectrl"
+	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
 )
 
 // PascalCase phase tokens the reconciler reads from

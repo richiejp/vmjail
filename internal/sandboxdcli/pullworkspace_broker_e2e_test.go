@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/brokerclient"
-	"github.com/richiejp/darkaifactory/internal/cas"
-	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/orchestrator"
-	"github.com/richiejp/darkaifactory/internal/workspace"
+	"github.com/localai-org/darkaifactory/internal/brokerclient"
+	"github.com/localai-org/darkaifactory/internal/cas"
+	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/orchestrator"
+	"github.com/localai-org/darkaifactory/internal/workspace"
 )
 
 // TestPullWorkspaceBrokerHappyPath drives the full brokered pull

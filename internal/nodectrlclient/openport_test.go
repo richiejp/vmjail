@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
 )
 
 const (

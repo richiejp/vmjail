@@ -530,7 +530,7 @@ const file_trace_v1_trace_proto_rawDesc = "" +
 	"\x11SPAN_STATUS_ERROR\x10\x02\x12\x19\n" +
 	"\x15SPAN_STATUS_ABANDONED\x10\x032f\n" +
 	"\fTraceService\x12V\n" +
-	"\vReportSpans\x12!.daft.trace.v1.ReportSpansRequest\x1a\".daft.trace.v1.ReportSpansResponse\"\x00BCZAgithub.com/richiejp/darkaifactory/internal/genpb/trace/v1;tracev1b\x06proto3"
+	"\vReportSpans\x12!.daft.trace.v1.ReportSpansRequest\x1a\".daft.trace.v1.ReportSpansResponse\"\x00BFZDgithub.com/localai-org/darkaifactory/internal/genpb/trace/v1;tracev1b\x06proto3"
 
 var (
 	file_trace_v1_trace_proto_rawDescOnce sync.Once

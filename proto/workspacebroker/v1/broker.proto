@@ -11,7 +11,7 @@ syntax = "proto3";
 
 package daft.workspacebroker.v1;
 
-option go_package = "github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1;workspacebrokerv1";
+option go_package = "github.com/localai-org/darkaifactory/internal/genpb/workspacebroker/v1;workspacebrokerv1";
 
 // BrokerService is the orchestrator-side broker. Both client
 // (user-host) and sandbox-host hold persistent outbound streams

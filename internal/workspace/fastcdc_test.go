@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/cas"
+	"github.com/localai-org/darkaifactory/internal/cas"
 )
 
 func TestFastCDCChunkerEmptyStream(t *testing.T) {

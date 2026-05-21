@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/localai-org/darkaifactory/internal/oops"
 )
 
 // ErrLocked is returned by Remove when the image's bundle is held by

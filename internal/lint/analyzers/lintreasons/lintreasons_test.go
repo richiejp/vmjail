@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/lintreasons"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/lintreasons"
 )
 
 // TestAnalyzer drives the lintreasons analyzer over the testdata

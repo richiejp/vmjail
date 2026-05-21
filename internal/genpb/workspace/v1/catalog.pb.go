@@ -25,7 +25,7 @@
 package workspacev1
 
 import (
-	v1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	v1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
@@ -524,7 +524,7 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\x04Lock\x12+\n" +
 	"\x11owner_fingerprint\x18\x01 \x01(\tR\x10ownerFingerprint\x129\n" +
 	"\n" +
-	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAtBKZIgithub.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
+	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAtBNZLgithub.com/localai-org/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
 
 var (
 	file_workspace_v1_catalog_proto_rawDescOnce sync.Once

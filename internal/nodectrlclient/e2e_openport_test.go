@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/nodectrl"
-	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/nodectrl"
+	"github.com/localai-org/darkaifactory/internal/nodectrlclient"
+	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
 )
 
 const (

@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/orchestrator"
-	"github.com/richiejp/darkaifactory/internal/version"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/orchestrator"
+	"github.com/localai-org/darkaifactory/internal/version"
 )
 
 const (

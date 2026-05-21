@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/localai-org/darkaifactory/internal/oops"
 )
 
 // Peer is one approved counterparty: who they are (Label/Role) and

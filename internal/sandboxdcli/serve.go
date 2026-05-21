@@ -13,14 +13,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/nodectrl"
-	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/sandboxboot"
-	"github.com/richiejp/darkaifactory/internal/sandboxexec"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
-	"github.com/richiejp/darkaifactory/internal/version"
+	"github.com/localai-org/darkaifactory/internal/bundled"
+	"github.com/localai-org/darkaifactory/internal/nodectrl"
+	"github.com/localai-org/darkaifactory/internal/nodectrlclient"
+	"github.com/localai-org/darkaifactory/internal/sandbox"
+	"github.com/localai-org/darkaifactory/internal/sandboxboot"
+	"github.com/localai-org/darkaifactory/internal/sandboxexec"
+	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
+	"github.com/localai-org/darkaifactory/internal/version"
 )
 
 const serveCmdName = "serve"

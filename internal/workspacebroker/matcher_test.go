@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/identity"
 )
 
 const testWorkspaceName = "src"

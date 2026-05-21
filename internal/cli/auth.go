@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/identity"
 )
 
 // authCmdName is the name of the parent `daft auth` command.

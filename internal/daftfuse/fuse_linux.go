@@ -15,7 +15,7 @@ import (
 	gofuse "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
 )
 
 // Server is a running FUSE filesystem. Returned from Mount.Serve.

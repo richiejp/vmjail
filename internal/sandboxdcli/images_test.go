@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/imagestore"
+	"github.com/localai-org/darkaifactory/internal/imagestore"
 )
 
 func TestImagesIsRegistered(t *testing.T) {

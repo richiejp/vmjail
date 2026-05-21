@@ -17,9 +17,9 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/richiejp/darkaifactory/internal/cas"
-	"github.com/richiejp/darkaifactory/internal/daftfuse"
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/localai-org/darkaifactory/internal/cas"
+	"github.com/localai-org/darkaifactory/internal/daftfuse"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
 )
 
 // fakeFetcher is a ChunkFetcher backed by an in-memory digest→

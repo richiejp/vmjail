@@ -9,13 +9,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/nodectrl"
-	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/sandboxexec"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/localai-org/darkaifactory/internal/bundled"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/nodectrl"
+	"github.com/localai-org/darkaifactory/internal/nodectrlclient"
+	"github.com/localai-org/darkaifactory/internal/sandbox"
+	"github.com/localai-org/darkaifactory/internal/sandboxexec"
+	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
 )
 
 // stubBuildDispatcher swaps buildDispatcher with one that returns

@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/localai-org/darkaifactory/internal/nodectrl"
 )
 
 // procMeminfoPath is the path the resource probe reads MemTotal

@@ -9,7 +9,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/richiejp/darkaifactory/internal/sandboxdcli"
+	"github.com/localai-org/darkaifactory/internal/sandboxdcli"
 )
 
 var osExit = os.Exit

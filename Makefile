@@ -2,7 +2,7 @@
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
-LDFLAGS := -X github.com/richiejp/darkaifactory/internal/version.Version=$(VERSION)
+LDFLAGS := -X github.com/localai-org/darkaifactory/internal/version.Version=$(VERSION)
 
 # Our own Go code lives under cmd/ and internal/. third_party/ holds
 # vendored upstream sources (Linux kernel, Cloud Hypervisor, u-root) that

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
 )
 
 // ingressFixture is shared scaffolding: a tracer with an injected

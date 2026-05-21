@@ -15,11 +15,11 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
-	"github.com/richiejp/darkaifactory/internal/cas"
-	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
-	"github.com/richiejp/darkaifactory/internal/mtls"
-	"github.com/richiejp/darkaifactory/internal/trace"
-	"github.com/richiejp/darkaifactory/internal/workspace"
+	"github.com/localai-org/darkaifactory/internal/cas"
+	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/localai-org/darkaifactory/internal/mtls"
+	"github.com/localai-org/darkaifactory/internal/trace"
+	"github.com/localai-org/darkaifactory/internal/workspace"
 )
 
 const (

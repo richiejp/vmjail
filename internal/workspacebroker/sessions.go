@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/identity"
 )
 
 // ErrNoSession is returned by Pair when the session_id is unknown

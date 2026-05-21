@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/imagestore"
+	"github.com/localai-org/darkaifactory/internal/bundled"
+	"github.com/localai-org/darkaifactory/internal/imagestore"
 )
 
 // TestHostProcessIDs pins the helper that sandboxexec /

@@ -369,7 +369,7 @@ project's vocabulary so they're greppable, formatted consistently, and
 covered by the `assertpure` analyzer (see "Power of 10 (Go)" below).
 
 ```go
-import "github.com/richiejp/darkaifactory/internal/assert"
+import "github.com/localai-org/darkaifactory/internal/assert"
 
 // Caller guarantees nodes is non-empty and sorted ascending by ID.
 func process(nodes []Node) {
@@ -422,7 +422,7 @@ loud panic at the offending call site.
 The canonical pattern:
 
 ```go
-import "github.com/richiejp/darkaifactory/internal/assert"
+import "github.com/localai-org/darkaifactory/internal/assert"
 
 func (r *Reaper) Run(ctx context.Context) {
     assert.True(ctx.Done() != nil,

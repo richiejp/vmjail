@@ -20,7 +20,7 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/localai-org/darkaifactory/internal/lint/suppress"
 )
 
 // analyzerName is the value matched against //daft:lint:disable=

@@ -12,7 +12,7 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/identity"
 )
 
 // innerBaseURL is the host portion of an InnerClient request URL.

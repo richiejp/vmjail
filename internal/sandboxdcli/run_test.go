@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/imagestore"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/localai-org/darkaifactory/internal/bundled"
+	"github.com/localai-org/darkaifactory/internal/imagestore"
+	"github.com/localai-org/darkaifactory/internal/sandbox"
 )
 
 func TestRunIsRegisteredUnderDebug(t *testing.T) {

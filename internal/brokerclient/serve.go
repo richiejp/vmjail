@@ -11,8 +11,8 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/richiejp/darkaifactory/internal/assert"
-	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/assert"
+	"github.com/localai-org/darkaifactory/internal/identity"
 )
 
 // defaultMaxConcurrentAttaches caps how many brokered attaches

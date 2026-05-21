@@ -12,9 +12,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
 )
 
 // DefaultOpenAttachHandshakeTimeout caps how long OpenAttachBridge

@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/localai-org/darkaifactory/internal/lint/suppress"
 )
 
 // Shared fixture strings so funlen + goconst stay green and the

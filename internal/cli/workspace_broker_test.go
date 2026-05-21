@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/brokerclient"
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
-	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/brokerclient"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/localai-org/darkaifactory/internal/identity"
 
 	"connectrpc.com/connect"
 )

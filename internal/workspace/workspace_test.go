@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/cas"
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/localai-org/darkaifactory/internal/cas"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
 )
 
 // randomBytes returns sz bytes from a seeded PRNG so tests are

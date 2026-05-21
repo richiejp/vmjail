@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/assert"
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	"github.com/localai-org/darkaifactory/internal/assert"
+	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
 )
 
 // DefaultIngressQuietAfter is how long a trace_id may go without

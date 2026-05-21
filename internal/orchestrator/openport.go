@@ -14,8 +14,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
-	"github.com/richiejp/darkaifactory/internal/identity"
+	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/localai-org/darkaifactory/internal/identity"
 )
 
 // DefaultOpenPortHandshakeTimeout caps how long OpenPortBridge

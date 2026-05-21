@@ -9,11 +9,11 @@ import (
 
 	"connectrpc.com/connect"
 
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
-	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
+	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
 )
 
 // ErrAttachHelloMissing is returned by AttachSandbox when the

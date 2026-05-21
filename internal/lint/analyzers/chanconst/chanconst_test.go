@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/chanconst"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/chanconst"
 )
 
 func TestAnalyzer(t *testing.T) {

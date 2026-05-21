@@ -3,8 +3,8 @@ package workspace_test
 import (
 	"testing"
 
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/richiejp/darkaifactory/internal/workspace"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/localai-org/darkaifactory/internal/workspace"
 )
 
 func file(path string, mode uint32, digests ...string) *workspacev1.FileEntry {

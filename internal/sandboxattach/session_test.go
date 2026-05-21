@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/localai-org/darkaifactory/internal/agent"
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
+	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
 )
 
 // echoAgent runs a minimal agent simulator on agentConn: reads

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/assert"
+	"github.com/localai-org/darkaifactory/internal/assert"
 )
 
 // recoverPanic returns the panic value if fn panics, or nil otherwise.

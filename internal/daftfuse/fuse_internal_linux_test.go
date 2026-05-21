@@ -11,7 +11,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
 )
 
 // White-box tests for the FUSE adapter's pure helpers. These run

@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/identity"
 )
 
 // ErrUnknownNode is returned by Heartbeat when the caller's

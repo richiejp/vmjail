@@ -19,16 +19,16 @@ import (
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/multichecker"
 
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/assertpure"
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/chanconst"
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/forloopbound"
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/lintreasons"
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/maxbytes"
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nodoubleptr"
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nogoto"
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nolinkname"
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/norecursion"
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/tagcatalog"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/assertpure"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/chanconst"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/forloopbound"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/lintreasons"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/maxbytes"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/nodoubleptr"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/nogoto"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/nolinkname"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/norecursion"
+	"github.com/localai-org/darkaifactory/internal/lint/analyzers/tagcatalog"
 )
 
 // analyzers is the bundled set. Package-scoped so tests can verify

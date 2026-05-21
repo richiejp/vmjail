@@ -2,7 +2,7 @@
 // VM's init (u-root) via -uinitcmd and becomes the long-running supervisor
 // for the workload container.
 //
-// All the lifecycle logic lives in github.com/richiejp/darkaifactory/internal/agent;
+// All the lifecycle logic lives in github.com/localai-org/darkaifactory/internal/agent;
 // main exists only to wire process stdio, signals, and exit status.
 package main
 
@@ -11,7 +11,7 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/localai-org/darkaifactory/internal/agent"
 )
 
 // osExit and agentMain are package-level indirection points so

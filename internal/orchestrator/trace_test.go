@@ -14,13 +14,13 @@ import (
 	"connectrpc.com/connect"
 	"golang.org/x/net/http2"
 
-	"github.com/richiejp/darkaifactory/internal/component"
-	healthv1 "github.com/richiejp/darkaifactory/internal/genpb/health/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/localai-org/darkaifactory/internal/component"
+	healthv1 "github.com/localai-org/darkaifactory/internal/genpb/health/v1"
+	"github.com/localai-org/darkaifactory/internal/genpb/health/v1/healthv1connect"
+	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
+	"github.com/localai-org/darkaifactory/internal/genpb/trace/v1/tracev1connect"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/trace"
 )
 
 func TestNewTraceHandlerNilTracer(t *testing.T) {

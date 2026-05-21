@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/testdaemons"
-	"github.com/richiejp/darkaifactory/internal/testtmux"
+	"github.com/localai-org/darkaifactory/internal/testdaemons"
+	"github.com/localai-org/darkaifactory/internal/testtmux"
 )
 
 // d6c1IndexMarker is a known string baked into the index.html the

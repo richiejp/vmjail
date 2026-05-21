@@ -1,6 +1,6 @@
 // Command daft is the darkaifactory command-line entry point.
 //
-// All real logic lives in github.com/richiejp/darkaifactory/internal/cli;
+// All real logic lives in github.com/localai-org/darkaifactory/internal/cli;
 // main.go exists only to wire that package to the process's stdio and exit
 // status. Keeping main thin makes the CLI surface testable without
 // shelling out to a built binary.
@@ -11,7 +11,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/richiejp/darkaifactory/internal/cli"
+	"github.com/localai-org/darkaifactory/internal/cli"
 )
 
 // osExit is the indirection point tests use to verify main()

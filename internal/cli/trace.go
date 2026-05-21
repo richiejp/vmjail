@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/component"
-	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/localai-org/darkaifactory/internal/component"
+	"github.com/localai-org/darkaifactory/internal/genpb/trace/v1/tracev1connect"
+	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/localai-org/darkaifactory/internal/trace"
 )
 
 // flushTimeout caps how long Tracer.Shutdown waits for the trace

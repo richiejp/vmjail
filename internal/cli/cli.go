@@ -22,8 +22,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/version"
+	"github.com/localai-org/darkaifactory/internal/sandbox"
+	"github.com/localai-org/darkaifactory/internal/version"
 )
 
 // envPrefix is the prefix used for environment-variable bindings on the

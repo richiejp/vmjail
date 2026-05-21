@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/mtls"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/mtls"
 )
 
 func TestWorkspaceServeBadConfigDir(t *testing.T) {

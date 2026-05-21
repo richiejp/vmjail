@@ -9,9 +9,9 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/richiejp/darkaifactory/internal/cas"
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/localai-org/darkaifactory/internal/cas"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 )
 
 // Server implements WorkspaceServiceHandler over a CAS plus an

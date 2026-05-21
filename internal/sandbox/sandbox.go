@@ -22,10 +22,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/assert"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/localai-org/darkaifactory/internal/agent"
+	"github.com/localai-org/darkaifactory/internal/assert"
+	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/localai-org/darkaifactory/internal/trace"
 )
 
 // HelloTimeout caps how long we wait for the in-VM agent to print its

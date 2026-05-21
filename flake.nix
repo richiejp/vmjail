@@ -190,7 +190,7 @@
             env.CGO_ENABLED = if cgoEnabled then "1" else "0";
             ldflags = [
               "-s" "-w"
-              "-X github.com/richiejp/darkaifactory/internal/version.Version=${version}"
+              "-X github.com/localai-org/darkaifactory/internal/version.Version=${version}"
             ];
             subPackages = [ subPackage ];
             meta = with pkgs.lib; {
@@ -432,7 +432,7 @@
 
             ldflags = [
               "-s" "-w"
-              "-X github.com/richiejp/darkaifactory/internal/version.Version=${version}"
+              "-X github.com/localai-org/darkaifactory/internal/version.Version=${version}"
             ];
             subPackages = [ "cmd/daft-sandboxd" ];
 

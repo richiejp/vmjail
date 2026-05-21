@@ -7,9 +7,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/richiejp/darkaifactory/internal/daftfuse"
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/localai-org/darkaifactory/internal/daftfuse"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 )
 
 // stubWorkspaceClient implements WorkspaceServiceClient for the

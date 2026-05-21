@@ -31,7 +31,7 @@ import (
 	"slices"
 	"syscall"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/localai-org/darkaifactory/internal/agent"
 )
 
 // writeErrf forwards a diagnostic to out, swallowing the (rare)

@@ -15,8 +15,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/localai-org/darkaifactory/internal/trace"
 )
 
 // ErrUnknownImage is returned by Bundle when the requested digest is

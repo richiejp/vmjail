@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/identity"
 )
 
 // runSandboxd is a small variant of the cli package's runDaft —

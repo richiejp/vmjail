@@ -15,7 +15,7 @@ syntax = "proto3";
 
 package daft.trace.v1;
 
-option go_package = "github.com/richiejp/darkaifactory/internal/genpb/trace/v1;tracev1";
+option go_package = "github.com/localai-org/darkaifactory/internal/genpb/trace/v1;tracev1";
 
 // SpanKind disambiguates client/server pairs sharing one trace_id
 // across an RPC boundary, matching the OTel convention so a future

@@ -9,9 +9,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
+	"github.com/localai-org/darkaifactory/internal/genpb/trace/v1/tracev1connect"
+	"github.com/localai-org/darkaifactory/internal/trace"
 )
 
 // JSON field names emitted by /debug/traces and consumed by tests.

@@ -12,7 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/richiejp/darkaifactory/internal/imagestore"
+	"github.com/localai-org/darkaifactory/internal/imagestore"
 )
 
 // Env vars for image-store configuration. Stable so external scripts

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/localai-org/darkaifactory/internal/agent"
 )
 
 // TestMain doubles the test binary as a "fake VMM" when invoked with the

@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/daftfuse"
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/localai-org/darkaifactory/internal/daftfuse"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
 )
 
 // fuseMustHaveDev fails fast when /dev/fuse is missing — same

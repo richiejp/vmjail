@@ -26,8 +26,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/assert"
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	"github.com/localai-org/darkaifactory/internal/assert"
+	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
 )
 
 // DefaultCapacity sizes the ring buffer when New is called without

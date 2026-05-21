@@ -1,4 +1,4 @@
-module github.com/richiejp/darkaifactory
+module github.com/localai-org/darkaifactory
 
 go 1.25.0
 

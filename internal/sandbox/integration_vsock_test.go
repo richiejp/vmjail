@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/localai-org/darkaifactory/internal/agent"
+	"github.com/localai-org/darkaifactory/internal/trace"
 )
 
 // TestHelloIntegrationShipsAgentSpansOverVsock is the e2e proof of

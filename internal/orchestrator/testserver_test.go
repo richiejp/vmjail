@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/identity"
 )
 
 // orchTestEnv is a started in-process orchestrator paired with an

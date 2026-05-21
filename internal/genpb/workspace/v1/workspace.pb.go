@@ -522,7 +522,7 @@ const file_workspace_v1_workspace_proto_rawDesc = "" +
 	"\x12ENTRY_KIND_SYMLINK\x10\x032\xc5\x01\n" +
 	"\x10WorkspaceService\x12\\\n" +
 	"\vGetManifest\x12%.daft.workspace.v1.GetManifestRequest\x1a&.daft.workspace.v1.GetManifestResponse\x12S\n" +
-	"\bGetChunk\x12\".daft.workspace.v1.GetChunkRequest\x1a#.daft.workspace.v1.GetChunkResponseBKZIgithub.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
+	"\bGetChunk\x12\".daft.workspace.v1.GetChunkRequest\x1a#.daft.workspace.v1.GetChunkResponseBNZLgithub.com/localai-org/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
 
 var (
 	file_workspace_v1_workspace_proto_rawDescOnce sync.Once

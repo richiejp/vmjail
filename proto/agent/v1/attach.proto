@@ -13,7 +13,7 @@ syntax = "proto3";
 
 package daft.agent.v1;
 
-option go_package = "github.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1";
+option go_package = "github.com/localai-org/darkaifactory/internal/genpb/agent/v1;agentv1";
 
 // AgentAttachHello is the first message the sandboxd sends on a
 // fresh attach connection. The agent uses it to decide what to

@@ -5,8 +5,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
+	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
+	"github.com/localai-org/darkaifactory/internal/genpb/trace/v1/tracev1connect"
 )
 
 // Exporter ships finished spans to a remote consumer (typically the

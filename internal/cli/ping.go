@@ -11,10 +11,10 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/net/http2"
 
-	healthv1 "github.com/richiejp/darkaifactory/internal/genpb/health/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	healthv1 "github.com/localai-org/darkaifactory/internal/genpb/health/v1"
+	"github.com/localai-org/darkaifactory/internal/genpb/health/v1/healthv1connect"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/trace"
 )
 
 // pingCmdName is the verb users invoke. Surfaced as a constant so

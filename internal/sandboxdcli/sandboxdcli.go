@@ -20,9 +20,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/version"
+	"github.com/localai-org/darkaifactory/internal/bundled"
+	"github.com/localai-org/darkaifactory/internal/sandbox"
+	"github.com/localai-org/darkaifactory/internal/version"
 )
 
 // cacheSubdir is the directory we create under os.UserCacheDir for our

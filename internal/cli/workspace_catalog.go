@@ -18,12 +18,12 @@ import (
 	"golang.org/x/net/http2"
 	"google.golang.org/protobuf/types/known/durationpb"
 
-	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
-	"github.com/richiejp/darkaifactory/internal/identity"
-	"github.com/richiejp/darkaifactory/internal/trace"
-	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
+	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/trace"
+	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
 )
 
 const orchestratorFlag = "orchestrator"

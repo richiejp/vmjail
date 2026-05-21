@@ -15,8 +15,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/richiejp/darkaifactory/internal/cas"
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/localai-org/darkaifactory/internal/cas"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
 )
 
 // DefaultChunkSize is 1 MiB — large enough to amortise per-chunk

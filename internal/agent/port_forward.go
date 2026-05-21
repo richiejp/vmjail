@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/localai-org/darkaifactory/internal/trace"
 )
 
 // portForwardReportPrefix is the console prefix the agent uses for

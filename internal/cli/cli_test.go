@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/version"
+	"github.com/localai-org/darkaifactory/internal/sandbox"
+	"github.com/localai-org/darkaifactory/internal/version"
 )
 
 // runCmd executes the root command with the given args, capturing stdout and

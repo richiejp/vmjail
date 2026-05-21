@@ -20,10 +20,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/localai-org/darkaifactory/internal/agent"
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
+	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
 )
 
 // OpenSession sends the AgentAttachHello derived from req onto

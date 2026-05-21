@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/imagestore"
+	"github.com/localai-org/darkaifactory/internal/agent"
+	"github.com/localai-org/darkaifactory/internal/imagestore"
 )
 
 // TestWorkspaceOverlayE2E boots a real VM with the workspace share

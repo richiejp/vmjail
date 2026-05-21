@@ -20,7 +20,7 @@ package lintreasons
 import (
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/localai-org/darkaifactory/internal/lint/suppress"
 )
 
 // Analyzer is the lintreasons analyzer entry point. Run via

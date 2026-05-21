@@ -24,8 +24,8 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
-	"github.com/richiejp/darkaifactory/internal/cas"
-	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/localai-org/darkaifactory/internal/cas"
+	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
 )
 
 // ChunkFetcher fetches a single chunk's compressed bytes from a
