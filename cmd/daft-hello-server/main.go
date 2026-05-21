@@ -23,6 +23,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+
+	"github.com/localai-org/darkaifactory/internal/banner"
 )
 
 const (
@@ -48,6 +50,11 @@ func main() {
 func run(args []string, out io.Writer) int {
 	fs := flag.NewFlagSet("daft-hello-server", flag.ContinueOnError)
 	fs.SetOutput(out)
+	fs.Usage = func() {
+		_, _ = fmt.Fprint(out, banner.String)
+		_, _ = fmt.Fprintln(out, "\nUsage of daft-hello-server:")
+		fs.PrintDefaults()
+	}
 	addr := fs.String("addr", defaultAddr, "listen address (host:port)")
 	body := fs.String("body", defaultBody, "response body")
 	if err := fs.Parse(args); err != nil {

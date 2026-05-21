@@ -20,6 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/localai-org/darkaifactory/internal/banner"
 	"github.com/localai-org/darkaifactory/internal/bundled"
 	"github.com/localai-org/darkaifactory/internal/sandbox"
 	"github.com/localai-org/darkaifactory/internal/version"
@@ -35,7 +36,8 @@ func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "daft-sandboxd",
 		Short: "darkaifactory sandbox-host (single-executable)",
-		Long: "daft-sandboxd is the sandbox-host stack as a single static binary.\n\n" +
+		Long: banner.String +
+			"\ndaft-sandboxd is the sandbox-host stack as a single static binary.\n\n" +
 			"It embeds the VMM (cloud-hypervisor), the guest kernel, and the\n" +
 			"sandbox initramfs, extracts them to the user cache directory on\n" +
 			"first run, and boots sandbox VMs from them.",

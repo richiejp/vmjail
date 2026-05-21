@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/localai-org/darkaifactory/internal/banner"
 	"github.com/localai-org/darkaifactory/internal/identity"
 	"github.com/localai-org/darkaifactory/internal/orchestrator"
 	"github.com/localai-org/darkaifactory/internal/version"
@@ -39,8 +40,12 @@ const serveCmdName = "serve"
 // in for testability.
 func New(stdout, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "daft-orchestrator",
-		Short:         "daft orchestrator: central control-plane for sandbox-hosts and clients",
+		Use:   "daft-orchestrator",
+		Short: "daft orchestrator: central control-plane for sandbox-hosts and clients",
+		Long: banner.String +
+			"\ndaft-orchestrator is the central control-plane: it authenticates\n" +
+			"clients and sandbox-hosts via mTLS (TOFU peer approvals) and serves\n" +
+			"Connect-RPC over HTTP/2.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       version.Version,

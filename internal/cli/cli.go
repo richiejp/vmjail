@@ -22,6 +22,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/localai-org/darkaifactory/internal/banner"
 	"github.com/localai-org/darkaifactory/internal/sandbox"
 	"github.com/localai-org/darkaifactory/internal/version"
 )
@@ -48,7 +49,8 @@ func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "daft",
 		Short: "darkaifactory CLI",
-		Long: "daft is the command-line entry point for the darkaifactory project.\n\n" +
+		Long: banner.String +
+			"\ndaft is the command-line entry point for the darkaifactory project.\n\n" +
 			"Run `daft completion --help` to set up shell completions, and\n" +
 			"`daft version` to print the embedded build version.",
 		// Don't print usage on every error — the error itself is usually enough,
