@@ -42,6 +42,22 @@ const (
 	DefaultSubnet     = "192.168.127.0/24"
 	DefaultGatewayIP  = "192.168.127.1"
 	DefaultGatewayMAC = "5a:94:ef:e4:0c:dd"
+
+	// DefaultHostLoopbackIP is the virtual IP the guest dials to
+	// reach the sandboxd process's 127.0.0.1 — the netstack's NAT
+	// rewrites the destination on the way out. .254 is the
+	// last-usable address in the /24 and the convention podman
+	// machine and gvproxy's own examples use for the host hop.
+	// The sandboxd-side integration test depends on this address
+	// to point a guest-side HTTPS client at an httptest.Server
+	// bound on host loopback without binding any real interface.
+	DefaultHostLoopbackIP = "192.168.127.254"
+
+	// hostLoopbackTarget is the host-side address the netstack
+	// translates DefaultHostLoopbackIP to. Always 127.0.0.1 —
+	// any other address would defeat the "reach my own services"
+	// purpose of the magic IP.
+	hostLoopbackTarget = "127.0.0.1"
 )
 
 // Config describes the per-VM virtual network. Zero-valued
@@ -51,6 +67,14 @@ type Config struct {
 	GatewayIP  string
 	GatewayMAC string
 	MTU        int
+	// HostLoopbackIP enables the guest→host loopback escape
+	// hatch. When non-empty, the netstack answers ARP for this IP
+	// on the gateway interface and NATs outbound traffic to it
+	// onto 127.0.0.1 of the sandboxd process. Empty leaves the
+	// guest with no route to the host's loopback. Defaults to
+	// DefaultHostLoopbackIP when zero-valued — keep the slice-4
+	// integration test path easy to reach without ceremony.
+	HostLoopbackIP string
 }
 
 // Network is one VM's userspace TCP/IP stack. Construct with New,
@@ -75,6 +99,9 @@ func New(cfg Config) (*Network, error) {
 	if cfg.MTU == 0 {
 		cfg.MTU = DefaultMTU
 	}
+	if cfg.HostLoopbackIP == "" {
+		cfg.HostLoopbackIP = DefaultHostLoopbackIP
+	}
 	if _, _, err := net.ParseCIDR(cfg.Subnet); err != nil {
 		return nil, fmt.Errorf("sandboxnet: subnet %q: %w", cfg.Subnet, err)
 	}
@@ -84,12 +111,23 @@ func New(cfg Config) (*Network, error) {
 	if _, err := net.ParseMAC(cfg.GatewayMAC); err != nil {
 		return nil, fmt.Errorf("sandboxnet: gateway MAC %q: %w", cfg.GatewayMAC, err)
 	}
+	var gatewayVIPs []string
+	var natMap map[string]string
+	if cfg.HostLoopbackIP != "" {
+		if ip := net.ParseIP(cfg.HostLoopbackIP); ip == nil {
+			return nil, fmt.Errorf("sandboxnet: host loopback IP %q is not parseable", cfg.HostLoopbackIP)
+		}
+		gatewayVIPs = []string{cfg.HostLoopbackIP}
+		natMap = map[string]string{cfg.HostLoopbackIP: hostLoopbackTarget}
+	}
 	vn, err := virtualnetwork.New(&types.Configuration{
 		Subnet:            cfg.Subnet,
 		GatewayIP:         cfg.GatewayIP,
 		GatewayMacAddress: cfg.GatewayMAC,
 		MTU:               cfg.MTU,
 		Protocol:          types.StdioProtocol,
+		GatewayVirtualIPs: gatewayVIPs,
+		NAT:               natMap,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("sandboxnet: virtualnetwork.New: %w", err)

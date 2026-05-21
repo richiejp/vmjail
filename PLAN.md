@@ -999,13 +999,68 @@ the user-host or in CI today.
             kernel-side tap-up path stays untested until the
             slice-3 integration test exercises it with a real
             netns (no root in test runners).
-        3. container netns wiring: today the container shares
-           the VM's loopback; for D6c.2 it also needs an
-           egress route via tap0. Likely via crun's network
-           namespace + a veth pair into a small bridge.
-        4. integration test: container reaches an external
-           HTTPS endpoint (start with httpbin or a known-good
-           cache.nixos.org GET).
+        3. container egress wiring — **landed**. The
+           "container netns + veth + bridge" speculation in
+           this note was moot: D6b.4 already dropped the
+           container netns, so the container inherits tap0 +
+           the default route from the VM's init netns for
+           free. The remaining gap was DNS. Two production
+           changes shipped this slice: (a)
+           `sandboxexec.Config.NetEnabled` toggles a per-VM
+           sandboxnet listener — `resolveBootConfig` now
+           allocates a Vsock device and sets
+           `cfg.Vsock.NetPort = agent.DefaultNetVsockPort`
+           (9500, between AttachPort=9000 and
+           BaseVsockPort=10000) when the flag is set.
+           `daft-sandboxd serve` turns it on; unit tests
+           leave it off so they don't have to wire a real
+           sandboxnet stack. (b) The agent's `runWith` writes
+           `<bundle>/rootfs/etc/resolv.conf` with
+           `nameserver 192.168.127.1` whenever the net
+           bridge succeeds AND a `daft.bundle=` path was
+           parsed. Atomic write-and-rename, idempotent
+           across VMs sharing a bundle; overwrites any
+           image-baked resolv.conf because the sandboxnet
+           gateway is the only route the container has.
+        4. integration test — **landed**. Hermetic, no public
+           internet required:
+           `testdaemons.TestClusterWorkspaceHTTPSEgress` stands
+           up an `httptest.NewTLSServer` on the host's loopback,
+           rewrites the URL host to `sandboxnet.DefaultHostLoopbackIP`
+           (192.168.127.254), drives the standard workspace
+           create/image/mount/target/launch sequence, then
+           `daft workspace exec /bin/daft-http-fetch --insecure`
+           inside the container and waits for the
+           `daft-http-fetch ok status=200 bytes=<n> sha256=<hex>`
+           sentinel in the tmux pane. Cross-checking sha256
+           against the host body pins data integrity, not just
+           reachability. Three production changes shipped this
+           slice: (a) `sandboxnet.Config.HostLoopbackIP` (default
+           192.168.127.254) drives `GatewayVirtualIPs` + `NAT`
+           on gvisor-tap-vsock's `types.Configuration` so the
+           guest can dial host loopback through the magic IP.
+           (b) `cmd/daft-http-fetch` — a tiny static HTTPS
+           client baked into the nix-shell-image alongside
+           daft-hello-server; `--insecure` is opt-in and unit-
+           tested to confirm the default (verify-on) path still
+           rejects the same self-signed cert. (c)
+           `third_party/kernel-config/daft.config` adds
+           `CONFIG_TUN=y` — without it the guest had no /dev/net/tun
+           and the agent's tap-up path failed with ENOENT, so
+           the container saw ENETUNREACH on every connect. The
+           kernel-side tap-up path that 2b left untested is now
+           covered end to end. Slice-2b also shipped with a
+           latent GC-finalizer race: the agent's
+           `startNetBridgeFromCmdline` tap-up branch returned the
+           `*NetBridge` but nothing held a reference past the
+           call, so the runtime's `*os.File` finalizer would
+           sometimes close the tap fd and the kernel would
+           destroy `daft0`, leaving the container's
+           `/proc/net/route` empty and every connect() returning
+           ENETUNREACH. Fixed by holding the bridge in a
+           ctx-bound goroutine on the tap-up path too (the
+           conn-only slice-2a path already did this). The
+           integration test went 5/5 from ~50/50 after the fix.
       Connectivity allowlists (C4 in Phase C) layer on top later.
     - D6c.3: full vision. nixos/nix:latest pulled at
       integration setup (`make` target with a local cache so

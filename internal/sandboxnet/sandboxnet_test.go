@@ -40,6 +40,7 @@ func TestNewRejectsBadConfig(t *testing.T) {
 		{"bad subnet", sandboxnet.Config{Subnet: "not-a-cidr"}, "subnet"},
 		{"bad gateway IP", sandboxnet.Config{GatewayIP: "not-an-ip"}, "gateway IP"},
 		{"bad gateway MAC", sandboxnet.Config{GatewayMAC: "not-a-mac"}, "gateway MAC"},
+		{"bad host loopback IP", sandboxnet.Config{HostLoopbackIP: "not-an-ip"}, "host loopback IP"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -59,36 +60,50 @@ func TestNewRejectsBadConfig(t *testing.T) {
 // gateway MAC. Failing here pins a library protocol shift
 // before the real-VM e2e ever runs.
 func TestAcceptRoundTripsARP(t *testing.T) {
-	n, err := sandboxnet.New(sandboxnet.Config{})
-	if err != nil {
-		t.Fatalf("New: %v", err)
+	cases := []struct {
+		name     string
+		targetIP net.IP
+	}{
+		{"gateway IP", net.ParseIP(sandboxnet.DefaultGatewayIP).To4()},
+		// .254 is the GatewayVirtualIP wired by HostLoopbackIP;
+		// an ARP reply for it proves the netstack accepted the
+		// extra address (without it the slice-4 integration test
+		// can't even open a TCP conn to the host).
+		{"host loopback IP", net.ParseIP(sandboxnet.DefaultHostLoopbackIP).To4()},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			n, err := sandboxnet.New(sandboxnet.Config{})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
 
-	hostSide, guestSide := net.Pipe()
-	t.Cleanup(func() {
-		_ = hostSide.Close()
-		_ = guestSide.Close()
-	})
+			hostSide, guestSide := net.Pipe()
+			t.Cleanup(func() {
+				_ = hostSide.Close()
+				_ = guestSide.Close()
+			})
 
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
 
-	acceptErr := make(chan error, 1)
-	go func() {
-		acceptErr <- n.Accept(ctx, hostSide)
-	}()
+			acceptErr := make(chan error, 1)
+			go func() {
+				acceptErr <- n.Accept(ctx, hostSide)
+			}()
 
-	frame := sandboxnettest.ARPRequest(testGuestMAC[:], testGuestIP[:],
-		net.ParseIP(sandboxnet.DefaultGatewayIP).To4())
-	sandboxnettest.WriteFrame(t, guestSide, frame)
-	reply := sandboxnettest.ReadFrame(t, guestSide, readTimeout)
-	sandboxnettest.AssertARPReply(t, reply, sandboxnet.DefaultGatewayMAC, testGuestMAC[:])
+			frame := sandboxnettest.ARPRequest(testGuestMAC[:], testGuestIP[:], tc.targetIP)
+			sandboxnettest.WriteFrame(t, guestSide, frame)
+			reply := sandboxnettest.ReadFrame(t, guestSide, readTimeout)
+			sandboxnettest.AssertARPReply(t, reply, sandboxnet.DefaultGatewayMAC, testGuestMAC[:])
 
-	cancel()
-	_ = hostSide.Close()
-	select {
-	case <-acceptErr:
-	case <-time.After(readTimeout):
-		t.Fatal("Accept did not return after cancel")
+			cancel()
+			_ = hostSide.Close()
+			select {
+			case <-acceptErr:
+			case <-time.After(readTimeout):
+				t.Fatal("Accept did not return after cancel")
+			}
+		})
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 
 	"github.com/localai-org/darkaifactory/internal/oops"
 )
@@ -33,6 +34,13 @@ const (
 	DefaultGuestGw    = "192.168.127.1"
 	DefaultGuestMTU   = 1500
 )
+
+// DefaultNetVsockPort is the AF_VSOCK port the agent dials to reach
+// the sandboxnet userspace TCP/IP stack. Picked to sit between the
+// attach port (9000) and the port-forward base (BaseVsockPort =
+// 10000), well clear of CH's reserved low-numbered ports. One per
+// VM — sandboxnet runs one Network per Sandbox.
+const DefaultNetVsockPort uint32 = 9500
 
 // FormatNetPortCmdline renders a net-port to the wire form.
 func FormatNetPortCmdline(port uint32) string {
@@ -171,6 +179,21 @@ func startNetBridgeFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdl
 		if !attachTapToBridge(w, d.tap, bridge) {
 			return nil
 		}
+		// Keep the bridge wrapper reachable for the agent's
+		// lifetime. pumpFrames receives the underlying conn and
+		// tap directly, so without this goroutine the bridge
+		// goes out of scope as soon as runWith continues. The
+		// runtime's finalizer on *os.File would then close the
+		// tap fd as soon as GC saw the bridge as unreachable —
+		// destroying tap0 in the kernel and silently undoing the
+		// netlink configure, with no warning. Flake symptom:
+		// the container's /proc/net/route is empty and connect()
+		// returns ENETUNREACH. Holding the bridge here pins it
+		// to ctx so the tap survives the VM's lifetime.
+		go func() {
+			<-ctx.Done()
+			oops.Skip("close net bridge", bridge.Close(), net.ErrClosed)
+		}()
 		go pumpFrames(ctx, bridge.conn, bridge.tap)
 		return bridge
 	}
@@ -182,6 +205,49 @@ func startNetBridgeFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdl
 		oops.Skip("close net bridge", bridge.Close(), net.ErrClosed)
 	}()
 	return bridge
+}
+
+// WriteContainerResolvConf writes a minimal /etc/resolv.conf into
+// the OCI bundle's rootfs so the container resolves DNS via the
+// sandboxnet gateway. Called from runWith after the net bridge is
+// up and only when a bundle is configured. The container shares
+// the VM's init netns (per D6b.4) so it inherits tap0 + the default
+// route automatically; resolv.conf is the only remaining missing
+// piece for outbound DNS.
+//
+// Idempotent: the same constant content is safe to re-write across
+// VMs sharing the bundle. Failures are reported on w and don't
+// stop the boot — the container still has IP egress, only DNS
+// resolution suffers.
+func WriteContainerResolvConf(w io.Writer, bundle string) {
+	etcDir := filepath.Join(bundle, "rootfs", "etc")
+	// #nosec G301 — /etc must be world-readable inside the container
+	// so the c-library resolver (running as the container's uid) can
+	// stat its own resolv.conf regardless of the bundle's host uid.
+	if err := os.MkdirAll(etcDir, 0o755); err != nil {
+		writeReport(w, NetReportPrefix, "resolv.conf mkdir: "+err.Error())
+		return
+	}
+	path := filepath.Join(etcDir, "resolv.conf")
+	content := []byte("nameserver " + DefaultGuestGw + "\n")
+	if err := writeFileAtomic(path, content, 0o644); err != nil {
+		writeReport(w, NetReportPrefix, "resolv.conf write: "+err.Error())
+		return
+	}
+	writeReport(w, NetReportPrefix, "resolv.conf nameserver="+DefaultGuestGw)
+}
+
+// writeFileAtomic write-and-renames into path so a partial write
+// can't show up to a concurrent reader. mode applies to the
+// finalised file; the .tmp file picks the same mode so a crash
+// mid-rename leaves a benign artefact.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	tmp := path + ".tmp"
+	//nolint:gosec // path is constructed from a kernel-cmdline-supplied bundle path; the agent runs as PID 1's child in a single-tenant VM.
+	if err := os.WriteFile(tmp, data, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // attachTapToBridge opens tap0 and runs netlink config. On any

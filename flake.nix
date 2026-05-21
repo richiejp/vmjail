@@ -252,6 +252,20 @@
             platforms = pkgs.lib.platforms.linux;
           };
 
+          # daft-http-fetch is the D6c.2 slice-4 client workload:
+          # a tiny HTTPS GET that prints a known-shape sentinel on
+          # success. Baked into the nix-shell-image so the
+          # integration test can `daft workspace exec` it against
+          # an httptest TLS server bound to the host's loopback —
+          # reached through sandboxnet's DefaultHostLoopbackIP NAT
+          # — and prove the container's network egress works.
+          daft-http-fetch = mkDaftBinary {
+            name = "daft-http-fetch";
+            subPackage = "cmd/daft-http-fetch";
+            description = "darkaifactory HTTPS GET client (test workload)";
+            platforms = pkgs.lib.platforms.linux;
+          };
+
           # nix-shell-image is a minimal Nix-built OCI image used by
           # the D6b.3 integration test. It carries dash + coreutils
           # (so /bin/sh and /bin/sleep resolve inside the container)
@@ -274,8 +288,12 @@
             # is up so the port-forward test has something to GET
             # against. Its /bin/daft-hello-server lands here via
             # the same dockerTools buildEnv symlink mechanism as
-            # dash and coreutils.
-            contents = [ pkgs.dash pkgs.coreutils daft-hello-server ];
+            # dash and coreutils. daft-http-fetch joins the same
+            # buildEnv for the D6c.2 slice-4 HTTPS-egress proof.
+            contents = [
+              pkgs.dash pkgs.coreutils
+              daft-hello-server daft-http-fetch
+            ];
             # The entrypoint prints a readiness sentinel on container
             # startup, then execs sleep so the container stays alive.
             # The sentinel travels container stdout → agent → vsock →

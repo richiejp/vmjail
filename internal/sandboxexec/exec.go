@@ -87,6 +87,12 @@ type Executor struct {
 	// to wrap the framed conn as an AttachSession. Sharing
 	// VsockDir with bridger is enforced by New().
 	attachRegistry *sandboxgateway.AttachRegistry
+	// netEnabled toggles the sandboxnet listener wiring on every
+	// dispatched VM (Slice D6c.2 step 3). When true, resolveBootConfig
+	// allocates a Vsock device if one isn't already there and sets
+	// cfg.Vsock.NetPort so the agent dials the host-side sandboxnet
+	// stack on boot.
+	netEnabled bool
 	// nextCID hands out fresh AF_VSOCK Context IDs for each dispatch.
 	// Initialised to 2 so the first .Add(1) returns 3 — the lowest
 	// CID the ABI allows for a guest (0/1/2 are reserved).
@@ -129,6 +135,13 @@ type Config struct {
 	// non-nil; ignored otherwise. Typically `/var/run/daft-sandboxd`
 	// in production.
 	VsockDir string
+	// NetEnabled, when true, wires a sandboxnet-backed AF_VSOCK
+	// listener into every dispatched VM so the in-VM agent's tap
+	// bridge has somewhere to dial. Implies a per-Sandbox Vsock
+	// device (allocated like the attach/bridger paths). Production
+	// `daft-sandboxd serve` enables it; unit tests leave it off so
+	// they don't have to wire a real sandboxnet stack.
+	NetEnabled bool
 }
 
 // New builds an Executor. Stdout is required; Runner defaults to
@@ -146,9 +159,9 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.Runner == nil {
 		cfg.Runner = sandbox.Serve
 	}
-	if cfg.Bridger != nil || cfg.AttachRegistry != nil {
+	if cfg.Bridger != nil || cfg.AttachRegistry != nil || cfg.NetEnabled {
 		if cfg.VsockDir == "" {
-			return nil, errors.New("sandboxexec: VsockDir required when Bridger or AttachRegistry is set")
+			return nil, errors.New("sandboxexec: VsockDir required when Bridger, AttachRegistry, or NetEnabled is set")
 		}
 		if !filepath.IsAbs(cfg.VsockDir) {
 			return nil, fmt.Errorf("sandboxexec: VsockDir %q must be absolute", cfg.VsockDir)
@@ -162,6 +175,7 @@ func New(cfg Config) (*Executor, error) {
 		bridger:        cfg.Bridger,
 		attachRegistry: cfg.AttachRegistry,
 		vsockDir:       cfg.VsockDir,
+		netEnabled:     cfg.NetEnabled,
 		live:           map[string]*liveSandbox{},
 	}
 	// First .Add(1) returns 3 — the lowest CID the AF_VSOCK ABI
@@ -395,11 +409,15 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 	cfg.PortForwards = portForwardsFromSpec(spec.GetPorts())
 	wantVsockForPorts := e.bridger != nil && len(cfg.PortForwards) > 0
 	wantVsockForAttach := e.attachRegistry != nil
-	if wantVsockForPorts || wantVsockForAttach {
+	wantVsockForNet := e.netEnabled
+	if wantVsockForPorts || wantVsockForAttach || wantVsockForNet {
 		cfg.Vsock = e.assignVsock(uid)
 	}
 	if wantVsockForAttach {
 		cfg.Vsock.AttachPort = agent.DefaultAttachVsockPort
+	}
+	if wantVsockForNet {
+		cfg.Vsock.NetPort = agent.DefaultNetVsockPort
 	}
 	return cfg, unlock, nil
 }

@@ -125,7 +125,12 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	// the agent's lifetime.
 	startPortForwardersFromCmdline(ctx, w, d, cmdline)
 	startAttachListenerFromCmdline(ctx, w, d, cmdline)
-	startNetBridgeFromCmdline(ctx, w, d, cmdline)
+	if startNetBridgeFromCmdline(ctx, w, d, cmdline) != nil && bundle != "" {
+		// The container shares the VM's init netns, so it inherits
+		// tap0 + the default route. resolv.conf is the only missing
+		// piece for DNS to resolve through the sandboxnet gateway.
+		WriteContainerResolvConf(w, bundle)
+	}
 	runContainerFromCmdline(ctx, w, d, cmdline)
 	bootSpan.End()
 

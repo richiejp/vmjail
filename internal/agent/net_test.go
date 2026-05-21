@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -307,6 +309,148 @@ func TestStartNetBridgeFromCmdlineTapConfigureError(t *testing.T) {
 	}
 	if !strings.Contains(w.String(), "netlink: addr in use") {
 		t.Fatalf("output %q missing configure-error report", w.String())
+	}
+}
+
+func TestWriteContainerResolvConfCreatesFile(t *testing.T) {
+	bundle := t.TempDir()
+	var w bytes.Buffer
+	WriteContainerResolvConf(&w, bundle)
+
+	path := filepath.Join(bundle, "rootfs", "etc", "resolv.conf")
+	got, err := os.ReadFile(path) //nolint:gosec // test reads back a path the test itself just wrote
+	if err != nil {
+		t.Fatalf("read resolv.conf: %v", err)
+	}
+	wantContent := "nameserver " + DefaultGuestGw + "\n"
+	if string(got) != wantContent {
+		t.Fatalf("resolv.conf = %q, want %q", got, wantContent)
+	}
+	if !strings.Contains(w.String(), "resolv.conf nameserver="+DefaultGuestGw) {
+		t.Fatalf("missing success report: %q", w.String())
+	}
+}
+
+func TestWriteContainerResolvConfIsIdempotent(t *testing.T) {
+	bundle := t.TempDir()
+	var w bytes.Buffer
+	WriteContainerResolvConf(&w, bundle)
+	WriteContainerResolvConf(&w, bundle)
+
+	path := filepath.Join(bundle, "rootfs", "etc", "resolv.conf")
+	got, err := os.ReadFile(path) //nolint:gosec // test reads back a path the test itself just wrote
+	if err != nil {
+		t.Fatalf("read resolv.conf: %v", err)
+	}
+	if string(got) != "nameserver "+DefaultGuestGw+"\n" {
+		t.Fatalf("resolv.conf got corrupted across writes: %q", got)
+	}
+}
+
+func TestWriteContainerResolvConfOverwritesExisting(t *testing.T) {
+	// nix-built images may not ship /etc/resolv.conf at all; some
+	// others bake in a public resolver. We overwrite because the
+	// sandboxnet gateway is the only route the container actually
+	// has, so a baked-in 8.8.8.8 would just time out.
+	bundle := t.TempDir()
+	etc := filepath.Join(bundle, "rootfs", "etc")
+	if err := os.MkdirAll(etc, 0o755); err != nil { //nolint:gosec // test fixture rootfs needs the same mode prod uses
+		t.Fatalf("mkdir etc: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(etc, "resolv.conf"), []byte("nameserver 8.8.8.8\n"), 0o644); err != nil {
+		t.Fatalf("seed resolv.conf: %v", err)
+	}
+
+	var w bytes.Buffer
+	WriteContainerResolvConf(&w, bundle)
+
+	got, err := os.ReadFile(filepath.Join(etc, "resolv.conf")) //nolint:gosec // test reads back a path the test itself just wrote
+	if err != nil {
+		t.Fatalf("read resolv.conf: %v", err)
+	}
+	if !strings.Contains(string(got), DefaultGuestGw) || strings.Contains(string(got), "8.8.8.8") {
+		t.Fatalf("resolv.conf = %q, want nameserver=%s", got, DefaultGuestGw)
+	}
+}
+
+// TestRunWithWritesResolvConfWhenNetAndBundleAreSet pins the
+// agent-side composition: when daft.net_port wires a net bridge
+// AND daft.bundle points at an OCI bundle, runWith drops a
+// resolv.conf into the bundle's rootfs/etc before launching the
+// container. The container shares the VM's netns, so this file is
+// the only DNS plumbing it sees.
+func TestRunWithWritesResolvConfWhenNetAndBundleAreSet(t *testing.T) {
+	bundle := t.TempDir()
+	_, guestSide := net.Pipe()
+	t.Cleanup(func() { _ = guestSide.Close() })
+
+	cmdline := FormatNetPortCmdline(DefaultNetVsockPort) + " " + FormatBundleCmdline(bundle)
+
+	deps := runDeps{
+		readCmdline: func() (string, error) { return cmdline, nil },
+		share:       noopShareDeps(),
+		dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
+			return guestSide, nil
+		},
+		container: ContainerDeps{
+			Exec: func(_ context.Context, _ io.Writer, _ string) error { return nil },
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	var buf bytes.Buffer
+	_ = runWith(ctx, &buf, deps)
+
+	got, err := os.ReadFile(filepath.Join(bundle, "rootfs", "etc", "resolv.conf")) //nolint:gosec // test reads back a path the test itself just wrote
+	if err != nil {
+		t.Fatalf("expected resolv.conf at <bundle>/rootfs/etc; got %v\nagent output:\n%s", err, buf.String())
+	}
+	if !strings.Contains(string(got), DefaultGuestGw) {
+		t.Fatalf("resolv.conf = %q, want nameserver %s", got, DefaultGuestGw)
+	}
+}
+
+// TestRunWithSkipsResolvConfWithoutBundle pins the negative branch:
+// when no bundle is configured (cmdline lacks daft.bundle) we don't
+// fabricate a rootfs to write into.
+func TestRunWithSkipsResolvConfWithoutBundle(t *testing.T) {
+	_, guestSide := net.Pipe()
+	t.Cleanup(func() { _ = guestSide.Close() })
+
+	cmdline := FormatNetPortCmdline(DefaultNetVsockPort)
+	deps := runDeps{
+		readCmdline: func() (string, error) { return cmdline, nil },
+		share:       noopShareDeps(),
+		dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
+			return guestSide, nil
+		},
+		container: ContainerDeps{
+			Exec: func(_ context.Context, _ io.Writer, _ string) error { return nil },
+		},
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	var buf bytes.Buffer
+	_ = runWith(ctx, &buf, deps)
+
+	// No bundle = no rootfs/etc directory should have been created.
+	if strings.Contains(buf.String(), "resolv.conf") {
+		t.Fatalf("unexpected resolv.conf report when no bundle is set: %q", buf.String())
+	}
+}
+
+func TestWriteContainerResolvConfReportsMkdirFailure(t *testing.T) {
+	// Point the "bundle" at an existing non-dir so MkdirAll fails
+	// with ENOTDIR. Catches the error-report branch without root.
+	f := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(f, []byte{}, 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	var w bytes.Buffer
+	WriteContainerResolvConf(&w, f)
+	if !strings.Contains(w.String(), "resolv.conf mkdir") {
+		t.Fatalf("missing mkdir-error report: %q", w.String())
 	}
 }
 

@@ -182,6 +182,7 @@ var buildDispatcher = func(
 		Bridger:        bridger,
 		AttachRegistry: attachRegistry,
 		VsockDir:       vsockDir,
+		NetEnabled:     true,
 	})
 }
 

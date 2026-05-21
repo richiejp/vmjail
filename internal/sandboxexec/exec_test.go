@@ -735,6 +735,56 @@ func TestHandleSandboxEventAssignsAttachPortAndVsock(t *testing.T) {
 	}
 }
 
+// TestHandleSandboxEventAssignsNetPortWhenNetEnabled pins the
+// sandboxnet allocation: when NetEnabled is set, every dispatch
+// gets a Vsock device with NetPort = agent.DefaultNetVsockPort —
+// even when no other Vsock-bearing branch (attach / port forwards)
+// would have allocated one.
+func TestHandleSandboxEventAssignsNetPortWhenNetEnabled(t *testing.T) {
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	e, err := New(Config{
+		Stdout:     io.Discard,
+		Runner:     runner,
+		NetEnabled: true,
+		VsockDir:   testVsockDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: "ws-net"}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-net", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if seen.Vsock == nil {
+		t.Fatal("Vsock not set")
+	}
+	if seen.Vsock.NetPort != agent.DefaultNetVsockPort {
+		t.Errorf("NetPort = %d, want %d", seen.Vsock.NetPort, agent.DefaultNetVsockPort)
+	}
+}
+
+// TestNetEnabledRequiresVsockDir pins the validation rule mirroring
+// Bridger / AttachRegistry: net listeners need a place to mint the
+// per-Sandbox UDS path, so a missing VsockDir is a constructor
+// error.
+func TestNetEnabledRequiresVsockDir(t *testing.T) {
+	_, err := New(Config{
+		Stdout:     io.Discard,
+		Runner:     func(context.Context, io.Writer, sandbox.Config) error { return nil },
+		NetEnabled: true,
+	})
+	if err == nil {
+		t.Fatal("expected error when NetEnabled is set without VsockDir")
+	}
+	if !strings.Contains(err.Error(), "VsockDir") {
+		t.Fatalf("err = %v, want substring VsockDir", err)
+	}
+}
+
 // TestHandleSandboxEventRegistersAndUnregistersAttachRoute pins
 // the attach-route lifecycle: during the dispatch the route is
 // reachable via the registry; after dispatch returns it's gone
