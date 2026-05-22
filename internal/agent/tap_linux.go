@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"syscall"
 	"unsafe"
 
 	"github.com/vishvananda/netlink"
@@ -56,8 +57,29 @@ func defaultTapLinuxDeps() tapLinuxDeps {
 	}
 }
 
+// openDevNetTun opens /dev/net/tun in a way that keeps Go's
+// runtime netpoller out of the picture.
+//
+// `os.OpenFile("/dev/net/tun", os.O_RDWR, 0)` returns an *os.File
+// whose backing fd is registered with the netpoller (pollable=true).
+// /dev/net/tun's poll method doesn't fit Go's epoll-driven expectations,
+// so reads later return "read /dev/net/tun: not pollable" — sometimes
+// on the very first Read, sometimes after one or more successful
+// frames, which presents as a flaky tap that silently disappears.
+// Calling Fd() after OpenFile transitions the fd to blocking mode but
+// does not unregister it from the poller.
+//
+// Going via syscall.Open + os.NewFile takes a different code path:
+// because the fd is blocking when handed to NewFile, the runtime
+// initialises the *os.File with pollable=false and never touches the
+// netpoller for it. Reads/Writes then go straight to syscall.Read/
+// syscall.Write, which is exactly what a tap fd needs.
 func openDevNetTun() (*os.File, error) {
-	return os.OpenFile("/dev/net/tun", os.O_RDWR, 0)
+	fd, err := syscall.Open("/dev/net/tun", syscall.O_RDWR|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), "/dev/net/tun"), nil
 }
 
 // realTunSetIff is the only line of unsafe.Pointer in this package

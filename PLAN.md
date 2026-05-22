@@ -1050,25 +1050,56 @@ the user-host or in CI today.
            the container saw ENETUNREACH on every connect. The
            kernel-side tap-up path that 2b left untested is now
            covered end to end. Slice-2b also shipped with a
-           latent GC-finalizer race: the agent's
-           `startNetBridgeFromCmdline` tap-up branch returned the
-           `*NetBridge` but nothing held a reference past the
-           call, so the runtime's `*os.File` finalizer would
-           sometimes close the tap fd and the kernel would
-           destroy `daft0`, leaving the container's
-           `/proc/net/route` empty and every connect() returning
-           ENETUNREACH. Fixed by holding the bridge in a
-           ctx-bound goroutine on the tap-up path too (the
-           conn-only slice-2a path already did this). The
-           integration test went 5/5 from ~50/50 after the fix.
+           latent flake that didn't surface until this slice's
+           e2e test exercised the pumps under real traffic: Go's
+           runtime registers fds opened via `os.OpenFile` with
+           its epoll-based netpoller, and `/dev/net/tun`'s poll
+           method is incompatible — reads sometimes return
+           `read /dev/net/tun: not pollable` and the tap pump
+           aborts. The pump's deferred `stop()` then closes both
+           the tap fd and the vsock conn; the kernel destroys
+           `daft0`, the container's `/proc/net/route` empties,
+           and every connect returns ENETUNREACH. The earlier
+           "GC-finalizer race" hypothesis was a misdiagnosis;
+           the real fix is to open `/dev/net/tun` via
+           `syscall.Open` + `os.NewFile` so the fd lands on
+           Go's non-pollable file path and reads go straight to
+           `syscall.Read`. The bridge-pinning goroutine added in
+           the misdiagnosis still earns its keep — it makes
+           teardown explicit and idempotent — but the netpoller
+           fix is what makes the integration test stable
+           (8/8 in isolation, full e2e sweep green).
       Connectivity allowlists (C4 in Phase C) layer on top later.
-    - D6c.3: full vision. nixos/nix:latest pulled at
-      integration setup (`make` target with a local cache so
-      cold-run cost stays bounded). /workspace mounts a real
-      flake that uses a typical dev-shell dependency
-      (e.g. Bun or Vite). Exec `nix develop -c bun dev`;
-      port-forward + HTTP-GET as before. This is the
-      reference dev loop a real user would experience.
+    - D6c.3: full vision. Sliced:
+        1. **landed**. `testdaemons.FetchNixOfficialImage`
+           caches `docker.io/nixos/nix@sha256:bf1d…` under
+           `os.UserCacheDir()/daft-test-images/`; first run
+           pulls (~100 MB), subsequent runs reuse. The cache
+           survives `make clean` (it doesn't live under bin/).
+           Smoke test `TestClusterWorkspaceAgainstNixOfficial`
+           loads the cached tarball, mutates the image config
+           to swap the upstream `nix` entrypoint for
+           `/bin/sh -c "echo D6C3-READY; exec sleep infinity"`
+           (image layers untouched, so it's still upstream's
+           nix binary), pushes via the existing in-process
+           registry, launches a workspace, and asserts
+           `daft workspace exec … -- /bin/sh -lc 'nix --version'`
+           prints `nix (Nix) …` in the pane. `sh -lc` is
+           needed because crun-exec doesn't inherit the
+           entrypoint's process.env (same gap D6c.1 hit) so
+           PATH only resolves nix after sourcing
+           `/etc/profile.d/nix.sh`. 3/3 stable in ~4 s.
+        2. real dev-shell workload — `nix develop -c bun dev`
+           against a flake fixture that pins nixpkgs + pulls
+           bun. Will exercise the D6c.2 egress path: the first
+           `nix develop` fetches bun's closure from
+           cache.nixos.org through sandboxnet's NAT.
+           Port-forward + HTTP-GET asserts a known body
+           served by `bun dev`.
+        3. (deferred) host-mounted persistent `/nix/store` if
+           the slice-2 cold-start latency turns out to be a
+           pre-commit-hook blocker. Default plan: skip — bun's
+           closure is small enough to refetch per VM.
 - D5: **Multi-container per VM** (was the old D2). daft-agent
   vsock control stream: agent accepts `RunContainer(spec)` /
   `StopContainer(id)`, runs N crun children, isolates each by
