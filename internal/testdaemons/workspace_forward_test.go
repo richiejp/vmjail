@@ -3,6 +3,7 @@
 package testdaemons_test
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -150,10 +152,17 @@ func startDaftSubprocess(t *testing.T, logPath string, daftBin string, args ...s
 	if err != nil {
 		t.Fatalf("create log %s: %v", logPath, err)
 	}
-	//nolint:gosec // G204: args are caller-controlled test-only paths.
-	cmd := exec.Command(daftBin, args...)
-	cmd.Stdout = out
-	cmd.Stderr = out
+	// Tee the subprocess's combined output into the test's own log
+	// stream too, so a test that fails via the framework's timeout
+	// panic (which preempts t.Cleanup) still surfaces the
+	// subprocess's stderr in the test report. Cheap diagnostic-
+	// fabric piece: any wait-for-sentinel failure now shows the
+	// actual output that didn't contain the sentinel.
+	tag := filepath.Base(logPath)
+	teed := &testLogTee{t: t, w: out, prefix: tag + ": "}
+	cmd := exec.Command(daftBin, args...) //nolint:gosec // G204: args are caller-controlled test-only paths.
+	cmd.Stdout = teed
+	cmd.Stderr = teed
 	// /dev/null stdin so daft's stdin pump EOFs immediately —
 	// same as a non-interactive shell-backgrounded invocation,
 	// but explicit so the behaviour is predictable.
@@ -172,6 +181,7 @@ func startDaftSubprocess(t *testing.T, logPath string, daftBin string, args ...s
 	}
 	t.Cleanup(func() {
 		_ = devNull.Close()
+		teed.disable()
 		_ = out.Close()
 		if cmd.Process == nil {
 			return
@@ -180,6 +190,55 @@ func startDaftSubprocess(t *testing.T, logPath string, daftBin string, args ...s
 		_ = cmd.Wait()
 	})
 	return cmd
+}
+
+// testLogTee fans subprocess output into both an on-disk log
+// file and the parent test's t.Log stream. Writes are line-
+// buffered: t.Log already adds its own newlines and tags each
+// entry with file:line, so buffering on '\n' produces one
+// t.Log call per line of subprocess output and keeps the test
+// report readable.
+//
+// disable() stops the t.Log half so post-test writes (e.g.
+// from the subprocess after its last sentinel landed) don't
+// race with the test exiting; the file half keeps absorbing
+// until the file is closed.
+type testLogTee struct {
+	t       *testing.T
+	w       io.Writer
+	prefix  string
+	mu      sync.Mutex
+	buf     []byte
+	stopped bool
+}
+
+func (tl *testLogTee) Write(p []byte) (int, error) {
+	n, werr := tl.w.Write(p)
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	if tl.stopped {
+		return n, werr
+	}
+	tl.buf = append(tl.buf, p...)
+	for {
+		i := bytes.IndexByte(tl.buf, '\n')
+		if i < 0 {
+			break
+		}
+		tl.t.Logf("%s%s", tl.prefix, tl.buf[:i])
+		tl.buf = tl.buf[i+1:]
+	}
+	return n, werr
+}
+
+func (tl *testLogTee) disable() {
+	tl.mu.Lock()
+	defer tl.mu.Unlock()
+	if len(tl.buf) > 0 {
+		tl.t.Logf("%s%s", tl.prefix, tl.buf)
+		tl.buf = nil
+	}
+	tl.stopped = true
 }
 
 // freeLocalPort picks a free loopback port for `daft workspace
