@@ -548,6 +548,16 @@
               # Fold the fragment options into a coherent .config (sets
               # defaults for any new dependencies, drops obsolete keys).
               make olddefconfig
+              # `make olddefconfig` has been observed to silently drop
+              # CONFIG_TUN between otherwise-identical builds (same
+              # source, same fragment, different output) — likely a
+              # symptom of a dependency that defaults to n. Re-assert
+              # it explicitly and refold; without TUN the in-VM agent
+              # can't open /dev/net/tun and every egress test fails
+              # with ENETUNREACH.
+              ./scripts/config --enable TUN
+              make olddefconfig
+              grep -q '^CONFIG_TUN=y$' .config || (echo "kernel: CONFIG_TUN missing after olddefconfig" >&2; exit 1)
               runHook postConfigure
             '';
 
