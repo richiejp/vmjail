@@ -75,9 +75,13 @@ type BundleMount struct {
 	Options     []string `json:"options,omitempty"`
 }
 
-// Bundle materialises a runnable bundle for digest. Idempotent: if
-// the bundle directory exists with config.json and rootfs/, it is
-// reused. The image must already be in the layer cache (Pull first).
+// Bundle materialises a runnable bundle for digest. The unpacked
+// rootfs is cached per digest (expensive to recreate — flattening
+// a multi-layer image with whiteout overlays), but config.json is
+// regenerated from scratch every call so that runtime-spec changes
+// (e.g. updated uid/gid mappings) take effect without needing the
+// cache to be invalidated by hand. The image must already be in
+// the layer cache (Pull first).
 func (s *Store) Bundle(ctx context.Context, digest string, opts BundleOptions) (*Bundle, error) {
 	ctx, span := trace.Start(ctx, "imagestore.Bundle",
 		trace.WithAttributes(trace.KV{Key: "digest", Value: digest}))
@@ -90,28 +94,25 @@ func (s *Store) Bundle(ctx context.Context, digest string, opts BundleOptions) (
 	rootfs := filepath.Join(bundlePath, "rootfs")
 	configPath := filepath.Join(bundlePath, "config.json")
 
-	if isAssembled(configPath, rootfs) {
-		s.touchEntry(digest)
-		span.AddEvent("cached")
-		return &Bundle{Digest: digest, Path: bundlePath}, nil
-	}
-
 	img, err := s.loadLayoutImage(digest)
 	if err != nil {
 		return nil, trace.RecordError(ctx, err)
 	}
 
-	// #nosec G301 — 0755 is intentional. The bundle dir is read by
-	// virtiofsd (running as the daft-sandboxd user) and the VM's
-	// kernel mount, which may use a different uid inside the
-	// guest. World-execute lets crun's uid traverse this path
-	// regardless of which user owns it.
-	if err := os.MkdirAll(rootfs, 0o755); err != nil {
-		return nil, trace.RecordError(ctx, fmt.Errorf("imagestore: mkdir rootfs: %w", err))
-	}
-
-	if err := unpackRootfs(img, rootfs); err != nil {
-		return nil, trace.RecordError(ctx, err)
+	if rootfsCached(rootfs) {
+		span.AddEvent("rootfs-cached")
+	} else {
+		// #nosec G301 — 0755 is intentional. The bundle dir is read by
+		// virtiofsd (running as the daft-sandboxd user) and the VM's
+		// kernel mount, which may use a different uid inside the
+		// guest. World-execute lets crun's uid traverse this path
+		// regardless of which user owns it.
+		if err := os.MkdirAll(rootfs, 0o755); err != nil {
+			return nil, trace.RecordError(ctx, fmt.Errorf("imagestore: mkdir rootfs: %w", err))
+		}
+		if err := unpackRootfs(img, rootfs); err != nil {
+			return nil, trace.RecordError(ctx, err)
+		}
 	}
 
 	cfg, err := buildRuntimeConfig(img, opts)
@@ -169,14 +170,11 @@ func (s *Store) touchEntry(digest string) {
 	}
 }
 
-// isAssembled reports whether a bundle dir already has the two parts
-// crun needs (config.json + rootfs/). Existence is the only check —
-// we never partial-write, since failure during unpack leaves only one
-// of the two.
-func isAssembled(configPath, rootfs string) bool {
-	if _, err := os.Stat(configPath); err != nil {
-		return false
-	}
+// rootfsCached reports whether the rootfs/ subdir is already
+// populated. Existence-as-directory is the only check; unpack
+// either completes the whole tree or doesn't create the dir at
+// all, so a partial unpack isn't a reachable state.
+func rootfsCached(rootfs string) bool {
 	fi, err := os.Stat(rootfs)
 	return err == nil && fi.IsDir()
 }
