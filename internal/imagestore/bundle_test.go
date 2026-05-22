@@ -314,49 +314,30 @@ func TestBuildRuntimeConfigRejectsNameFormUser(t *testing.T) {
 	}
 }
 
-// TestBuildRuntimeConfigUserNamespace pins the D6c.1b mapping:
-// when HostUID/HostGID is non-zero the runtime spec gains a
-// `user` namespace plus one-entry uid/gid maps. Without it,
-// virtiofs-served files would be inaccessible to nix-in-container
-// (see BundleOptions.HostUID for the chain of constraints).
-func TestBuildRuntimeConfigUserNamespace(t *testing.T) {
-	host := localRegistry(t)
-	ref := host + "/test/userns:v1"
-	layer := helloLayer(t, "x\n")
-	img, _ := mutate.AppendLayers(empty.Image, layer)
-	img, _ = mutate.Config(img, v1.Config{Entrypoint: []string{testEntrypoint}})
-	r, _ := name.ParseReference(ref)
-	if err := crane.Push(img, r.String()); err != nil {
-		t.Fatalf("push: %v", err)
+// TestWriteJSONErrors pins both surfaces of writeJSON failing:
+//   - an unmarshalable payload (here, a func) trips MarshalIndent
+//     before any disk write.
+//   - a missing parent directory trips os.WriteFile.
+//
+// Catches accidental silent drops on either failure mode.
+func TestWriteJSONErrors(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does", "not", "exist", "out.json")
+	if err := writeJSON(missing, struct{ A int }{A: 1}); err == nil {
+		t.Errorf("writeJSON to %s: err = nil, want failure", missing)
 	}
-	store, _ := New(t.TempDir(), 1<<30)
-	pulled, _ := store.Pull(context.Background(), ref)
-	bundle, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{
-		HostUID: 1000,
-		HostGID: 100,
-	})
-	if err != nil {
-		t.Fatalf("Bundle: %v", err)
-	}
-	cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
-	got := string(cfg)
-	for _, want := range []string{
-		`"type": "user"`,
-		`"hostID": 1000`,
-		`"hostID": 100`,
-		`"containerID": 0`,
-		`"size": 1`,
-	} {
-		if !strings.Contains(got, want) {
-			t.Errorf("config.json missing %q:\n%s", want, got)
-		}
+
+	good := filepath.Join(t.TempDir(), "out.json")
+	if err := writeJSON(good, func() {}); err == nil {
+		t.Errorf("writeJSON with unmarshalable payload: err = nil, want failure")
 	}
 }
 
-// TestBuildRuntimeConfigNoUserNamespaceByDefault pins the inverse:
-// HostUID=0 + HostGID=0 leaves the spec free of the userns +
-// mapping clutter so the existing v0 attach path stays unchanged.
-func TestBuildRuntimeConfigNoUserNamespaceByDefault(t *testing.T) {
+// TestBuildRuntimeConfigOmitsUserNamespace pins the D7 design:
+// the bundle no longer emits an OCI `user` namespace or uid/gid
+// maps. Container processes inherit the calling sandboxd's user
+// namespace (set up by the daft-sandboxd re-exec scaffold), so
+// the runtime spec stays free of mapping clutter.
+func TestBuildRuntimeConfigOmitsUserNamespace(t *testing.T) {
 	host := localRegistry(t)
 	ref := host + "/test/no-userns:v1"
 	layer := helloLayer(t, "x\n")
@@ -373,11 +354,15 @@ func TestBuildRuntimeConfigNoUserNamespaceByDefault(t *testing.T) {
 		t.Fatalf("Bundle: %v", err)
 	}
 	cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
-	if strings.Contains(string(cfg), `"type": "user"`) {
-		t.Errorf("config.json has user namespace when HostUID=0:\n%s", cfg)
-	}
-	if strings.Contains(string(cfg), `uidMappings`) {
-		t.Errorf("config.json has uidMappings when HostUID=0:\n%s", cfg)
+	got := string(cfg)
+	for _, banned := range []string{
+		`"type": "user"`,
+		`uidMappings`,
+		`gidMappings`,
+	} {
+		if strings.Contains(got, banned) {
+			t.Errorf("config.json contains %q:\n%s", banned, got)
+		}
 	}
 }
 

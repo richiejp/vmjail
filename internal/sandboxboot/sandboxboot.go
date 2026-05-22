@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/localai-org/darkaifactory/internal/bundled"
@@ -59,18 +58,6 @@ type Mount struct {
 // honours alongside the image ref.
 type BootOptions struct {
 	Mounts []Mount
-	// HostUID / HostGID forward to imagestore.BundleOptions; see
-	// that type for the user-namespace rationale.
-	HostUID int
-	HostGID int
-}
-
-// HostProcessIDs returns the sandboxd process's effective uid/gid
-// — the values to plumb into BootOptions / BundleOptions so the
-// container's uid 0 maps to virtiofsd's host uid. Single seam so
-// callers don't each reinvent the os.Geteuid/Getegid pair.
-func HostProcessIDs() (uid, gid int) {
-	return os.Geteuid(), os.Getegid()
 }
 
 // Store is the imagestore surface BuildBundleConfig needs. Kept as
@@ -139,8 +126,6 @@ func BuildBundleConfig(
 	}
 	bundle, err := store.Bundle(ctx, img.Digest, imagestore.BundleOptions{
 		ExtraMounts: bundleMountsFromSpec(opts.Mounts),
-		HostUID:     opts.HostUID,
-		HostGID:     opts.HostGID,
 	})
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: bundle %s: %w", img.Digest, err)

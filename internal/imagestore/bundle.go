@@ -54,15 +54,6 @@ type BundleOptions struct {
 	// container rootfs (or for ensuring crun's mount call creates
 	// it via `nodev,nosuid,…` options when using bind mounts).
 	ExtraMounts []BundleMount
-	// HostUID / HostGID are the IDs container uid 0 / gid 0
-	// map to via a one-entry user namespace. Required when the
-	// bundle's files are served by an unprivileged virtiofsd —
-	// the daemon performs every syscall as its own host uid, so
-	// the container's uid must match the file owner for DAC
-	// checks to pass. Zero / zero (the default) leaves the
-	// user namespace and mappings off.
-	HostUID int
-	HostGID int
 }
 
 // BundleMount mirrors the subset of the OCI runtime-spec mount type

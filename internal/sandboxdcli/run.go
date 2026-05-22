@@ -25,7 +25,6 @@ import (
 	"github.com/localai-org/darkaifactory/internal/imagestore"
 	"github.com/localai-org/darkaifactory/internal/oops"
 	"github.com/localai-org/darkaifactory/internal/sandbox"
-	"github.com/localai-org/darkaifactory/internal/sandboxboot"
 	"github.com/localai-org/darkaifactory/internal/trace"
 	"github.com/localai-org/darkaifactory/internal/workspace"
 )
@@ -574,11 +573,7 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 	if err != nil {
 		return sandbox.Config{}, nil, fmt.Errorf("daft-sandboxd: pull %s: %w", opts.ref, err)
 	}
-	uid, gid := sandboxboot.HostProcessIDs()
-	bundleOpts := imagestore.BundleOptions{
-		HostUID: uid,
-		HostGID: gid,
-	}
+	bundleOpts := imagestore.BundleOptions{}
 	if len(opts.cmdArgs) > 0 {
 		bundleOpts.Args = opts.cmdArgs
 	}

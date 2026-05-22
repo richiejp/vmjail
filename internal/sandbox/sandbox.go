@@ -402,23 +402,14 @@ func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig) (
 
 	socket = filepath.Join(dir, "vhost.sock")
 
-	// --sandbox=none keeps virtiofsd from trying to chroot/setuid; we
-	// run it as the same user that owns the share dir, so the
-	// production hardening (PLAN.md "rootless agent") is layered on
-	// at the orchestration boundary, not inside virtiofsd.
-	//
-	// Note on chown limits: virtiofsd's `--uid-map` / `--gid-map`
-	// accept ONLY ONE range each (UidMap is a single struct, not a
-	// slice) — multi-line userns mappings aren't expressible here.
-	// That means an upstream image's chown to a non-root id outside
-	// the calling process's own uid (e.g. nixos/nix's nixbld gid
-	// 30000) will get EPERM at the virtiofs layer no matter how the
-	// OCI runtime spec maps it. Callers that need to run such an
-	// image rootlessly either need to disable the offending feature
-	// in-container (e.g. `nix --option build-users-group ""`) or
-	// pre-chown the bundle rootfs into a contiguous host id range
-	// and use a single-range map at virtiofs — both are out-of-
-	// scope here; see PLAN.md D6c.3 for the discovery write-up.
+	// --sandbox=none keeps virtiofsd from trying to chroot/setuid;
+	// we run it inside daft-sandboxd's user namespace (set up by
+	// the userns re-exec scaffold at startup), where it has the
+	// CAP_CHOWN it needs to satisfy container-side chowns into the
+	// subordinate id range. No `--uid-map` / `--gid-map` is needed:
+	// the kernel translates uids/gids through sandboxd's userns,
+	// and virtiofsd's identity passthrough lands the translated
+	// host ids on the underlying fs.
 	//
 	// #nosec G204 — `binary` is cfg.Virtiofsd, an absolute path
 	// passed by the host operator who's already trusted to spawn
