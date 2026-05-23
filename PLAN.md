@@ -1194,6 +1194,26 @@ the user-host or in CI today.
               models (netem adds delay but not loss).
 
            Next experiment(s) to actually localize:
+            - `cmd/daft-mitm-proxy` (landed): a debug HTTPS-MITM
+              forward proxy that runs on the host, generates a
+              CA at startup (PEM to `--ca-cert-out`), MITMs
+              CONNECT traffic, logs every request as
+              `<ts> <method> <url> -> <status> bytes=<n>
+              elapsed=<d>`, and makes the real WAN connection
+              from the host. Point the in-VM nix at it via
+              `https_proxy=http://192.168.127.254:PORT` +
+              `NIX_SSL_CERT_FILE=<ca.pem>` (CA mounted into the
+              VM through the workspace mount). This answers
+              the open question directly: the per-request log
+              shows whether the 50 KB/s is one big stream or
+              N small fetches, the byte counts, and the
+              per-request elapsed times. It *also* moves the
+              WAN leg to the host's full-bandwidth network —
+              if nix-through-proxy is fast, that both localizes
+              the cause AND validates the slice-3 approach
+              (outsource fetches to the host). Smoke-verified
+              against example.com: one request logged with
+              status + bytes + elapsed.
             - Add a `loss=N%` variant to netem to test
               loss-recovery behaviour at WAN RTT.
             - tcpdump from inside the VM during a real
