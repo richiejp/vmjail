@@ -1127,23 +1127,35 @@ the user-host or in CI today.
              either; it floors ~500× above the bun-test
              observation.
 
-           - `TestClusterWorkspaceLoopbackThroughput` (integration,
-             gated on `DAFT_RUN_THROUGHPUT_EXPERIMENT=1`) runs
-             the full real-VM path the synthetic bench couldn't
-             cover: Linux-kernel-TCP in the VM → CH virtio-net →
-             vsock to sandboxd → pump → gvisor netstack → real
-             `127.0.0.1` listener serving 32 MiB. Result:
-             **138 MiB/s** — 4× faster than the gvisor↔gvisor
-             synthetic peer (Linux kernel TCP on the client side
-             beats gvisor's). **2800× faster than the bun-test
-             50 KB/s floor.**
+           - `TestClusterWorkspaceLoopbackThroughput` and its
+             sibling `TestClusterWorkspaceLANThroughput`
+             (integration, both gated on
+             `DAFT_RUN_THROUGHPUT_EXPERIMENT=1`) run the full
+             real-VM path the synthetic bench couldn't cover:
+             Linux-kernel-TCP in the VM → CH virtio-net → vsock
+             to sandboxd → pump → gvisor netstack → real host
+             listener serving 32 MiB. The two variants differ
+             only in the host-side listener address: loopback
+             binds 127.0.0.1 (kernel TCP fast-path), LAN binds
+             the host's external IPv4 (`enp*`/`eth*`/`wlp*`,
+             scanned at runtime, overridable via
+             `DAFT_THROUGHPUT_LAN_IP`). The gvisor TCP
+             forwarder's `net.Dial` in the LAN variant targets
+             a non-`127.0.0.0/8` IP, which the host kernel
+             routes locally but via the full IP/TCP TX path
+             rather than the loopback fast-path. Results:
+             **142 MiB/s loopback, 144 MiB/s LAN** — within
+             1% of each other, both ~4× the gvisor↔gvisor
+             synthetic peer and ~2800× the bun-test floor.
 
            Conclusion: the bun-test slowness is **not** in any
            layer this codebase owns. The in-VM stack delivers
-           ~1.1 Gbit/s against a host listener. The 50 KB/s
-           observation is real-network bandwidth-delay-product
-           (cache.nixos.org RTT × whatever TCP window the
-           gvisor netstack negotiates with a *remote* peer).
+           ~1.1 Gbit/s against any local host destination, and
+           the loopback fast-path was not masking a real cost.
+           The 50 KB/s observation is real-network bandwidth-
+           delay-product (cache.nixos.org RTT × whatever TCP
+           window the gvisor netstack negotiates with a
+           *remote* peer).
            A tcpdump from inside the VM would show small CWND
            and slow ramp-up; that's a tuning question, not a
            bug. Pragmatically the fix is **slice 3 below**
