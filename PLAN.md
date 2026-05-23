@@ -1100,6 +1100,143 @@ the user-host or in CI today.
            the slice-2 cold-start latency turns out to be a
            pre-commit-hook blocker. Default plan: skip — bun's
            closure is small enough to refetch per VM.
+
+- D7: **Rootless storage translation** — bridge the
+  CAP_CHOWN gap between the sandbox-host process and the
+  container's view of the bundle / workspace.
+
+  Background. Slice 1 (landed, 9b1202e) wraps daft-sandboxd in
+  its own user namespace via `newuidmap`/`newgidmap` at startup
+  so the rest of the slice plan ("rootless agent" in the
+  privilege model section) can assume CAP_SYS_ADMIN + CAP_CHOWN
+  within a non-init userns. Slice 2 (landed, 4135e0f) dropped
+  the per-bundle OCI userns wiring now that the container can
+  share sandboxd's userns directly. Slice 3 (landed) cleaned up
+  the idmap-mount scaffolding that didn't work before the
+  re-exec.
+
+  The remaining gap: virtiofsd inherits sandboxd's userns
+  (CAP_CHOWN scoped to it), but the bundle files live on the
+  host fs in *init*'s userns. The kernel checks CAP_CHOWN
+  against the userns owning the inode, so virtiofsd's chowns
+  to subuid-range targets EPERM even though the kernel happily
+  translates the gid via sandboxd's gid_map. Concretely: nix
+  daemon's chown of `/nix/store` to gid 30000 (nixbld) fails
+  the moment a fresh container touches the store. Bun
+  dev-shell (D6c.3 slice 2) currently sidesteps this with
+  `--option build-users-group ""` — fine for a dev-shell, not
+  fine for any workload that actually builds derivations.
+
+  Options to evaluate (none landed):
+    1. **Sandboxd-private tmpfs bundles**. After re-exec
+       sandboxd unshares CLONE_NEWNS, mounts a fresh tmpfs at
+       a fixed location, and unpacks bundles into it. The
+       tmpfs's superblock userns is sandboxd's userns, so
+       CAP_CHOWN over its inodes works without idmapped
+       mounts. Bound by RAM, but bundles in practice are
+       small (~hundreds of MB) and the workspace mount is
+       separate. Lowest-risk path.
+    2. **Idmapped mounts on the bundle share**. Kernel's
+       `mount_setattr(MOUNT_ATTR_IDMAP)` requires CAP_SYS_ADMIN
+       in the *initial* userns regardless of where the mount
+       lives, so this needs a small setuid helper or systemd
+       socket-activated mount-helper. More moving parts.
+    3. **virtiofsd `--uid-map` with a non-zero euid**.
+       Virtiofsd rejects `--uid-map` when euid==0 (its sandbox
+       layer expects to set up its own userns via newuidmap).
+       Drop sandboxd's spawned virtiofsd to inside-uid 1 first;
+       virtiofsd then does its own newuidmap dance with a
+       single contiguous range. Per virtiofsd's idmap code the
+       map is single-range only, so the OCI side needs to
+       agree on one contiguous mapping; works for v0 but
+       constrains future multi-uid-per-container designs.
+    4. **FUSE translator in front of virtiofsd**. Write a
+       daft-fuse passthrough that translates uids at the FUSE
+       boundary. Gives us full control of the policy
+       (per-mount, per-container) but is the most code.
+
+  Slice plan when picked up:
+    - D7.4: spike each of the four options enough to learn
+      which the kernel actually permits in our environment;
+      bun-dev-shell + a nix-daemon-running-build smoke test
+      decide.
+    - D7.5: land the chosen approach; drop the
+      `--option build-users-group ""` workaround from
+      D6c.3 slice 2.
+    - D7.6: PLAN.md "Privilege model" section updates to
+      reflect the actual mechanism (currently sketches a
+      `newuidmap`-free model — that was the goal before we
+      learned the CAP_CHOWN boundary; reconcile or rewrite).
+
+- D8: **Diagnostic fabric — workload-agnostic
+  introspection from test harness through to the in-VM
+  kernel**.
+
+  Motivation. The bun-test investigation that fixed CONFIG_TUN
+  + landed D7.2 spent most of its time on archaeology
+  (extracting a single line from a temp-dir log surviving a
+  timeout panic) instead of on the actual bug. Slice 1
+  (`testLogTee`, landed 754912c) closes the worst gap by
+  fanning subprocess output into `t.Log` as lines arrive, so
+  the failure report shows what the workload printed
+  regardless of how the test died. The rest of the slice plan
+  is the rest of the same fabric: every layer that knows
+  something useful should be feeding into one place when a
+  test fails.
+
+  Slices, ordered cheapest-first:
+    1. **landed** — `testLogTee` in
+       `internal/testdaemons/workspace_forward_test.go`. Any
+       `startDaftSubprocess` now streams stdout+stderr into
+       the test's log buffer line by line.
+    2. **Cluster output → t.Log**.
+       `internal/testdaemons/cluster.go`'s pane prefixer
+       (`[daft-sandboxd] …`) already captures stderr from the
+       control-plane daemons. Make it use the same tee
+       pattern so framework-timeout panics also surface that
+       output, not just the daft-subprocess output.
+    3. **Persistent capture-on-failure**. On any
+       integration-test failure, copy the cluster's
+       `t.TempDir()` contents to
+       `/tmp/daft-test-failures/<test>-<ts>/`. Stable
+       location, post-mortem-safe — no race with go test's
+       tempdir cleanup. One `t.Cleanup` at cluster level,
+       skipped on success.
+    4. **virtiofsd `--log-level info`**. Default in tests,
+       captured to a path under the cluster tempdir. Surfaces
+       every FUSE-layer EPERM at the source of truth.
+    5. **crun `--debug`**. Same pattern — agent passes
+       `--debug` to crun when a `DAFT_DEBUG_OCI=1` env var is
+       set, captures stderr to the per-container log. OCI
+       lifecycle failures land in the timeline.
+    6. **Agent-side `/proc` snapshotter**. OCI prestart hook
+       writes `/proc/self/{status,mountinfo,uid_map,gid_map}`
+       into `/workspace/.daft/container-<id>.snap`. Workspace
+       mount is host-visible and outlives the VM, so the
+       black-box state of the container is captured even when
+       the VM doesn't come up cleanly.
+    7. **VM ftrace channel**. Enable
+       `CONFIG_FTRACE_SYSCALLS=y`, `CONFIG_KPROBE_EVENTS=y`,
+       `CONFIG_UPROBE_EVENTS=y`, `CONFIG_HIST_TRIGGERS=y` in
+       `third_party/kernel-config/daft.config`. Agent reads
+       `/sys/kernel/tracing/trace_pipe` selectively (filter
+       enabled by `DAFT_TRACE_SYSCALLS` env on the kernel
+       cmdline) and frames events on a new
+       `daft.trace_port=…` vsock channel. Host writes them
+       into the unified timeline. Workload-agnostic
+       eBPF-class visibility at ~150 LoC of agent code +
+       kernel config.
+    8. **Unified timeline merger**. Sandboxd-side aggregator
+       that interleaves trace spans + virtiofsd + crun + the
+       ftrace stream + cluster captures in chronological
+       order. Exposed to tests as one stream; on failure,
+       dumped alongside the captured tempdir.
+
+  Property the fabric upholds: any failure mode of any
+  workload running in any container is at-most-one-grep away.
+  Production keeps the same hooks behind feature flags so
+  field debugging is the same shape as test debugging.
+
 - D5: **Multi-container per VM** (was the old D2). daft-agent
   vsock control stream: agent accepts `RunContainer(spec)` /
   `StopContainer(id)`, runs N crun children, isolates each by

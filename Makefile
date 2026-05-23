@@ -241,7 +241,7 @@ integration: integration-build
 	@echo "[e2e] booting real VMs against /dev/kvm..."
 	@DAFT_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT) \
 		DAFT_BUNDLE=$(CURDIR)/$(BUNDLE_OUT) \
-		go test -tags=integration -count=1 ./internal/sandbox/ ./internal/testdaemons/
+		go test -v -tags=integration -count=1 -timeout 20m ./internal/sandbox/ ./internal/testdaemons/
 
 ## Git hooks -----------------------------------------------------------------
 
