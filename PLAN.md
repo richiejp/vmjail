@@ -1096,6 +1096,35 @@ the user-host or in CI today.
            cache.nixos.org through sandboxnet's NAT.
            Port-forward + HTTP-GET asserts a known body
            served by `bun dev`.
+
+           Throughput floor under investigation: in-VM
+           `curl` of the nixpkgs tarball through the sandboxnet
+           NAT clocks ~50 KB/s on a host that hits the same
+           URL at megabits-per-second. Layer-by-layer
+           benches so far:
+
+           - `internal/agent.BenchmarkPump*` proves the
+             agent's frame pump (tap ↔ stdio) runs at
+             ~720 MB/s at MTU 1500 (net.Pipe substrate). Pump
+             is not the bottleneck.
+           - `internal/sandboxnet.BenchmarkAcceptARPRoundTrip`
+             drives ARP request→reply through the gvisor
+             switch + IP layer at ~180k frames/sec
+             (~5.5 µs/frame, ~7.6 MB/s on 42-byte frames).
+             Even allowing 10× cost per MTU-1500 TCP frame,
+             that's still ~24 MB/s — three orders of
+             magnitude above the observed floor. Switch + IP
+             responder are not the bottleneck.
+
+           Remaining suspects, in rough order of likelihood:
+           the gvisor TCP forwarder's `net.Dial`+`tcpproxy`
+           path on the host side; gvisor netstack TCP
+           windowing/MSS defaults causing tiny segments or
+           stall on the data plane; CH virtio-net ↔ sandboxd
+           UDS hop's framing overhead. Next bench should drive
+           bulk TCP through the forwarder (e.g. via a
+           paired-stack guest emulator or by exercising the
+           forwarder code path directly) to localize further.
         3. (deferred) host-mounted persistent `/nix/store` if
            the slice-2 cold-start latency turns out to be a
            pre-commit-hook blocker. Default plan: skip — bun's
