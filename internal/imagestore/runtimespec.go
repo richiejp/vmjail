@@ -97,11 +97,8 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 	if err != nil {
 		return runtimeSpec{}, err
 	}
-	// Container shares the calling sandboxd's user namespace (set up
-	// by the daft-sandboxd re-exec at startup). No nested OCI userns
-	// is needed: uid 0 in the container is sandboxd's inside uid 0,
-	// which the kernel maps to the operator's host uid via the
-	// uid_map newuidmap wrote at sandboxd entry.
+	// No nested OCI userns: the container shares sandboxd's userns
+	// (D7 slice 1). See PLAN.md "D7 — rootless storage translation".
 	linux := defaultRuntimeLinuxConfig()
 	return runtimeSpec{
 		OCIVersion: "1.0.2",

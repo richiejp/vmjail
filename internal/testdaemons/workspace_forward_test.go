@@ -214,31 +214,54 @@ type testLogTee struct {
 
 func (tl *testLogTee) Write(p []byte) (int, error) {
 	n, werr := tl.w.Write(p)
-	tl.mu.Lock()
-	defer tl.mu.Unlock()
-	if tl.stopped {
-		return n, werr
-	}
-	tl.buf = append(tl.buf, p...)
-	for {
-		i := bytes.IndexByte(tl.buf, '\n')
-		if i < 0 {
-			break
-		}
-		tl.t.Logf("%s%s", tl.prefix, tl.buf[:i])
-		tl.buf = tl.buf[i+1:]
+	lines, prefix := tl.extractLines(p)
+	for _, line := range lines {
+		tl.t.Logf("%s%s", prefix, line)
 	}
 	return n, werr
 }
 
-func (tl *testLogTee) disable() {
+// extractLines splits the rolling buffer at '\n' boundaries and
+// returns the complete lines for the caller to log outside the
+// mutex. Holding tl.mu across t.Logf would backpressure the
+// subprocess pipe whenever the testing framework's log lock is
+// contended — turning a diagnostic into a flow-control bottleneck
+// on a hung-test. searchFrom is advanced past consumed bytes so
+// each append scans only the newly-arrived suffix; without it
+// IndexByte revisits the whole buffer on every Write and gives
+// quadratic cost under any sustained line-less burst.
+func (tl *testLogTee) extractLines(p []byte) ([]string, string) {
 	tl.mu.Lock()
 	defer tl.mu.Unlock()
-	if len(tl.buf) > 0 {
-		tl.t.Logf("%s%s", tl.prefix, tl.buf)
-		tl.buf = nil
+	if tl.stopped {
+		return nil, tl.prefix
 	}
+	start := len(tl.buf)
+	tl.buf = append(tl.buf, p...)
+	var lines []string
+	for {
+		rel := bytes.IndexByte(tl.buf[start:], '\n')
+		if rel < 0 {
+			break
+		}
+		i := start + rel
+		lines = append(lines, string(tl.buf[:i]))
+		tl.buf = tl.buf[i+1:]
+		start = 0
+	}
+	return lines, tl.prefix
+}
+
+func (tl *testLogTee) disable() {
+	tl.mu.Lock()
+	tail := tl.buf
+	tl.buf = nil
 	tl.stopped = true
+	prefix := tl.prefix
+	tl.mu.Unlock()
+	if len(tail) > 0 {
+		tl.t.Logf("%s%s", prefix, tail)
+	}
 }
 
 // freeLocalPort picks a free loopback port for `daft workspace
