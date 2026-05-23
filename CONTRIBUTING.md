@@ -291,6 +291,42 @@ write them.
 Coverage is the price of merge — pay it on the way in, not by
 relaxing the gate.
 
+### Performance claims need a benchmark — and a profile
+
+Performance is testable, not declarable. Sentences like "this is the
+bottleneck", "X is slow", "Y is hot in the inner loop", "we'd save a
+syscall per packet if…" are *hypotheses*, not conclusions, until a
+benchmark and a profile back them. Treat perf the same as
+correctness: hypothesis → experiment → result → write it down. No
+folk wisdom in commit messages or PR descriptions.
+
+Concretely, before claiming a perf change matters — or that a perf
+regression doesn't — do the experiment:
+
+1. **Benchmark.** Write a `BenchmarkXxx` that exercises the path
+   under test. Call `b.SetBytes(...)` when bytes/sec is meaningful;
+   `b.ReportAllocs()` when alloc churn might be the suspect. Commit
+   the benchmark alongside the change so the next contributor can
+   reproduce it.
+2. **Profile.** Run the benchmark with `-cpuprofile=cpu.out
+   -memprofile=mem.out -benchtime=…` and inspect with
+   `go tool pprof -http=:8080 cpu.out`. The profile will tell you
+   what actually moved; the wall-clock number alone won't.
+3. **Baseline.** When the result is meant to be durable, capture it
+   in `bench.txt` via `make bench`. The regression gate then
+   catches future drift.
+
+Comments and PR descriptions that include perf claims without a
+benchmark to back them get pushed back on. The same discipline
+applies to architectural choices framed in perf terms: "we chose
+MTU 1500 to avoid MSS-clamping" is fine *if* a benchmark shows the
+two paths' throughput and the clamping cost; otherwise it's an
+assumption that future readers will quietly inherit and act on.
+
+The point is the discipline, not the ceremony: a 30-line benchmark
+that lets the next contributor verify the claim is the artifact
+that survives, not the assertion in a comment or chat log.
+
 ### Fuzz where you can
 
 > If something can be fuzzed, it should be fuzzed.
