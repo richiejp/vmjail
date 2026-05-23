@@ -1127,44 +1127,90 @@ the user-host or in CI today.
              either; it floors ~500× above the bun-test
              observation.
 
-           - `TestClusterWorkspaceLoopbackThroughput` and its
-             sibling `TestClusterWorkspaceLANThroughput`
-             (integration, both gated on
+           - `TestClusterWorkspaceLoopbackThroughput`,
+             `TestClusterWorkspaceLANThroughput`, and
+             `TestClusterWorkspaceLatencyThroughput`
+             (integration, all gated on
              `DAFT_RUN_THROUGHPUT_EXPERIMENT=1`) run the full
              real-VM path the synthetic bench couldn't cover:
              Linux-kernel-TCP in the VM → CH virtio-net → vsock
              to sandboxd → pump → gvisor netstack → real host
-             listener serving 32 MiB. The two variants differ
-             only in the host-side listener address: loopback
-             binds 127.0.0.1 (kernel TCP fast-path), LAN binds
-             the host's external IPv4 (`enp*`/`eth*`/`wlp*`,
-             scanned at runtime, overridable via
-             `DAFT_THROUGHPUT_LAN_IP`). The gvisor TCP
-             forwarder's `net.Dial` in the LAN variant targets
-             a non-`127.0.0.0/8` IP, which the host kernel
-             routes locally but via the full IP/TCP TX path
-             rather than the loopback fast-path. Results:
-             **142 MiB/s loopback, 144 MiB/s LAN** — within
-             1% of each other, both ~4× the gvisor↔gvisor
-             synthetic peer and ~2800× the bun-test floor.
+             listener serving 32 MiB. The variants differ in
+             the host-side listener address and whether netem
+             latency is injected on `lo`:
+              - **loopback**: 127.0.0.1, kernel TCP fast-path.
+              - **lan**: host's external IPv4 (scanned at
+                runtime; `DAFT_THROUGHPUT_LAN_IP` overrides).
+                gvisor's `net.Dial` targets a
+                non-`127.0.0.0/8` IP so the host kernel uses
+                the full IP/TCP TX path, not the loopback
+                fast-path.
+              - **latency50ms**: LAN setup plus
+                `sudo tc qdisc add dev lo root netem delay
+                50ms` injected after cluster bring-up. Tests
+                gvisor's TCP under WAN-realistic RTT —
+                continent-to-continent paths run ~50–150ms.
+                Skips when passwordless `sudo tc` isn't
+                available.
 
-           Conclusion: the bun-test slowness is **not** in any
-           layer this codebase owns. The in-VM stack delivers
-           ~1.1 Gbit/s against any local host destination, and
-           the loopback fast-path was not masking a real cost.
-           The 50 KB/s observation is real-network bandwidth-
-           delay-product (cache.nixos.org RTT × whatever TCP
-           window the gvisor netstack negotiates with a
-           *remote* peer).
-           A tcpdump from inside the VM would show small CWND
-           and slow ramp-up; that's a tuning question, not a
-           bug. Pragmatically the fix is **slice 3 below**
-           (host-mounted persistent `/nix/store`), which makes
-           the slow first-fetch a one-time cost paid by the
-           host's full-bandwidth network instead of by every
-           VM through the netstack's high-BDP path. Slice 3
-           is now promoted from "deferred" to the actual
-           unblocker for slice 2.
+             Results: **142 MiB/s loopback, 144 MiB/s LAN,
+             14.2 MiB/s at 50ms RTT.** The first two are
+             within 1% of each other — kernel loopback
+             fast-path was not hiding a real cost.
+
+           What's *proven* by the four experiments + three
+           variants:
+            - The local end-to-end path (no upstream-internet
+              variable) delivers ~1.1 Gbit/s. No layer this
+              codebase owns is the bottleneck at low RTT.
+            - At a WAN-realistic 50ms RTT, gvisor still
+              delivers 14.2 MiB/s = ~112 Mbit/s. That's a
+              10× drop from low-RTT but **still 280× faster
+              than the bun-test 50 KB/s observation**.
+
+           What's *not* proven and was previously claimed as
+           if it were (corrected 2026-05-23): the bun-test
+           50 KB/s is **not** explained by gvisor TCP being
+           "BDP-limited at high RTT". 14.2 MiB/s at 50ms is
+           way too fast for that story to fit; gvisor's
+           receive window auto-tuning evidently works at
+           least up to ~720 KB BDP. The honest situation
+           is we don't yet have a mechanism that explains
+           the 50 KB/s observation. Plausible candidates
+           still in scope:
+            - The 50 KB/s observation may not be steady-state
+              single-stream TCP throughput. It may be the
+              aggregate slowness of many small sequential
+              fetches (TLS handshake + DNS per closure
+              path), in which case "per-stream throughput"
+              isn't the right metric.
+            - RTT to `cache.nixos.org` from this host may be
+              much higher than 50ms (CDN-dependent), or the
+              path may have meaningful packet loss that
+              caps cwnd via Reno.
+            - gvisor's congestion control (Reno vs CUBIC)
+              and lack of GSO/TSO/GRO may compound on a
+              lossy WAN path beyond what netem-on-lo
+              models (netem adds delay but not loss).
+
+           Next experiment(s) to actually localize:
+            - Add a `loss=N%` variant to netem to test
+              loss-recovery behaviour at WAN RTT.
+            - tcpdump from inside the VM during a real
+              `bun-test` run; inspect cwnd evolution, RTO,
+              SACK behaviour.
+            - Verify whether the 50 KB/s is a single TCP
+              stream or aggregate-of-many-small-fetches by
+              timing a single curl of a known-large file
+              from cache.nixos.org with `--max-time` and
+              `--write-out '%{speed_download}'`.
+
+           Regardless of where the bun-test root cause
+           ultimately lands, **slice 3 below** (host-mounted
+           persistent `/nix/store`) is still the right
+           pragmatic unblocker for slice 2: the closure
+           lives on the host's filesystem, the VM mounts it
+           read-only, no fetch happens at all.
         3. **host-mounted persistent `/nix/store`** (promoted
            from deferred, 2026-05-23, after the throughput
            experiment ruled out an in-stack root cause for

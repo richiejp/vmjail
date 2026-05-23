@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -84,10 +85,52 @@ func TestClusterWorkspaceLANThroughput(t *testing.T) {
 	})
 }
 
+// TestClusterWorkspaceLatencyThroughput is the LAN variant with
+// `tc qdisc add dev lo root netem delay <ms>ms` injected
+// between cluster bring-up and the fetch. Real RTT to a
+// far-internet peer is ~50–150ms; loopback is ~10µs.
+// Injecting latency on lo simulates the WAN condition gvisor's
+// netstack has to handle when talking to cache.nixos.org —
+// without it, the LAN test only proves the *low-RTT* path is
+// fast, which doesn't rule out gvisor having a high-RTT
+// pathology (small fixed receive window, Reno-vs-CUBIC ramp,
+// no buffer auto-tuning, per-packet syscall cost mounting on
+// a full pipe of in-flight segments, etc.).
+//
+// Requires passwordless `sudo tc`; t.Skip otherwise. Cleans
+// up the qdisc unconditionally via t.Cleanup, so a crash
+// won't leave 50ms latency on lo persistently. The 50ms
+// figure is the median continent-to-continent RTT; tune via
+// DAFT_THROUGHPUT_LATENCY_MS.
+func TestClusterWorkspaceLatencyThroughput(t *testing.T) {
+	if os.Getenv("DAFT_RUN_THROUGHPUT_EXPERIMENT") != "1" {
+		t.Skip("set DAFT_RUN_THROUGHPUT_EXPERIMENT=1 to run the bun-test bottleneck experiment")
+	}
+	if err := canRunSudoTc(); err != nil {
+		t.Skipf("netem variant needs passwordless `sudo tc`: %v", err)
+	}
+	latencyMs := 50
+	if s := os.Getenv("DAFT_THROUGHPUT_LATENCY_MS"); s != "" {
+		var parsed int
+		if _, err := fmt.Sscanf(s, "%d", &parsed); err != nil || parsed <= 0 {
+			t.Fatalf("DAFT_THROUGHPUT_LATENCY_MS=%q is not a positive int", s)
+		}
+		latencyMs = parsed
+	}
+	lanIP := discoverHostLANIP(t)
+	runThroughputExperiment(t, throughputVariant{
+		label:     fmt.Sprintf("latency%dms", latencyMs),
+		listenIP:  lanIP,
+		dialIP:    lanIP,
+		latencyMs: latencyMs,
+	})
+}
+
 type throughputVariant struct {
-	label    string // log tag; "loopback" or "lan"
-	listenIP string // httptest binds here
-	dialIP   string // in-VM client dials https://<dialIP>:port/
+	label     string // log tag; "loopback" / "lan" / "latency50ms"
+	listenIP  string // httptest binds here
+	dialIP    string // in-VM client dials https://<dialIP>:port/
+	latencyMs int    // optional netem delay on lo (0 = no injection)
 }
 
 const throughputBodySize = 32 << 20
@@ -131,6 +174,15 @@ func runThroughputExperiment(t *testing.T, v throughputVariant) {
 		}, 30*time.Second)
 
 	c.WaitForSandboxdOutput(t, "daft-nix-shell ready", 60*time.Second)
+
+	// netem on lo is added AFTER cluster bring-up so the
+	// orchestrator↔sandboxd gRPCs don't pay the latency cost
+	// during launch (their timeouts are tuned for ~10µs lo).
+	// The fetch and its TCP control plane are the only thing
+	// that needs to see WAN-realistic RTT.
+	if v.latencyMs > 0 {
+		injectLoopbackLatency(t, v.latencyMs)
+	}
 
 	execCmd := fmt.Sprintf(
 		"%s workspace exec %s --tty=false %s -- "+
@@ -243,6 +295,41 @@ func discoverHostLANIP(t *testing.T) string {
 	}
 	t.Skip("no usable LAN IPv4 on this host; set DAFT_THROUGHPUT_LAN_IP")
 	return ""
+}
+
+// canRunSudoTc checks whether `sudo -n tc` will work without a
+// password prompt; used by the netem-latency variant to decide
+// between running the experiment and t.Skip'ing.
+func canRunSudoTc() error {
+	out, err := exec.Command("sudo", "-n", "tc", "-help").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// injectLoopbackLatency adds `netem delay <ms>ms` to the lo
+// device's root qdisc and registers t.Cleanup to remove it.
+// Affects ALL loopback traffic — including the cluster's own
+// orchestrator↔sandboxd gRPC — so callers should only invoke
+// this after bring-up has completed. Cleanup runs even on
+// panic via the t.Cleanup contract, so a crashed test doesn't
+// strand 50ms latency on the dev machine's lo.
+func injectLoopbackLatency(t *testing.T, ms int) {
+	t.Helper()
+	add := exec.Command("sudo", "-n", "tc", "qdisc", "add", "dev", "lo",
+		"root", "netem", "delay", fmt.Sprintf("%dms", ms))
+	if out, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("tc qdisc add netem %dms on lo: %v: %s",
+			ms, err, strings.TrimSpace(string(out)))
+	}
+	t.Cleanup(func() {
+		del := exec.Command("sudo", "-n", "tc", "qdisc", "del", "dev", "lo", "root")
+		if out, err := del.CombinedOutput(); err != nil {
+			t.Logf("tc qdisc del lo (may already be gone): %v: %s",
+				err, strings.TrimSpace(string(out)))
+		}
+	})
 }
 
 // isVirtualInterface filters out the bridges + tunnels that
