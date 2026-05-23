@@ -1127,24 +1127,41 @@ the user-host or in CI today.
              either; it floors ~500× above the bun-test
              observation.
 
-           Remaining suspects after this third bench (real
-           workload is Linux-kernel-TCP-in-VM ↔ gvisor-on-host,
-           not gvisor↔gvisor as the bench, so interop matters):
-           CH virtio-net device backend + UDS hop framing the
-           bench skips entirely; TCP option negotiation between
-           the Linux kernel and gvisor netstack (window
-           scaling, MSS, SACK); and real-network bandwidth-
-           delay-product (cache.nixos.org RTT × whatever window
-           the gvisor netstack opens). Next experiment should
-           run the existing `TestClusterWorkspaceHTTPSEgress`
-           against a localhost-served large body and a remote
-           one, both pprof'ing sandboxd — if localhost is fast
-           and remote is slow, it's window/RTT; if both are
-           slow, it's CH-or-kernel-side and we look there.
-        3. (deferred) host-mounted persistent `/nix/store` if
-           the slice-2 cold-start latency turns out to be a
-           pre-commit-hook blocker. Default plan: skip — bun's
-           closure is small enough to refetch per VM.
+           - `TestClusterWorkspaceLoopbackThroughput` (integration,
+             gated on `DAFT_RUN_THROUGHPUT_EXPERIMENT=1`) runs
+             the full real-VM path the synthetic bench couldn't
+             cover: Linux-kernel-TCP in the VM → CH virtio-net →
+             vsock to sandboxd → pump → gvisor netstack → real
+             `127.0.0.1` listener serving 32 MiB. Result:
+             **138 MiB/s** — 4× faster than the gvisor↔gvisor
+             synthetic peer (Linux kernel TCP on the client side
+             beats gvisor's). **2800× faster than the bun-test
+             50 KB/s floor.**
+
+           Conclusion: the bun-test slowness is **not** in any
+           layer this codebase owns. The in-VM stack delivers
+           ~1.1 Gbit/s against a host listener. The 50 KB/s
+           observation is real-network bandwidth-delay-product
+           (cache.nixos.org RTT × whatever TCP window the
+           gvisor netstack negotiates with a *remote* peer).
+           A tcpdump from inside the VM would show small CWND
+           and slow ramp-up; that's a tuning question, not a
+           bug. Pragmatically the fix is **slice 3 below**
+           (host-mounted persistent `/nix/store`), which makes
+           the slow first-fetch a one-time cost paid by the
+           host's full-bandwidth network instead of by every
+           VM through the netstack's high-BDP path. Slice 3
+           is now promoted from "deferred" to the actual
+           unblocker for slice 2.
+        3. **host-mounted persistent `/nix/store`** (promoted
+           from deferred, 2026-05-23, after the throughput
+           experiment ruled out an in-stack root cause for
+           the bun-test 50 KB/s observation). Host-side
+           `nix copy` once, mount the resulting store
+           read-only into the VM via virtiofs, the in-VM nix
+           sees its closure paths already populated and skips
+           the cache.nixos.org fetch entirely. Slice 2's
+           bun dev-shell becomes a launch + run, no network.
 
 - D7: **Rootless storage translation** — bridge the
   CAP_CHOWN gap between the sandbox-host process and the
