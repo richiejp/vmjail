@@ -1115,16 +1115,32 @@ the user-host or in CI today.
              that's still ~24 MB/s — three orders of
              magnitude above the observed floor. Switch + IP
              responder are not the bottleneck.
+           - `internal/sandboxnet.BenchmarkForwarderTCPThroughput`
+             wires two gvisor netstacks back-to-back over a
+             `net.Pipe` (host + guest), dials from guest
+             through host's TCP forwarder + NAT to a real
+             127.0.0.1 listener, and streams bytes. Steady
+             state across chunk sizes 1K/4K/32K/128K:
+             25 / 38 / 30 / 32 MB/s. The forwarder path —
+             gvisor TCP endpoint, NAT lookup, `net.Dial`,
+             `tcpproxy.HandleConn` — is not the bottleneck
+             either; it floors ~500× above the bun-test
+             observation.
 
-           Remaining suspects, in rough order of likelihood:
-           the gvisor TCP forwarder's `net.Dial`+`tcpproxy`
-           path on the host side; gvisor netstack TCP
-           windowing/MSS defaults causing tiny segments or
-           stall on the data plane; CH virtio-net ↔ sandboxd
-           UDS hop's framing overhead. Next bench should drive
-           bulk TCP through the forwarder (e.g. via a
-           paired-stack guest emulator or by exercising the
-           forwarder code path directly) to localize further.
+           Remaining suspects after this third bench (real
+           workload is Linux-kernel-TCP-in-VM ↔ gvisor-on-host,
+           not gvisor↔gvisor as the bench, so interop matters):
+           CH virtio-net device backend + UDS hop framing the
+           bench skips entirely; TCP option negotiation between
+           the Linux kernel and gvisor netstack (window
+           scaling, MSS, SACK); and real-network bandwidth-
+           delay-product (cache.nixos.org RTT × whatever window
+           the gvisor netstack opens). Next experiment should
+           run the existing `TestClusterWorkspaceHTTPSEgress`
+           against a localhost-served large body and a remote
+           one, both pprof'ing sandboxd — if localhost is fast
+           and remote is slow, it's window/RTT; if both are
+           slow, it's CH-or-kernel-side and we look there.
         3. (deferred) host-mounted persistent `/nix/store` if
            the slice-2 cold-start latency turns out to be a
            pre-commit-hook blocker. Default plan: skip — bun's
