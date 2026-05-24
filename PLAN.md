@@ -1618,13 +1618,29 @@ which is fine.
 Slices, cheapest-first:
   - I1: **Record/replay cache for the test suite** — the smallest
     viable version of the whole idea, and the one with immediate
-    payoff. `cas.Store`-backed URL → entry index; cache-on-miss
-    while online; a `DAFT_PROXY_OFFLINE=1` mode that serves only
-    from cache and fails the request on a miss. Wire into
-    `TestClusterWorkspaceBunDevServer` so its nixpkgs-tarball +
-    codeload fetch is recorded once, then replayed offline on
-    every subsequent run — de-flaking the integration suite's
-    current hard dependency on github/cache.nixos.org reachability.
+    payoff. `cas.Store`-backed key → entry index; cache-on-miss
+    while online; an offline mode that serves only from cache and
+    fails the request on a miss.
+    **Mechanism landed**: `internal/httpcache` is the storage half
+    — a `cas.Store`-backed `key → Entry{Digest,Size,Status,Header}`
+    index with an atomically-persisted `index.json`, reusing the
+    workspace-sync blob primitive (sha256 + zstd, verified on read)
+    and dropping hop-by-hop/framing headers at Put so a replay
+    reconstructs from the known body size. `daft-mitm-proxy` gained
+    `--cache-dir` (enable) and `--offline` (miss → 504); `serveOne`
+    consults the cache, stores GET/200 responses, and replays the
+    stored *and* freshly-recorded body through one code path
+    (`serveFromCache`) so store and hit share their bugs. Non-GET /
+    non-200 pass through uncached. Unit-tested incl. record→replay
+    (proves the second GET never refetches), offline-miss,
+    error-status pass-through, persistence across reopen, and the
+    fs/cache error branches.
+    **Next**: wire it into `TestClusterWorkspaceBunDevServer` with a
+    persistent `--cache-dir` (under `os.UserCacheDir()`, like
+    `FetchNixOfficialImage`) so the nixpkgs-tarball + codeload fetch
+    is recorded once then replayed on every subsequent run —
+    de-flaking the suite's hard dependency on
+    github/cache.nixos.org reachability.
   - I2: **Persistent CA + on-disk store**. Today the CA is
     regenerated every startup (24h validity, explicitly "NOT FOR
     PRODUCTION" in the file header) and the cert/cache state is

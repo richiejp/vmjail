@@ -18,8 +18,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/localai-org/darkaifactory/internal/httpcache"
 )
 
 // syncBuffer is a mutex-guarded io.Writer + reader for log
@@ -761,6 +764,202 @@ func TestCertErrorPaths(t *testing.T) {
 			t.Error("want error from leafForHost when leaf CreateCertificate fails")
 		}
 	})
+}
+
+// startCachingHarness wires a TLS upstream (serving via h, wrapped
+// in a hit counter), a proxy with caching enabled at cacheDir, and a
+// client that trusts the proxy's CA. Returns the client, the https
+// target it should GET, the proxy log sink, and the upstream hit
+// counter — so a test can prove a replay never touched upstream.
+func startCachingHarness(
+	t *testing.T, cacheDir string, offline bool, h http.HandlerFunc,
+) (*http.Client, string, *syncBuffer, *atomic.Int64) {
+	t.Helper()
+	var hits atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		h(w, r)
+	}))
+	t.Cleanup(upstream.Close)
+
+	certs, err := newCertCache()
+	if err != nil {
+		t.Fatalf("newCertCache: %v", err)
+	}
+	logSink := &syncBuffer{}
+	p := newProxy(certs, true, logSink)
+	cache, cerr := httpcache.Open(cacheDir, offline)
+	if cerr != nil {
+		t.Fatalf("cache open: %v", cerr)
+	}
+	p.cache = cache
+
+	upURL, _ := url.Parse(upstream.URL)
+	_, port, _ := net.SplitHostPort(upURL.Host)
+	p.upstream.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		_, pt, _ := net.SplitHostPort(addr)
+		return (&net.Dialer{}).DialContext(ctx, network, "127.0.0.1:"+pt)
+	}
+
+	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = proxyLn.Close() })
+	proxySrv := &http.Server{Handler: p, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = proxySrv.Serve(proxyLn) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = proxySrv.Shutdown(ctx)
+	})
+
+	pool := x509.NewCertPool()
+	pool.AddCert(certs.caCert)
+	proxyURL, _ := url.Parse("http://" + proxyLn.Addr().String())
+	client := &http.Client{Transport: &http.Transport{
+		Proxy:             http.ProxyURL(proxyURL),
+		TLSClientConfig:   &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+		DisableKeepAlives: true,
+	}}
+	return client, "https://localhost:" + port + "/pkg", logSink, &hits
+}
+
+// doGet performs one GET and returns status + body.
+func doGet(t *testing.T, client *http.Client, target string) (status int, body []byte) {
+	t.Helper()
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return resp.StatusCode, b
+}
+
+// TestCacheRecordAndReplay is slice I1's headline behaviour: the
+// first GET is fetched + stored, the second is served from the cache
+// without touching upstream, and both bodies are byte-identical.
+func TestCacheRecordAndReplay(t *testing.T) {
+	body := []byte("cached-upstream-body-content\n")
+	client, target, logSink, hits := startCachingHarness(t, t.TempDir(), false,
+		func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write(body) })
+
+	if st, got := doGet(t, client, target); st != 200 || !bytes.Equal(got, body) {
+		t.Fatalf("first GET: status=%d body=%q, want 200 / %q", st, got, body)
+	}
+	if !logSink.waitForContains(t, "STORE", 2*time.Second) {
+		t.Errorf("no STORE in log: %q", logSink.String())
+	}
+
+	if st, got := doGet(t, client, target); st != 200 || !bytes.Equal(got, body) {
+		t.Fatalf("second GET: status=%d body=%q, want 200 / %q", st, got, body)
+	}
+	if !logSink.waitForContains(t, " HIT", 2*time.Second) {
+		t.Errorf("no HIT in log: %q", logSink.String())
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("upstream hit %d times, want 1 (replay must not refetch)", n)
+	}
+}
+
+// TestCacheOfflineMiss: offline mode with an empty cache fails the
+// request with 504 rather than reaching upstream.
+func TestCacheOfflineMiss(t *testing.T) {
+	client, target, logSink, hits := startCachingHarness(t, t.TempDir(), true,
+		func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("nope")) })
+
+	if st, _ := doGet(t, client, target); st != http.StatusGatewayTimeout {
+		t.Errorf("offline miss status = %d, want 504", st)
+	}
+	if !logSink.waitForContains(t, "MISS offline", 2*time.Second) {
+		t.Errorf("no offline-miss log: %q", logSink.String())
+	}
+	if n := hits.Load(); n != 0 {
+		t.Errorf("upstream hit %d times in offline mode, want 0", n)
+	}
+}
+
+// TestCacheNonOKPassThrough: a non-200 response is passed through
+// untouched and NOT cached, so a transient error never poisons the
+// cache (the second request hits upstream again).
+func TestCacheNonOKPassThrough(t *testing.T) {
+	client, target, _, hits := startCachingHarness(t, t.TempDir(), false,
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+
+	if st, _ := doGet(t, client, target); st != http.StatusNotFound {
+		t.Errorf("first status = %d, want 404", st)
+	}
+	if st, _ := doGet(t, client, target); st != http.StatusNotFound {
+		t.Errorf("second status = %d, want 404", st)
+	}
+	if n := hits.Load(); n != 2 {
+		t.Errorf("upstream hit %d times, want 2 (404 must not be cached)", n)
+	}
+}
+
+// TestServeFromCacheErrors covers serveFromCache's two failure
+// branches: a writeback error (client conn died mid-response) and a
+// cache-read error (the index references a body the CAS no longer
+// has). Both must log and emit a 502, not panic.
+func TestServeFromCacheErrors(t *testing.T) {
+	dir := t.TempDir()
+	certs, err := newCertCache()
+	if err != nil {
+		t.Fatalf("newCertCache: %v", err)
+	}
+	logSink := &syncBuffer{}
+	p := newProxy(certs, true, logSink)
+	cache, cerr := httpcache.Open(dir, false)
+	if cerr != nil {
+		t.Fatalf("cache open: %v", cerr)
+	}
+	p.cache = cache
+	entry, perr := cache.Put("k", http.StatusOK, http.Header{}, strings.NewReader("hello"))
+	if perr != nil {
+		t.Fatalf("Put: %v", perr)
+	}
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet,
+		"https://example.invalid/x", http.NoBody)
+
+	p.serveFromCache(&failingWriter{failAfter: 0}, req, "HIT", entry)
+	if !logSink.waitForContains(t, "writeback-err", 2*time.Second) {
+		t.Errorf("no writeback-err in log: %q", logSink.String())
+	}
+
+	// Drop the blob so Body() fails on the next replay.
+	if rerr := os.RemoveAll(filepath.Join(dir, "blobs")); rerr != nil {
+		t.Fatalf("remove blobs: %v", rerr)
+	}
+	var buf bytes.Buffer
+	p.serveFromCache(&buf, req, "HIT", entry)
+	if !strings.Contains(buf.String(), "502") {
+		t.Errorf("want 502 on cache-read error; got %q", buf.String())
+	}
+	if !logSink.waitForContains(t, "cache-read-err", 2*time.Second) {
+		t.Errorf("no cache-read-err in log: %q", logSink.String())
+	}
+}
+
+// TestRunCacheOpenError covers run()'s fail-fast when --cache-dir
+// can't be opened (here, its parent is a regular file).
+func TestRunCacheOpenError(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "afile")
+	if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	var out bytes.Buffer
+	code := run([]string{ephemeralAddrFlag, "--cache-dir=" + filepath.Join(parent, "c")}, &out)
+	if code == 0 {
+		t.Errorf("code = 0; want non-zero")
+	}
+	if !strings.Contains(out.String(), "cache:") {
+		t.Errorf("missing 'cache:' err in out: %q", out.String())
+	}
 }
 
 // TestLeafForHostIPAddress pins that an IP literal host

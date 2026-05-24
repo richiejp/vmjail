@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/localai-org/darkaifactory/internal/banner"
+	"github.com/localai-org/darkaifactory/internal/httpcache"
 )
 
 const (
@@ -88,6 +89,12 @@ func run(args []string, out io.Writer) int {
 			"the in-VM client must trust it via NIX_SSL_CERT_FILE")
 	insecureUpstream := fs.Bool("insecure-upstream", false,
 		"skip upstream TLS verification (for self-signed test peers)")
+	cacheDir := fs.String("cache-dir", "",
+		"enable record/replay caching, storing GET/200 responses "+
+			"content-addressed under this dir (empty = pure pass-through)")
+	offline := fs.Bool("offline", false,
+		"serve only from --cache-dir; a cache miss fails the request "+
+			"(504) instead of reaching upstream")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -111,6 +118,14 @@ func run(args []string, out io.Writer) int {
 	}
 
 	p := newProxy(certs, *insecureUpstream, out)
+	if *cacheDir != "" {
+		cache, cerr := httpcache.Open(*cacheDir, *offline)
+		if cerr != nil {
+			_, _ = fmt.Fprintf(out, "daft-mitm-proxy err: cache: %v\n", cerr)
+			return 1
+		}
+		p.cache = cache
+	}
 	_, _ = fmt.Fprintf(out, "%s%s\n", readyPrefix, ln.Addr())
 	srv := &http.Server{
 		Handler:           p,
@@ -132,6 +147,13 @@ type proxy struct {
 	client   *http.Client
 	logSink  io.Writer
 	logMu    sync.Mutex
+	// cache, when non-nil, turns the proxy into a record/replay
+	// caching layer (PLAN.md Phase I, slice I1): GET/200 responses
+	// are stored content-addressed and replayed on a repeat
+	// request. nil keeps the pure pass-through behaviour. Set by
+	// run() from --cache-dir; left nil by newProxy so tests that
+	// don't care are unaffected.
+	cache *httpcache.Cache
 }
 
 func newProxy(certs *certCache, insecureUpstream bool, logSink io.Writer) *proxy {
@@ -224,6 +246,21 @@ func (p *proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 
 func (p *proxy) serveOne(tlsClient io.Writer, req *http.Request) {
 	reqURL := req.URL.String()
+	key := req.Method + " " + reqURL
+
+	if p.cache != nil {
+		if entry, ok := p.cache.Lookup(key); ok {
+			p.serveFromCache(tlsClient, req, "HIT", entry)
+			return
+		}
+		if p.cache.Offline() {
+			p.logLine("%s %s -> MISS offline (504)", req.Method, reqURL)
+			_, _ = io.WriteString(tlsClient,
+				"HTTP/1.1 504 Gateway Timeout\r\nContent-Length: 0\r\n\r\n")
+			return
+		}
+	}
+
 	start := time.Now()
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -241,6 +278,22 @@ func (p *proxy) serveOne(tlsClient io.Writer, req *http.Request) {
 		finalURL = resp.Request.URL.String()
 	}
 
+	// Cacheable responses are stored into the CAS and then replayed
+	// from it, so the store path and the hit path share one code
+	// path (and one set of bugs). The body is consumed by Put.
+	if p.cache != nil && cacheable(req, resp) {
+		entry, perr := p.cache.Put(key, resp.StatusCode, resp.Header, resp.Body)
+		if perr != nil {
+			p.logLine("%s %s -> cache-store-err=%v", req.Method, finalURL, perr)
+			_, _ = io.WriteString(tlsClient, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+			return
+		}
+		p.logLine("%s %s -> %d bytes=%d elapsed=%s STORE",
+			req.Method, finalURL, entry.Status, entry.Size, time.Since(start))
+		p.serveFromCache(tlsClient, req, "STORE-REPLAY", entry)
+		return
+	}
+
 	cw := &countingWriter{w: tlsClient}
 	wErr := resp.Write(cw)
 	elapsed := time.Since(start)
@@ -251,6 +304,47 @@ func (p *proxy) serveOne(tlsClient io.Writer, req *http.Request) {
 	}
 	p.logLine("%s %s -> %d bytes=%d elapsed=%s",
 		req.Method, finalURL, resp.StatusCode, cw.n, elapsed)
+}
+
+// serveFromCache reconstructs a stored response from the CAS body +
+// recorded status/headers and writes it back to the client. The
+// stored header set has framing headers stripped (see httpcache), so
+// resp.Write derives Content-Length from the known body size.
+func (p *proxy) serveFromCache(tlsClient io.Writer, req *http.Request, tag string, e httpcache.Entry) {
+	body, err := p.cache.Body(e.Digest)
+	if err != nil {
+		p.logLine("%s %s -> cache-read-err=%v", req.Method, req.URL, err)
+		_, _ = io.WriteString(tlsClient, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+		return
+	}
+	defer func() { _ = body.Close() }()
+
+	resp := &http.Response{
+		StatusCode:    e.Status,
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        e.Header.Clone(),
+		Body:          body,
+		ContentLength: int64(e.Size), //nolint:gosec // G115: cached body size fits int64.
+		Request:       req,
+	}
+	cw := &countingWriter{w: tlsClient}
+	if wErr := resp.Write(cw); wErr != nil {
+		p.logLine("%s %s -> %d bytes=%d %s writeback-err=%v",
+			req.Method, req.URL, e.Status, cw.n, tag, wErr)
+		return
+	}
+	p.logLine("%s %s -> %d bytes=%d %s",
+		req.Method, req.URL, e.Status, cw.n, tag)
+}
+
+// cacheable reports whether a response may be recorded for replay.
+// Conservative for slice I1: only idempotent GETs that returned 200.
+// Range responses (206) and error statuses are passed through
+// untouched so a partial or transient body never poisons the cache.
+func cacheable(req *http.Request, resp *http.Response) bool {
+	return req.Method == http.MethodGet && resp.StatusCode == http.StatusOK
 }
 
 func (p *proxy) logLine(format string, args ...any) {
