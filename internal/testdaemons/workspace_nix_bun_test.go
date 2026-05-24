@@ -190,7 +190,7 @@ func TestClusterWorkspaceBunDevServer(t *testing.T) {
 		"--option build-users-group \"\" " +
 		"-vv " +
 		"develop --command bun run /workspace/server.ts'"
-	startDaftSubprocess(
+	serverProc := startDaftSubprocess(
 		t, serverLog,
 		c.DaftBin, "--config-dir", c.ClientConfigDir,
 		"workspace", "exec", wsName,
@@ -199,18 +199,18 @@ func TestClusterWorkspaceBunDevServer(t *testing.T) {
 		"--", "/bin/sh", "-c", execShell,
 	)
 	attachWorkspaceProfiler(t, c, wsName)
-	waitForFileContains(t, serverLog,
+	waitForFileContains(t, serverProc, serverLog,
 		"bun listening on", d6c3BunSlowBoot,
 		func() string { return s.Capture() })
 
-	startDaftSubprocess(
+	forwardProc := startDaftSubprocess(
 		t, forwardLog,
 		c.DaftBin, "--config-dir", c.ClientConfigDir,
 		"workspace", "forward",
 		fmt.Sprintf("%d:%d", localPort, containerPort), wsName,
 		"--orchestrator", c.OrchestratorURL,
 	)
-	waitForFileContains(t, forwardLog,
+	waitForFileContains(t, forwardProc, forwardLog,
 		"daft workspace forward:", 30*time.Second,
 		func() string { return s.Capture() })
 

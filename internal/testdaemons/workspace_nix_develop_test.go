@@ -102,7 +102,7 @@ func TestClusterWorkspaceForwardAgainstNixRun(t *testing.T) {
 	// inputs and the program is already in /nix/store, so a
 	// healthy run must not touch the network. If it does try,
 	// we want a fast clear failure, not a slow timeout.
-	startDaftSubprocess(
+	serverProc := startDaftSubprocess(
 		t, serverLog,
 		c.DaftBin, "--config-dir", c.ClientConfigDir,
 		"workspace", "exec", wsName,
@@ -124,18 +124,18 @@ func TestClusterWorkspaceForwardAgainstNixRun(t *testing.T) {
 			containerPort,
 		),
 	)
-	waitForFileContains(t, serverLog,
+	waitForFileContains(t, serverProc, serverLog,
 		"Serving HTTP on", 90*time.Second,
 		func() string { return s.Capture() })
 
-	startDaftSubprocess(
+	forwardProc := startDaftSubprocess(
 		t, forwardLog,
 		c.DaftBin, "--config-dir", c.ClientConfigDir,
 		"workspace", "forward",
 		fmt.Sprintf("%d:%d", localPort, containerPort), wsName,
 		"--orchestrator", c.OrchestratorURL,
 	)
-	waitForFileContains(t, forwardLog,
+	waitForFileContains(t, forwardProc, forwardLog,
 		"daft workspace forward:", 30*time.Second,
 		func() string { return s.Capture() })
 

@@ -104,7 +104,7 @@ func TestClusterWorkspaceForwardAgainstNixServer(t *testing.T) {
 	// before producing any output. Run them as managed
 	// subprocesses instead — far simpler, gives the test direct
 	// stdout/stderr capture, and clean Cleanup via SIGTERM.
-	startDaftSubprocess(
+	serverProc := startDaftSubprocess(
 		t, serverLog,
 		c.DaftBin, "--config-dir", c.ClientConfigDir,
 		"workspace", "exec", wsName,
@@ -113,18 +113,18 @@ func TestClusterWorkspaceForwardAgainstNixServer(t *testing.T) {
 		"--", "/bin/daft-hello-server",
 		fmt.Sprintf("--addr=:%d", containerPort),
 	)
-	waitForFileContains(t, serverLog,
+	waitForFileContains(t, serverProc, serverLog,
 		"daft-hello-server listening on", 30*time.Second,
 		func() string { return s.Capture() })
 
-	startDaftSubprocess(
+	forwardProc := startDaftSubprocess(
 		t, forwardLog,
 		c.DaftBin, "--config-dir", c.ClientConfigDir,
 		"workspace", "forward",
 		fmt.Sprintf("%d:%d", localPort, containerPort), wsName,
 		"--orchestrator", c.OrchestratorURL,
 	)
-	waitForFileContains(t, forwardLog,
+	waitForFileContains(t, forwardProc, forwardLog,
 		"daft workspace forward:", 30*time.Second,
 		func() string { return s.Capture() })
 
@@ -146,7 +146,37 @@ func TestClusterWorkspaceForwardAgainstNixServer(t *testing.T) {
 // process group so the test doesn't leak daft + its in-VM
 // children when it ends. Mirrors startDaemon's pattern from
 // cluster.go but specialised for client-side daft invocations.
-func startDaftSubprocess(t *testing.T, logPath string, daftBin string, args ...string) *exec.Cmd {
+// daftProc is a started subprocess plus a single-owner exit
+// signal. A lone goroutine owns cmd.Wait(); done is closed once it
+// returns and waitErr captures the result. This lets a readiness
+// poll (waitForFileContains) fail fast the moment the process dies
+// instead of sitting out its full timeout, while keeping exactly
+// one Wait() call (calling Wait twice is a race).
+type daftProc struct {
+	cmd     *exec.Cmd
+	done    chan struct{}
+	mu      sync.Mutex
+	waitErr error
+}
+
+// exited reports whether the process has terminated (non-blocking).
+func (p *daftProc) exited() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// err returns the Wait() result; only meaningful once exited().
+func (p *daftProc) err() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.waitErr
+}
+
+func startDaftSubprocess(t *testing.T, logPath string, daftBin string, args ...string) *daftProc {
 	t.Helper()
 	out, err := os.Create(logPath) //nolint:gosec // logPath is under t.TempDir(); test-only.
 	if err != nil {
@@ -179,17 +209,29 @@ func startDaftSubprocess(t *testing.T, logPath string, daftBin string, args ...s
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start daft %v: %v", args, err)
 	}
+	p := &daftProc{cmd: cmd, done: make(chan struct{})}
+	// Single owner of cmd.Wait(). It returns only after the process
+	// has exited AND the stdout/stderr copy goroutines drain, so by
+	// the time done is closed the log file holds all output —
+	// waitForFileContains can re-read it and still see a sentinel
+	// the process printed just before exiting.
+	go func() {
+		werr := cmd.Wait()
+		p.mu.Lock()
+		p.waitErr = werr
+		p.mu.Unlock()
+		close(p.done)
+	}()
 	t.Cleanup(func() {
 		_ = devNull.Close()
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		}
+		<-p.done // the Wait goroutine owns cmd.Wait(); let it finish
 		teed.disable()
 		_ = out.Close()
-		if cmd.Process == nil {
-			return
-		}
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		_ = cmd.Wait()
 	})
-	return cmd
+	return p
 }
 
 // testLogTee fans subprocess output into both an on-disk log
@@ -282,14 +324,21 @@ func freeLocalPort(t *testing.T) uint32 {
 	return uint32(addr.Port) //nolint:gosec // TCP ports fit in uint16; conversion is loss-free.
 }
 
-// waitForFileContains polls path until substr appears or
-// timeout fires. The poll cadence is tight (100 ms) so the
-// readiness handoff between subprocess and Go test is snappy.
-// On timeout the helper fatals with the file contents AND the
-// tmux pane snapshot — the latter pins down whether the typed
+// waitForFileContains polls path until substr appears, the
+// producing subprocess exits, or timeout fires. The poll cadence
+// is tight (100 ms) so the readiness handoff between subprocess
+// and Go test is snappy. proc is the subprocess writing path; when
+// it dies before substr appears the helper fatals immediately
+// rather than sitting out the full timeout — the bun dev-shell
+// regression where nix crashed on a missing /dev/ptmx otherwise
+// burned the whole 15-min cap waiting for a banner a dead process
+// could never print. Pass a nil proc to poll the file alone.
+//
+// On either failure the helper fatals with the file contents AND
+// the tmux pane snapshot — the latter pins down whether the typed
 // command even reached daft (vs. a shell-quoting bug that left
 // the redirection broken so the file stays empty).
-func waitForFileContains(t *testing.T, path, substr string, timeout time.Duration, paneDump func() string) {
+func waitForFileContains(t *testing.T, proc *daftProc, path, substr string, timeout time.Duration, paneDump func() string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	//daft:lint:disable=forloopbound reason="bounded by deadline + t.Fatalf below"
@@ -297,6 +346,21 @@ func waitForFileContains(t *testing.T, path, substr string, timeout time.Duratio
 		b, _ := os.ReadFile(path) //nolint:gosec // path is under t.TempDir(); test-only.
 		if strings.Contains(string(b), substr) {
 			return
+		}
+		// Fail fast when the writer has exited. done implies all of
+		// its output has been flushed to path; re-read once here so a
+		// sentinel that landed between this loop's read and the exit
+		// check still counts (otherwise a process that printed the
+		// banner and immediately exited would false-fail).
+		if proc != nil && proc.exited() {
+			b, _ = os.ReadFile(path) //nolint:gosec // path is under t.TempDir(); test-only.
+			if strings.Contains(string(b), substr) {
+				return
+			}
+			t.Fatalf("subprocess exited (%v) before %q appeared in %s\n"+
+				"--- file contents ---\n%s\n"+
+				"--- pane ---\n%s",
+				proc.err(), substr, path, b, paneDump())
 		}
 		if time.Now().After(deadline) {
 			fi, statErr := os.Stat(path)
