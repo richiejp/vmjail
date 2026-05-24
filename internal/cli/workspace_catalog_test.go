@@ -573,6 +573,50 @@ func TestWorkspaceAcquireAndReleaseRoundTrip(t *testing.T) {
 	}
 }
 
+// TestWorkspaceResourcesSetsMemoryAndCPUs drives the resources
+// subcommand end-to-end: parse the human size, call SetResources,
+// render the summary.
+func TestWorkspaceResourcesSetsMemoryAndCPUs(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	h.run(append([]string{resourcesSubName, "--memory", "2G", "--cpus", "2"}, h.commonArgs...)...)
+}
+
+// TestWorkspaceResourcesRejectsBadMemory pins the client-side
+// parse guard: a non-numeric --memory never reaches the wire.
+func TestWorkspaceResourcesRejectsBadMemory(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	_, err := h.runErr(append([]string{resourcesSubName, "--memory", "lots"}, h.commonArgs...)...)
+	if err == nil {
+		t.Error("expected error for --memory lots")
+	}
+}
+
+func TestParseMemoryBytes(t *testing.T) {
+	cases := map[string]uint64{
+		"":     0,
+		"1024": 1024,
+		"512M": 512 << 20,
+		"4G":   4 << 30,
+		"2k":   2 << 10,
+		"1T":   1 << 40,
+	}
+	for in, want := range cases {
+		got, err := parseMemoryBytes(in)
+		if err != nil {
+			t.Errorf("parseMemoryBytes(%q): %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("parseMemoryBytes(%q) = %d, want %d", in, got, want)
+		}
+	}
+	if _, err := parseMemoryBytes("nope"); err == nil {
+		t.Error("parseMemoryBytes(nope): want error")
+	}
+}
+
 // TestWorkspaceAcquireRejectsZeroTTL pins the InvalidArgument
 // guard at the wire — passing --ttl 0s surfaces the error from
 // the orchestrator handler.

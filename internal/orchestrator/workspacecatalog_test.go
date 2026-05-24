@@ -699,6 +699,40 @@ func TestSetImageClearsField(t *testing.T) {
 	}
 }
 
+func TestSetResourcesRoundTripsAndClears(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "res"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
+
+	const wantMem = uint64(4) << 30
+	const wantCPU = uint32(4)
+	set, err := rig.client.SetResources(t.Context(), connect.NewRequest(
+		&workspacev1.SetResourcesRequest{Handle: handle, MemoryBytes: wantMem, CpuCores: wantCPU},
+	))
+	if err != nil {
+		t.Fatalf("SetResources: %v", err)
+	}
+	spec := set.Msg.GetWorkspace().GetSpec()
+	if spec.GetMemoryBytes() != wantMem || spec.GetCpuCores() != wantCPU {
+		t.Errorf("got memory=%d cpus=%d, want %d/%d",
+			spec.GetMemoryBytes(), spec.GetCpuCores(), wantMem, wantCPU)
+	}
+
+	cleared, err := rig.client.SetResources(t.Context(), connect.NewRequest(
+		&workspacev1.SetResourcesRequest{Handle: handle, MemoryBytes: 0, CpuCores: 0},
+	))
+	if err != nil {
+		t.Fatalf("SetResources clear: %v", err)
+	}
+	cspec := cleared.Msg.GetWorkspace().GetSpec()
+	if cspec.GetMemoryBytes() != 0 || cspec.GetCpuCores() != 0 {
+		t.Errorf("after clear got memory=%d cpus=%d, want 0/0",
+			cspec.GetMemoryBytes(), cspec.GetCpuCores())
+	}
+}
+
 // TestRemoveMountDropsTheTargetAndReReinstatesMissing pins the
 // symmetric "AddMount → RemoveMount" cycle: after AddMount removes
 // "mount" from Missing[], RemoveMount must put it back when the

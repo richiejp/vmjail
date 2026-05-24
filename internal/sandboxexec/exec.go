@@ -18,6 +18,7 @@ import (
 	"io"
 	"net"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -406,6 +407,7 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 	if err != nil {
 		return sandbox.Config{}, func() {}, err
 	}
+	applyResourceSizing(&cfg, spec)
 	cfg.PortForwards = portForwardsFromSpec(spec.GetPorts())
 	wantVsockForPorts := e.bridger != nil && len(cfg.PortForwards) > 0
 	wantVsockForAttach := e.attachRegistry != nil
@@ -450,6 +452,46 @@ func (e *Executor) baseBootConfig(ctx context.Context, spec *sandboxv1.SandboxSp
 	return e.assembler(ctx, imageRef, sandboxboot.BootOptions{
 		Mounts: mountsFromSpec(spec.GetMounts()),
 	})
+}
+
+// applyResourceSizing layers the SandboxSpec's guest-RAM and vCPU
+// requests onto the boot config. A zero memory request leaves
+// cfg.Memory as the assembler produced it (sandbox.Config then
+// applies its 256 MiB default). A zero CPU request on an
+// image-backed dispatch falls back to half the host's logical
+// cores (min 1) — the workspace VM shares cores with the host
+// rather than owning them, and a single vCPU starves CPU-heavy
+// workloads like `nix develop`'s nixpkgs evaluation. The
+// imageRef guard keeps the smoke-test fallback path (which boots
+// e.base) on its own CPU setting.
+func applyResourceSizing(cfg *sandbox.Config, spec *sandboxv1.SandboxSpec) {
+	if b := spec.GetMemoryBytes(); b > 0 {
+		cfg.Memory = memoryArgFromBytes(b)
+	}
+	switch {
+	case spec.GetCpuCores() > 0:
+		cfg.CPUs = int(spec.GetCpuCores())
+	case spec.GetImageRef() != "" && cfg.CPUs == 0:
+		cfg.CPUs = defaultWorkspaceCPUs()
+	}
+}
+
+// defaultWorkspaceCPUs returns half the host's logical cores,
+// floored at 1.
+func defaultWorkspaceCPUs() int {
+	if n := runtime.NumCPU() / 2; n > 0 {
+		return n
+	}
+	return 1
+}
+
+// memoryArgFromBytes renders a byte count as the MiB-suffixed
+// string sandbox.Config.Memory expects (it becomes cloud-
+// hypervisor's `--memory size=`). Rounds up so a sub-MiB request
+// never collapses to size=0.
+func memoryArgFromBytes(b uint64) string {
+	const mib = 1 << 20
+	return fmt.Sprintf("%dM", (b+mib-1)/mib)
 }
 
 // mountsFromSpec projects the wire mounts onto sandboxboot's

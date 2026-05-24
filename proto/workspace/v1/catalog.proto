@@ -88,6 +88,11 @@ message WorkspaceSpec {
   daft.sandbox.v1.GpuRequest gpu_request = 7;
   // Sharing policy. UNSPECIFIED ⇒ scheduler-default.
   daft.sandbox.v1.Isolation isolation = 8;
+  // Guest RAM in bytes. Zero ⇒ executor default (256 MiB).
+  // Projected directly onto SandboxSpec.memory_bytes at Launch.
+  uint64 memory_bytes = 9;
+  // Guest vCPU count. Zero ⇒ executor default (half host cores).
+  uint32 cpu_cores = 10;
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.

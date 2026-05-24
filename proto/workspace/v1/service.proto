@@ -62,6 +62,11 @@ service WorkspaceCatalogService {
   // will pick at Launch time, once Launch lands in B2c).
   rpc SetTarget(SetTargetRequest) returns (WorkspaceResponse) {}
 
+  // SetResources records the guest VM's RAM and vCPU sizing.
+  // Zero in either field clears it (reverts to the executor's
+  // default). Projected onto the SandboxSpec at Launch.
+  rpc SetResources(SetResourcesRequest) returns (WorkspaceResponse) {}
+
   // AddMount appends a Mount to the workspace. Mount.target must
   // be absolute; the orchestrator rejects empty or relative targets
   // and refuses a duplicate target in the existing mount set.
@@ -280,6 +285,14 @@ message SetTargetRequest {
   // mTLS fingerprint of the pinned sandbox-host. Empty clears
   // the pin.
   string sandbox_fingerprint = 2;
+}
+
+message SetResourcesRequest {
+  WorkspaceHandle handle = 1;
+  // Guest RAM in bytes. Zero clears it (executor default).
+  uint64 memory_bytes = 2;
+  // Guest vCPU count. Zero clears it (executor default).
+  uint32 cpu_cores = 3;
 }
 
 message AddMountRequest {

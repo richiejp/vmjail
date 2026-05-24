@@ -421,6 +421,14 @@ type SandboxSpec struct {
 	// metadata.workspace ref for executor convenience (scoping
 	// filesystem state, port labels, teardown).
 	WorkspaceUuid string `protobuf:"bytes,8,opt,name=workspace_uuid,json=workspaceUuid,proto3" json:"workspace_uuid,omitempty"`
+	// Guest RAM in bytes. Zero ⇒ the executor's built-in default
+	// (256 MiB). nix develop / build workloads need hundreds of
+	// MiB to low-GiB; see CLI `daft workspace resources`.
+	MemoryBytes uint64 `protobuf:"varint,9,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
+	// Guest vCPU count. Zero ⇒ the executor's default (half the
+	// host's logical cores, min 1 — the VM shares cores with the
+	// host rather than owning them exclusively).
+	CpuCores      uint32 `protobuf:"varint,10,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -509,6 +517,20 @@ func (x *SandboxSpec) GetWorkspaceUuid() string {
 		return x.WorkspaceUuid
 	}
 	return ""
+}
+
+func (x *SandboxSpec) GetMemoryBytes() uint64 {
+	if x != nil {
+		return x.MemoryBytes
+	}
+	return 0
+}
+
+func (x *SandboxSpec) GetCpuCores() uint32 {
+	if x != nil {
+		return x.CpuCores
+	}
+	return 0
 }
 
 // SandboxStatus is the orchestrator's observed runtime state.
@@ -1091,7 +1113,7 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\tworkspace\x18\x02 \x01(\v2\x1d.daft.sandbox.v1.WorkspaceRefR\tworkspace\x129\n" +
 	"\n" +
 	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12I\n" +
-	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\x86\x03\n" +
+	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xc6\x03\n" +
 	"\vSandboxSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12.\n" +
 	"\x06mounts\x18\x02 \x03(\v2\x16.daft.sandbox.v1.MountR\x06mounts\x12)\n" +
@@ -1101,7 +1123,10 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"gpuRequest\x128\n" +
 	"\tisolation\x18\x06 \x01(\x0e2\x1a.daft.sandbox.v1.IsolationR\tisolation\x12,\n" +
 	"\x04node\x18\a \x01(\v2\x18.daft.sandbox.v1.NodeRefR\x04node\x12%\n" +
-	"\x0eworkspace_uuid\x18\b \x01(\tR\rworkspaceUuid\"\xcc\x01\n" +
+	"\x0eworkspace_uuid\x18\b \x01(\tR\rworkspaceUuid\x12!\n" +
+	"\fmemory_bytes\x18\t \x01(\x04R\vmemoryBytes\x12\x1b\n" +
+	"\tcpu_cores\x18\n" +
+	" \x01(\rR\bcpuCores\"\xcc\x01\n" +
 	"\rSandboxStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12\x1b\n" +
 	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12:\n" +

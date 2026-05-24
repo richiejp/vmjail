@@ -76,6 +76,9 @@ const (
 	// WorkspaceCatalogServiceSetTargetProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's SetTarget RPC.
 	WorkspaceCatalogServiceSetTargetProcedure = "/daft.workspace.v1.WorkspaceCatalogService/SetTarget"
+	// WorkspaceCatalogServiceSetResourcesProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's SetResources RPC.
+	WorkspaceCatalogServiceSetResourcesProcedure = "/daft.workspace.v1.WorkspaceCatalogService/SetResources"
 	// WorkspaceCatalogServiceAddMountProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's AddMount RPC.
 	WorkspaceCatalogServiceAddMountProcedure = "/daft.workspace.v1.WorkspaceCatalogService/AddMount"
@@ -141,6 +144,10 @@ type WorkspaceCatalogServiceClient interface {
 	// mTLS fingerprint. Empty fingerprint clears the pin (scheduler
 	// will pick at Launch time, once Launch lands in B2c).
 	SetTarget(context.Context, *connect.Request[v1.SetTargetRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// SetResources records the guest VM's RAM and vCPU sizing.
+	// Zero in either field clears it (reverts to the executor's
+	// default). Projected onto the SandboxSpec at Launch.
+	SetResources(context.Context, *connect.Request[v1.SetResourcesRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 	// AddMount appends a Mount to the workspace. Mount.target must
 	// be absolute; the orchestrator rejects empty or relative targets
 	// and refuses a duplicate target in the existing mount set.
@@ -280,6 +287,12 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetTarget")),
 			connect.WithClientOptions(opts...),
 		),
+		setResources: connect.NewClient[v1.SetResourcesRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceSetResourcesProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetResources")),
+			connect.WithClientOptions(opts...),
+		),
 		addMount: connect.NewClient[v1.AddMountRequest, v1.WorkspaceResponse](
 			httpClient,
 			baseURL+WorkspaceCatalogServiceAddMountProcedure,
@@ -368,6 +381,7 @@ type workspaceCatalogServiceClient struct {
 	list          *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
 	setImage      *connect.Client[v1.SetImageRequest, v1.WorkspaceResponse]
 	setTarget     *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
+	setResources  *connect.Client[v1.SetResourcesRequest, v1.WorkspaceResponse]
 	addMount      *connect.Client[v1.AddMountRequest, v1.WorkspaceResponse]
 	addEnv        *connect.Client[v1.AddEnvRequest, v1.WorkspaceResponse]
 	addPort       *connect.Client[v1.AddPortRequest, v1.WorkspaceResponse]
@@ -406,6 +420,11 @@ func (c *workspaceCatalogServiceClient) SetImage(ctx context.Context, req *conne
 // SetTarget calls daft.workspace.v1.WorkspaceCatalogService.SetTarget.
 func (c *workspaceCatalogServiceClient) SetTarget(ctx context.Context, req *connect.Request[v1.SetTargetRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return c.setTarget.CallUnary(ctx, req)
+}
+
+// SetResources calls daft.workspace.v1.WorkspaceCatalogService.SetResources.
+func (c *workspaceCatalogServiceClient) SetResources(ctx context.Context, req *connect.Request[v1.SetResourcesRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.setResources.CallUnary(ctx, req)
 }
 
 // AddMount calls daft.workspace.v1.WorkspaceCatalogService.AddMount.
@@ -497,6 +516,10 @@ type WorkspaceCatalogServiceHandler interface {
 	// mTLS fingerprint. Empty fingerprint clears the pin (scheduler
 	// will pick at Launch time, once Launch lands in B2c).
 	SetTarget(context.Context, *connect.Request[v1.SetTargetRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// SetResources records the guest VM's RAM and vCPU sizing.
+	// Zero in either field clears it (reverts to the executor's
+	// default). Projected onto the SandboxSpec at Launch.
+	SetResources(context.Context, *connect.Request[v1.SetResourcesRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 	// AddMount appends a Mount to the workspace. Mount.target must
 	// be absolute; the orchestrator rejects empty or relative targets
 	// and refuses a duplicate target in the existing mount set.
@@ -632,6 +655,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetTarget")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceSetResourcesHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceSetResourcesProcedure,
+		svc.SetResources,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetResources")),
+		connect.WithHandlerOptions(opts...),
+	)
 	workspaceCatalogServiceAddMountHandler := connect.NewUnaryHandler(
 		WorkspaceCatalogServiceAddMountProcedure,
 		svc.AddMount,
@@ -722,6 +751,8 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceSetImageHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceSetTargetProcedure:
 			workspaceCatalogServiceSetTargetHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceSetResourcesProcedure:
+			workspaceCatalogServiceSetResourcesHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceAddMountProcedure:
 			workspaceCatalogServiceAddMountHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceAddEnvProcedure:
@@ -775,6 +806,10 @@ func (UnimplementedWorkspaceCatalogServiceHandler) SetImage(context.Context, *co
 
 func (UnimplementedWorkspaceCatalogServiceHandler) SetTarget(context.Context, *connect.Request[v1.SetTargetRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.SetTarget is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) SetResources(context.Context, *connect.Request[v1.SetResourcesRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.SetResources is not implemented"))
 }
 
 func (UnimplementedWorkspaceCatalogServiceHandler) AddMount(context.Context, *connect.Request[v1.AddMountRequest]) (*connect.Response[v1.WorkspaceResponse], error) {

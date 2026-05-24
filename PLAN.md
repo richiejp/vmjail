@@ -1193,37 +1193,95 @@ the user-host or in CI today.
               lossy WAN path beyond what netem-on-lo
               models (netem adds delay but not loss).
 
-           Next experiment(s) to actually localize:
-            - `cmd/daft-mitm-proxy` (landed): a debug HTTPS-MITM
-              forward proxy that runs on the host, generates a
-              CA at startup (PEM to `--ca-cert-out`), MITMs
-              CONNECT traffic, logs every request as
-              `<ts> <method> <url> -> <status> bytes=<n>
-              elapsed=<d>`, and makes the real WAN connection
-              from the host. Point the in-VM nix at it via
-              `https_proxy=http://192.168.127.254:PORT` +
-              `NIX_SSL_CERT_FILE=<ca.pem>` (CA mounted into the
-              VM through the workspace mount). This answers
-              the open question directly: the per-request log
-              shows whether the 50 KB/s is one big stream or
-              N small fetches, the byte counts, and the
-              per-request elapsed times. It *also* moves the
-              WAN leg to the host's full-bandwidth network —
-              if nix-through-proxy is fast, that both localizes
-              the cause AND validates the slice-3 approach
-              (outsource fetches to the host). Smoke-verified
-              against example.com: one request logged with
-              status + bytes + elapsed.
+           RESOLVED (2026-05-24) — the failure is **memory, not
+           network**. `cmd/daft-mitm-proxy` (a host-side HTTPS-MITM
+           forward proxy: generates a CA at startup, MITMs CONNECT,
+           logs `<ts> <method> <url> -> <status> bytes=<n>
+           elapsed=<d>`, makes the real WAN call from the host) was
+           wired into `TestClusterWorkspaceBunDevServer` via
+           `DAFT_MITM_PROXY=1` (in-VM nix points at
+           `https_proxy=http://192.168.127.254:PORT` +
+           `NIX_SSL_CERT_FILE=/workspace/mitm-ca.pem`, CA dropped in
+           the workspace mount). Two proxy fixes were needed to make
+           it a usable probe: follow redirects internally (nix's
+           flake fetch hits `github.com/.../archive/<rev>.tar.gz`
+           which 302s to codeload; a bare `Transport.RoundTrip`
+           hands the 302 back and nix's libcurl can't follow it
+           through the MITM, leaving the tree empty) and *don't*
+           force `NIX_REMOTE=` (local-store mode stalls this image,
+           which expects the daemon).
+
+           What the proxy log showed across runs:
+            - `GET api.github.com/.../commits/nixos-25.05` → 200,
+              3.7 KB, ~230 ms (latency-bound tiny request).
+            - `GET codeload.github.com/.../tar.gz/<rev>` → 200,
+              **44.8 MB in ~1.3–1.4 s = ~30–35 MiB/s** through the
+              *entire* VM stack + MITM. Egress is fast; the
+              "50 KB/s" was never the real story.
+
+           nix never reached `cache.nixos.org` at all. Immediately
+           after the tarball download the guest kernel logged
+           `nix invoked oom-killer` /
+           `Out of memory: Killed process (nix)
+           total-vm:393448kB, anon-rss:178244kB`, with the guest
+           reporting `65439 pages RAM` ≈ **256 MiB**. nix is
+           OOM-killed mid-`nixpkgs` evaluation; the test then sits
+           the full 15-minute cap waiting for a readiness line that
+           can never come.
+
+           Root cause + exact location: workspace VMs are
+           hardwired to the 256 MiB default.
+           `internal/sandboxexec/exec.go:445` `baseBootConfig`
+           only returns `e.base` (which carries `DAFT_MEMORY` from
+           `sandbox.ConfigFromEnv`) on the **`imageRef == ""`**
+           smoke-test fallback; every real dispatch carries an
+           image ref, so it calls the assembler, whose
+           `internal/sandboxboot/sandboxboot.go:155` builds a fresh
+           `sandbox.Config` **with no `Memory` field** →
+           `defaultMemory = "256M"`. `DAFT_MEMORY` therefore never
+           reaches a workspace VM (confirmed: a `DAFT_MEMORY=4G`
+           run still booted 256 MiB and OOM'd identically). The
+           standalone `daft-sandboxd run` path
+           (`internal/sandboxdcli/run.go:607`) has the same gap.
+
+           Fix landed (2026-05-24): per-workspace VM sizing.
+           Added `memory_bytes` + `cpu_cores` to `SandboxSpec`
+           and `WorkspaceSpec`, a `SetResources` workspace RPC, a
+           `daft workspace resources --memory 4G --cpus N` CLI
+           command, and `applyResourceSizing` in
+           `internal/sandboxexec/exec.go` — which projects the
+           spec onto the boot config and, for image-backed
+           dispatches with no explicit CPU request, defaults
+           vCPUs to half the host's logical cores (min 1) instead
+           of the bare 1-core `sandbox.Config` default. Memory
+           still defaults to 256 MiB when unset; workloads opt up.
+           Verified: with `--memory 4G --cpus 4` the bun VM no
+           longer OOMs (256 MiB OOM-killed nix deterministically
+           at nixpkgs eval; 4 GiB does not).
+
+           SECOND bottleneck, still open: even with the OOM gone,
+           `TestClusterWorkspaceBunDevServer` still times out at
+           the 15-min cap. nix goes silent right after
+           "unpacking … into the Git cache" / the codeload
+           tarball download (which itself clocks 7–35 MiB/s
+           through the proxy — fine) and never emits another
+           `-vv` line. No OOM, no error. The ~14-min silent phase
+           is the nixpkgs git-cache unpack + store import +
+           evaluation — filesystem/CPU work over the VM's
+           virtiofs-backed store, not network. This is squarely
+           **slice 3** (host-mounted persistent `/nix/store`) /
+           a virtiofs-small-file-throughput investigation; the
+           memory fix was necessary but not sufficient.
+
+           Remaining (lower-priority, network-shaped) probes, now
+           that the immediate blocker is understood:
             - Add a `loss=N%` variant to netem to test
               loss-recovery behaviour at WAN RTT.
-            - tcpdump from inside the VM during a real
-              `bun-test` run; inspect cwnd evolution, RTO,
-              SACK behaviour.
-            - Verify whether the 50 KB/s is a single TCP
-              stream or aggregate-of-many-small-fetches by
-              timing a single curl of a known-large file
-              from cache.nixos.org with `--max-time` and
-              `--write-out '%{speed_download}'`.
+            - To observe the `cache.nixos.org` closure fetch through
+              the proxy, the **nix-daemon** (not our exec'd client)
+              must inherit `https_proxy`/`NIX_SSL_CERT_FILE`; it's
+              started by the image entrypoint, so this needs an
+              entrypoint/daemon-env change rather than exec env.
 
            Regardless of where the bun-test root cause
            ultimately lands, **slice 3 below** (host-mounted

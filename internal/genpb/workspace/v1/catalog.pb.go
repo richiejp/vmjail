@@ -232,7 +232,12 @@ type WorkspaceSpec struct {
 	// GPU reservation. Unset ⇒ CPU-only.
 	GpuRequest *v1.GpuRequest `protobuf:"bytes,7,opt,name=gpu_request,json=gpuRequest,proto3" json:"gpu_request,omitempty"`
 	// Sharing policy. UNSPECIFIED ⇒ scheduler-default.
-	Isolation     v1.Isolation `protobuf:"varint,8,opt,name=isolation,proto3,enum=daft.sandbox.v1.Isolation" json:"isolation,omitempty"`
+	Isolation v1.Isolation `protobuf:"varint,8,opt,name=isolation,proto3,enum=daft.sandbox.v1.Isolation" json:"isolation,omitempty"`
+	// Guest RAM in bytes. Zero ⇒ executor default (256 MiB).
+	// Projected directly onto SandboxSpec.memory_bytes at Launch.
+	MemoryBytes uint64 `protobuf:"varint,9,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
+	// Guest vCPU count. Zero ⇒ executor default (half host cores).
+	CpuCores      uint32 `protobuf:"varint,10,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -321,6 +326,20 @@ func (x *WorkspaceSpec) GetIsolation() v1.Isolation {
 		return x.Isolation
 	}
 	return v1.Isolation(0)
+}
+
+func (x *WorkspaceSpec) GetMemoryBytes() uint64 {
+	if x != nil {
+		return x.MemoryBytes
+	}
+	return 0
+}
+
+func (x *WorkspaceSpec) GetCpuCores() uint32 {
+	if x != nil {
+		return x.CpuCores
+	}
+	return 0
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.
@@ -502,7 +521,7 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x9b\x03\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xdb\x03\n" +
 	"\rWorkspaceSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12(\n" +
 	"\x10pending_build_id\x18\x02 \x01(\tR\x0ependingBuildId\x12.\n" +
@@ -512,7 +531,10 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\x1atarget_sandbox_fingerprint\x18\x06 \x01(\tR\x18targetSandboxFingerprint\x12<\n" +
 	"\vgpu_request\x18\a \x01(\v2\x1b.daft.sandbox.v1.GpuRequestR\n" +
 	"gpuRequest\x128\n" +
-	"\tisolation\x18\b \x01(\x0e2\x1a.daft.sandbox.v1.IsolationR\tisolation\"\x8b\x02\n" +
+	"\tisolation\x18\b \x01(\x0e2\x1a.daft.sandbox.v1.IsolationR\tisolation\x12!\n" +
+	"\fmemory_bytes\x18\t \x01(\x04R\vmemoryBytes\x12\x1b\n" +
+	"\tcpu_cores\x18\n" +
+	" \x01(\rR\bcpuCores\"\x8b\x02\n" +
 	"\x0fWorkspaceStatus\x12/\n" +
 	"\x13observed_generation\x18\x01 \x01(\x04R\x12observedGeneration\x12:\n" +
 	"\n" +

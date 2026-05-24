@@ -129,6 +129,7 @@ func run(args []string, out io.Writer) int {
 type proxy struct {
 	certs    *certCache
 	upstream *http.Transport
+	client   *http.Client
 	logSink  io.Writer
 	logMu    sync.Mutex
 }
@@ -141,7 +142,20 @@ func newProxy(certs *certCache, insecureUpstream bool, logSink io.Writer) *proxy
 	tr := base.Clone()
 	tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: insecureUpstream} //nolint:gosec // debug tool, gated by flag.
 	tr.ResponseHeaderTimeout = upstreamTimeout
-	return &proxy{certs: certs, upstream: tr, logSink: logSink}
+	// client follows redirects so the proxy serves the *final*
+	// body to the in-VM client. nix's flake fetch hits
+	// github.com/.../archive/<rev>.tar.gz which 302-redirects to
+	// codeload.github.com; a bare Transport.RoundTrip would hand
+	// the 302 back and nix's libcurl would try to follow it on a
+	// path that doesn't survive the MITM, leaving the unpacked
+	// tree empty. Following here keeps the chain inside the proxy
+	// and lets the big download be observed in one log line.
+	return &proxy{
+		certs:    certs,
+		upstream: tr,
+		client:   &http.Client{Transport: tr},
+		logSink:  logSink,
+	}
 }
 
 func (p *proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -209,26 +223,34 @@ func (p *proxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *proxy) serveOne(tlsClient io.Writer, req *http.Request) {
+	reqURL := req.URL.String()
 	start := time.Now()
-	resp, err := p.upstream.RoundTrip(req)
+	resp, err := p.client.Do(req)
 	if err != nil {
-		p.logLine("%s %s -> err=%v", req.Method, req.URL, err)
+		p.logLine("%s %s -> err=%v", req.Method, reqURL, err)
 		_, _ = io.WriteString(tlsClient, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// resp.Request is the final request after any redirects; log
+	// it alongside the original so a github->codeload hop is
+	// visible rather than hidden behind a transparent 200.
+	finalURL := reqURL
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL = resp.Request.URL.String()
+	}
+
 	cw := &countingWriter{w: tlsClient}
 	wErr := resp.Write(cw)
 	elapsed := time.Since(start)
-	statusForLog := resp.StatusCode
 	if wErr != nil {
 		p.logLine("%s %s -> %d bytes=%d elapsed=%s writeback-err=%v",
-			req.Method, req.URL, statusForLog, cw.n, elapsed, wErr)
+			req.Method, finalURL, resp.StatusCode, cw.n, elapsed, wErr)
 		return
 	}
 	p.logLine("%s %s -> %d bytes=%d elapsed=%s",
-		req.Method, req.URL, statusForLog, cw.n, elapsed)
+		req.Method, finalURL, resp.StatusCode, cw.n, elapsed)
 }
 
 func (p *proxy) logLine(format string, args ...any) {

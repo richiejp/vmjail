@@ -40,18 +40,19 @@ const (
 // Subcommand verb names. Promoted to constants so the cobra Use
 // fields, span names, and tests reference the same string.
 const (
-	createSubName   = "create"
-	statusSubName   = "status"
-	imageSubName    = "image"
-	targetSubName   = "target"
-	mountSubName    = "mount"
-	envSubName      = "env"
-	portSubName     = "port"
-	validateSubName = "validate"
-	launchSubName   = "launch"
-	stopSubName     = "stop"
-	addSubName      = "add"
-	rmSubName       = "rm"
+	createSubName    = "create"
+	statusSubName    = "status"
+	imageSubName     = "image"
+	targetSubName    = "target"
+	mountSubName     = "mount"
+	envSubName       = "env"
+	portSubName      = "port"
+	validateSubName  = "validate"
+	launchSubName    = "launch"
+	stopSubName      = "stop"
+	addSubName       = "add"
+	rmSubName        = "rm"
+	resourcesSubName = "resources"
 )
 
 var errOrchestratorRequired = errors.New("daft workspace: --orchestrator is required")
@@ -225,6 +226,7 @@ func newWorkspaceCatalogSubcommands() []*cobra.Command {
 		newWorkspaceListCmd(),
 		newWorkspaceImageCmd(),
 		newWorkspaceTargetCmd(),
+		newWorkspaceResourcesCmd(),
 		newWorkspaceMountCmd(),
 		newWorkspaceEnvCmd(),
 		newWorkspacePortCmd(),
@@ -384,6 +386,75 @@ func newWorkspaceTargetCmd() *cobra.Command {
 	}
 	bindWorkspaceClientFlags(cmd, &opts)
 	return cmd
+}
+
+// newWorkspaceResourcesCmd sets the guest VM's RAM and vCPU
+// sizing. Both flags are optional; a flag left unset sends zero,
+// which the orchestrator records as "clear" (executor default).
+func newWorkspaceResourcesCmd() *cobra.Command {
+	var (
+		opts   workspaceClientOpts
+		memStr string
+		cpus   uint32
+	)
+	cmd := &cobra.Command{
+		Use:           resourcesSubName,
+		Short:         "Set the workspace VM's RAM (--memory 4G) and/or vCPUs (--cpus N)",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			memBytes, err := parseMemoryBytes(memStr)
+			if err != nil {
+				return err
+			}
+			return runCatalogCmd(cmd, opts, resourcesSubName,
+				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
+					resp, err := c.SetResources(ctx, connect.NewRequest(
+						&workspacev1.SetResourcesRequest{
+							Handle:      h,
+							MemoryBytes: memBytes,
+							CpuCores:    cpus,
+						},
+					))
+					if err != nil {
+						return err
+					}
+					return writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace())
+				})
+		},
+	}
+	cmd.Flags().StringVar(&memStr, "memory", "",
+		"guest RAM, e.g. 4G / 512M (empty clears, reverts to default)")
+	cmd.Flags().Uint32Var(&cpus, "cpus", 0,
+		"guest vCPU count (0 clears, reverts to default)")
+	bindWorkspaceClientFlags(cmd, &opts)
+	return cmd
+}
+
+// parseMemoryBytes converts a human size ("4G", "512M", "1024")
+// to bytes. Empty string ⇒ 0 (clear). Suffixes K/M/G/T are
+// powers of 1024; a bare number is bytes.
+func parseMemoryBytes(s string) (uint64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	mult := uint64(1)
+	num := s
+	switch s[len(s)-1] {
+	case 'K', 'k':
+		mult, num = 1<<10, s[:len(s)-1]
+	case 'M', 'm':
+		mult, num = 1<<20, s[:len(s)-1]
+	case 'G', 'g':
+		mult, num = 1<<30, s[:len(s)-1]
+	case 'T', 't':
+		mult, num = 1<<40, s[:len(s)-1]
+	}
+	n, err := strconv.ParseUint(num, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid memory size %q: %w", s, err)
+	}
+	return n * mult, nil
 }
 
 func newWorkspaceMountCmd() *cobra.Command {

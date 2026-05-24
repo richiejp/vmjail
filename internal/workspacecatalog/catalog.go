@@ -185,6 +185,11 @@ type Spec struct {
 	GpuCount   uint32
 	GpuMinVRAM uint64
 	Isolation  int32 // matches daft.sandbox.v1.Isolation enum integer
+	// MemoryBytes / CPUCores: guest VM sizing. Zero ⇒ executor
+	// default (256 MiB RAM, half-host-cores). Projected onto the
+	// SandboxSpec at Launch, same as the GPU fields above.
+	MemoryBytes uint64
+	CPUCores    uint32
 }
 
 // Status is the controller-observed workspace state.

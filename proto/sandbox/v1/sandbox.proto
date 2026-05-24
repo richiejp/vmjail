@@ -72,6 +72,14 @@ message SandboxSpec {
   // metadata.workspace ref for executor convenience (scoping
   // filesystem state, port labels, teardown).
   string workspace_uuid = 8;
+  // Guest RAM in bytes. Zero ⇒ the executor's built-in default
+  // (256 MiB). nix develop / build workloads need hundreds of
+  // MiB to low-GiB; see CLI `daft workspace resources`.
+  uint64 memory_bytes = 9;
+  // Guest vCPU count. Zero ⇒ the executor's default (half the
+  // host's logical cores, min 1 — the VM shares cores with the
+  // host rather than owning them exclusively).
+  uint32 cpu_cores = 10;
 }
 
 // SandboxStatus is the orchestrator's observed runtime state.

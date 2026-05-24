@@ -406,6 +406,62 @@ func TestPortForwardsFromSpecAssignsSequentialVsockPorts(t *testing.T) {
 	}
 }
 
+func TestApplyResourceSizingExplicit(t *testing.T) {
+	cfg := sandbox.Config{}
+	applyResourceSizing(&cfg, &sandboxv1.SandboxSpec{
+		ImageRef:    "img:v1",
+		MemoryBytes: 2 << 30, // 2 GiB
+		CpuCores:    3,
+	})
+	if cfg.Memory != "2048M" {
+		t.Errorf("Memory = %q, want 2048M", cfg.Memory)
+	}
+	if cfg.CPUs != 3 {
+		t.Errorf("CPUs = %d, want 3", cfg.CPUs)
+	}
+}
+
+func TestApplyResourceSizingDefaultsCPUForImageDispatch(t *testing.T) {
+	cfg := sandbox.Config{}
+	applyResourceSizing(&cfg, &sandboxv1.SandboxSpec{ImageRef: "img:v1"})
+	if cfg.Memory != "" {
+		t.Errorf("Memory = %q, want empty (defers to sandbox default)", cfg.Memory)
+	}
+	if want := defaultWorkspaceCPUs(); cfg.CPUs != want {
+		t.Errorf("CPUs = %d, want default %d", cfg.CPUs, want)
+	}
+}
+
+func TestApplyResourceSizingLeavesFallbackPathAlone(t *testing.T) {
+	// No image ref ⇒ the e.base smoke-test path; don't impose the
+	// half-cores default or touch a preset CPU count.
+	cfg := sandbox.Config{CPUs: 1}
+	applyResourceSizing(&cfg, &sandboxv1.SandboxSpec{})
+	if cfg.CPUs != 1 {
+		t.Errorf("CPUs = %d, want 1 (untouched on fallback path)", cfg.CPUs)
+	}
+}
+
+func TestDefaultWorkspaceCPUsAtLeastOne(t *testing.T) {
+	if got := defaultWorkspaceCPUs(); got < 1 {
+		t.Errorf("defaultWorkspaceCPUs() = %d, want >= 1", got)
+	}
+}
+
+func TestMemoryArgFromBytesRoundsUp(t *testing.T) {
+	cases := map[uint64]string{
+		1 << 20:       "1M",
+		4 << 30:       "4096M",
+		(1 << 20) + 1: "2M", // rounds up, never size=0
+		1:             "1M",
+	}
+	for in, want := range cases {
+		if got := memoryArgFromBytes(in); got != want {
+			t.Errorf("memoryArgFromBytes(%d) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 // TestPortForwardsFromSpecEmpty pins the no-ports path: the
 // spec carries nothing, the cmdline should carry no daft.port=
 // tokens, no allocation churn.

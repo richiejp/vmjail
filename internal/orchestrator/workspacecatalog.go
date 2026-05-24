@@ -195,6 +195,22 @@ func (h *WorkspaceCatalogHandler) SetTarget(
 		})
 }
 
+// SetResources records the guest VM's RAM/vCPU sizing. Zero in
+// either field reverts it to the executor default.
+func (h *WorkspaceCatalogHandler) SetResources(
+	_ context.Context,
+	req *connect.Request[workspacev1.SetResourcesRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	memBytes := req.Msg.GetMemoryBytes()
+	cpuCores := req.Msg.GetCpuCores()
+	return h.mutate(req.Header(), req.Msg.GetHandle(),
+		func(w *workspacecatalog.Workspace) error {
+			w.Spec.MemoryBytes = memBytes
+			w.Spec.CPUCores = cpuCores
+			return nil
+		})
+}
+
 // mutate is the shared auth → resolve → Update → project plumbing
 // behind every per-field setter. Defaults to MutateSpec (bumps
 // generation + recomputes Missing/Ready). Add* handlers don't use
@@ -755,6 +771,8 @@ func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Finge
 		Mounts:        mountsToProto(ws.Spec.Mounts),
 		Env:           envToProto(ws.Spec.Env),
 		Ports:         portsToProto(ws.Spec.Ports),
+		MemoryBytes:   ws.Spec.MemoryBytes,
+		CpuCores:      ws.Spec.CPUCores,
 	}
 }
 
@@ -893,6 +911,8 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 			TargetSandboxFingerprint: ws.Spec.TargetSandboxFingerprint,
 			GpuRequest:               gpuRequestToProto(ws.Spec),
 			Isolation:                sandboxv1.Isolation(ws.Spec.Isolation),
+			MemoryBytes:              ws.Spec.MemoryBytes,
+			CpuCores:                 ws.Spec.CPUCores,
 		},
 		Status: &workspacev1.WorkspaceStatus{
 			ObservedGeneration: ws.Status.ObservedGeneration,
