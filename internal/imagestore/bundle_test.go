@@ -237,6 +237,37 @@ func TestDefaultRuntimeMountsIncludesTmpfsScratch(t *testing.T) {
 	}
 }
 
+// TestDefaultRuntimeMountsIncludesDevPts pins the devpts mount
+// that gives the container a working /dev/ptmx. Without it,
+// `nix develop --command` (and any PTY allocation) fails with
+// "opening pseudoterminal master: No such file or directory".
+func TestDefaultRuntimeMountsIncludesDevPts(t *testing.T) {
+	var devpts *runtimeMount
+	for i, m := range defaultRuntimeMounts() {
+		if m.Destination == "/dev/pts" {
+			devpts = &defaultRuntimeMounts()[i]
+			break
+		}
+	}
+	if devpts == nil {
+		t.Fatal("default mounts missing /dev/pts")
+	}
+	if devpts.Type != mountTypeDevpts {
+		t.Errorf("/dev/pts type = %q, want %q", devpts.Type, mountTypeDevpts)
+	}
+	wantOpts := map[string]bool{"newinstance": false, "ptmxmode=0666": false}
+	for _, o := range devpts.Options {
+		if _, ok := wantOpts[o]; ok {
+			wantOpts[o] = true
+		}
+	}
+	for o, found := range wantOpts {
+		if !found {
+			t.Errorf("/dev/pts options missing %q (got %v)", o, devpts.Options)
+		}
+	}
+}
+
 // TestBuildRuntimeConfigRootfsWritable pins the rootfs Readonly
 // flag — load-bearing for nix-CLI workflows (see runtimespec.go
 // comment for the chain of constraints).

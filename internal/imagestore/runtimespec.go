@@ -224,9 +224,10 @@ func defaultRuntimeLinuxConfig() runtimeLinuxConfig {
 
 // Mount-option keywords reused across the default mount set.
 const (
-	mountOptNosuid = "nosuid"
-	mountOptNodev  = "nodev"
-	mountTypeTmpfs = "tmpfs"
+	mountOptNosuid  = "nosuid"
+	mountOptNodev   = "nodev"
+	mountTypeTmpfs  = "tmpfs"
+	mountTypeDevpts = "devpts"
 )
 
 // defaultRuntimeMounts mirrors contrib/hello-bundle/config.json. Kept
@@ -244,6 +245,21 @@ func defaultRuntimeMounts() []runtimeMount {
 		{
 			Destination: "/dev", Type: mountTypeTmpfs, Source: mountTypeTmpfs,
 			Options: []string{mountOptNosuid, "strictatime", "mode=755", "size=65536k"},
+		},
+		// /dev/pts gives the container a private devpts instance so
+		// processes can allocate PTYs by opening /dev/ptmx — which
+		// the runtime symlinks to pts/ptmx once this is mounted.
+		// Without it /dev is a bare tmpfs with no ptmx node, and any
+		// PTY allocation fails with ENOENT ("opening pseudoterminal
+		// master: No such file or directory"). `nix develop
+		// --command` hits exactly that when it spawns its build
+		// shell. newinstance + ptmxmode=0666 keep it self-contained
+		// and openable from the container's (possibly unprivileged,
+		// userns-mapped) uid; gid=5 is omitted deliberately since
+		// the tty group need not exist in the container's gid map.
+		{
+			Destination: "/dev/pts", Type: mountTypeDevpts, Source: mountTypeDevpts,
+			Options: []string{mountOptNosuid, "noexec", "newinstance", "ptmxmode=0666", "mode=0620"},
 		},
 		{
 			Destination: "/sys", Type: "sysfs", Source: "sysfs",

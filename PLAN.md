@@ -1259,19 +1259,41 @@ the user-host or in CI today.
            longer OOMs (256 MiB OOM-killed nix deterministically
            at nixpkgs eval; 4 GiB does not).
 
-           SECOND bottleneck, still open: even with the OOM gone,
-           `TestClusterWorkspaceBunDevServer` still times out at
-           the 15-min cap. nix goes silent right after
-           "unpacking … into the Git cache" / the codeload
-           tarball download (which itself clocks 7–35 MiB/s
-           through the proxy — fine) and never emits another
-           `-vv` line. No OOM, no error. The ~14-min silent phase
-           is the nixpkgs git-cache unpack + store import +
-           evaluation — filesystem/CPU work over the VM's
-           virtiofs-backed store, not network. This is squarely
-           **slice 3** (host-mounted persistent `/nix/store`) /
-           a virtiofs-small-file-throughput investigation; the
-           memory fix was necessary but not sufficient.
+           SECOND bottleneck, RESOLVED (2026-05-24) — it was
+           never a bottleneck, it was a crash followed by the test
+           waiting out its own timeout. An in-VM /proc sampler run
+           alongside `nix develop` (DAFT_PROFILE_BUN=1 in
+           workspace_nix_bun_profile_test.go) showed: after the
+           tarball, nix evaluates nixpkgs fully (RSS ~476 MiB,
+           hundreds of lib/*.nix + pkgs/stdenv/*.nix lines), writes
+           ~600 store paths, then — with -vv — prints:
+
+             executing builder '/nix/store/…-bash-5.2p37/bin/bash'
+             error: opening pseudoterminal master:
+                    No such file or directory
+
+           nix then exits. The "14-min silent phase" was just the
+           test's waitForFileContains polling for a "bun listening
+           on" line that never comes (it doesn't watch for process
+           exit): the sampler found no nix process at all, loadavg
+           0.00, store frozen, Dirty=0 — idle, because nix was
+           already dead.
+
+           Root cause: `internal/imagestore/runtimespec.go`
+           `defaultRuntimeMounts` mounted /dev as a bare tmpfs with
+           no /dev/pts devpts submount, so /dev/ptmx didn't exist
+           and any PTY allocation failed with ENOENT. `nix develop
+           --command` allocates a PTY for its build shell and hit
+           exactly that. (The agent's attach-exec path sets up its
+           own devpts per attach_exec_linux.go; the OCI container
+           the bundle runs never got one.) Fix: add a
+           `/dev/pts` devpts mount (newinstance, ptmxmode=0666) to
+           defaultRuntimeMounts — the runtime then symlinks
+           /dev/ptmx → pts/ptmx. Validated by re-running the bun
+           test. Neither network nor virtiofs throughput was ever
+           the problem; the earlier slice-3 framing was a red
+           herring for THIS test (slice 3 still has independent
+           merit for cold-fetch latency).
 
            Remaining (lower-priority, network-shaped) probes, now
            that the immediate blocker is understood:
