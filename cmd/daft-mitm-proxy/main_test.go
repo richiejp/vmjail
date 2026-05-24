@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"io"
 	"math/big"
 	"net"
@@ -192,12 +193,12 @@ func TestRunWritesCAToDisk(t *testing.T) {
 		}
 	}
 
-	pem, err := os.ReadFile(caPath) //nolint:gosec // caPath is t.TempDir + constant.
+	caPEM, err := os.ReadFile(caPath) //nolint:gosec // caPath is t.TempDir + constant.
 	if err != nil {
 		t.Fatalf("read CA: %v", err)
 	}
-	if !bytes.HasPrefix(pem, []byte("-----BEGIN CERTIFICATE-----")) {
-		t.Errorf("CA file does not start with PEM CERTIFICATE block: %s", pem[:min(len(pem), 64)])
+	if !bytes.HasPrefix(caPEM, []byte("-----BEGIN CERTIFICATE-----")) {
+		t.Errorf("CA file does not start with PEM CERTIFICATE block: %s", caPEM[:min(len(caPEM), 64)])
 	}
 }
 
@@ -959,6 +960,172 @@ func TestRunCacheOpenError(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "cache:") {
 		t.Errorf("missing 'cache:' err in out: %q", out.String())
+	}
+}
+
+// TestLoadOrCreateCertCacheEphemeral: no --ca-dir mints a fresh CA.
+func TestLoadOrCreateCertCacheEphemeral(t *testing.T) {
+	cc, err := loadOrCreateCertCache("")
+	if err != nil {
+		t.Fatalf("loadOrCreateCertCache(\"\"): %v", err)
+	}
+	if cc == nil || cc.caCert == nil || cc.caKey == nil {
+		t.Fatal("ephemeral CA not fully built")
+	}
+}
+
+// TestPersistentCAReloads is I2's headline: a CA minted on the first
+// call is written to --ca-dir and the second call reloads the *same*
+// cert + key rather than minting a new one — so the sandbox's trust
+// anchor survives a proxy restart.
+func TestPersistentCAReloads(t *testing.T) {
+	dir := t.TempDir()
+	first, err := loadOrCreateCertCache(dir)
+	if err != nil {
+		t.Fatalf("first loadOrCreate: %v", err)
+	}
+	for _, n := range []string{caCertName, caKeyName} {
+		if _, serr := os.Stat(filepath.Join(dir, n)); serr != nil {
+			t.Errorf("expected %s persisted: %v", n, serr)
+		}
+	}
+	second, err := loadOrCreateCertCache(dir)
+	if err != nil {
+		t.Fatalf("second loadOrCreate: %v", err)
+	}
+	if !bytes.Equal(first.caCertPEM, second.caCertPEM) {
+		t.Error("reloaded CA cert differs from persisted one")
+	}
+	if first.caKey.N.Cmp(second.caKey.N) != 0 {
+		t.Error("reloaded CA key differs from persisted one")
+	}
+}
+
+// TestPersistentCARegeneratesWhenKeyMissing: a stray cert with no key
+// is a partial state, treated as missing → mint fresh + persist both.
+func TestPersistentCARegeneratesWhenKeyMissing(t *testing.T) {
+	dir := t.TempDir()
+	seed, err := newCertCache()
+	if err != nil {
+		t.Fatalf("newCertCache: %v", err)
+	}
+	if werr := os.WriteFile(filepath.Join(dir, caCertName), seed.caCertPEM, 0o644); werr != nil {
+		t.Fatalf("seed cert: %v", werr)
+	}
+	if _, err := loadOrCreateCertCache(dir); err != nil {
+		t.Fatalf("loadOrCreate with missing key: %v", err)
+	}
+	if _, serr := os.Stat(filepath.Join(dir, caKeyName)); serr != nil {
+		t.Errorf("key not persisted on regenerate: %v", serr)
+	}
+}
+
+// TestPersistentCACorruptCert: a present-but-malformed CA is a hard
+// error, not a silent regenerate (that would mask a trust mismatch).
+func TestPersistentCACorruptCert(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, caCertName), "not a pem block")
+	writeFile(t, filepath.Join(dir, caKeyName), "not a pem block")
+	if _, err := loadOrCreateCertCache(dir); err == nil {
+		t.Error("want error on corrupt CA cert; got nil")
+	}
+}
+
+// TestPersistentCACorruptKey covers the key-parse branch: a valid
+// cert beside a malformed key.
+func TestPersistentCACorruptKey(t *testing.T) {
+	dir := t.TempDir()
+	seed, err := newCertCache()
+	if err != nil {
+		t.Fatalf("newCertCache: %v", err)
+	}
+	if werr := os.WriteFile(filepath.Join(dir, caCertName), seed.caCertPEM, 0o644); werr != nil {
+		t.Fatalf("seed cert: %v", werr)
+	}
+	writeFile(t, filepath.Join(dir, caKeyName),
+		"-----BEGIN RSA PRIVATE KEY-----\nbad\n-----END RSA PRIVATE KEY-----\n")
+	if _, err := loadOrCreateCertCache(dir); err == nil {
+		t.Error("want error on corrupt CA key; got nil")
+	}
+}
+
+// TestPersistentCAMkdirError: a --ca-dir whose parent is a regular
+// file can't be created, so persistence (and the call) fails.
+func TestPersistentCAMkdirError(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "afile")
+	if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	if _, err := loadOrCreateCertCache(filepath.Join(parent, "ca")); err == nil {
+		t.Error("want error when ca-dir can't be created; got nil")
+	}
+}
+
+// TestPersistentCAWriteError covers persist's write-failure branch:
+// the ca-dir exists but is read-only, so writing the key into it
+// fails after MkdirAll succeeds.
+func TestPersistentCAWriteError(t *testing.T) {
+	dir := t.TempDir()
+	//nolint:gosec // G302: deliberately read-only dir to force a write error.
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	//nolint:gosec // G302: restore writability for t.TempDir cleanup.
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if _, err := loadOrCreateCertCache(dir); err == nil {
+		t.Error("want error persisting into read-only ca-dir; got nil")
+	}
+}
+
+// TestPersistentCAKeyNoPEMBlock covers loadCertCache's keyBlock==nil
+// branch: a valid cert beside a key file that holds no PEM block.
+func TestPersistentCAKeyNoPEMBlock(t *testing.T) {
+	dir := t.TempDir()
+	seed, err := newCertCache()
+	if err != nil {
+		t.Fatalf("newCertCache: %v", err)
+	}
+	if werr := os.WriteFile(filepath.Join(dir, caCertName), seed.caCertPEM, 0o644); werr != nil {
+		t.Fatalf("seed cert: %v", werr)
+	}
+	writeFile(t, filepath.Join(dir, caKeyName), "no pem block here")
+	if _, err := loadOrCreateCertCache(dir); err == nil {
+		t.Error("want error: key has no PEM block; got nil")
+	}
+}
+
+// TestPersistentCACertBadDER covers loadCertCache's ParseCertificate
+// error branch: a well-formed PEM block wrapping non-certificate DER.
+func TestPersistentCACertBadDER(t *testing.T) {
+	dir := t.TempDir()
+	badCert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not-valid-der")})
+	if werr := os.WriteFile(filepath.Join(dir, caCertName), badCert, 0o644); werr != nil {
+		t.Fatalf("seed cert: %v", werr)
+	}
+	writeFile(t, filepath.Join(dir, caKeyName), "present-but-unread")
+	if _, err := loadOrCreateCertCache(dir); err == nil {
+		t.Error("want error: cert is not valid DER; got nil")
+	}
+}
+
+// TestPersistentCARegenerateError covers loadOrCreateCertCache's
+// branch where the on-disk CA is absent and minting a fresh one fails
+// (forced via the rsaGenerateKey seam).
+func TestPersistentCARegenerateError(t *testing.T) {
+	old := rsaGenerateKey
+	t.Cleanup(func() { rsaGenerateKey = old })
+	rsaGenerateKey = func(io.Reader, int) (*rsa.PrivateKey, error) {
+		return nil, errFake("forced regenerate failure")
+	}
+	if _, err := loadOrCreateCertCache(t.TempDir()); err == nil {
+		t.Error("want error when regenerate's newCertCache fails; got nil")
+	}
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }
 

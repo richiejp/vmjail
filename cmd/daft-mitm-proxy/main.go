@@ -37,10 +37,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	iofs "io/fs"
 	"math/big"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -49,10 +51,18 @@ import (
 )
 
 const (
-	readyPrefix     = "daft-mitm-proxy listening on "
-	defaultAddr     = "127.0.0.1:0"
-	caValidity      = 24 * time.Hour
+	readyPrefix = "daft-mitm-proxy listening on "
+	defaultAddr = "127.0.0.1:0"
+	// caValidity is generous because a persisted CA (--ca-dir) is a
+	// trust anchor the sandbox keeps across many runs; a 24h cert
+	// would force re-distribution daily. Still a dev/test CA — see
+	// the file header.
+	caValidity      = 10 * 365 * 24 * time.Hour
 	leafValidity    = time.Hour
+	caCertName      = "ca.pem"
+	caKeyName       = "ca.key"
+	caKeyPerm       = 0o600
+	caCertPerm      = 0o644
 	upstreamTimeout = 5 * time.Minute
 	connectOKLine   = "HTTP/1.1 200 OK\r\n\r\n"
 	keySize         = 2048
@@ -85,8 +95,11 @@ func run(args []string, out io.Writer) int {
 	}
 	addr := fs.String("addr", defaultAddr, "listen address (host:port)")
 	caCertOut := fs.String("ca-cert-out", "",
-		"write the generated CA cert (PEM) to this path; "+
+		"write the CA cert (PEM) to this path; "+
 			"the in-VM client must trust it via NIX_SSL_CERT_FILE")
+	caDir := fs.String("ca-dir", "",
+		"persist the CA cert+key under this dir and reuse it across "+
+			"runs (empty = fresh ephemeral CA each startup)")
 	insecureUpstream := fs.Bool("insecure-upstream", false,
 		"skip upstream TLS verification (for self-signed test peers)")
 	cacheDir := fs.String("cache-dir", "",
@@ -99,7 +112,7 @@ func run(args []string, out io.Writer) int {
 		return 2
 	}
 
-	certs, err := newCertCache()
+	certs, err := loadOrCreateCertCache(*caDir)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "daft-mitm-proxy err: ca: %v\n", err)
 		return 1
@@ -415,6 +428,93 @@ func newCertCache() (*certCache, error) {
 		caCertPEM: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
 		leaves:    make(map[string]*tls.Certificate),
 	}, nil
+}
+
+// loadOrCreateCertCache returns a certCache. With caDir == "" it
+// mints a fresh ephemeral CA (the investigation-tool default). With
+// caDir set it loads ca.pem + ca.key if both are present, otherwise
+// mints a fresh CA and persists it there — so the sandbox's trust
+// anchor stays stable across proxy restarts and the CA only has to be
+// distributed once. A corrupt (non-missing) CA on disk is a hard
+// error rather than a silent regenerate, so a stale-trust mismatch
+// surfaces instead of hiding.
+func loadOrCreateCertCache(caDir string) (*certCache, error) {
+	if caDir == "" {
+		return newCertCache()
+	}
+	certPath := filepath.Join(caDir, caCertName)
+	keyPath := filepath.Join(caDir, caKeyName)
+	cc, err := loadCertCache(certPath, keyPath)
+	switch {
+	case err == nil:
+		return cc, nil
+	case !errors.Is(err, iofs.ErrNotExist):
+		return nil, err
+	}
+	cc, err = newCertCache()
+	if err != nil {
+		return nil, err
+	}
+	if perr := cc.persist(caDir, certPath, keyPath); perr != nil {
+		return nil, perr
+	}
+	return cc, nil
+}
+
+// loadCertCache reconstructs a certCache from a PEM cert + PKCS1 key
+// on disk. A missing file propagates as fs.ErrNotExist (the caller
+// treats that as "mint a fresh one"); a present-but-malformed file
+// is a distinct hard error.
+func loadCertCache(certPath, keyPath string) (*certCache, error) {
+	certPEM, err := os.ReadFile(certPath) //nolint:gosec // path is caDir + constant.
+	if err != nil {
+		return nil, err
+	}
+	keyPEM, err := os.ReadFile(keyPath) //nolint:gosec // path is caDir + constant.
+	if err != nil {
+		return nil, err
+	}
+	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil {
+		return nil, fmt.Errorf("ca: no PEM block in %s", certPath)
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("ca: parse cert: %w", err)
+	}
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return nil, fmt.Errorf("ca: no PEM block in %s", keyPath)
+	}
+	key, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("ca: parse key: %w", err)
+	}
+	return &certCache{
+		caCert:    cert,
+		caKey:     key,
+		caCertPEM: certPEM,
+		leaves:    make(map[string]*tls.Certificate),
+	}, nil
+}
+
+// persist writes the CA cert (world-readable; it's public) and key
+// (0600; it's the signing secret) under caDir.
+func (c *certCache) persist(caDir, certPath, keyPath string) error {
+	if err := os.MkdirAll(caDir, 0o700); err != nil {
+		return fmt.Errorf("ca: mkdir %s: %w", caDir, err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(c.caKey),
+	})
+	if err := os.WriteFile(keyPath, keyPEM, caKeyPerm); err != nil {
+		return fmt.Errorf("ca: write key: %w", err)
+	}
+	if err := os.WriteFile(certPath, c.caCertPEM, caCertPerm); err != nil { //nolint:gosec // CA cert is public.
+		return fmt.Errorf("ca: write cert: %w", err)
+	}
+	return nil
 }
 
 func (c *certCache) leafForHost(host string) (*tls.Certificate, error) {

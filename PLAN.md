@@ -1656,12 +1656,20 @@ Slices, cheapest-first:
     needs the deferred daemon-env change (see the D6c.3 slice-2
     "Remaining probes" note). The focused test above proves the
     mechanism end-to-end without that dependency.
-  - I2: **Persistent CA + on-disk store**. Today the CA is
-    regenerated every startup (24h validity, explicitly "NOT FOR
-    PRODUCTION" in the file header) and the cert/cache state is
-    in-memory. Persist the CA under the config dir and the blob
-    store on disk so the cache survives across runs and the
-    sandbox's trust anchor is stable.
+  - I2: **Persistent CA + on-disk store** — **landed**. The blob
+    store was already on disk (I1's `httpcache` persists the index +
+    CAS), so this slice was the CA half: `daft-mitm-proxy --ca-dir`
+    loads `ca.pem` + `ca.key` on startup if both are present and
+    otherwise mints a fresh CA and persists them there, so the
+    sandbox's trust anchor is stable across restarts and the cert
+    only has to be distributed once. CA validity bumped from 24h to
+    10y (a daily-expiring trust anchor defeats the point; still a
+    dev/test CA per the file header). A present-but-corrupt CA is a
+    hard error rather than a silent regenerate, so a trust mismatch
+    surfaces. `--ca-dir` unset keeps the prior fresh-ephemeral-CA
+    behaviour. Unit-tested: mint+persist+reload-identical, regenerate
+    on partial state, and the corrupt-cert / corrupt-key / bad-DER /
+    unwritable-dir / regenerate-failure error paths.
   - I3: **Shared CAS GC / refcounting** at `internal/cas`. The
     proxy cache grows unbounded, and workspace sync already wants
     eviction — PLAN notes the CAS has no expiry policy. Build
