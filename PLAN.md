@@ -1635,12 +1635,27 @@ Slices, cheapest-first:
     (proves the second GET never refetches), offline-miss,
     error-status pass-through, persistence across reopen, and the
     fs/cache error branches.
-    **Next**: wire it into `TestClusterWorkspaceBunDevServer` with a
-    persistent `--cache-dir` (under `os.UserCacheDir()`, like
-    `FetchNixOfficialImage`) so the nixpkgs-tarball + codeload fetch
-    is recorded once then replayed on every subsequent run —
-    de-flaking the suite's hard dependency on
-    github/cache.nixos.org reachability.
+    **End-to-end validated** in a real VM by
+    `TestClusterWorkspaceCachingProxy`
+    (`workspace_caching_proxy_test.go`): an in-VM `daft-http-fetch`
+    (gained a `--proxy` flag; the minimal nix-shell-image has no
+    `/bin/sh` to set `https_proxy` through) GETs an HTTPS URL routed
+    through `daft-mitm-proxy` on the sandboxd-host loopback, reached
+    via sandboxnet's `DefaultHostLoopbackIP` NAT. Phase 1 records;
+    phase 2 **shuts the upstream down** and replays through a second
+    `--offline` proxy sharing the cache dir — success then proves the
+    body came from the CAS, not the network. `daft-mitm-proxy` is now
+    built by `testdaemons` (cluster `MitmProxyBin`). The proxy log
+    shows the path explicitly: `… -> 200 bytes=22 … STORE` then
+    `… HIT` on the offline pass.
+    **Not yet wired into `TestClusterWorkspaceBunDevServer`**, and it
+    can't fully de-flake it in I1: the bun *closure* substitution
+    from cache.nixos.org runs in the **nix-daemon**, which doesn't
+    inherit the proxy env (only the client-side flake fetch from
+    github/codeload would route through). Fully caching the bun test
+    needs the deferred daemon-env change (see the D6c.3 slice-2
+    "Remaining probes" note). The focused test above proves the
+    mechanism end-to-end without that dependency.
   - I2: **Persistent CA + on-disk store**. Today the CA is
     regenerated every startup (24h validity, explicitly "NOT FOR
     PRODUCTION" in the file header) and the cert/cache state is

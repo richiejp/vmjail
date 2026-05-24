@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -147,7 +148,7 @@ func TestNewClientFallback(t *testing.T) {
 	old := http.DefaultTransport
 	defer func() { http.DefaultTransport = old }()
 	http.DefaultTransport = stubRoundTripper{}
-	c := newClient(true)
+	c := newClient(true, nil)
 	if c == nil || c.Transport == nil {
 		t.Fatal("newClient returned nil client/transport on fallback")
 	}
@@ -160,4 +161,48 @@ type stubRoundTripper struct{}
 
 func (stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, fmt.Errorf("stubRoundTripper: unused")
+}
+
+// TestRunRoutesThroughProxy proves --proxy makes the request go via
+// the given proxy: a stand-in proxy server records the CONNECT/req
+// it receives. Here a plain-HTTP proxy returns the body itself, so a
+// matching sentinel can only mean the request traversed the proxy.
+func TestRunRoutesThroughProxy(t *testing.T) {
+	body := []byte("via-proxy-body\n")
+	var proxied atomic.Bool
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxied.Store(true)
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(proxy.Close)
+
+	var out bytes.Buffer
+	// Target host is unroutable; the only way a 200 comes back is
+	// through the proxy, which answers every request with body.
+	code := run([]string{
+		"--url=http://daft-fetch-no-such-host.invalid/",
+		"--proxy=" + proxy.URL,
+	}, &out)
+	if code != 0 {
+		t.Fatalf("code = %d, want 0; out=%q", code, out.String())
+	}
+	if !proxied.Load() {
+		t.Error("proxy was not used")
+	}
+	wantSHA := sha256.Sum256(body)
+	if !strings.Contains(out.String(), hex.EncodeToString(wantSHA[:])) {
+		t.Errorf("body sha not from proxy: %q", out.String())
+	}
+}
+
+// TestRunRejectsBadProxy covers the --proxy parse-error branch.
+func TestRunRejectsBadProxy(t *testing.T) {
+	var out bytes.Buffer
+	code := run([]string{"--url=http://example.invalid/", "--proxy=://no-scheme"}, &out)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1; out=%q", code, out.String())
+	}
+	if !strings.Contains(out.String(), "bad --proxy") {
+		t.Errorf("missing bad-proxy message: %q", out.String())
+	}
 }

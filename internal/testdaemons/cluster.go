@@ -82,6 +82,10 @@ type Cluster struct {
 	// ClientConfigDir is a fresh config dir holding the client's
 	// identity + a peer store that approves the orchestrator.
 	ClientConfigDir string
+	// MitmProxyBin is the absolute path to the freshly-built
+	// daft-mitm-proxy binary, for tests that route in-VM egress
+	// through the caching proxy (PLAN.md Phase I).
+	MitmProxyBin string
 
 	OrchestratorFP identity.Fingerprint
 	SandboxdFP     identity.Fingerprint
@@ -167,6 +171,7 @@ func NewCluster(t *testing.T) *Cluster {
 		DaftBin:         bins.daft,
 		OrchestratorURL: url,
 		ClientConfigDir: cliDir,
+		MitmProxyBin:    bins.mitmProxy,
 		OrchestratorFP:  orchID.Fingerprint(),
 		SandboxdFP:      sbxID.Fingerprint(),
 		ClientFP:        cliID.Fingerprint(),
@@ -180,6 +185,7 @@ type binaries struct {
 	daft         string
 	orchestrator string
 	sandboxd     string
+	mitmProxy    string
 }
 
 //nolint:gochecknoglobals // sync.Once shared across tests in the same process so binaries build once.
@@ -210,6 +216,7 @@ func ensureBinaries(t *testing.T) binaries {
 			{"daft", "./cmd/daft"},
 			{"daft-orchestrator", "./cmd/daft-orchestrator"},
 			{"daft-sandboxd", "./cmd/daft-sandboxd"},
+			{"daft-mitm-proxy", "./cmd/daft-mitm-proxy"},
 		}
 		for _, tgt := range targets {
 			outPath := filepath.Join(dir, tgt.name)
@@ -227,6 +234,8 @@ func ensureBinaries(t *testing.T) binaries {
 				built.orchestrator = outPath
 			case "daft-sandboxd":
 				built.sandboxd = outPath
+			case "daft-mitm-proxy":
+				built.mitmProxy = outPath
 			}
 		}
 		bins = built

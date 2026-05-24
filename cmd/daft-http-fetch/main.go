@@ -9,6 +9,7 @@
 //
 //	--url=...       URL to GET (required)
 //	--insecure      skip TLS verification (for self-signed test certs)
+//	--proxy=...      route the request through this HTTP proxy
 //
 // On success prints
 //
@@ -31,6 +32,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 
 	"github.com/localai-org/darkaifactory/internal/banner"
@@ -56,19 +58,30 @@ func run(args []string, out io.Writer) int {
 		_, _ = fmt.Fprintln(out, "\nUsage of daft-http-fetch:")
 		fs.PrintDefaults()
 	}
-	url := fs.String("url", "", "URL to GET (required)")
+	target := fs.String("url", "", "URL to GET (required)")
 	insecure := fs.Bool("insecure", false,
 		"skip TLS certificate verification (for self-signed test certs)")
+	proxy := fs.String("proxy", "",
+		"route the request through this HTTP proxy (e.g. http://host:port)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if *url == "" {
+	if *target == "" {
 		_, _ = fmt.Fprintln(out, "daft-http-fetch err: --url is required")
 		return 1
 	}
-	client := newClient(*insecure)
+	var proxyURL *url.URL
+	if *proxy != "" {
+		pu, perr := url.Parse(*proxy)
+		if perr != nil {
+			_, _ = fmt.Fprintf(out, "daft-http-fetch err: bad --proxy: %v\n", perr)
+			return 1
+		}
+		proxyURL = pu
+	}
+	client := newClient(*insecure, proxyURL)
 	//nolint:noctx // a one-shot CLI tool; no parent context.
-	resp, err := client.Get(*url)
+	resp, err := client.Get(*target)
 	if err != nil {
 		_, _ = fmt.Fprintf(out, "daft-http-fetch err: get: %v\n", err)
 		return 1
@@ -93,7 +106,7 @@ func run(args []string, out io.Writer) int {
 // undone by an unconditional override here.
 //
 //nolint:gosec // G402: InsecureSkipVerify is gated on the --insecure flag.
-func newClient(insecure bool) *http.Client {
+func newClient(insecure bool, proxyURL *url.URL) *http.Client {
 	base, ok := http.DefaultTransport.(*http.Transport)
 	if !ok {
 		base = &http.Transport{}
@@ -101,6 +114,9 @@ func newClient(insecure bool) *http.Client {
 	tr := base.Clone()
 	if insecure {
 		tr.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+	if proxyURL != nil {
+		tr.Proxy = http.ProxyURL(proxyURL)
 	}
 	return &http.Client{Transport: tr}
 }
