@@ -1723,6 +1723,87 @@ fetches (narHash in flake.lock, `.narinfo` hashes), so a caching
 proxy can never corrupt nix — which makes the general path safe
 even for the ecosystem that already has a store to mount.
 
+Phase J — **Hermetic egress: default-deny WAN + mandatory cached
+proxy/DNS for the test suite**:
+
+Goal: every test that touches a remote service goes through the
+caching proxy by default, and traffic *not* routed through it cannot
+reach the WAN. DNS is served by a caching resolver so lookups don't
+leak either. Any other protocol that wants out is dropped and logged
+so we **stop and consider** it deliberately rather than silently
+allowing or breaking it.
+
+Decisions taken (2026-05-24, with the user):
+  - **Interception = env injection, not transparent MITM.** Workloads
+    get `https_proxy`/`HTTPS_PROXY` + the proxy CA
+    (`NIX_SSL_CERT_FILE`) injected by default. (Transparent SNI-based
+    MITM was considered and *is* feasible — SNI is cleartext and the
+    VM trusts our CA — but the user opted for explicit env injection.)
+    The WAN block is the backstop: anything that ignores the env (a
+    static binary, the nix-daemon) hits default-deny and **fails
+    loudly** instead of leaking.
+  - **Hermeticity = hosted cassette store.** Recorded responses
+    (httpcache CAS + DNS cache) are pushed/pulled from a remote over
+    the existing mTLS stack so CI is hermetic without committing
+    multi-hundred-MB closures to git. (Per-dev local cache and
+    committed cassettes were the alternatives.)
+
+Enforcement mechanism (researched 2026-05-24): gvisor-tap-vsock's
+forwarder (`pkg/services/forwarder/{tcp,udp}.go`) hardcodes
+`net.Dial` for all guest-initiated outbound — no allowlist or
+custom-dialer hook, and `virtualnetwork.New` wires it in wholesale.
+So default-deny is not a config flag; sandboxnet must own the
+forward path. Because env injection sends all legitimate egress to
+the proxy at the gateway VIP (`192.168.127.254` → NAT → host
+`127.0.0.1`), the guest never legitimately needs gvisor to dial a
+real WAN IP. The allowlist is therefore tight: **the forwarder may
+dial only the NAT-translated loopback target; every other
+destination is dropped + logged.** The proxy runs host-side (outside
+gvisor) and is the sole WAN-capable component.
+
+Slices, cheapest-first:
+  - J1: **Egress allowlist in sandboxnet** (spike + land). Replace
+    gvisor-tap-vsock's stock TCP/UDP forwarder wiring with our own
+    that consults a policy: allow dials only to the NAT target
+    (host loopback) + configured proxy/DNS ports; drop everything
+    else and log `egress-deny proto=<> dst=<>` (the "stop and
+    consider" signal). Unit-test the policy decision; integration-
+    test that an allowed dial connects and a denied one fails fast.
+    This is core-network surgery — the bench suite (D8) guards the
+    throughput regression.
+  - J2: **Default proxy-env injection.** The workspace launch/exec
+    path sets `https_proxy`/`HTTPS_PROXY`/`NIX_SSL_CERT_FILE` (proxy
+    CA) by default; the cluster auto-starts the proxy with a
+    persistent `--cache-dir` + `--ca-dir`. Where the workload spawns
+    a daemon (nix-daemon), inject into its env too; where we can't,
+    J1's deny rule makes the leak a hard failure surfaced in the log.
+  - J3: **Caching DNS resolver.** A host-side record/replay DNS cache
+    (its own cassette, same shape as httpcache); sandboxnet's :53
+    lane routes to it; replay mode never queries the WAN. Reconcile
+    with gvisor-tap-vsock's built-in `DNS []Zone` server (may serve
+    the static/gateway answers directly).
+  - J4: **Hosted cassette store.** Push/pull the proxy + DNS
+    cassettes from a remote over mTLS (reuse registry/CAS), keyed so
+    a test pulls its cassette before running and a record run pushes
+    the delta. Makes CI hermetic without git bloat.
+  - J5: **Flip the suite to default-on.** `NewCluster` enables the
+    egress policy + proxy + DNS by default; record vs replay chosen
+    by env (record locally, replay in CI from pulled cassettes).
+    Audit each remote-touching test; the bun test's nix-daemon
+    traffic now either routes (J2 daemon-env) or fails-and-is-seen.
+
+Open questions:
+  - **Record bootstrap**: a brand-new cassette needs one WAN-allowed
+    record pass. Is that a per-test opt-in flag, or a global
+    "record mode" that lifts the deny rule and points the proxy/DNS
+    at the real WAN? Leaning global record mode + push to the store.
+  - **Cassette keying / invalidation**: what keys a cassette to a
+    test + its inputs (image rev, flake.lock, request set) so a
+    stale cassette is refetched rather than silently replayed?
+  - **Non-HTTP/DNS protocols**: none needed yet; J1's deny-log is the
+    tripwire. When one appears (e.g. a git:// or ssh fetch), stop and
+    design its lane rather than widening the allowlist reflexively.
+
 ### What survives, what moves
 
 - **Survives**: broker (relay), daft-fuse, overlayfs, mTLS
