@@ -1575,6 +1575,100 @@ Notes:
   asks for an unsupported endpoint we 501 it with a pointer to
   the daft equivalent.
 
+Phase I — **Caching / pinning egress proxy**:
+
+Rationale: `cmd/daft-mitm-proxy` was built as a throwaway probe for
+the D6c.3 bun-test investigation (D8 slice "build daft-mitm-proxy
+investigation tool"), but it already sits in the one architectural
+position that makes it far more than a probe. It terminates TLS,
+mints per-host leaf certs from a CA the sandbox trusts (via
+`NIX_SSL_CERT_FILE` / the in-VM CA bundle), and makes the real
+upstream call at a single line (`p.client.Do(req)`,
+cmd/daft-mitm-proxy/main.go). A cache and a router both slot in
+right there: consult cache → on miss, `Do` → store → write back;
+or rewrite the destination to a local service. Promoting it gives
+three capabilities a per-ecosystem store mount (D6c.3 slice 3)
+can't: it works across *every* package ecosystem that fetches over
+HTTPS (nix, PyPI, npm, apt, container registries), it keeps a live
+network path (more realistic than a fully-offline mount) while
+removing the hard dependency on remote hosts during testing, and
+it becomes the seam where a user pins which upstream versions the
+sandbox sees — so a mutated/compromised remote does not
+immediately propagate into their builds.
+
+Backing store: reuse `internal/cas.Store` as-is — the same
+sha256-keyed, zstd-compressed, verifying-reader blob store that
+workspace sync uses. The reuse boundary is clean: **share
+`cas.Store`, replace the workspace `Manifest` with a flat URL →
+entry index** where each entry is `{digest, status, headers,
+validators}`. The CAS is content-agnostic (`Put(io.Reader) →
+digest`); a cached body stores exactly like a workspace chunk.
+FastCDC chunking is *not* expected to earn its keep here —
+package artifacts are already-compressed tarballs/wheels where
+sub-file dedup across versions is poor — so store whole-body
+blobs first and only chunk if measurement justifies it.
+
+Cert pinning is the hard boundary for the routing feature: clients
+that trust the system CA bundle (nix/pip/npm/apt — all libcurl)
+are transparently routable, but clients that pin a specific
+cert/pubkey (HPKP, embedded roots, app-level pinning) defeat the
+MITM. That covers our package-fetch use cases and not much else,
+which is fine.
+
+Slices, cheapest-first:
+  - I1: **Record/replay cache for the test suite** — the smallest
+    viable version of the whole idea, and the one with immediate
+    payoff. `cas.Store`-backed URL → entry index; cache-on-miss
+    while online; a `DAFT_PROXY_OFFLINE=1` mode that serves only
+    from cache and fails the request on a miss. Wire into
+    `TestClusterWorkspaceBunDevServer` so its nixpkgs-tarball +
+    codeload fetch is recorded once, then replayed offline on
+    every subsequent run — de-flaking the integration suite's
+    current hard dependency on github/cache.nixos.org reachability.
+  - I2: **Persistent CA + on-disk store**. Today the CA is
+    regenerated every startup (24h validity, explicitly "NOT FOR
+    PRODUCTION" in the file header) and the cert/cache state is
+    in-memory. Persist the CA under the config dir and the blob
+    store on disk so the cache survives across runs and the
+    sandbox's trust anchor is stable.
+  - I3: **Shared CAS GC / refcounting** at `internal/cas`. The
+    proxy cache grows unbounded, and workspace sync already wants
+    eviction — PLAN notes the CAS has no expiry policy. Build
+    refcounting + an eviction policy (size cap / LRU) *once at the
+    CAS layer* so both consumers share it rather than each
+    bolting on its own.
+  - I4: **Pinning / freeze policy**. A user-controlled URL →
+    digest pin set plus refetch/expire rules; a "freeze" mode that
+    serves only pinned digests so an upstream mutation can't
+    propagate into the sandbox. This is the supply-chain story —
+    a lockfile for the whole network, not just one ecosystem's
+    package set.
+  - I5: **Mock / route table**. Config maps a host (or host+path)
+    to a local listener or an alternate upstream; explicit opt-in
+    per route (it's a footgun otherwise), documenting the
+    cert-pinning limitation. Lets a user stand up a local service
+    that mimics a remote one and have the sandbox transparently
+    hit it.
+  - I6: **HTTP cache-correctness hardening** (only as far as the
+    workload needs). Today the proxy is CONNECT-only and does no
+    cache validation. Add conditional revalidation
+    (`ETag`/`If-None-Match`), honor explicit `no-store`, and
+    handle `Vary`/range requests — but scoped to what package
+    managers actually emit, not full RFC 9111. Add plain-HTTP
+    support only if a real client needs it.
+
+Open question: relationship to D6c.3 slice 3 (host-mounted
+`/nix/store`). Both reduce remote dependence. The proxy cache is
+general across ecosystems and keeps a realistic live network path
+but costs HTTP cache semantics + a CA that's now a real trust
+anchor; the store mount is nix-only and fully offline but needs
+the host to pre-`nix copy`. Once I1 lands, re-evaluate whether
+slice 3 is still worth building or whether the proxy cache
+subsumes its motivation. nix content-verifies everything it
+fetches (narHash in flake.lock, `.narinfo` hashes), so a caching
+proxy can never corrupt nix — which makes the general path safe
+even for the ecosystem that already has a store to mount.
+
 ### What survives, what moves
 
 - **Survives**: broker (relay), daft-fuse, overlayfs, mTLS
