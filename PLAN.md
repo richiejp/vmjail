@@ -1089,13 +1089,22 @@ the user-host or in CI today.
            entrypoint's process.env (same gap D6c.1 hit) so
            PATH only resolves nix after sourcing
            `/etc/profile.d/nix.sh`. 3/3 stable in ~4 s.
-        2. real dev-shell workload — `nix develop -c bun dev`
-           against a flake fixture that pins nixpkgs + pulls
-           bun. Will exercise the D6c.2 egress path: the first
-           `nix develop` fetches bun's closure from
-           cache.nixos.org through sandboxnet's NAT.
-           Port-forward + HTTP-GET asserts a known body
-           served by `bun dev`.
+        2. real dev-shell workload — LANDED + passing
+           (TestClusterWorkspaceBunDevServer, ~120s). `nix
+           develop --command bun run server.ts` against a flake
+           fixture that pins nixpkgs + pulls bun; port-forward +
+           HTTP-GET asserts the bun-served body comes back
+           through the full byte path. Exercises the D6c.2 egress
+           path: the first `nix develop` fetches the nixpkgs
+           tarball from github and bun's closure from
+           cache.nixos.org through sandboxnet's NAT. Requires the
+           per-workspace 4 GiB / 4 vCPU sizing and the /dev/pts
+           devpts mount (both below). An in-VM /proc profiler
+           (attachWorkspaceProfiler, workspace_profiler_test.go)
+           is wired in by default around the readiness wait — its
+           samples are invisible on a pass and surface process
+           state (R/D + wchan, loadavg, store growth) in the log
+           on any future stall/crash.
 
            Throughput floor under investigation: in-VM
            `curl` of the nixpkgs tarball through the sandboxnet
