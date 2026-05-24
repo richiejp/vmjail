@@ -13,7 +13,7 @@ import (
 
 func mustOpen(t *testing.T, dir string, offline bool) *httpcache.Cache {
 	t.Helper()
-	c, err := httpcache.Open(dir, offline)
+	c, err := httpcache.Open(dir, offline, 0)
 	if err != nil {
 		t.Fatalf("Open(%s): %v", dir, err)
 	}
@@ -132,7 +132,7 @@ func TestPutDropsHopByHopHeaders(t *testing.T) {
 
 // TestOpenRejectsEmptyDir pins the guard.
 func TestOpenRejectsEmptyDir(t *testing.T) {
-	if _, err := httpcache.Open("", false); err == nil {
+	if _, err := httpcache.Open("", false, 0); err == nil {
 		t.Error("Open(\"\") = nil err; want error")
 	}
 }
@@ -144,7 +144,7 @@ func TestOpenRejectsMalformedIndex(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "index.json"), []byte("{not json"), 0o600); err != nil {
 		t.Fatalf("seed bad index: %v", err)
 	}
-	if _, err := httpcache.Open(dir, false); err == nil {
+	if _, err := httpcache.Open(dir, false, 0); err == nil {
 		t.Error("Open with malformed index = nil err; want error")
 	}
 }
@@ -167,7 +167,7 @@ func TestOpenStoreError(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "blobs"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("seed blocking file: %v", err)
 	}
-	if _, err := httpcache.Open(dir, false); err == nil {
+	if _, err := httpcache.Open(dir, false, 0); err == nil {
 		t.Error("Open with blobs-is-a-file = nil err; want error")
 	}
 }
@@ -208,7 +208,7 @@ func TestOpenMkdirError(t *testing.T) {
 	if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
 		t.Fatalf("seed file: %v", err)
 	}
-	if _, err := httpcache.Open(filepath.Join(parent, "cache"), false); err == nil {
+	if _, err := httpcache.Open(filepath.Join(parent, "cache"), false, 0); err == nil {
 		t.Error("Open under a file = nil err; want error")
 	}
 }
@@ -221,7 +221,7 @@ func TestOpenIndexReadError(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(dir, "index.json"), 0o700); err != nil {
 		t.Fatalf("seed index dir: %v", err)
 	}
-	if _, err := httpcache.Open(dir, false); err == nil {
+	if _, err := httpcache.Open(dir, false, 0); err == nil {
 		t.Error("Open with index.json-as-dir = nil err; want error")
 	}
 }
@@ -260,3 +260,120 @@ func TestPutWriteError(t *testing.T) {
 type errReader struct{}
 
 func (errReader) Read([]byte) (int, error) { return 0, io.ErrUnexpectedEOF }
+
+// monotonicClock returns a nowNanos stub whose value strictly
+// increases by 1 per call, so Put/Lookup recency order is
+// deterministic without sleeping.
+func monotonicClock() func() int64 {
+	var n int64
+	return func() int64 { n++; return n }
+}
+
+// bodyOf reconstructs the cached body bytes for key, or fails.
+func bodyOf(t *testing.T, c *httpcache.Cache, key string) []byte {
+	t.Helper()
+	e, ok := c.Lookup(key)
+	if !ok {
+		t.Fatalf("Lookup(%q) miss", key)
+	}
+	rc, err := c.Body(e.Digest)
+	if err != nil {
+		t.Fatalf("Body(%q): %v", key, err)
+	}
+	defer func() { _ = rc.Close() }()
+	b, err := io.ReadAll(rc)
+	if err != nil {
+		t.Fatalf("read body(%q): %v", key, err)
+	}
+	return b
+}
+
+// TestEvictionByteCapLRU: with a byte cap, an over-cap Put evicts the
+// least-recently-used entry. Three 10-byte bodies into a 25-byte cap
+// leaves the two most recent.
+func TestEvictionByteCapLRU(t *testing.T) {
+	httpcache.SetNowNanos(monotonicClock())
+	t.Cleanup(httpcache.ResetSeams)
+	c, err := httpcache.Open(t.TempDir(), false, 25)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ten := strings.Repeat("x", 10)
+	for _, k := range []string{"k1", "k2", "k3"} {
+		mustPut(t, c, k, ten)
+	}
+	if _, ok := c.Lookup("k1"); ok {
+		t.Error("k1 should have been evicted (oldest)")
+	}
+	for _, k := range []string{"k2", "k3"} {
+		if _, ok := c.Lookup(k); !ok {
+			t.Errorf("%s should have survived", k)
+		}
+	}
+}
+
+// TestEvictionHonorsLookupRecency: a Lookup bumps recency, so a
+// subsequently-Put entry evicts a different (now-oldest) victim.
+func TestEvictionHonorsLookupRecency(t *testing.T) {
+	httpcache.SetNowNanos(monotonicClock())
+	t.Cleanup(httpcache.ResetSeams)
+	c, err := httpcache.Open(t.TempDir(), false, 25)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ten := strings.Repeat("x", 10)
+	mustPut(t, c, "k1", ten)
+	mustPut(t, c, "k2", ten)
+	c.Lookup("k1") // bump k1 ahead of k2
+	mustPut(t, c, "k3", ten)
+	if _, ok := c.Lookup("k2"); ok {
+		t.Error("k2 should have been evicted (least recently used)")
+	}
+	if _, ok := c.Lookup("k1"); !ok {
+		t.Error("k1 should have survived (recently looked up)")
+	}
+}
+
+// TestEvictionSkipsSharedDigest: two keys sharing one body keep the
+// blob alive even when one key is evicted.
+func TestEvictionSkipsSharedDigest(t *testing.T) {
+	httpcache.SetNowNanos(monotonicClock())
+	t.Cleanup(httpcache.ResetSeams)
+	c, err := httpcache.Open(t.TempDir(), false, 15)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	shared := strings.Repeat("y", 10)
+	mustPut(t, c, "k1", shared)
+	mustPut(t, c, "k2", shared) // same digest; total counted 20 > 15 → evict k1
+	if _, ok := c.Lookup("k1"); ok {
+		t.Error("k1 should have been evicted")
+	}
+	if got := bodyOf(t, c, "k2"); string(got) != shared {
+		t.Errorf("k2 body = %q, want %q (shared blob must survive)", got, shared)
+	}
+}
+
+// TestNoEvictionWhenUnbounded: maxBytes 0 never evicts.
+func TestNoEvictionWhenUnbounded(t *testing.T) {
+	c, err := httpcache.Open(t.TempDir(), false, 0)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	keys := []string{"a", "b", "c", "d", "e"}
+	for _, k := range keys {
+		mustPut(t, c, k, strings.Repeat("z", 1000))
+	}
+	for _, k := range keys {
+		if _, ok := c.Lookup(k); !ok {
+			t.Errorf("%s evicted under unbounded cap", k)
+		}
+	}
+}
+
+func mustPut(t *testing.T, c *httpcache.Cache, key, body string) {
+	t.Helper()
+	if _, err := c.Put(key, 200, http.Header{}, strings.NewReader(body)); err != nil {
+		t.Fatalf("Put(%s): %v", key, err)
+	}
+}

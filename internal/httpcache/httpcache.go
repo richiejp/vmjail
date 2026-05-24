@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/localai-org/darkaifactory/internal/cas"
 	"github.com/localai-org/darkaifactory/internal/oops"
@@ -79,18 +80,25 @@ var hopByHopHeaders = map[string]struct{}{
 
 // Entry is one cached response: a pointer into the CAS for the body
 // plus the status and headers needed to reconstruct the response.
+// LastAccess (unix nanoseconds) drives LRU eviction; it's bumped on
+// every Lookup hit and on Put.
 type Entry struct {
-	Digest string      `json:"digest"`
-	Size   uint64      `json:"size"`
-	Status int         `json:"status"`
-	Header http.Header `json:"header"`
+	Digest     string      `json:"digest"`
+	Size       uint64      `json:"size"`
+	Status     int         `json:"status"`
+	Header     http.Header `json:"header"`
+	LastAccess int64       `json:"last_access"`
 }
 
 // Cache is a key -> Entry index backed by a CAS blob store. Lookup
 // and Put are safe for concurrent use.
 type Cache struct {
-	store     *cas.Store
-	offline   bool
+	store   *cas.Store
+	offline bool
+	// maxBytes caps the total stored body size; 0 means unbounded.
+	// On Put, least-recently-used entries are evicted until the
+	// total is back under the cap.
+	maxBytes  uint64
 	indexPath string
 
 	mu    sync.Mutex
@@ -103,8 +111,9 @@ type Cache struct {
 // recordings are visible. offline makes the caller treat misses as
 // hard failures (the Cache itself does not fetch — that is the
 // caller's job — but it carries the flag so the policy lives in one
-// place).
-func Open(dir string, offline bool) (*Cache, error) {
+// place). maxBytes caps total stored body size (0 = unbounded);
+// over-cap Puts evict least-recently-used entries.
+func Open(dir string, offline bool, maxBytes uint64) (*Cache, error) {
 	if dir == "" {
 		return nil, errors.New("httpcache: empty cache dir")
 	}
@@ -118,6 +127,7 @@ func Open(dir string, offline bool) (*Cache, error) {
 	c := &Cache{
 		store:     store,
 		offline:   offline,
+		maxBytes:  maxBytes,
 		indexPath: filepath.Join(dir, indexName),
 		index:     make(map[string]Entry),
 	}
@@ -149,12 +159,21 @@ func (c *Cache) loadIndex() error {
 	return nil
 }
 
-// Lookup returns the Entry recorded for key, if any.
+// Lookup returns the Entry recorded for key, if any. A hit bumps the
+// entry's LastAccess in memory so it survives LRU eviction; the bump
+// is not persisted (a read shouldn't trigger a disk write), so
+// recency ordering across a restart falls back to the last persisted
+// value — good enough for an eviction heuristic.
 func (c *Cache) Lookup(key string) (Entry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.index[key]
-	return e, ok
+	if !ok {
+		return Entry{}, false
+	}
+	e.LastAccess = nowNanos()
+	c.index[key] = e
+	return e, true
 }
 
 // Body returns a verified reader over the cached body for digest.
@@ -176,18 +195,68 @@ func (c *Cache) Put(key string, status int, header http.Header, body io.Reader) 
 		return Entry{}, fmt.Errorf("httpcache: store body: %w", err)
 	}
 	entry := Entry{
-		Digest: digest,
-		Size:   size,
-		Status: status,
-		Header: sanitizeHeader(header),
+		Digest:     digest,
+		Size:       size,
+		Status:     status,
+		Header:     sanitizeHeader(header),
+		LastAccess: nowNanos(),
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.index[key] = entry
+	c.evictLocked()
 	if err := c.persistLocked(); err != nil {
 		return Entry{}, err
 	}
 	return entry, nil
+}
+
+// evictLocked drops least-recently-used entries until the total
+// stored body size is back under maxBytes. A blob is removed from the
+// CAS only when no surviving entry still references its digest (two
+// URLs with identical bodies share one blob). Caller holds c.mu;
+// maxBytes == 0 disables eviction.
+func (c *Cache) evictLocked() {
+	if c.maxBytes == 0 {
+		return
+	}
+	//daft:lint:disable=forloopbound reason="bounded by index size; each pass deletes one entry"
+	for c.totalBytesLocked() > c.maxBytes && len(c.index) > 0 {
+		oldestKey := ""
+		var oldestAccess int64
+		for k, e := range c.index {
+			if oldestKey == "" || e.LastAccess < oldestAccess {
+				oldestKey, oldestAccess = k, e.LastAccess
+			}
+		}
+		victim := c.index[oldestKey]
+		delete(c.index, oldestKey)
+		if !c.digestReferencedLocked(victim.Digest) {
+			oops.Skip("httpcache: evict blob",
+				c.store.Delete(victim.Digest), fs.ErrNotExist)
+		}
+	}
+}
+
+// totalBytesLocked sums the recorded body sizes. Caller holds c.mu.
+func (c *Cache) totalBytesLocked() uint64 {
+	var total uint64
+	for _, e := range c.index {
+		total += e.Size
+	}
+	return total
+}
+
+// digestReferencedLocked reports whether any index entry still points
+// at digest, so eviction doesn't delete a blob another key shares.
+// Caller holds c.mu.
+func (c *Cache) digestReferencedLocked(digest string) bool {
+	for _, e := range c.index {
+		if e.Digest == digest {
+			return true
+		}
+	}
+	return false
 }
 
 // persistLocked writes the index atomically (tmp + rename) so a
@@ -219,6 +288,12 @@ func (c *Cache) persistLocked() error {
 	}
 	return nil
 }
+
+// nowNanos is the recency clock for LRU. A function var so tests can
+// pin a deterministic order without sleeping.
+//
+//nolint:gochecknoglobals // test seam.
+var nowNanos = func() int64 { return time.Now().UnixNano() }
 
 // sanitizeHeader returns a deep copy of h with hop-by-hop / framing
 // headers removed. Canonicalises keys so the drop-set match is

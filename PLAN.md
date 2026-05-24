@@ -1670,12 +1670,27 @@ Slices, cheapest-first:
     behaviour. Unit-tested: mint+persist+reload-identical, regenerate
     on partial state, and the corrupt-cert / corrupt-key / bad-DER /
     unwritable-dir / regenerate-failure error paths.
-  - I3: **Shared CAS GC / refcounting** at `internal/cas`. The
-    proxy cache grows unbounded, and workspace sync already wants
-    eviction — PLAN notes the CAS has no expiry policy. Build
-    refcounting + an eviction policy (size cap / LRU) *once at the
-    CAS layer* so both consumers share it rather than each
-    bolting on its own.
+  - I3: **Cache eviction** — **landed**, but *not* in `cas.Store`.
+    `internal/cas` documents itself as deliberately minimal ("no
+    indexing, no LRU, no quota — those are workspace-level concerns
+    layered on top"), so adding LRU there would contradict its
+    design. Instead the eviction lives in `httpcache`, the layer that
+    already owns the index + recency: `Open` takes a `maxBytes` cap
+    (`daft-mitm-proxy --cache-max-bytes`, 0 = unbounded), `Entry`
+    gained a `LastAccess` (bumped on every Lookup hit, in memory; not
+    persisted on read), and an over-cap `Put` evicts least-recently-
+    used entries — deleting a blob from the CAS only when no
+    surviving entry still references that digest (shared-body
+    safety). Unit-tested: byte-cap LRU order, Lookup-bumps-recency,
+    shared-digest survival, unbounded no-op.
+    The original "refcounting + GC once at the CAS layer, shared with
+    workspace sync" framing was conflating two different models:
+    workspace sync needs **liveness** refcounting (don't drop a chunk
+    a live manifest needs), the proxy cache needs **size-bounded
+    LRU**. They aren't the same mechanism, and workspace sync has no
+    unbounded-growth pain today (manifests are explicit), so its
+    refcounting GC stays a separate future slice rather than being
+    forced into a shared abstraction now.
   - I4: **Pinning / freeze policy**. A user-controlled URL →
     digest pin set plus refetch/expire rules; a "freeze" mode that
     serves only pinned digests so an upstream mutation can't

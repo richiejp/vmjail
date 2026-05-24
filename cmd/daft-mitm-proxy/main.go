@@ -108,6 +108,9 @@ func run(args []string, out io.Writer) int {
 	offline := fs.Bool("offline", false,
 		"serve only from --cache-dir; a cache miss fails the request "+
 			"(504) instead of reaching upstream")
+	cacheMaxBytes := fs.Uint64("cache-max-bytes", 0,
+		"cap the cache's total stored body size in bytes; over-cap "+
+			"writes evict least-recently-used entries (0 = unbounded)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -132,7 +135,7 @@ func run(args []string, out io.Writer) int {
 
 	p := newProxy(certs, *insecureUpstream, out)
 	if *cacheDir != "" {
-		cache, cerr := httpcache.Open(*cacheDir, *offline)
+		cache, cerr := httpcache.Open(*cacheDir, *offline, *cacheMaxBytes)
 		if cerr != nil {
 			_, _ = fmt.Fprintf(out, "daft-mitm-proxy err: cache: %v\n", cerr)
 			return 1

@@ -789,7 +789,7 @@ func startCachingHarness(
 	}
 	logSink := &syncBuffer{}
 	p := newProxy(certs, true, logSink)
-	cache, cerr := httpcache.Open(cacheDir, offline)
+	cache, cerr := httpcache.Open(cacheDir, offline, 0)
 	if cerr != nil {
 		t.Fatalf("cache open: %v", cerr)
 	}
@@ -915,7 +915,7 @@ func TestServeFromCacheErrors(t *testing.T) {
 	}
 	logSink := &syncBuffer{}
 	p := newProxy(certs, true, logSink)
-	cache, cerr := httpcache.Open(dir, false)
+	cache, cerr := httpcache.Open(dir, false, 0)
 	if cerr != nil {
 		t.Fatalf("cache open: %v", cerr)
 	}
@@ -960,6 +960,26 @@ func TestRunCacheOpenError(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "cache:") {
 		t.Errorf("missing 'cache:' err in out: %q", out.String())
+	}
+}
+
+// TestRunStartsWithCacheDir covers run()'s cache-open success path:
+// with a valid --cache-dir the proxy opens the cache and reaches the
+// listening state. Runs in a goroutine since Serve blocks; the
+// listener is reclaimed at process exit (same pattern as
+// TestRunWritesCAToDisk).
+func TestRunStartsWithCacheDir(t *testing.T) {
+	cacheDir := t.TempDir()
+	out := &syncBuffer{}
+	go func() {
+		_ = run([]string{
+			ephemeralAddrFlag,
+			"--cache-dir=" + cacheDir,
+			"--cache-max-bytes=4096",
+		}, out)
+	}()
+	if !out.waitForContains(t, readyPrefix, 5*time.Second) {
+		t.Fatalf("proxy did not reach listening state with cache; out=%q", out.String())
 	}
 }
 
