@@ -228,8 +228,13 @@ func TestProxyEnv(t *testing.T) {
 	for _, want := range []string{
 		"http_proxy=" + u, "https_proxy=" + u,
 		"HTTP_PROXY=" + u, "HTTPS_PROXY=" + u,
+		"no_proxy=localhost,127.0.0.1", "NO_PROXY=localhost,127.0.0.1",
 		"NIX_SSL_CERT_FILE=" + egressCAGuestPath,
 		"SSL_CERT_FILE=" + egressCAGuestPath,
+		"CURL_CA_BUNDLE=" + egressCAGuestPath,
+		"GIT_SSL_CAINFO=" + egressCAGuestPath,
+		"REQUESTS_CA_BUNDLE=" + egressCAGuestPath,
+		"NODE_EXTRA_CA_CERTS=" + egressCAGuestPath,
 	} {
 		if !slices.Contains(got, want) {
 			t.Errorf("proxyEnv missing %q in %v", want, got)

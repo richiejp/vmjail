@@ -552,17 +552,26 @@ func envFromSpec(in []*sandboxv1.EnvVar) []string {
 }
 
 // proxyEnv is the set of variables that route a container's HTTP(S)
-// egress through the proxy at guestURL and make its TLS clients
-// trust the proxy CA. Both lower- and upper-case proxy vars are set
-// because tools disagree on which they honour.
+// egress through the proxy at guestURL and make its TLS clients trust
+// the proxy CA. Both lower- and upper-case proxy vars are set because
+// tools disagree on which they honour, and the CA path is exported
+// under every common per-tool name (nix, curl, git, python-requests,
+// node) so a default-deny workload's HTTPS clients validate the MITM
+// leaf out of the box. no_proxy keeps loopback traffic off the proxy.
 func proxyEnv(guestURL string) []string {
 	return []string{
 		"http_proxy=" + guestURL,
 		"https_proxy=" + guestURL,
 		"HTTP_PROXY=" + guestURL,
 		"HTTPS_PROXY=" + guestURL,
+		"no_proxy=localhost,127.0.0.1",
+		"NO_PROXY=localhost,127.0.0.1",
 		"NIX_SSL_CERT_FILE=" + egressCAGuestPath,
 		"SSL_CERT_FILE=" + egressCAGuestPath,
+		"CURL_CA_BUNDLE=" + egressCAGuestPath,
+		"GIT_SSL_CAINFO=" + egressCAGuestPath,
+		"REQUESTS_CA_BUNDLE=" + egressCAGuestPath,
+		"NODE_EXTRA_CA_CERTS=" + egressCAGuestPath,
 	}
 }
 

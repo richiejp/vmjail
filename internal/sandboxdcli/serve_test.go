@@ -364,11 +364,26 @@ func TestExtractWithEnvFallbackReturnsErrNotBundledWhenBaseEmpty(t *testing.T) {
 }
 
 func TestEgressProxyFromEnv(t *testing.T) {
-	t.Run("unset is nil", func(t *testing.T) {
+	t.Run("unset enables by default", func(t *testing.T) {
 		t.Setenv(envEgressProxy, "")
+		t.Setenv(envEgressProxyCADir, "")
+		t.Setenv(envEgressProxyCacheDir, "")
 		p, err := egressProxyFromEnv(io.Discard)
-		if p != nil || err != nil {
-			t.Fatalf("unset: got (%v, %v), want (nil, nil)", p, err)
+		if err != nil {
+			t.Fatalf("unset: %v", err)
+		}
+		if p == nil || p.Handler == nil {
+			t.Fatalf("unset: want proxy on by default, got %+v", p)
+		}
+	})
+
+	t.Run("explicit off is nil", func(t *testing.T) {
+		for _, v := range []string{"0", "false", "no", "off", "OFF"} {
+			t.Setenv(envEgressProxy, v)
+			p, err := egressProxyFromEnv(io.Discard)
+			if p != nil || err != nil {
+				t.Fatalf("%q: got (%v, %v), want (nil, nil)", v, p, err)
+			}
 		}
 	})
 

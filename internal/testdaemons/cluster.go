@@ -181,7 +181,10 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	// (a temp dir) so a repeat fetch replays without a second upstream
 	// hit; upstream verification is skipped because tests use
 	// self-signed upstreams.
-	var sbxEnv []string
+	// The proxy is on by default in sandboxd, so tests that don't ask
+	// for it must explicitly opt out — otherwise every cluster would
+	// run default-deny and break workloads that egress directly.
+	sbxEnv := []string{"DAFT_EGRESS_PROXY=0"}
 	var proxyURL string
 	if o.egressProxy {
 		proxyURL = "http://" + net.JoinHostPort(

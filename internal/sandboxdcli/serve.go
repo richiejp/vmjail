@@ -200,8 +200,11 @@ var buildDispatcher = func(
 // netstack gateway — there is no separate process or proxy URL/CA path
 // to distribute; sandboxd generates the CA and injects it into bundles.
 const (
-	// envEgressProxy enables the in-stack proxy when set to a truthy
-	// value ("1"/"true"). Empty/unset leaves direct egress (pre-J path).
+	// envEgressProxy gates the in-stack proxy. It is ON BY DEFAULT
+	// (Phase J hermetic egress): unset/empty enables it, so a stock
+	// `daft-sandboxd serve` runs default-deny with the proxy lane. Set
+	// it to a falsy value ("0"/"false"/"no"/"off") to opt a node out
+	// and fall back to direct allow-all egress.
 	envEgressProxy = "DAFT_EGRESS_PROXY"
 	// envEgressProxyCacheDir enables record/replay caching at this dir
 	// (empty = pure pass-through).
@@ -218,14 +221,15 @@ const (
 )
 
 // egressProxyFromEnv builds the executor's in-stack EgressProxy from
-// the DAFT_EGRESS_PROXY* env vars, or nil (feature off) when
-// DAFT_EGRESS_PROXY is unset. sandboxd owns the proxy: it mints/loads
-// the CA, optionally opens the record/replay cache, and hands the
-// resulting http.Handler + CA PEM to the executor, which serves the
-// handler on every VM's gateway and injects the matching https_proxy +
-// CA. logSink receives the proxy's per-request log lines.
+// the DAFT_EGRESS_PROXY* env vars. The proxy is ON BY DEFAULT; it
+// returns nil (feature off) only when DAFT_EGRESS_PROXY is explicitly
+// falsy. sandboxd owns the proxy: it mints/loads the CA, optionally
+// opens the record/replay cache, and hands the resulting http.Handler +
+// CA PEM to the executor, which serves the handler on every VM's
+// gateway and injects the matching https_proxy + CA. logSink receives
+// the proxy's per-request log lines.
 func egressProxyFromEnv(logSink io.Writer) (*sandboxexec.EgressProxy, error) {
-	if !envTruthy(os.Getenv(envEgressProxy)) {
+	if !egressProxyEnabled() {
 		return nil, nil //nolint:nilnil // nil config = feature off, not an error.
 	}
 	certs, err := mitmproxy.LoadOrCreateCertCache(os.Getenv(envEgressProxyCADir))
@@ -243,8 +247,22 @@ func egressProxyFromEnv(logSink io.Writer) (*sandboxexec.EgressProxy, error) {
 	return &sandboxexec.EgressProxy{Handler: proxy, CACertPEM: certs.CACertPEM()}, nil
 }
 
+// egressProxyEnabled reports whether the in-stack proxy is on. It is on
+// by default — only an explicit falsy DAFT_EGRESS_PROXY ("0"/"false"/
+// "no"/"off", case-insensitive) opts a node out.
+func egressProxyEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(envEgressProxy))) {
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return true
+	}
+}
+
 // envTruthy reports whether an env value means "on": "1" or "true"
-// (case-insensitive). Everything else, including empty, is off.
+// (case-insensitive). Everything else, including empty, is off. Used
+// for the optional sub-flags that default off (cache offline, insecure
+// upstream).
 func envTruthy(v string) bool {
 	return v == "1" || strings.EqualFold(v, "true")
 }

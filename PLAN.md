@@ -1873,9 +1873,15 @@ Slices, cheapest-first:
     gvisor hands the guest's bytes straight to the accepted `net.Conn`
     — no NAT, no host TCP, no second daemon. The executor injects a
     fixed `https_proxy=http://192.168.127.1:3128` (like DNS's `:53`),
-    ships the sandboxd-generated CA into the bundle, and flips
-    `DenyEgress` on; sandboxd reads `DAFT_EGRESS_PROXY` (+ optional
-    `_CACHE_DIR` / `_CA_DIR` / `_OFFLINE` / `_INSECURE_UPSTREAM`).
+    ships the sandboxd-generated CA into the bundle (exported as
+    `NIX_SSL_CERT_FILE`/`SSL_CERT_FILE`/`CURL_CA_BUNDLE`/`GIT_SSL_CAINFO`/
+    `REQUESTS_CA_BUNDLE`/`NODE_EXTRA_CA_CERTS`, plus `no_proxy` for
+    loopback), and flips `DenyEgress` on. **On by default**: a stock
+    `daft-sandboxd serve` runs default-deny + proxy; set
+    `DAFT_EGRESS_PROXY=0` (or `false`/`no`/`off`) to opt a node out.
+    Optional sub-flags: `_CACHE_DIR` / `_CA_DIR` / `_OFFLINE` /
+    `_INSECURE_UPSTREAM`. (The e2e cluster opts out by default and
+    re-enables only under `WithEgressProxy`.)
     Wins realised: (a) guest→proxy now terminates at the in-stack
     listener *before* the TCP forwarder, so deny-mode egress has no
     `net.Dial("127.0.0.1:…")` proxy path; (b) `DAFT_EGRESS_PROXY_URL`/
