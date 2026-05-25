@@ -1762,15 +1762,32 @@ destination is dropped + logged.** The proxy runs host-side (outside
 gvisor) and is the sole WAN-capable component.
 
 Slices, cheapest-first:
-  - J1: **Egress allowlist in sandboxnet** (spike + land). Replace
-    gvisor-tap-vsock's stock TCP/UDP forwarder wiring with our own
-    that consults a policy: allow dials only to the NAT target
-    (host loopback) + configured proxy/DNS ports; drop everything
-    else and log `egress-deny proto=<> dst=<>` (the "stop and
-    consider" signal). Unit-test the policy decision; integration-
-    test that an allowed dial connects and a denied one fails fast.
-    This is core-network surgery — the bench suite (D8) guards the
-    throughput regression.
+  - J1: **Egress allowlist in sandboxnet** — LANDED. sandboxnet no
+    longer calls `virtualnetwork.New`; it assembles its own gvisor
+    stack (`internal/sandboxnet/forward.go`: `createNetStack` + tap
+    switch + in-stack DNS server, no DHCP since the guest is static)
+    and wires policy-checking TCP/UDP forwarders. After NAT
+    translation the forwarder consults `egressPermitted(deny, dst)`:
+    with `Config.DenyEgress` set, only the loopback target
+    (`127.0.0.1`) is dialable; everything else is dropped and logged
+    `egress-deny proto=<> dst=<>:<port>` via `oops` (the "stop and
+    consider" tripwire). `DenyEgress` defaults **off** (allow-all) to
+    preserve the pre-J path until J2 wires the proxy lane; J5 flips
+    it. The reimplementation is a faithful drop-in — ARP/TCP/UDP/DNS
+    behaviour matches upstream; the D8 forwarder bench still runs
+    through the new path. Tested at integration grade by wiring two
+    real gvisor stacks (host + guest) over a pipe:
+    `TestForwarderTCPAllowsLoopback` (byte round-trip via the VIP),
+    `TestForwarderTCPDeniesWAN` / `TestForwarderUDPDeniesWAN` (drop +
+    egress-deny log, dial fails fast), plus UDP forward + DNS-zone
+    resolution. Endpoint-creation failure branches are covered via
+    `tcpCreateEndpoint`/`udpCreateEndpoint` seams.
+    - **Deferred to J2**: port-level allowlisting (J1 allows any port
+      on the loopback target — it's the host's own services) and the
+      real-VM deny e2e (deny-mode is only coherent once J2 provides
+      the proxy lane; until then the existing allow-all e2e —
+      `TestClusterWorkspaceHTTPSEgress`, bun — guards the VM path via
+      `make verify`).
   - J2: **Default proxy-env injection.** The workspace launch/exec
     path sets `https_proxy`/`HTTPS_PROXY`/`NIX_SSL_CERT_FILE` (proxy
     CA) by default; the cluster auto-starts the proxy with a

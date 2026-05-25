@@ -21,9 +21,13 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 
+	"github.com/containers/gvisor-tap-vsock/pkg/tap"
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
-	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
+	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/tcp"
+	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 )
 
 // DefaultMTU is 1500 to match the host's underlying interface,
@@ -74,13 +78,39 @@ type Config struct {
 	// DefaultHostLoopbackIP when zero-valued — keep the slice-4
 	// integration test path easy to reach without ceremony.
 	HostLoopbackIP string
+
+	// DenyEgress switches the netstack to default-deny: the only
+	// outbound dials the TCP/UDP forwarders make are to the host
+	// loopback target (the post-NAT 127.0.0.1) — i.e. host-side
+	// services such as the caching proxy reached via
+	// DefaultHostLoopbackIP. Every other dial is dropped and logged
+	// as `egress-deny`. Defaults to false (allow all) to preserve
+	// the pre-Phase-J path until proxy-env injection (J2) routes all
+	// legitimate egress through the loopback proxy; J5 flips the
+	// suite default.
+	DenyEgress bool
+
+	// dnsZones are the static DNS records the in-stack resolver
+	// serves before falling back to the host resolver. Unexported:
+	// no caller sets zones yet, but the field keeps the DNS server
+	// wiring honest for J3.
+	dnsZones []types.Zone
 }
 
 // Network is one VM's userspace TCP/IP stack. Construct with New,
 // hand accepted conns to Accept, and discard when the VM stops.
 // All methods are safe for concurrent use.
+//
+// Unlike the stock gvisor-tap-vsock virtualnetwork, this stack owns
+// its TCP/UDP forward path so it can enforce an egress policy (see
+// forward.go) — the library's forwarders hardcode net.Dial with no
+// allowlist hook, and the stack they wire it onto is unexported, so
+// there is no way to interpose after construction.
 type Network struct {
-	vn *virtualnetwork.VirtualNetwork
+	sw      *tap.Switch
+	nat     map[tcpip.Address]tcpip.Address
+	natLock sync.Mutex
+	deny    bool
 }
 
 // New constructs the netstack from cfg. The returned Network has
@@ -119,19 +149,28 @@ func New(cfg Config) (*Network, error) {
 		gatewayVIPs = []string{cfg.HostLoopbackIP}
 		natMap = map[string]string{cfg.HostLoopbackIP: hostLoopbackTarget}
 	}
-	vn, err := virtualnetwork.New(&types.Configuration{
-		Subnet:            cfg.Subnet,
-		GatewayIP:         cfg.GatewayIP,
-		GatewayMacAddress: cfg.GatewayMAC,
-		MTU:               cfg.MTU,
-		Protocol:          types.StdioProtocol,
-		GatewayVirtualIPs: gatewayVIPs,
-		NAT:               natMap,
-	})
+
+	//nolint:gosec // G115: MTU is a small positive config value, defaulted to DefaultMTU (1500).
+	tapEndpoint, err := tap.NewLinkEndpoint(false, uint32(cfg.MTU), cfg.GatewayMAC, cfg.GatewayIP, gatewayVIPs)
 	if err != nil {
-		return nil, fmt.Errorf("sandboxnet: virtualnetwork.New: %w", err)
+		return nil, fmt.Errorf("sandboxnet: tap endpoint: %w", err)
 	}
-	return &Network{vn: vn}, nil
+	sw := tap.NewSwitch(false)
+	tapEndpoint.Connect(sw)
+	sw.Connect(tapEndpoint)
+
+	s, err := createNetStack(cfg, tapEndpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	n := &Network{sw: sw, nat: natTable(natMap), deny: cfg.DenyEgress}
+	s.SetTransportProtocolHandler(tcp.ProtocolNumber, n.tcpForwarder(s).HandlePacket)
+	s.SetTransportProtocolHandler(udp.ProtocolNumber, n.udpForwarder(s).HandlePacket)
+	if err := startDNSServer(cfg, s); err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
 // Accept blocks until conn is closed or ctx is cancelled, ferrying
@@ -142,5 +181,5 @@ func New(cfg Config) (*Network, error) {
 // CAM table — callers can re-Accept a fresh conn (guest reboot) on
 // the same Network.
 func (n *Network) Accept(ctx context.Context, conn net.Conn) error {
-	return n.vn.AcceptStdio(ctx, conn)
+	return n.sw.Accept(ctx, conn, types.StdioProtocol)
 }

@@ -7,6 +7,7 @@ require (
 	github.com/containers/gvisor-tap-vsock v0.8.9
 	github.com/google/go-containerregistry v0.21.5
 	github.com/hanwen/go-fuse/v2 v2.10.1
+	github.com/inetaf/tcpproxy v0.0.0-20250222171855-c4b9df066048
 	github.com/klauspost/compress v1.18.5
 	github.com/mdlayher/vsock v1.2.1
 	github.com/spf13/cobra v1.10.2
@@ -18,6 +19,7 @@ require (
 	golang.org/x/term v0.43.0
 	golang.org/x/tools v0.44.0
 	google.golang.org/protobuf v1.36.11
+	gvisor.dev/gvisor v0.0.0-20240916094835-a174eb65023f
 )
 
 require (
@@ -29,7 +31,6 @@ require (
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/inetaf/tcpproxy v0.0.0-20250222171855-c4b9df066048 // indirect
 	github.com/insomniacslk/dhcp v0.0.0-20240710054256-ddd8a41251c9 // indirect
 	github.com/mdlayher/socket v0.4.1 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
@@ -49,7 +50,6 @@ require (
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
-	gvisor.dev/gvisor v0.0.0-20240916094835-a174eb65023f // indirect
 )
 
 tool (
