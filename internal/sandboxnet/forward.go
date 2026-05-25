@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strconv"
 	"time"
 
@@ -282,6 +283,33 @@ func startDNSServer(cfg Config, s *stack.Stack) error {
 	}()
 	go func() {
 		oops.Skip("sandboxnet: dns serve tcp", server.ServeTCP(), net.ErrClosed)
+	}()
+	return nil
+}
+
+// startProxyServer stands up the in-stack egress proxy on the
+// gateway's ProxyPort, mirroring startDNSServer. gonet.ListenTCP binds
+// a listener inside the per-VM netstack, so the guest's bytes are
+// handed straight to the accepted net.Conn — no NAT, no host TCP, no
+// second daemon. The proxy (an http.Handler that MITMs CONNECT and
+// dials upstream itself) runs in sandboxd's address space; under
+// default-deny this is the guest's only WAN lane. nil ProxyHandler
+// leaves the proxy off (the pre-J6 separate-process path).
+func startProxyServer(cfg Config, s *stack.Stack) error {
+	if cfg.ProxyHandler == nil {
+		return nil
+	}
+	gwAddr := tcpip.AddrFrom4Slice(net.ParseIP(cfg.GatewayIP).To4())
+	ln, err := gonet.ListenTCP(s, tcpip.FullAddress{NIC: 1, Addr: gwAddr, Port: cfg.ProxyPort}, ipv4.ProtocolNumber)
+	if err != nil {
+		return fmt.Errorf("sandboxnet: proxy tcp listen: %w", err)
+	}
+	srv := &http.Server{
+		Handler:           cfg.ProxyHandler,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	go func() {
+		oops.Skip("sandboxnet: proxy serve", srv.Serve(ln), net.ErrClosed, http.ErrServerClosed)
 	}()
 	return nil
 }

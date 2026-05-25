@@ -822,6 +822,23 @@ func TestServeFromCacheErrors(t *testing.T) {
 	}
 }
 
+// TestCACertPEM pins the accessor the boot path uses to ship the CA
+// into a guest bundle: it returns the same PEM the cache holds, a
+// well-formed CERTIFICATE block.
+func TestCACertPEM(t *testing.T) {
+	c, err := NewCertCache()
+	if err != nil {
+		t.Fatalf("NewCertCache: %v", err)
+	}
+	got := c.CACertPEM()
+	if !bytes.Equal(got, c.caCertPEM) {
+		t.Error("CACertPEM() differs from the stored PEM")
+	}
+	if !bytes.HasPrefix(got, []byte("-----BEGIN CERTIFICATE-----")) {
+		t.Errorf("CACertPEM() not a PEM CERTIFICATE block: %q", got[:min(len(got), 32)])
+	}
+}
+
 // TestLoadOrCreateCertCacheEphemeral: no caDir mints a fresh CA.
 func TestLoadOrCreateCertCacheEphemeral(t *testing.T) {
 	cc, err := LoadOrCreateCertCache("")

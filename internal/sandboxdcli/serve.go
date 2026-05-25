@@ -8,12 +8,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/localai-org/darkaifactory/internal/bundled"
+	"github.com/localai-org/darkaifactory/internal/httpcache"
+	"github.com/localai-org/darkaifactory/internal/mitmproxy"
 	"github.com/localai-org/darkaifactory/internal/nodectrl"
 	"github.com/localai-org/darkaifactory/internal/nodectrlclient"
 	"github.com/localai-org/darkaifactory/internal/sandbox"
@@ -175,7 +178,7 @@ var buildDispatcher = func(
 		CacheDir:  userCacheDir,
 		Extract:   extractWithEnvFallback(base),
 	})
-	egress, err := egressProxyFromEnv()
+	egress, err := egressProxyFromEnv(stdout)
 	if err != nil {
 		return nil, err
 	}
@@ -191,32 +194,59 @@ var buildDispatcher = func(
 	})
 }
 
-// Env vars that configure default egress-proxy injection. Set by the
-// node operator (and by the test cluster's WithEgressProxy option).
+// Env vars that configure the in-stack egress proxy (Phase J6). Set by
+// the node operator (and by the test cluster's WithEgressProxy option).
+// The proxy itself runs in-process inside sandboxd, served on each VM's
+// netstack gateway — there is no separate process or proxy URL/CA path
+// to distribute; sandboxd generates the CA and injects it into bundles.
 const (
-	envEgressProxyURL = "DAFT_EGRESS_PROXY_URL"
-	envEgressProxyCA  = "DAFT_EGRESS_PROXY_CA"
+	// envEgressProxy enables the in-stack proxy when set to a truthy
+	// value ("1"/"true"). Empty/unset leaves direct egress (pre-J path).
+	envEgressProxy = "DAFT_EGRESS_PROXY"
+	// envEgressProxyCacheDir enables record/replay caching at this dir
+	// (empty = pure pass-through).
+	envEgressProxyCacheDir = "DAFT_EGRESS_PROXY_CACHE_DIR"
+	// envEgressProxyCADir persists the proxy CA cert+key here so the
+	// trust anchor survives restarts (empty = fresh ephemeral CA).
+	envEgressProxyCADir = "DAFT_EGRESS_PROXY_CA_DIR"
+	// envEgressProxyOffline serves only from the cache; a miss 504s
+	// instead of reaching upstream.
+	envEgressProxyOffline = "DAFT_EGRESS_PROXY_OFFLINE"
+	// envEgressProxyInsecureUpstream skips upstream TLS verification —
+	// for tests whose upstream is a self-signed peer.
+	envEgressProxyInsecureUpstream = "DAFT_EGRESS_PROXY_INSECURE_UPSTREAM"
 )
 
-// egressProxyFromEnv builds the executor's EgressProxy config from
-// the DAFT_EGRESS_PROXY_* env vars. Unset URL ⇒ nil (direct egress).
-// A set URL requires a readable CA file so guest TLS clients can
-// trust the proxy's MITM leaves.
-func egressProxyFromEnv() (*sandboxexec.EgressProxy, error) {
-	guestURL := os.Getenv(envEgressProxyURL)
-	if guestURL == "" {
+// egressProxyFromEnv builds the executor's in-stack EgressProxy from
+// the DAFT_EGRESS_PROXY* env vars, or nil (feature off) when
+// DAFT_EGRESS_PROXY is unset. sandboxd owns the proxy: it mints/loads
+// the CA, optionally opens the record/replay cache, and hands the
+// resulting http.Handler + CA PEM to the executor, which serves the
+// handler on every VM's gateway and injects the matching https_proxy +
+// CA. logSink receives the proxy's per-request log lines.
+func egressProxyFromEnv(logSink io.Writer) (*sandboxexec.EgressProxy, error) {
+	if !envTruthy(os.Getenv(envEgressProxy)) {
 		return nil, nil //nolint:nilnil // nil config = feature off, not an error.
 	}
-	caPath := os.Getenv(envEgressProxyCA)
-	if caPath == "" {
-		return nil, fmt.Errorf("sandboxd: %s set but %s empty", envEgressProxyURL, envEgressProxyCA)
-	}
-	//nolint:gosec // G304: caPath is an operator-supplied config path.
-	pem, err := os.ReadFile(caPath)
+	certs, err := mitmproxy.LoadOrCreateCertCache(os.Getenv(envEgressProxyCADir))
 	if err != nil {
-		return nil, fmt.Errorf("sandboxd: read egress proxy CA %s: %w", caPath, err)
+		return nil, fmt.Errorf("sandboxd: egress proxy CA: %w", err)
 	}
-	return &sandboxexec.EgressProxy{GuestURL: guestURL, CACertPEM: pem}, nil
+	proxy := mitmproxy.New(certs, envTruthy(os.Getenv(envEgressProxyInsecureUpstream)), logSink)
+	if cacheDir := os.Getenv(envEgressProxyCacheDir); cacheDir != "" {
+		cache, cerr := httpcache.Open(cacheDir, envTruthy(os.Getenv(envEgressProxyOffline)), 0)
+		if cerr != nil {
+			return nil, fmt.Errorf("sandboxd: egress proxy cache: %w", cerr)
+		}
+		proxy.SetCache(cache)
+	}
+	return &sandboxexec.EgressProxy{Handler: proxy, CACertPEM: certs.CACertPEM()}, nil
+}
+
+// envTruthy reports whether an env value means "on": "1" or "true"
+// (case-insensitive). Everything else, including empty, is off.
+func envTruthy(v string) bool {
+	return v == "1" || strings.EqualFold(v, "true")
 }
 
 // extractWithEnvFallback wraps bundled.Extract: when the binary

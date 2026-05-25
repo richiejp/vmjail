@@ -364,45 +364,64 @@ func TestExtractWithEnvFallbackReturnsErrNotBundledWhenBaseEmpty(t *testing.T) {
 }
 
 func TestEgressProxyFromEnv(t *testing.T) {
-	const guestURL = "http://192.168.127.254:8080"
-
 	t.Run("unset is nil", func(t *testing.T) {
-		t.Setenv(envEgressProxyURL, "")
-		p, err := egressProxyFromEnv()
+		t.Setenv(envEgressProxy, "")
+		p, err := egressProxyFromEnv(io.Discard)
 		if p != nil || err != nil {
 			t.Fatalf("unset: got (%v, %v), want (nil, nil)", p, err)
 		}
 	})
 
-	t.Run("url without CA errors", func(t *testing.T) {
-		t.Setenv(envEgressProxyURL, guestURL)
-		t.Setenv(envEgressProxyCA, "")
-		if _, err := egressProxyFromEnv(); err == nil {
-			t.Fatal("want error when URL set but CA empty")
-		}
-	})
-
-	t.Run("unreadable CA errors", func(t *testing.T) {
-		t.Setenv(envEgressProxyURL, guestURL)
-		t.Setenv(envEgressProxyCA, filepath.Join(t.TempDir(), "missing.pem"))
-		if _, err := egressProxyFromEnv(); err == nil {
-			t.Fatal("want error when CA file is unreadable")
-		}
-	})
-
-	t.Run("happy path", func(t *testing.T) {
-		caFile := filepath.Join(t.TempDir(), "ca.pem")
-		if err := os.WriteFile(caFile, []byte("PEM"), 0o600); err != nil {
-			t.Fatalf("write CA: %v", err)
-		}
-		t.Setenv(envEgressProxyURL, guestURL)
-		t.Setenv(envEgressProxyCA, caFile)
-		p, err := egressProxyFromEnv()
+	t.Run("enabled mints ephemeral proxy", func(t *testing.T) {
+		t.Setenv(envEgressProxy, "1")
+		t.Setenv(envEgressProxyCADir, "")
+		t.Setenv(envEgressProxyCacheDir, "")
+		p, err := egressProxyFromEnv(io.Discard)
 		if err != nil {
-			t.Fatalf("happy: %v", err)
+			t.Fatalf("enabled: %v", err)
 		}
-		if p == nil || p.GuestURL != guestURL || string(p.CACertPEM) != "PEM" {
-			t.Fatalf("happy: got %+v", p)
+		if p == nil || p.Handler == nil || len(p.CACertPEM) == 0 {
+			t.Fatalf("enabled: got %+v (want non-nil Handler + CA PEM)", p)
+		}
+	})
+
+	t.Run("bad CA dir errors", func(t *testing.T) {
+		// A CA dir whose parent is a regular file can't be created, so
+		// LoadOrCreateCertCache fails before the proxy is built.
+		parent := filepath.Join(t.TempDir(), "afile")
+		if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+			t.Fatalf("seed file: %v", err)
+		}
+		t.Setenv(envEgressProxy, "true")
+		t.Setenv(envEgressProxyCADir, filepath.Join(parent, "ca"))
+		if _, err := egressProxyFromEnv(io.Discard); err == nil {
+			t.Fatal("want error when CA dir can't be created")
+		}
+	})
+
+	t.Run("bad cache dir errors", func(t *testing.T) {
+		parent := filepath.Join(t.TempDir(), "afile")
+		if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+			t.Fatalf("seed file: %v", err)
+		}
+		t.Setenv(envEgressProxy, "1")
+		t.Setenv(envEgressProxyCADir, "")
+		t.Setenv(envEgressProxyCacheDir, filepath.Join(parent, "cache"))
+		if _, err := egressProxyFromEnv(io.Discard); err == nil {
+			t.Fatal("want error when cache dir can't be opened")
+		}
+	})
+
+	t.Run("caching enabled", func(t *testing.T) {
+		t.Setenv(envEgressProxy, "1")
+		t.Setenv(envEgressProxyCADir, "")
+		t.Setenv(envEgressProxyCacheDir, t.TempDir())
+		p, err := egressProxyFromEnv(io.Discard)
+		if err != nil {
+			t.Fatalf("caching: %v", err)
+		}
+		if p == nil || p.Handler == nil {
+			t.Fatalf("caching: got %+v", p)
 		}
 	})
 }

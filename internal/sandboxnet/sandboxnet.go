@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"sync"
 
 	"github.com/containers/gvisor-tap-vsock/pkg/tap"
@@ -61,6 +62,13 @@ const (
 	// any other address would defeat the "reach my own services"
 	// purpose of the magic IP.
 	hostLoopbackTarget = "127.0.0.1"
+
+	// DefaultProxyPort is the gateway TCP port the in-stack egress
+	// proxy listens on when Config.ProxyHandler is set and ProxyPort
+	// is zero. 3128 is the conventional forward-proxy port; the value
+	// only has to be agreed with the guest's https_proxy and is
+	// otherwise arbitrary inside the per-VM netstack.
+	DefaultProxyPort uint16 = 3128
 )
 
 // Config describes the per-VM virtual network. Zero-valued
@@ -89,6 +97,21 @@ type Config struct {
 	// legitimate egress through the loopback proxy; J5 flips the
 	// suite default.
 	DenyEgress bool
+
+	// ProxyHandler, when non-nil, is served by an in-stack HTTP server
+	// on gateway:ProxyPort, mirroring the DNS server on :53. This is
+	// the Phase-J egress lane: a default-deny guest points https_proxy
+	// at gateway:ProxyPort and reaches the WAN only through this
+	// terminating MITM/caching hop, which lives in sandboxd's address
+	// space and dials upstream itself. nil disables the in-stack proxy
+	// (the pre-J6 separate-process path). The handler is shared across
+	// every VM's netstack; it must be safe for concurrent use.
+	ProxyHandler http.Handler
+	// ProxyPort is the gateway TCP port the in-stack proxy listens on.
+	// Fixed (like DNS's :53) so the guest's https_proxy is a constant
+	// gateway:port with no port-discovery dance. Defaults to
+	// DefaultProxyPort when zero and ProxyHandler is set.
+	ProxyPort uint16
 
 	// dnsZones are the static DNS records the in-stack resolver
 	// serves before falling back to the host resolver. Unexported:
@@ -131,6 +154,9 @@ func New(cfg Config) (*Network, error) {
 	if cfg.HostLoopbackIP == "" {
 		cfg.HostLoopbackIP = DefaultHostLoopbackIP
 	}
+	if cfg.ProxyHandler != nil && cfg.ProxyPort == 0 {
+		cfg.ProxyPort = DefaultProxyPort
+	}
 	if _, _, err := net.ParseCIDR(cfg.Subnet); err != nil {
 		return nil, fmt.Errorf("sandboxnet: subnet %q: %w", cfg.Subnet, err)
 	}
@@ -172,6 +198,9 @@ func New(cfg Config) (*Network, error) {
 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, n.tcpForwarder(s).HandlePacket)
 	s.SetTransportProtocolHandler(udp.ProtocolNumber, n.udpForwarder(s).HandlePacket)
 	if err := startDNSServer(cfg, s); err != nil {
+		return nil, err
+	}
+	if err := startProxyServer(cfg, s); err != nil {
 		return nil, err
 	}
 	return n, nil

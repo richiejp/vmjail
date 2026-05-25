@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -17,6 +19,7 @@ import (
 	"github.com/localai-org/darkaifactory/internal/sandbox"
 	"github.com/localai-org/darkaifactory/internal/sandboxboot"
 	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
+	"github.com/localai-org/darkaifactory/internal/sandboxnet"
 )
 
 const (
@@ -181,18 +184,19 @@ func TestHandleSandboxEventProjectsEnv(t *testing.T) {
 }
 
 // TestEgressActive pins the single predicate that gates BOTH proxy
-// injection and the DenyEgress decision: an EgressProxy with an empty
-// GuestURL must not count as active, or deny would turn on with no
+// injection and the DenyEgress decision: an EgressProxy with a nil
+// Handler must not count as active, or deny would turn on with no
 // proxy lane and black-hole all egress.
 func TestEgressActive(t *testing.T) {
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	cases := []struct {
 		name string
 		p    *EgressProxy
 		want bool
 	}{
 		{"nil proxy", nil, false},
-		{"empty url", &EgressProxy{GuestURL: "", CACertPEM: []byte("x")}, false},
-		{"url set", &EgressProxy{GuestURL: "http://192.168.127.254:8080"}, true},
+		{"nil handler", &EgressProxy{Handler: nil, CACertPEM: []byte("x")}, false},
+		{"handler set", &EgressProxy{Handler: handler}, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -204,8 +208,22 @@ func TestEgressActive(t *testing.T) {
 	}
 }
 
+// TestProxyPort pins the gateway-port resolution: a configured Port
+// wins, zero falls back to sandboxnet's default. The fallback is what
+// the fixed guest https_proxy depends on.
+func TestProxyPort(t *testing.T) {
+	custom := &Executor{egressProxy: &EgressProxy{Port: 9999}}
+	if got := custom.proxyPort(); got != 9999 {
+		t.Errorf("proxyPort(custom) = %d, want 9999", got)
+	}
+	deflt := &Executor{egressProxy: &EgressProxy{}}
+	if got := deflt.proxyPort(); got != sandboxnet.DefaultProxyPort {
+		t.Errorf("proxyPort(default) = %d, want %d", got, sandboxnet.DefaultProxyPort)
+	}
+}
+
 func TestProxyEnv(t *testing.T) {
-	const u = "http://192.168.127.254:8080"
+	const u = "http://192.168.127.1:3128"
 	got := proxyEnv(u)
 	for _, want := range []string{
 		"http_proxy=" + u, "https_proxy=" + u,
@@ -224,8 +242,12 @@ func TestProxyEnv(t *testing.T) {
 // proxy's https_proxy is ordered after a workspace's own so the
 // bundle's env merge lets the proxy win.
 func TestHandleSandboxEventInjectsProxy(t *testing.T) {
-	const u = "http://192.168.127.254:8080"
+	// The in-stack proxy lives on the netstack gateway at a fixed
+	// gateway:DefaultProxyPort, so the injected https_proxy is derived,
+	// not configured.
+	u := "http://" + net.JoinHostPort(sandboxnet.DefaultGatewayIP, strconv.Itoa(int(sandboxnet.DefaultProxyPort)))
 	ca := []byte("CA-PEM")
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 	var opts sandboxboot.BootOptions
 	asm := func(_ context.Context, _ string, o sandboxboot.BootOptions) (sandbox.Config, func(), error) {
 		opts = o
@@ -234,7 +256,7 @@ func TestHandleSandboxEventInjectsProxy(t *testing.T) {
 	runner := func(context.Context, io.Writer, sandbox.Config) error { return nil }
 	e, err := New(Config{
 		Stdout: io.Discard, Runner: runner, Assembler: asm,
-		EgressProxy: &EgressProxy{GuestURL: u, CACertPEM: ca},
+		EgressProxy: &EgressProxy{Handler: handler, CACertPEM: ca},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -936,6 +958,44 @@ func TestHandleSandboxEventAssignsNetPortWhenNetEnabled(t *testing.T) {
 	}
 	if seen.Vsock.NetPort != agent.DefaultNetVsockPort {
 		t.Errorf("NetPort = %d, want %d", seen.Vsock.NetPort, agent.DefaultNetVsockPort)
+	}
+}
+
+// TestHandleSandboxEventServesInStackProxy pins the J6 wiring: when an
+// egress proxy is configured and the netstack is enabled, the dispatch
+// config carries the proxy handler + fixed gateway port and flips to
+// default-deny, so sandboxnet serves the proxy in-stack and drops every
+// other egress.
+func TestHandleSandboxEventServesInStackProxy(t *testing.T) {
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	asm := func(context.Context, string, sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		return sandbox.Config{Bundle: "/b"}, func() {}, nil
+	}
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	e, err := New(Config{
+		Stdout: io.Discard, Runner: runner, Assembler: asm,
+		NetEnabled: true, VsockDir: testVsockDir,
+		EgressProxy: &EgressProxy{Handler: handler, CACertPEM: []byte("CA")},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{ImageRef: testImageRef}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-proxy-net", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if !seen.DenyEgress {
+		t.Error("DenyEgress not set with an egress proxy + net enabled")
+	}
+	if seen.ProxyHandler == nil {
+		t.Error("ProxyHandler not threaded into the boot config")
+	}
+	if seen.ProxyPort != sandboxnet.DefaultProxyPort {
+		t.Errorf("ProxyPort = %d, want %d", seen.ProxyPort, sandboxnet.DefaultProxyPort)
 	}
 }
 

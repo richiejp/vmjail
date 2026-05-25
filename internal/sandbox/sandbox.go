@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -100,6 +101,18 @@ type Config struct {
 	// the executor when an egress proxy is configured, so all
 	// legitimate egress goes through the proxy lane.
 	DenyEgress bool
+
+	// ProxyHandler, when non-nil, is served in-stack on the per-VM
+	// netstack's gateway:ProxyPort (Phase J6): the guest's https_proxy
+	// points there and reaches the WAN only through this terminating
+	// MITM/caching hop, which runs in sandboxd and dials upstream
+	// itself. Set by the executor alongside DenyEgress when an egress
+	// proxy is configured. nil leaves the netstack without an in-stack
+	// proxy. Forwarded verbatim to sandboxnet.Config.
+	ProxyHandler http.Handler
+	// ProxyPort is the gateway TCP port ProxyHandler listens on; zero
+	// lets sandboxnet pick its DefaultProxyPort.
+	ProxyPort uint16
 }
 
 // PortForward declares one Slice C1 port-forward: traffic the

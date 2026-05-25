@@ -1859,37 +1859,38 @@ Slices, cheapest-first:
       each remote-touching test), and reconcile with J3 (DNS) + J4
       (hosted cassettes) so CI replays hermetically rather than
       re-recording from the WAN each run.
-  - J6: **In-process egress proxy (refactor).** Today the proxy is a
-    separate `daft-mitm-proxy` process the guest reaches via
+  - J6: **In-process egress proxy (refactor).** ✅ Landed. The proxy
+    was a separate `daft-mitm-proxy` process the guest reached via
     `https_proxy=http://192.168.127.254:PORT` → the loopback VIP →
     NAT → host `127.0.0.1:PORT`, wired with `DAFT_EGRESS_PROXY_URL/CA`
-    env. That shape is a holdover from the proxy's D8 origins as a
-    standalone investigation tool. Make it an **in-stack service**
-    instead, mirroring the DNS server (`startDNSServer` already does
-    `gonet.ListenTCP(stack, gateway:53)` and serves in-process): run
-    the proxy's `http.Server` on a `gonet.ListenTCP(stack,
-    gateway:<proxyPort>)` listener — gvisor hands the guest's bytes
-    straight to the accepted `net.Conn`, no NAT, no host TCP, no
-    second daemon. `cmd/daft-mitm-proxy` stays as the standalone
-    entry point; the production path goes in-process.
-    Wins: (a) **closes the deny-mode port hole** (review finding #4) —
-    guest→proxy terminates at the in-stack listener before the
-    forwarder, so the forwarder's `127.0.0.1`-any-port NAT allowance
-    can be deleted and deny has *no* `net.Dial("127.0.0.1:…")` path
-    at all; (b) **erases the J2c env/lifecycle UX** —
-    `DAFT_EGRESS_PROXY_URL`/port-discovery/CA-path go away, sandboxd
-    owns the proxy and the guest's `https_proxy` is a fixed
-    `gateway:<port>` (like DNS's `:53`); (c) the `.254` host-loopback
-    VIP is then only needed for the (separate) reach-host-services
-    feature, not for egress.
-    Tradeoff: a proxy panic/leak now lives in sandboxd's address
-    space and the proxy can't be separately confined — but that
-    isolation is illusory today anyway (the forwarder already does
-    the upstream `net.Dial` to the WAN inside sandboxd). True proxy
-    isolation would be a *deliberate* separate-process + netns design,
-    not the accidental one we have.
-    Supersedes the separate-process/env-injection parts of J2c and
-    the deferred port-allowlist refinement.
+    env — a holdover from the proxy's D8 origins as a standalone
+    investigation tool. It is now an **in-stack service** mirroring the
+    DNS server: the proxy core moved to `internal/mitmproxy` (step 1,
+    `cmd/daft-mitm-proxy` is now a thin wrapper over it), and sandboxd
+    builds one `mitmproxy.Proxy` + CA and serves it via
+    `startProxyServer` on a `gonet.ListenTCP(stack, gateway:3128)`
+    listener inside each VM's netstack (`sandboxnet.DefaultProxyPort`).
+    gvisor hands the guest's bytes straight to the accepted `net.Conn`
+    — no NAT, no host TCP, no second daemon. The executor injects a
+    fixed `https_proxy=http://192.168.127.1:3128` (like DNS's `:53`),
+    ships the sandboxd-generated CA into the bundle, and flips
+    `DenyEgress` on; sandboxd reads `DAFT_EGRESS_PROXY` (+ optional
+    `_CACHE_DIR` / `_CA_DIR` / `_OFFLINE` / `_INSECURE_UPSTREAM`).
+    Wins realised: (a) guest→proxy now terminates at the in-stack
+    listener *before* the TCP forwarder, so deny-mode egress has no
+    `net.Dial("127.0.0.1:…")` proxy path; (b) `DAFT_EGRESS_PROXY_URL`/
+    port-discovery/CA-path UX is gone — sandboxd owns the proxy and the
+    guest's `https_proxy` is a fixed `gateway:port`; (c) the `.254`
+    host-loopback VIP/NAT is now only the (separate) reach-host-services
+    lane, not egress. The forwarder's `127.0.0.1` allowance is left in
+    place for that lane (deleting it is a follow-up if reach-host is
+    dropped). Verified e2e: `TestClusterWorkspaceEgressProxyEnv` (cached
+    env-routed fetches, CA trusted) and `TestClusterWorkspaceBunDevServer`
+    (nix flake fetch + bun through the in-stack proxy).
+    Tradeoff accepted: a proxy panic/leak now lives in sandboxd's
+    address space — but that isolation was illusory already (the
+    forwarder does the upstream `net.Dial` to the WAN inside sandboxd).
+    Superseded the separate-process/env-injection parts of J2c.
 
 Open questions:
   - **Record bootstrap**: a brand-new cassette needs one WAN-allowed

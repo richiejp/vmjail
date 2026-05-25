@@ -17,9 +17,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"sync"
 	"sync/atomic"
 
@@ -31,6 +33,7 @@ import (
 	"github.com/localai-org/darkaifactory/internal/sandboxattach"
 	"github.com/localai-org/darkaifactory/internal/sandboxboot"
 	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
+	"github.com/localai-org/darkaifactory/internal/sandboxnet"
 	"github.com/localai-org/darkaifactory/internal/trace"
 )
 
@@ -155,17 +158,25 @@ type Config struct {
 	EgressProxy *EgressProxy
 }
 
-// EgressProxy configures default proxy-env injection (Phase J2).
+// EgressProxy configures the in-stack egress proxy (Phase J6). The
+// proxy is served inside each VM's netstack on the gateway (see
+// sandboxnet); the executor injects http(s)_proxy pointing at that
+// fixed gateway:port and ships the proxy CA into the bundle.
 type EgressProxy struct {
-	// GuestURL is the proxy as the guest reaches it — the loopback
-	// VIP plus the proxy's port, e.g. "http://192.168.127.254:8080".
-	// NAT rewrites the VIP onto the host's 127.0.0.1 where the proxy
-	// listens.
-	GuestURL string
+	// Handler is the proxy's http.Handler (an internal/mitmproxy
+	// Proxy). sandboxd builds one and shares it across every VM's
+	// netstack, which serves it on gateway:Port. Must be safe for
+	// concurrent use. A nil Handler means "no proxy" — egressActive
+	// returns false and neither injection nor default-deny kicks in.
+	Handler http.Handler
 	// CACertPEM is the proxy's CA certificate (PEM). Written into the
-	// container rootfs at egressCAGuestPath so guest TLS clients
-	// trust the proxy's MITM leaf certs.
+	// container rootfs at egressCAGuestPath so guest TLS clients trust
+	// the proxy's MITM leaf certs.
 	CACertPEM []byte
+	// Port is the gateway TCP port the proxy listens on inside the
+	// netstack. Zero falls back to sandboxnet.DefaultProxyPort; the
+	// injected https_proxy uses whichever applies.
+	Port uint16
 }
 
 // New builds an Executor. Stdout is required; Runner defaults to
@@ -444,11 +455,16 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 	}
 	if wantVsockForNet {
 		cfg.Vsock.NetPort = agent.DefaultNetVsockPort
-		// With an egress proxy configured, lock the netstack to
-		// default-deny: every legitimate egress is injected to route
-		// through the proxy (J2), so anything dialing elsewhere is a
-		// leak we want dropped + logged rather than silently sent.
-		cfg.DenyEgress = e.egressActive()
+		// With an egress proxy configured, serve it in-stack on the
+		// gateway and lock the netstack to default-deny: every
+		// legitimate egress is injected to route through the proxy
+		// (J6), so anything dialing elsewhere is a leak we want dropped
+		// + logged rather than silently sent.
+		if e.egressActive() {
+			cfg.DenyEgress = true
+			cfg.ProxyHandler = e.egressProxy.Handler
+			cfg.ProxyPort = e.proxyPort()
+		}
 	}
 	return cfg, unlock, nil
 }
@@ -486,7 +502,7 @@ func (e *Executor) baseBootConfig(ctx context.Context, spec *sandboxv1.SandboxSp
 	// proxy vars win on a key clash (a workload can't unset the proxy
 	// the node mandates), and ship the proxy CA into the rootfs.
 	if e.egressActive() {
-		opts.Env = append(opts.Env, proxyEnv(e.egressProxy.GuestURL)...)
+		opts.Env = append(opts.Env, proxyEnv(e.proxyGuestURL())...)
 		opts.CACert = e.egressProxy.CACertPEM
 		opts.CACertGuestPath = egressCAGuestPath
 	}
@@ -495,10 +511,26 @@ func (e *Executor) baseBootConfig(ctx context.Context, spec *sandboxv1.SandboxSp
 
 // egressActive reports whether a usable egress proxy is configured.
 // Both proxy-env injection and the DenyEgress decision key off this
-// single predicate: turning on default-deny without injecting a
+// single predicate: turning on default-deny without serving a
 // reachable proxy lane would black-hole all guest egress.
 func (e *Executor) egressActive() bool {
-	return e.egressProxy != nil && e.egressProxy.GuestURL != ""
+	return e.egressProxy != nil && e.egressProxy.Handler != nil
+}
+
+// proxyPort is the gateway port the in-stack proxy listens on,
+// defaulting to sandboxnet's when the config leaves it zero.
+func (e *Executor) proxyPort() uint16 {
+	if e.egressProxy.Port != 0 {
+		return e.egressProxy.Port
+	}
+	return sandboxnet.DefaultProxyPort
+}
+
+// proxyGuestURL is the fixed address the guest reaches the in-stack
+// proxy at: the netstack gateway plus the proxy port (like the DNS
+// server's gateway:53). No VIP, no NAT, no port discovery.
+func (e *Executor) proxyGuestURL() string {
+	return "http://" + net.JoinHostPort(sandboxnet.DefaultGatewayIP, strconv.Itoa(int(e.proxyPort())))
 }
 
 // egressCAGuestPath is where the proxy CA lands inside the container;

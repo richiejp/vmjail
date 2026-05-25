@@ -21,7 +21,11 @@ func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), err er
 	if cfg.Vsock == nil || cfg.Vsock.NetPort == 0 {
 		return func() {}, nil
 	}
-	network, err := sandboxnet.New(sandboxnet.Config{DenyEgress: cfg.DenyEgress})
+	network, err := sandboxnet.New(sandboxnet.Config{
+		DenyEgress:   cfg.DenyEgress,
+		ProxyHandler: cfg.ProxyHandler,
+		ProxyPort:    cfg.ProxyPort,
+	})
 	if err != nil {
 		return func() {}, fmt.Errorf("sandbox: sandboxnet.New: %w", err)
 	}
