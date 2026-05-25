@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/sandboxnet"
 	"github.com/localai-org/darkaifactory/internal/testtmux"
 )
 
@@ -86,6 +87,10 @@ type Cluster struct {
 	// daft-mitm-proxy binary, for tests that route in-VM egress
 	// through the caching proxy (PLAN.md Phase I).
 	MitmProxyBin string
+	// EgressProxyURL is the guest-facing URL of the auto-started
+	// caching proxy when the cluster was built WithEgressProxy
+	// (empty otherwise). Tests assert egress routed through it.
+	EgressProxyURL string
 
 	OrchestratorFP identity.Fingerprint
 	SandboxdFP     identity.Fingerprint
@@ -129,8 +134,13 @@ func (c *Cluster) WaitForSandboxdOutput(t *testing.T, substr string, timeout tim
 // Registers Cleanup that SIGTERMs each daemon's process group
 // and waits for exit; Pdeathsig=SIGKILL guarantees that even a
 // crashed test binary doesn't leak daemons.
-func NewCluster(t *testing.T) *Cluster {
+func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	t.Helper()
+
+	var o clusterOpts
+	for _, fn := range opts {
+		fn(&o)
+	}
 
 	requireSandboxArtefacts(t)
 	bins := ensureBinaries(t)
@@ -158,11 +168,26 @@ func NewCluster(t *testing.T) *Cluster {
 	orchOut := newOutputCapture(t, "daft-orchestrator")
 	sbxOut := newOutputCapture(t, "daft-sandboxd")
 
-	startDaemon(t, orchOut, bins.orchestrator,
+	startDaemon(t, orchOut, nil, bins.orchestrator,
 		"serve", "--addr", addr, "--config-dir", orchDir)
 	waitForTCP(t, addr, daemonReadyTimeout)
 
-	startDaemon(t, sbxOut, bins.sandboxd,
+	// When the egress proxy is requested, start it before sandboxd so
+	// its DAFT_EGRESS_PROXY_* env is in place when the executor is
+	// constructed — every image-backed dispatch then routes guest TLS
+	// through it.
+	var sbxEnv []string
+	var proxyURL string
+	if o.egressProxy {
+		var caPath string
+		proxyURL, caPath = startClusterEgressProxy(t, bins.mitmProxy)
+		sbxEnv = []string{
+			"DAFT_EGRESS_PROXY_URL=" + proxyURL,
+			"DAFT_EGRESS_PROXY_CA=" + caPath,
+		}
+	}
+
+	startDaemon(t, sbxOut, sbxEnv, bins.sandboxd,
 		"serve", "--orchestrator", url, "--config-dir", sbxDir)
 	// Sandboxd registration is asynchronous — the test asserts on
 	// daft node list output to decide when registration completed.
@@ -172,10 +197,73 @@ func NewCluster(t *testing.T) *Cluster {
 		OrchestratorURL: url,
 		ClientConfigDir: cliDir,
 		MitmProxyBin:    bins.mitmProxy,
+		EgressProxyURL:  proxyURL,
 		OrchestratorFP:  orchID.Fingerprint(),
 		SandboxdFP:      sbxID.Fingerprint(),
 		ClientFP:        cliID.Fingerprint(),
 		sandboxdOut:     sbxOut,
+	}
+}
+
+// ClusterOption tunes optional cluster topology.
+type ClusterOption func(*clusterOpts)
+
+type clusterOpts struct {
+	egressProxy bool
+}
+
+// WithEgressProxy makes the cluster auto-start a caching MITM proxy
+// and inject DAFT_EGRESS_PROXY_URL/CA into sandboxd, so guest TLS
+// egress routes through (and trusts) the proxy via the executor's
+// Phase-J env injection.
+func WithEgressProxy() ClusterOption {
+	return func(o *clusterOpts) { o.egressProxy = true }
+}
+
+// MitmProxyListenPrefix is the readiness line daft-mitm-proxy prints
+// on startup; the OS-assigned port follows it.
+const MitmProxyListenPrefix = "daft-mitm-proxy listening on "
+
+// startClusterEgressProxy starts a recording daft-mitm-proxy on the
+// host loopback with a persistent cache + CA, waits for readiness,
+// and returns the guest-facing proxy URL (the loopback VIP + the
+// OS-assigned port) plus the on-disk CA cert path sandboxd ships into
+// each bundle.
+func startClusterEgressProxy(t *testing.T, bin string) (guestURL, caPath string) {
+	t.Helper()
+	cacheDir := t.TempDir()
+	caDir := t.TempDir()
+	out := newOutputCapture(t, "daft-mitm-proxy")
+	startDaemon(t, out, nil, bin,
+		"--addr", "127.0.0.1:0",
+		"--cache-dir", cacheDir,
+		"--ca-dir", caDir,
+		"--insecure-upstream")
+
+	addr := waitForProxyAddr(t, out, daemonReadyTimeout)
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("parse proxy addr %q: %v", addr, err)
+	}
+	return "http://" + sandboxnet.DefaultHostLoopbackIP + ":" + port, filepath.Join(caDir, "ca.pem")
+}
+
+// waitForProxyAddr polls the proxy's captured output for the listen
+// line and returns the host:port it announced.
+func waitForProxyAddr(t *testing.T, out *outputCapture, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	//daft:lint:disable=forloopbound reason="bounded by deadline via the if-fatal below"
+	for {
+		for _, line := range strings.Split(out.Snapshot(), "\n") {
+			if i := strings.Index(line, MitmProxyListenPrefix); i >= 0 {
+				return strings.TrimSpace(line[i+len(MitmProxyListenPrefix):])
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("proxy never announced %q within %s\n%s", MitmProxyListenPrefix, timeout, out.Snapshot())
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
@@ -337,10 +425,13 @@ func freeLoopbackAddr(t *testing.T) string {
 // and registers a Cleanup that SIGTERMs the whole group then
 // Waits with a bounded delay. Pdeathsig=SIGKILL means a crashed
 // test process can't leak the daemon even if Cleanup never runs.
-func startDaemon(t *testing.T, out *outputCapture, prog string, args ...string) *exec.Cmd {
+func startDaemon(t *testing.T, out *outputCapture, extraEnv []string, prog string, args ...string) *exec.Cmd {
 	t.Helper()
 	//nolint:gosec // G204: prog + args are caller-controlled test-only paths.
 	cmd := exec.Command(prog, args...)
+	if len(extraEnv) > 0 {
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid:   true,
 		Pdeathsig: syscall.SIGKILL,

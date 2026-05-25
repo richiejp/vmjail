@@ -1788,12 +1788,34 @@ Slices, cheapest-first:
       the proxy lane; until then the existing allow-all e2e —
       `TestClusterWorkspaceHTTPSEgress`, bun — guards the VM path via
       `make verify`).
-  - J2: **Default proxy-env injection.** The workspace launch/exec
-    path sets `https_proxy`/`HTTPS_PROXY`/`NIX_SSL_CERT_FILE` (proxy
-    CA) by default; the cluster auto-starts the proxy with a
-    persistent `--cache-dir` + `--ca-dir`. Where the workload spawns
-    a daemon (nix-daemon), inject into its env too; where we can't,
-    J1's deny rule makes the leak a hard failure surfaced in the log.
+  - J2: **Default proxy-env injection** — LANDED.
+    - J2a/J2b (`f077cc1`): the executor merges the workspace's env
+      over the image env (keyed by NAME) and, when
+      `Config.EgressProxy` is set, layers `http(s)_proxy` +
+      `NIX_SSL_CERT_FILE`/`SSL_CERT_FILE` on top (proxy wins) and
+      writes the proxy CA into the bundle rootfs at
+      `/etc/daft-egress-ca.pem`.
+    - J2c/J2d: `daft-sandboxd serve` reads `DAFT_EGRESS_PROXY_URL` +
+      `DAFT_EGRESS_PROXY_CA` into `Config.EgressProxy`. The test
+      cluster's `WithEgressProxy()` auto-starts the caching proxy
+      (persistent `--cache-dir` + `--ca-dir`) and sets those env
+      vars on sandboxd. Crucially, `crun exec` previously inherited
+      **none** of the container's env, so the agent now reads the
+      bundle's `config.json` `process.env` and forwards it via
+      `--env` — exec'd commands (and any daemon they spawn, incl.
+      nix-daemon) see the same env as PID 1. Proven by
+      `TestClusterWorkspaceEgressProxyEnv`: a bare in-VM
+      `daft-http-fetch` (no `--proxy`/`--insecure`) routes through
+      the proxy via injected `https_proxy`, validates the MITM leaf
+      via the injected CA (proxy mints IP-SAN leaves), and the
+      second fetch is a cache HIT.
+    - **Gotcha for any future env-driven egress test**: Go's
+      `ProxyFromEnvironment` unconditionally bypasses the proxy for
+      `localhost`/loopback targets — a test upstream must bind a
+      non-loopback host IP or the fetch goes direct.
+    - **Deferred**: a proxy-driven nix-daemon e2e (today's nix/bun
+      tests don't configure a proxy); it's covered transitively by
+      exec env-forwarding and lands fully when J5 flips the default.
   - J3: **Caching DNS resolver.** A host-side record/replay DNS cache
     (its own cassette, same shape as httpcache); sandboxnet's :53
     lane routes to it; replay mode never queries the WAN. Reconcile

@@ -3,10 +3,13 @@ package agent
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"google.golang.org/protobuf/proto"
@@ -98,6 +101,11 @@ type AttachExecRequest struct {
 	TTY     bool
 	Cols    uint32
 	Rows    uint32
+	// Env is the container's environment (read from the bundle's
+	// config.json), forwarded so an exec'd process sees the same env
+	// as the container's entrypoint — including the Phase-J egress
+	// proxy vars. crun exec otherwise starts with a bare env.
+	Env []string
 }
 
 // attachDeps factors the side-effect surfaces of the attach
@@ -133,7 +141,37 @@ func startAttachListenerFromCmdline(ctx context.Context, w io.Writer, d runDeps,
 	if !ok {
 		return
 	}
-	go runAttachListener(ctx, w, port, d.attach)
+	bundle, _, _ := ParseBundleCmdline(cmdline)
+	containerEnv := readContainerEnv(w, bundle)
+	go runAttachListener(ctx, w, port, d.attach, containerEnv)
+}
+
+// readContainerEnv reads the container env from the bundle's
+// config.json so exec'd processes inherit it. Best-effort: a missing
+// or malformed config (e.g. the bare hello-bundle, or no bundle at
+// all) reports on the console and yields nil — exec then runs with
+// crun's default env, the pre-J behaviour.
+func readContainerEnv(w io.Writer, bundle string) []string {
+	if bundle == "" {
+		return nil
+	}
+	path := filepath.Join(bundle, "config.json")
+	//nolint:gosec // G304: bundle path is kernel-cmdline-supplied in a single-tenant VM.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		writeReport(w, attachReportPrefix, "read container env: "+err.Error())
+		return nil
+	}
+	var spec struct {
+		Process struct {
+			Env []string `json:"env"`
+		} `json:"process"`
+	}
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		writeReport(w, attachReportPrefix, "parse container env: "+err.Error())
+		return nil
+	}
+	return spec.Process.Env
 }
 
 // runAttachListener vsock-listens on port and serves each accepted
@@ -141,7 +179,7 @@ func startAttachListenerFromCmdline(ctx context.Context, w io.Writer, d runDeps,
 // on the console and the goroutine exits — there's nothing
 // useful to do otherwise. ctx.Done triggers a Close on the
 // listener so Accept returns net.ErrClosed.
-func runAttachListener(ctx context.Context, w io.Writer, port uint32, d attachDeps) {
+func runAttachListener(ctx context.Context, w io.Writer, port uint32, d attachDeps, containerEnv []string) {
 	_, span := trace.Start(ctx, "agent.attach.listener.start",
 		trace.WithAttributes(trace.KV{Key: "vsock_port", Value: strconv.FormatUint(uint64(port), 10)}))
 	defer span.End()
@@ -156,13 +194,13 @@ func runAttachListener(ctx context.Context, w io.Writer, port uint32, d attachDe
 		<-ctx.Done()
 		oops.Skip("agent: close attach listener", ln.Close(), net.ErrClosed)
 	}()
-	attachAcceptLoop(ctx, w, ln, d.exec)
+	attachAcceptLoop(ctx, w, ln, d.exec, containerEnv)
 }
 
 // attachAcceptLoop accepts connections on ln and spawns
 // handleAttach per connection. Returns on ErrClosed (ctx-driven
 // listener close) or any non-temporary error.
-func attachAcceptLoop(ctx context.Context, w io.Writer, ln net.Listener, exec ExecAttach) {
+func attachAcceptLoop(ctx context.Context, w io.Writer, ln net.Listener, exec ExecAttach, containerEnv []string) {
 	//daft:lint:disable=forloopbound reason="bounded by ln.Accept returning ErrClosed when ctx.Done closes the listener"
 	for {
 		conn, err := ln.Accept()
@@ -173,7 +211,7 @@ func attachAcceptLoop(ctx context.Context, w io.Writer, ln net.Listener, exec Ex
 			writeReport(w, attachReportPrefix, fmt.Sprintf("accept: %v", err))
 			return
 		}
-		go handleAttach(ctx, w, conn, exec)
+		go handleAttach(ctx, w, conn, exec, containerEnv)
 	}
 }
 
@@ -184,7 +222,7 @@ func attachAcceptLoop(ctx context.Context, w io.Writer, ln net.Listener, exec Ex
 // All error paths surface to the client as an Exit frame with a
 // non-empty error string so the attaching `daft workspace attach`
 // session sees the failure rather than a silent EOF.
-func handleAttach(ctx context.Context, w io.Writer, conn net.Conn, exec ExecAttach) {
+func handleAttach(ctx context.Context, w io.Writer, conn net.Conn, exec ExecAttach, containerEnv []string) {
 	defer func() { oops.Skip("agent: close attach conn", conn.Close(), net.ErrClosed) }()
 	hello, err := ReadAttachHello(conn)
 	if err != nil {
@@ -197,6 +235,7 @@ func handleAttach(ctx context.Context, w io.Writer, conn net.Conn, exec ExecAtta
 		TTY:     hello.GetTty(),
 		Cols:    hello.GetCols(),
 		Rows:    hello.GetRows(),
+		Env:     containerEnv,
 	}
 	pumpAttachProcess(ctx, w, conn, exec, req)
 }

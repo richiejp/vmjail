@@ -68,7 +68,15 @@ const (
 // fd in as the child's stdio, so the in-container process sees
 // a real TTY without crun needing one of its own.
 func defaultAttachCmd(ctx context.Context, req AttachExecRequest) *exec.Cmd {
-	argv := []string{crunExecSubcommand, ContainerID}
+	argv := []string{crunExecSubcommand}
+	// Forward the container's env (read from config.json) so the
+	// exec'd process sees the same environment as the entrypoint —
+	// including the Phase-J egress proxy vars. crun exec starts from
+	// a bare env otherwise.
+	for _, e := range req.Env {
+		argv = append(argv, "--env", e)
+	}
+	argv = append(argv, ContainerID)
 	if len(req.Command) == 0 {
 		argv = append(argv, defaultAttachShell, "-l")
 	} else {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -360,4 +361,48 @@ func TestExtractWithEnvFallbackReturnsErrNotBundledWhenBaseEmpty(t *testing.T) {
 	if !errors.Is(err, bundled.ErrNotBundled) {
 		t.Errorf("err = %v, want ErrNotBundled", err)
 	}
+}
+
+func TestEgressProxyFromEnv(t *testing.T) {
+	const guestURL = "http://192.168.127.254:8080"
+
+	t.Run("unset is nil", func(t *testing.T) {
+		t.Setenv(envEgressProxyURL, "")
+		p, err := egressProxyFromEnv()
+		if p != nil || err != nil {
+			t.Fatalf("unset: got (%v, %v), want (nil, nil)", p, err)
+		}
+	})
+
+	t.Run("url without CA errors", func(t *testing.T) {
+		t.Setenv(envEgressProxyURL, guestURL)
+		t.Setenv(envEgressProxyCA, "")
+		if _, err := egressProxyFromEnv(); err == nil {
+			t.Fatal("want error when URL set but CA empty")
+		}
+	})
+
+	t.Run("unreadable CA errors", func(t *testing.T) {
+		t.Setenv(envEgressProxyURL, guestURL)
+		t.Setenv(envEgressProxyCA, filepath.Join(t.TempDir(), "missing.pem"))
+		if _, err := egressProxyFromEnv(); err == nil {
+			t.Fatal("want error when CA file is unreadable")
+		}
+	})
+
+	t.Run("happy path", func(t *testing.T) {
+		caFile := filepath.Join(t.TempDir(), "ca.pem")
+		if err := os.WriteFile(caFile, []byte("PEM"), 0o600); err != nil {
+			t.Fatalf("write CA: %v", err)
+		}
+		t.Setenv(envEgressProxyURL, guestURL)
+		t.Setenv(envEgressProxyCA, caFile)
+		p, err := egressProxyFromEnv()
+		if err != nil {
+			t.Fatalf("happy: %v", err)
+		}
+		if p == nil || p.GuestURL != guestURL || string(p.CACertPEM) != "PEM" {
+			t.Fatalf("happy: got %+v", p)
+		}
+	})
 }

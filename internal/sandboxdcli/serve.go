@@ -175,6 +175,10 @@ var buildDispatcher = func(
 		CacheDir:  userCacheDir,
 		Extract:   extractWithEnvFallback(base),
 	})
+	egress, err := egressProxyFromEnv()
+	if err != nil {
+		return nil, err
+	}
 	return sandboxexec.New(sandboxexec.Config{
 		Base:           base,
 		Stdout:         stdout,
@@ -183,7 +187,36 @@ var buildDispatcher = func(
 		AttachRegistry: attachRegistry,
 		VsockDir:       vsockDir,
 		NetEnabled:     true,
+		EgressProxy:    egress,
 	})
+}
+
+// Env vars that configure default egress-proxy injection. Set by the
+// node operator (and by the test cluster's WithEgressProxy option).
+const (
+	envEgressProxyURL = "DAFT_EGRESS_PROXY_URL"
+	envEgressProxyCA  = "DAFT_EGRESS_PROXY_CA"
+)
+
+// egressProxyFromEnv builds the executor's EgressProxy config from
+// the DAFT_EGRESS_PROXY_* env vars. Unset URL ⇒ nil (direct egress).
+// A set URL requires a readable CA file so guest TLS clients can
+// trust the proxy's MITM leaves.
+func egressProxyFromEnv() (*sandboxexec.EgressProxy, error) {
+	guestURL := os.Getenv(envEgressProxyURL)
+	if guestURL == "" {
+		return nil, nil //nolint:nilnil // nil config = feature off, not an error.
+	}
+	caPath := os.Getenv(envEgressProxyCA)
+	if caPath == "" {
+		return nil, fmt.Errorf("sandboxd: %s set but %s empty", envEgressProxyURL, envEgressProxyCA)
+	}
+	//nolint:gosec // G304: caPath is an operator-supplied config path.
+	pem, err := os.ReadFile(caPath)
+	if err != nil {
+		return nil, fmt.Errorf("sandboxd: read egress proxy CA %s: %w", caPath, err)
+	}
+	return &sandboxexec.EgressProxy{GuestURL: guestURL, CACertPEM: pem}, nil
 }
 
 // extractWithEnvFallback wraps bundled.Extract: when the binary

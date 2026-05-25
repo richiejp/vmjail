@@ -7,6 +7,9 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -14,6 +17,43 @@ import (
 
 	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 )
+
+func TestReadContainerEnv(t *testing.T) {
+	if env := readContainerEnv(io.Discard, ""); env != nil {
+		t.Fatalf("empty bundle: env = %v, want nil", env)
+	}
+
+	var missingW bytes.Buffer
+	if env := readContainerEnv(&missingW, t.TempDir()); env != nil {
+		t.Fatalf("missing config.json: env = %v, want nil", env)
+	}
+	if !strings.Contains(missingW.String(), "read container env") {
+		t.Errorf("missing config.json not reported: %q", missingW.String())
+	}
+
+	okDir := t.TempDir()
+	writeConfigJSON(t, okDir, `{"process":{"env":["A=1","B=2"]}}`)
+	if env := readContainerEnv(io.Discard, okDir); !slices.Equal(env, []string{"A=1", "B=2"}) {
+		t.Fatalf("valid config: env = %v, want [A=1 B=2]", env)
+	}
+
+	badDir := t.TempDir()
+	writeConfigJSON(t, badDir, "not json")
+	var badW bytes.Buffer
+	if env := readContainerEnv(&badW, badDir); env != nil {
+		t.Fatalf("malformed config: env = %v, want nil", env)
+	}
+	if !strings.Contains(badW.String(), "parse container env") {
+		t.Errorf("malformed config not reported: %q", badW.String())
+	}
+}
+
+func writeConfigJSON(t *testing.T, dir, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(content), 0o600); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
+}
 
 // fakeAttachProcess wraps an io.Pipe pair as an AttachProcess so
 // tests can drive bytes both directions without spawning a real
@@ -279,7 +319,7 @@ func TestHandleAttachSplicesBothWays(t *testing.T) {
 	go func() {
 		defer close(done)
 		var w bytes.Buffer
-		handleAttach(ctx, &w, server, exec)
+		handleAttach(ctx, &w, server, exec, nil)
 	}()
 
 	hello := &agentv1.AgentAttachHello{
@@ -357,7 +397,7 @@ func TestHandleAttachForwardsResize(t *testing.T) {
 	go func() {
 		defer close(done)
 		var w bytes.Buffer
-		handleAttach(ctx, &w, server, exec)
+		handleAttach(ctx, &w, server, exec, nil)
 	}()
 
 	if err := WriteAttachHello(client, &agentv1.AgentAttachHello{Tty: true, Cols: 80, Rows: 24}); err != nil {
@@ -399,7 +439,7 @@ func TestHandleAttachReportsExecStartError(t *testing.T) {
 	go func() {
 		defer close(done)
 		var w bytes.Buffer
-		handleAttach(ctx, &w, server, exec)
+		handleAttach(ctx, &w, server, exec, nil)
 	}()
 
 	if err := WriteAttachHello(client, &agentv1.AgentAttachHello{}); err != nil {
@@ -439,7 +479,7 @@ func TestHandleAttachReportsResizeError(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		handleAttach(context.Background(), &w, server, exec)
+		handleAttach(context.Background(), &w, server, exec, nil)
 	}()
 
 	if err := WriteAttachHello(client, &agentv1.AgentAttachHello{Tty: true, Cols: 80, Rows: 24}); err != nil {
@@ -486,7 +526,7 @@ func TestHandleAttachClientExitFrameTreatedAsEOF(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		handleAttach(context.Background(), &w, server, exec)
+		handleAttach(context.Background(), &w, server, exec, nil)
 	}()
 
 	if err := WriteAttachHello(client, &agentv1.AgentAttachHello{Tty: true, Cols: 80, Rows: 24}); err != nil {
@@ -523,7 +563,7 @@ func TestHandleAttachWaitErrorSurfacedToClient(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		handleAttach(context.Background(), &w, server, exec)
+		handleAttach(context.Background(), &w, server, exec, nil)
 	}()
 
 	if err := WriteAttachHello(client, &agentv1.AgentAttachHello{Tty: true, Cols: 80, Rows: 24}); err != nil {
@@ -557,7 +597,7 @@ func TestHandleAttachReportsHelloReadError(t *testing.T) {
 	go func() {
 		defer close(done)
 		var w bytes.Buffer
-		handleAttach(context.Background(), &w, server, &fakeAttachExec{})
+		handleAttach(context.Background(), &w, server, &fakeAttachExec{}, nil)
 	}()
 	select {
 	case <-done:
@@ -671,7 +711,7 @@ func TestRunAttachListenerReportsListenError(t *testing.T) {
 		listenVsock: func(uint32) (net.Listener, error) {
 			return nil, errors.New("bind: address in use")
 		},
-	})
+	}, nil)
 	if !strings.Contains(w.String(), "bind: address in use") {
 		t.Errorf("console output %q missing bind error", w.String())
 	}
@@ -688,7 +728,7 @@ func TestHandleAttachUnmarshalHelloError(t *testing.T) {
 	go func() {
 		defer close(done)
 		var w bytes.Buffer
-		handleAttach(context.Background(), &w, server, &fakeAttachExec{})
+		handleAttach(context.Background(), &w, server, &fakeAttachExec{}, nil)
 	}()
 
 	// 0xff bytes are invalid as a proto wire format.
@@ -826,7 +866,7 @@ func TestAttachAcceptLoopReportsNonClosedError(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		attachAcceptLoop(context.Background(), &w, ln, &fakeAttachExec{})
+		attachAcceptLoop(context.Background(), &w, ln, &fakeAttachExec{}, nil)
 	}()
 	select {
 	case <-done:
