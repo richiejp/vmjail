@@ -94,6 +94,9 @@ type Executor struct {
 	// cfg.Vsock.NetPort so the agent dials the host-side sandboxnet
 	// stack on boot.
 	netEnabled bool
+	// egressProxy, when non-nil, drives Phase-J proxy-env + CA
+	// injection on every image-backed dispatch (see Config.EgressProxy).
+	egressProxy *EgressProxy
 	// nextCID hands out fresh AF_VSOCK Context IDs for each dispatch.
 	// Initialised to 2 so the first .Add(1) returns 3 — the lowest
 	// CID the ABI allows for a guest (0/1/2 are reserved).
@@ -143,6 +146,26 @@ type Config struct {
 	// `daft-sandboxd serve` enables it; unit tests leave it off so
 	// they don't have to wire a real sandboxnet stack.
 	NetEnabled bool
+	// EgressProxy, when non-nil, makes every image-backed dispatch
+	// route guest TLS egress through the host-side caching proxy:
+	// the executor injects http(s)_proxy + NIX_SSL_CERT_FILE /
+	// SSL_CERT_FILE into the container env and writes the proxy CA
+	// into the bundle rootfs. Leave nil to keep direct egress (the
+	// pre-Phase-J behaviour).
+	EgressProxy *EgressProxy
+}
+
+// EgressProxy configures default proxy-env injection (Phase J2).
+type EgressProxy struct {
+	// GuestURL is the proxy as the guest reaches it — the loopback
+	// VIP plus the proxy's port, e.g. "http://192.168.127.254:8080".
+	// NAT rewrites the VIP onto the host's 127.0.0.1 where the proxy
+	// listens.
+	GuestURL string
+	// CACertPEM is the proxy's CA certificate (PEM). Written into the
+	// container rootfs at egressCAGuestPath so guest TLS clients
+	// trust the proxy's MITM leaf certs.
+	CACertPEM []byte
 }
 
 // New builds an Executor. Stdout is required; Runner defaults to
@@ -177,6 +200,7 @@ func New(cfg Config) (*Executor, error) {
 		attachRegistry: cfg.AttachRegistry,
 		vsockDir:       cfg.VsockDir,
 		netEnabled:     cfg.NetEnabled,
+		egressProxy:    cfg.EgressProxy,
 		live:           map[string]*liveSandbox{},
 	}
 	// First .Add(1) returns 3 — the lowest CID the AF_VSOCK ABI
@@ -449,9 +473,52 @@ func (e *Executor) baseBootConfig(ctx context.Context, spec *sandboxv1.SandboxSp
 	if imageRef == "" || e.assembler == nil {
 		return e.base, func() {}, nil
 	}
-	return e.assembler(ctx, imageRef, sandboxboot.BootOptions{
+	opts := sandboxboot.BootOptions{
 		Mounts: mountsFromSpec(spec.GetMounts()),
-	})
+		Env:    envFromSpec(spec.GetEnv()),
+	}
+	// Layer the egress-proxy env after the workspace's own env so the
+	// proxy vars win on a key clash (a workload can't unset the proxy
+	// the node mandates), and ship the proxy CA into the rootfs.
+	if e.egressProxy != nil && e.egressProxy.GuestURL != "" {
+		opts.Env = append(opts.Env, proxyEnv(e.egressProxy.GuestURL)...)
+		opts.CACert = e.egressProxy.CACertPEM
+		opts.CACertGuestPath = egressCAGuestPath
+	}
+	return e.assembler(ctx, imageRef, opts)
+}
+
+// egressCAGuestPath is where the proxy CA lands inside the container;
+// the injected NIX_SSL_CERT_FILE / SSL_CERT_FILE point at it.
+const egressCAGuestPath = "/etc/daft-egress-ca.pem"
+
+// envFromSpec flattens the spec's EnvVars into OCI "NAME=VALUE"
+// entries. Returns nil for an empty spec so the bundle keeps the
+// image's env untouched.
+func envFromSpec(in []*sandboxv1.EnvVar) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, e := range in {
+		out = append(out, e.GetName()+"="+e.GetValue())
+	}
+	return out
+}
+
+// proxyEnv is the set of variables that route a container's HTTP(S)
+// egress through the proxy at guestURL and make its TLS clients
+// trust the proxy CA. Both lower- and upper-case proxy vars are set
+// because tools disagree on which they honour.
+func proxyEnv(guestURL string) []string {
+	return []string{
+		"http_proxy=" + guestURL,
+		"https_proxy=" + guestURL,
+		"HTTP_PROXY=" + guestURL,
+		"HTTPS_PROXY=" + guestURL,
+		"NIX_SSL_CERT_FILE=" + egressCAGuestPath,
+		"SSL_CERT_FILE=" + egressCAGuestPath,
+	}
 }
 
 // applyResourceSizing layers the SandboxSpec's guest-RAM and vCPU

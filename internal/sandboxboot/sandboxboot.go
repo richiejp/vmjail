@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/localai-org/darkaifactory/internal/bundled"
@@ -58,6 +59,17 @@ type Mount struct {
 // honours alongside the image ref.
 type BootOptions struct {
 	Mounts []Mount
+	// Env is merged over the image's Env (keyed by NAME) in the
+	// container's OCI process env. Carries the workspace's own env
+	// plus, under Phase J, the injected egress-proxy variables.
+	Env []string
+	// CACert, when non-empty, is a PEM CA bundle written into the
+	// bundle's rootfs at CACertGuestPath (an absolute in-container
+	// path) before boot, so the container's TLS clients — pointed at
+	// it via NIX_SSL_CERT_FILE / SSL_CERT_FILE — trust the egress
+	// proxy's MITM leaf certs.
+	CACert          []byte
+	CACertGuestPath string
 }
 
 // Store is the imagestore surface BuildBundleConfig needs. Kept as
@@ -126,6 +138,7 @@ func BuildBundleConfig(
 	}
 	bundle, err := store.Bundle(ctx, img.Digest, imagestore.BundleOptions{
 		ExtraMounts: bundleMountsFromSpec(opts.Mounts),
+		Env:         opts.Env,
 	})
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: bundle %s: %w", img.Digest, err)
@@ -142,6 +155,12 @@ func BuildBundleConfig(
 			unlock = unlockNow
 		}
 	}()
+
+	if len(opts.CACert) > 0 {
+		if err = writeBundleCACert(bundle.Path, opts.CACertGuestPath, opts.CACert); err != nil {
+			return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: write CA cert: %w", err)
+		}
+	}
 
 	cacheDir, err := deps.CacheDir()
 	if err != nil {
@@ -172,6 +191,32 @@ func BuildBundleConfig(
 		})
 	}
 	return cfg, bundleUnlock, nil
+}
+
+// writeBundleCACert writes pem into the bundle's rootfs at the
+// absolute in-container path guestPath (e.g. /etc/daft-egress-ca.pem),
+// creating parent dirs. Written before boot and 0644 because a CA
+// cert is public; the container's TLS clients read it via
+// NIX_SSL_CERT_FILE / SSL_CERT_FILE. Atomic (tmp+rename) so a bundle
+// shared by a concurrently-booting VM never sees a partial file.
+func writeBundleCACert(bundlePath, guestPath string, pem []byte) error {
+	if guestPath == "" {
+		return errors.New("sandboxboot: empty CA cert guest path")
+	}
+	dst := filepath.Join(bundlePath, "rootfs", filepath.FromSlash(guestPath))
+	//nolint:gosec // G301: /etc must be world-traversable so the container's non-root user can reach the CA.
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("mkdir for CA cert: %w", err)
+	}
+	tmp := dst + ".tmp"
+	//nolint:gosec // G306: a CA cert is public; container TLS clients must read it.
+	if err := os.WriteFile(tmp, pem, 0o644); err != nil {
+		return fmt.Errorf("write CA cert: %w", err)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return fmt.Errorf("rename CA cert: %w", err)
+	}
+	return nil
 }
 
 func validateDeps(d Deps) error {

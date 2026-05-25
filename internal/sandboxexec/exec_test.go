@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"testing"
 
@@ -140,6 +141,97 @@ func TestHandleSandboxEventAssemblerPath(t *testing.T) {
 	}
 	if unlockCalls != 1 {
 		t.Errorf("unlock called %d times, want 1", unlockCalls)
+	}
+}
+
+func TestEnvFromSpec(t *testing.T) {
+	if got := envFromSpec(nil); got != nil {
+		t.Fatalf("envFromSpec(nil) = %v, want nil", got)
+	}
+	got := envFromSpec([]*sandboxv1.EnvVar{{Name: "A", Value: "1"}, {Name: "B", Value: "x=y"}})
+	want := []string{"A=1", "B=x=y"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("envFromSpec = %v, want %v", got, want)
+	}
+}
+
+// TestHandleSandboxEventProjectsEnv proves the spec's env reaches the
+// assembler's BootOptions (the J2a wiring) rather than being dropped.
+func TestHandleSandboxEventProjectsEnv(t *testing.T) {
+	var seenEnv []string
+	asm := func(_ context.Context, _ string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		seenEnv = opts.Env
+		return sandbox.Config{Bundle: "/b"}, func() {}, nil
+	}
+	runner := func(context.Context, io.Writer, sandbox.Config) error { return nil }
+	e, err := New(Config{Stdout: io.Discard, Runner: runner, Assembler: asm})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	evt := addedEvent("sb-env", &sandboxv1.SandboxSpec{
+		ImageRef: testImageRef,
+		Env:      []*sandboxv1.EnvVar{{Name: "FOO", Value: "bar"}},
+	})
+	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if !slices.Contains(seenEnv, "FOO=bar") {
+		t.Fatalf("assembler BootOptions.Env = %v, want to contain FOO=bar", seenEnv)
+	}
+}
+
+func TestProxyEnv(t *testing.T) {
+	const u = "http://192.168.127.254:8080"
+	got := proxyEnv(u)
+	for _, want := range []string{
+		"http_proxy=" + u, "https_proxy=" + u,
+		"HTTP_PROXY=" + u, "HTTPS_PROXY=" + u,
+		"NIX_SSL_CERT_FILE=" + egressCAGuestPath,
+		"SSL_CERT_FILE=" + egressCAGuestPath,
+	} {
+		if !slices.Contains(got, want) {
+			t.Errorf("proxyEnv missing %q in %v", want, got)
+		}
+	}
+}
+
+// TestHandleSandboxEventInjectsProxy proves the executor layers the
+// egress-proxy env + CA onto an image-backed dispatch, and that the
+// proxy's https_proxy is ordered after a workspace's own so the
+// bundle's env merge lets the proxy win.
+func TestHandleSandboxEventInjectsProxy(t *testing.T) {
+	const u = "http://192.168.127.254:8080"
+	ca := []byte("CA-PEM")
+	var opts sandboxboot.BootOptions
+	asm := func(_ context.Context, _ string, o sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		opts = o
+		return sandbox.Config{Bundle: "/b"}, func() {}, nil
+	}
+	runner := func(context.Context, io.Writer, sandbox.Config) error { return nil }
+	e, err := New(Config{
+		Stdout: io.Discard, Runner: runner, Assembler: asm,
+		EgressProxy: &EgressProxy{GuestURL: u, CACertPEM: ca},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	evt := addedEvent("sb-proxy", &sandboxv1.SandboxSpec{
+		ImageRef: testImageRef,
+		Env:      []*sandboxv1.EnvVar{{Name: "https_proxy", Value: "user-set"}},
+	})
+	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	userIdx := slices.Index(opts.Env, "https_proxy=user-set")
+	proxyIdx := slices.Index(opts.Env, "https_proxy="+u)
+	if userIdx < 0 || proxyIdx < 0 || proxyIdx < userIdx {
+		t.Errorf("want proxy https_proxy after user's; env=%v (user=%d proxy=%d)", opts.Env, userIdx, proxyIdx)
+	}
+	if !slices.Contains(opts.Env, "SSL_CERT_FILE="+egressCAGuestPath) {
+		t.Errorf("SSL_CERT_FILE not injected: %v", opts.Env)
+	}
+	if !bytes.Equal(opts.CACert, ca) || opts.CACertGuestPath != egressCAGuestPath {
+		t.Errorf("CA not passed: pem=%q path=%q", opts.CACert, opts.CACertGuestPath)
 	}
 }
 

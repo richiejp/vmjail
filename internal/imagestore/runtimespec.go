@@ -105,7 +105,7 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 		Process: runtimeProcess{
 			User:            user,
 			Args:            args,
-			Env:             firstNonNil(opts.Env, imgCfg.Env),
+			Env:             mergeEnv(imgCfg.Env, opts.Env),
 			Cwd:             firstNonEmpty(opts.Cwd, imgCfg.WorkingDir, "/"),
 			Capabilities:    emptyCapabilities(),
 			Rlimits:         []any{},
@@ -138,11 +138,33 @@ func mergeArgs(override, entrypoint, cmd []string) []string {
 	return out
 }
 
-func firstNonNil[T any](primary, fallback []T) []T {
-	if primary != nil {
-		return primary
+// mergeEnv overlays overlay onto base, keyed by the NAME part of each
+// "NAME=VALUE" entry: an overlay entry replaces a base entry with the
+// same NAME in place, and a new NAME is appended. Base order is
+// preserved so the image's own ordering is stable. Empty overlay
+// returns base unchanged (the pre-J behaviour: image env as-is).
+func mergeEnv(base, overlay []string) []string {
+	if len(overlay) == 0 {
+		return base
 	}
-	return fallback
+	out := make([]string, 0, len(base)+len(overlay))
+	pos := make(map[string]int, len(base)+len(overlay))
+	add := func(entry string) {
+		name, _, _ := strings.Cut(entry, "=")
+		if p, ok := pos[name]; ok {
+			out[p] = entry
+			return
+		}
+		pos[name] = len(out)
+		out = append(out, entry)
+	}
+	for _, e := range base {
+		add(e)
+	}
+	for _, e := range overlay {
+		add(e)
+	}
+	return out
 }
 
 func firstNonEmpty(primary, secondary, fallback string) string {

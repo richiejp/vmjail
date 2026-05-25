@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -423,6 +424,69 @@ func TestBundleAppliesOverrides(t *testing.T) {
 		!strings.Contains(string(cfg), `"OVERRIDE=1"`) ||
 		!strings.Contains(string(cfg), `"custom-host"`) {
 		t.Errorf("overrides missing in config.json:\n%s", cfg)
+	}
+}
+
+func TestMergeEnv(t *testing.T) {
+	const a1 = "A=1"
+	cases := []struct {
+		name    string
+		base    []string
+		overlay []string
+		want    []string
+	}{
+		{"empty overlay keeps base", []string{a1, "B=2"}, nil, []string{a1, "B=2"}},
+		{"empty base takes overlay", nil, []string{a1}, []string{a1}},
+		{
+			"override in place + append",
+			[]string{"PATH=/img", a1},
+			[]string{"A=2", "NEW=x"},
+			[]string{"PATH=/img", "A=2", "NEW=x"},
+		},
+		{"bare name (no =) keyed whole", []string{a1}, []string{"A"}, []string{"A"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mergeEnv(tc.base, tc.overlay)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("mergeEnv(%v, %v) = %v, want %v", tc.base, tc.overlay, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBundleMergesEnvOverImage proves BundleOptions.Env overlays the
+// image's Env keyed by NAME: the same name is overridden, a new name
+// is appended, and an untouched image name survives.
+func TestBundleMergesEnvOverImage(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/merge-env:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{
+		Entrypoint: []string{testEntrypoint},
+		Env:        []string{"PATH=/img/bin", "https_proxy=stale"},
+	})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+	bundle, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{
+		Env: []string{"https_proxy=http://192.168.127.254:9", "NEW=1"},
+	})
+	if err != nil {
+		t.Fatalf("Bundle: %v", err)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+	for _, want := range []string{`"PATH=/img/bin"`, `"https_proxy=http://192.168.127.254:9"`, `"NEW=1"`} {
+		if !strings.Contains(string(cfg), want) {
+			t.Errorf("config.json missing %s:\n%s", want, cfg)
+		}
+	}
+	if strings.Contains(string(cfg), `"https_proxy=stale"`) {
+		t.Errorf("stale image env not overridden:\n%s", cfg)
 	}
 }
 

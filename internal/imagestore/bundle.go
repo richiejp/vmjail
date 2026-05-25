@@ -39,7 +39,9 @@ type BundleOptions struct {
 	// Args, when non-nil, replaces the image's Entrypoint+Cmd. Pass
 	// []string{"/bin/sh"} to override.
 	Args []string
-	// Env, when non-nil, replaces the image's Env entirely.
+	// Env is merged over the image's Env keyed by NAME: an entry with
+	// a NAME already in the image replaces it, a new NAME is appended.
+	// Empty leaves the image's Env untouched.
 	Env []string
 	// Cwd, when non-empty, overrides the image's WorkingDir.
 	Cwd string

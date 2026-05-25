@@ -1,8 +1,11 @@
 package sandboxboot
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -76,6 +79,84 @@ func happyPathDeps(t *testing.T, unlockCalls *int) Deps {
 				Virtiofsd:       testVirtiofsdPath,
 			}, nil
 		},
+	}
+}
+
+// tempBundleDeps is happyPathDeps but with bundle.Path under a real
+// temp dir so host-side rootfs writes (the CA cert) land somewhere.
+func tempBundleDeps(t *testing.T, bundlePath string) Deps {
+	t.Helper()
+	store := &fakeStore{
+		pull: func(context.Context, string) (*imagestore.Image, error) {
+			return &imagestore.Image{Digest: testDigest}, nil
+		},
+		bundle: func(context.Context, string, imagestore.BundleOptions) (*imagestore.Bundle, error) {
+			return &imagestore.Bundle{Path: bundlePath}, nil
+		},
+		lock: func(string) (func(), error) { return func() {}, nil },
+	}
+	return Deps{
+		OpenStore: func() (Store, error) { return store, nil },
+		CacheDir:  func() (string, error) { return t.TempDir(), nil },
+		Extract: func(string) (bundled.Paths, error) {
+			return bundled.Paths{CloudHypervisor: testCHPath, Kernel: testKernelPath, Initramfs: testInitramfsPath, Virtiofsd: testVirtiofsdPath}, nil
+		},
+	}
+}
+
+func TestBuildBundleConfigWritesCACert(t *testing.T) {
+	bundlePath := filepath.Join(t.TempDir(), "bundle")
+	deps := tempBundleDeps(t, bundlePath)
+	pem := []byte("-----BEGIN CERTIFICATE-----\nxyz\n-----END CERTIFICATE-----\n")
+	_, unlock, err := BuildBundleConfig(t.Context(), "alpine:3", BootOptions{
+		CACert:          pem,
+		CACertGuestPath: "/etc/daft-egress-ca.pem",
+	}, deps)
+	if err != nil {
+		t.Fatalf("BuildBundleConfig: %v", err)
+	}
+	defer unlock()
+	// #nosec G304 — test-only path under t.TempDir().
+	got, err := os.ReadFile(filepath.Join(bundlePath, "rootfs", "etc", "daft-egress-ca.pem"))
+	if err != nil {
+		t.Fatalf("read CA cert: %v", err)
+	}
+	if !bytes.Equal(got, pem) {
+		t.Errorf("CA cert content = %q, want %q", got, pem)
+	}
+}
+
+// TestBuildBundleConfigCACertEmptyPath covers the guard + lock
+// release when CACert is set but its guest path is empty.
+func TestBuildBundleConfigCACertEmptyPath(t *testing.T) {
+	var unlockCalls int
+	deps := happyPathDeps(t, &unlockCalls)
+	_, _, err := BuildBundleConfig(t.Context(), "alpine:3", BootOptions{
+		CACert: []byte("pem"),
+	}, deps)
+	if err == nil {
+		t.Fatal("want error for empty CA cert guest path")
+	}
+	if unlockCalls != 1 {
+		t.Errorf("lock not released on CA write failure: unlockCalls=%d", unlockCalls)
+	}
+}
+
+// TestBuildBundleConfigCACertWriteError covers writeBundleCACert's
+// filesystem-error path: a bundle.Path that is a regular file means
+// MkdirAll of rootfs/etc beneath it fails.
+func TestBuildBundleConfigCACertWriteError(t *testing.T) {
+	bundleFile := filepath.Join(t.TempDir(), "notadir")
+	if err := os.WriteFile(bundleFile, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	deps := tempBundleDeps(t, bundleFile)
+	_, _, err := BuildBundleConfig(t.Context(), "alpine:3", BootOptions{
+		CACert:          []byte("pem"),
+		CACertGuestPath: "/etc/daft-egress-ca.pem",
+	}, deps)
+	if err == nil {
+		t.Fatal("want error when rootfs dir cannot be created under a file")
 	}
 }
 
