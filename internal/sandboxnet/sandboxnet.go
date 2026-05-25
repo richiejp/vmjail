@@ -134,8 +134,12 @@ func New(cfg Config) (*Network, error) {
 	if _, _, err := net.ParseCIDR(cfg.Subnet); err != nil {
 		return nil, fmt.Errorf("sandboxnet: subnet %q: %w", cfg.Subnet, err)
 	}
-	if ip := net.ParseIP(cfg.GatewayIP); ip == nil {
-		return nil, fmt.Errorf("sandboxnet: gateway IP %q is not parseable", cfg.GatewayIP)
+	// Must be IPv4: the netstack builds tcpip addresses via
+	// AddrFrom4Slice(ip.To4()), which panics on a non-IPv4 address.
+	// net.ParseIP accepts IPv6, so check To4() explicitly here rather
+	// than crashing later in createNetStack.
+	if ip := net.ParseIP(cfg.GatewayIP); ip == nil || ip.To4() == nil {
+		return nil, fmt.Errorf("sandboxnet: gateway IP %q is not a valid IPv4 address", cfg.GatewayIP)
 	}
 	if _, err := net.ParseMAC(cfg.GatewayMAC); err != nil {
 		return nil, fmt.Errorf("sandboxnet: gateway MAC %q: %w", cfg.GatewayMAC, err)
@@ -143,8 +147,8 @@ func New(cfg Config) (*Network, error) {
 	var gatewayVIPs []string
 	var natMap map[string]string
 	if cfg.HostLoopbackIP != "" {
-		if ip := net.ParseIP(cfg.HostLoopbackIP); ip == nil {
-			return nil, fmt.Errorf("sandboxnet: host loopback IP %q is not parseable", cfg.HostLoopbackIP)
+		if ip := net.ParseIP(cfg.HostLoopbackIP); ip == nil || ip.To4() == nil {
+			return nil, fmt.Errorf("sandboxnet: host loopback IP %q is not a valid IPv4 address", cfg.HostLoopbackIP)
 		}
 		gatewayVIPs = []string{cfg.HostLoopbackIP}
 		natMap = map[string]string{cfg.HostLoopbackIP: hostLoopbackTarget}

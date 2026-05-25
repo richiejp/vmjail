@@ -221,6 +221,40 @@ func TestInstallProxyCA(t *testing.T) {
 	}
 }
 
+// TestInstallProxyCAPreservesOnWriteFailure pins the atomicity fix:
+// if the temp write can't be created (here: a read-only certs dir),
+// the original CA bundle must survive intact rather than being
+// deleted first and left missing.
+func TestInstallProxyCAPreservesOnWriteFailure(t *testing.T) {
+	bundlePath := t.TempDir()
+	certsDir := filepath.Join(bundlePath, "rootfs", "etc", "ssl", "certs")
+	if err := os.MkdirAll(certsDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	bundle := filepath.Join(certsDir, "ca-bundle.crt")
+	orig := []byte("REAL-CA\n")
+	if err := os.WriteFile(bundle, orig, 0o600); err != nil {
+		t.Fatalf("write bundle: %v", err)
+	}
+	// Read-only dir → the temp write fails, so the replace can't
+	// proceed. Restore perms at cleanup so t.TempDir can remove it.
+	if err := os.Chmod(certsDir, 0o500); err != nil { //nolint:gosec // G302: test needs a read-only-but-traversable dir.
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(certsDir, 0o700) }) //nolint:gosec // G302: restore so TempDir cleanup can remove it.
+
+	installProxyCA(bundlePath, []byte("PROXY-CA\n"))
+
+	//nolint:gosec // G304 — test-only path under t.TempDir().
+	got, err := os.ReadFile(bundle)
+	if err != nil {
+		t.Fatalf("original bundle missing after failed replace: %v", err)
+	}
+	if !bytes.Equal(got, orig) {
+		t.Errorf("original bundle = %q, want preserved %q", got, orig)
+	}
+}
+
 func TestBuildBundleConfigHappyPath(t *testing.T) {
 	var unlockCalls int
 	deps := happyPathDeps(t, &unlockCalls)

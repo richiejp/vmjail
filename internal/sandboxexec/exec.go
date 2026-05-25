@@ -448,7 +448,7 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 		// default-deny: every legitimate egress is injected to route
 		// through the proxy (J2), so anything dialing elsewhere is a
 		// leak we want dropped + logged rather than silently sent.
-		cfg.DenyEgress = e.egressProxy != nil
+		cfg.DenyEgress = e.egressActive()
 	}
 	return cfg, unlock, nil
 }
@@ -485,12 +485,20 @@ func (e *Executor) baseBootConfig(ctx context.Context, spec *sandboxv1.SandboxSp
 	// Layer the egress-proxy env after the workspace's own env so the
 	// proxy vars win on a key clash (a workload can't unset the proxy
 	// the node mandates), and ship the proxy CA into the rootfs.
-	if e.egressProxy != nil && e.egressProxy.GuestURL != "" {
+	if e.egressActive() {
 		opts.Env = append(opts.Env, proxyEnv(e.egressProxy.GuestURL)...)
 		opts.CACert = e.egressProxy.CACertPEM
 		opts.CACertGuestPath = egressCAGuestPath
 	}
 	return e.assembler(ctx, imageRef, opts)
+}
+
+// egressActive reports whether a usable egress proxy is configured.
+// Both proxy-env injection and the DenyEgress decision key off this
+// single predicate: turning on default-deny without injecting a
+// reachable proxy lane would black-hole all guest egress.
+func (e *Executor) egressActive() bool {
+	return e.egressProxy != nil && e.egressProxy.GuestURL != ""
 }
 
 // egressCAGuestPath is where the proxy CA lands inside the container;

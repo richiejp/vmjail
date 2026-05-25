@@ -32,15 +32,23 @@ func TestNewDefaults(t *testing.T) {
 // case wires a single field to a known-bad value; New must
 // reject before constructing the netstack.
 func TestNewRejectsBadConfig(t *testing.T) {
+	const (
+		wantGatewayIP  = "gateway IP"
+		wantLoopbackIP = "host loopback IP"
+	)
 	cases := []struct {
 		name string
 		cfg  sandboxnet.Config
 		want string
 	}{
 		{"bad subnet", sandboxnet.Config{Subnet: "not-a-cidr"}, "subnet"},
-		{"bad gateway IP", sandboxnet.Config{GatewayIP: "not-an-ip"}, "gateway IP"},
+		{"bad gateway IP", sandboxnet.Config{GatewayIP: "not-an-ip"}, wantGatewayIP},
+		// IPv6 parses but has no To4(); New must reject it rather than
+		// let createNetStack panic in AddrFrom4Slice.
+		{"ipv6 gateway IP", sandboxnet.Config{GatewayIP: "::1"}, wantGatewayIP},
 		{"bad gateway MAC", sandboxnet.Config{GatewayMAC: "not-a-mac"}, "gateway MAC"},
-		{"bad host loopback IP", sandboxnet.Config{HostLoopbackIP: "not-an-ip"}, "host loopback IP"},
+		{"bad host loopback IP", sandboxnet.Config{HostLoopbackIP: "not-an-ip"}, wantLoopbackIP},
+		{"ipv6 host loopback IP", sandboxnet.Config{HostLoopbackIP: "fe80::1"}, wantLoopbackIP},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

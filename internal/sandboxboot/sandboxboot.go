@@ -256,13 +256,20 @@ func installProxyCA(bundlePath string, proxyCA []byte) {
 		if _, err := os.Lstat(dst); err != nil {
 			continue // absent in this image
 		}
-		if err := os.Remove(dst); err != nil {
-			oops.Log("sandboxboot: remove CA bundle "+p, err)
+		// Atomic replace: write a sibling temp file, then rename over
+		// the (usually symlink) entry. rename(2) replaces a symlink in
+		// place, and a failed write leaves the original bundle intact
+		// rather than deleting it first — so a partial failure can't
+		// strip the guest of all CAs.
+		tmp := dst + ".tmp"
+		//nolint:gosec // G306: a CA bundle is public; container TLS clients must read it.
+		if err := os.WriteFile(tmp, proxyCA, 0o644); err != nil {
+			oops.Log("sandboxboot: write CA bundle "+p, err)
 			continue
 		}
-		//nolint:gosec // G306: a CA bundle is public; container TLS clients must read it.
-		if err := os.WriteFile(dst, proxyCA, 0o644); err != nil {
-			oops.Log("sandboxboot: write CA bundle "+p, err)
+		if err := os.Rename(tmp, dst); err != nil {
+			oops.Skip("sandboxboot: clean tmp CA bundle", os.Remove(tmp), os.ErrNotExist)
+			oops.Log("sandboxboot: replace CA bundle "+p, err)
 		}
 	}
 }

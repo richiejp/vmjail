@@ -180,6 +180,30 @@ func TestHandleSandboxEventProjectsEnv(t *testing.T) {
 	}
 }
 
+// TestEgressActive pins the single predicate that gates BOTH proxy
+// injection and the DenyEgress decision: an EgressProxy with an empty
+// GuestURL must not count as active, or deny would turn on with no
+// proxy lane and black-hole all egress.
+func TestEgressActive(t *testing.T) {
+	cases := []struct {
+		name string
+		p    *EgressProxy
+		want bool
+	}{
+		{"nil proxy", nil, false},
+		{"empty url", &EgressProxy{GuestURL: "", CACertPEM: []byte("x")}, false},
+		{"url set", &EgressProxy{GuestURL: "http://192.168.127.254:8080"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &Executor{egressProxy: tc.p}
+			if got := e.egressActive(); got != tc.want {
+				t.Fatalf("egressActive() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestProxyEnv(t *testing.T) {
 	const u = "http://192.168.127.254:8080"
 	got := proxyEnv(u)
