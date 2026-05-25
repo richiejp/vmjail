@@ -1836,22 +1836,29 @@ Slices, cheapest-first:
       so configuring the proxy composes J1+J2 (egress locked to the
       proxy lane). Proven for HTTP by `TestClusterWorkspaceEgressProxyEnv`
       running green under deny.
-    - **Spike finding (blocker)**: flipping the bun test to
-      `WithEgressProxy` (proxy+deny) showed nix **does** route its
-      flake/substituter fetch through the proxy (proxy MITM'd
-      `api.github.com`; 0 `egress-deny`; J2c/J2d confirmed for nix) —
-      but nix **rejects the proxy CA**: `OpenSSL verify result:
-      self-signed certificate in certificate chain (19)`, and the
-      proxy logs a client `TLS handshake error … EOF`. So the
-      injected `NIX_SSL_CERT_FILE`/`SSL_CERT_FILE` did not make nix
-      trust the proxy's MITM leaf for the github fetch. **The J5
-      blocker is CA-trust propagation to nix**, not routing or deny.
-      Leading hypotheses: (a) nix's flake/FileTransfer fetch ignores
-      the env CA vars, or (b) the fetch runs in a daemon that didn't
-      inherit the injected env. Next: probe which, then either point
-      nix at a combined (image-CA + proxy-CA) bundle or append the
-      proxy CA to the image's existing bundle rather than overriding
-      via env. The bun test is reverted to direct egress until fixed.
+    - **CA-trust blocker — RESOLVED.** Flipping the bun test to
+      `WithEgressProxy` (proxy+deny) showed nix routes its flake fetch
+      through the proxy (0 `egress-deny`) but rejected the proxy CA:
+      the bun test (and the image's login-shell profile) point
+      `NIX_SSL_CERT_FILE` at the image's own bundle
+      (`/etc/ssl/certs/ca-bundle.crt`), which lacks the proxy CA, so
+      our injected `*_SSL_CERT_FILE=/etc/daft-egress-ca.pem` was
+      overridden. Fix: `installProxyCA` (sandboxboot) **replaces** the
+      image's standard CA bundles with the proxy CA (drop the
+      symlink-into-the-read-only-store, write a regular file). Under
+      Phase J a configured proxy implies deny, so the guest's only
+      egress is the proxy and trusting **only** the proxy CA is the
+      correct model (the proxy validates real upstreams host-side);
+      replacing also sidesteps reading the image's absolute symlink
+      farm from the host. With this, the bun test passes through
+      proxy+deny in ~112 s (≈ the ~113 s direct run — negligible MITM
+      overhead), 0 cert errors, and its github flake fetches (incl. a
+      44 MB nixpkgs tarball) are cached. The bun test stays flipped to
+      `WithEgressProxy` as the J5 demonstration.
+    - **Still open for full J5**: flip the *rest* of the suite (audit
+      each remote-touching test), and reconcile with J3 (DNS) + J4
+      (hosted cassettes) so CI replays hermetically rather than
+      re-recording from the WAN each run.
 
 Open questions:
   - **Record bootstrap**: a brand-new cassette needs one WAN-allowed

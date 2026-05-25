@@ -160,6 +160,67 @@ func TestBuildBundleConfigCACertWriteError(t *testing.T) {
 	}
 }
 
+// TestInstallProxyCA covers replacing an image's CA bundle with the
+// proxy CA, including the common case where the bundle is an absolute
+// symlink into a read-only store: the symlink must be removed and
+// rewritten as a regular file holding the proxy CA, without writing
+// through into the store.
+func TestInstallProxyCA(t *testing.T) {
+	bundlePath := t.TempDir()
+	rootfs := filepath.Join(bundlePath, "rootfs")
+	certsDir := filepath.Join(rootfs, "etc", "ssl", "certs")
+	if err := os.MkdirAll(certsDir, 0o750); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Simulate the nixos/nix layout: ca-bundle.crt is an ABSOLUTE
+	// symlink (-> /nix/store/...) into a read-only store. installProxyCA
+	// must drop the symlink and write a regular file, never writing
+	// through into the store.
+	storeDir := filepath.Join(rootfs, "nix", "store", "x-nss-cacert")
+	if err := os.MkdirAll(storeDir, 0o750); err != nil {
+		t.Fatalf("mkdir store: %v", err)
+	}
+	orig := []byte("REAL-CA\n")
+	if err := os.WriteFile(filepath.Join(storeDir, "ca-bundle.crt"), orig, 0o444); err != nil {
+		t.Fatalf("write store file: %v", err)
+	}
+	link := filepath.Join(certsDir, "ca-bundle.crt")
+	if err := os.Symlink("/nix/store/x-nss-cacert/ca-bundle.crt", link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	storeFile := filepath.Join(storeDir, "ca-bundle.crt")
+
+	proxyCA := []byte("PROXY-CA\n")
+	installProxyCA(bundlePath, proxyCA)
+
+	// The link is now a regular file holding exactly the proxy CA.
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("lstat: %v", err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("ca-bundle.crt is still a symlink; want regular file")
+	}
+	//nolint:gosec // G304 — test-only path under t.TempDir().
+	got, err := os.ReadFile(link)
+	if err != nil {
+		t.Fatalf("read installed bundle: %v", err)
+	}
+	if !bytes.Equal(got, proxyCA) {
+		t.Fatalf("installed bundle = %q, want %q", got, proxyCA)
+	}
+	// The read-only store file must be untouched (we removed the
+	// symlink rather than writing through it).
+	//nolint:gosec // G304 — test-only path under t.TempDir().
+	store, err := os.ReadFile(storeFile)
+	if err != nil {
+		t.Fatalf("read store file: %v", err)
+	}
+	if !bytes.Equal(store, orig) {
+		t.Errorf("store file mutated = %q, want %q", store, orig)
+	}
+}
+
 func TestBuildBundleConfigHappyPath(t *testing.T) {
 	var unlockCalls int
 	deps := happyPathDeps(t, &unlockCalls)

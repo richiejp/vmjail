@@ -105,7 +105,7 @@ func TestClusterWorkspaceBunDevServer(t *testing.T) {
 	img := withLongRunningEntrypoint(t, base, "D6C3S2-READY")
 	ref := pushImageToRegistry(t, img, "test/d6c3-nix-bun:v1")
 
-	c := testdaemons.NewCluster(t)
+	c := testdaemons.NewCluster(t, testdaemons.WithEgressProxy())
 	s := testtmux.New(t)
 
 	mountSrc := t.TempDir()

@@ -23,6 +23,7 @@ import (
 
 	"github.com/localai-org/darkaifactory/internal/bundled"
 	"github.com/localai-org/darkaifactory/internal/imagestore"
+	"github.com/localai-org/darkaifactory/internal/oops"
 	"github.com/localai-org/darkaifactory/internal/sandbox"
 )
 
@@ -160,6 +161,11 @@ func BuildBundleConfig(
 		if err = writeBundleCACert(bundle.Path, opts.CACertGuestPath, opts.CACert); err != nil {
 			return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: write CA cert: %w", err)
 		}
+		// Tools like nix read a fixed CA bundle path (and a login
+		// shell's profile re-points *_SSL_CERT_FILE at it), not our
+		// injected env, so also install the proxy CA at the image's
+		// standard bundle paths.
+		installProxyCA(bundle.Path, opts.CACert)
 	}
 
 	cacheDir, err := deps.CacheDir()
@@ -217,6 +223,48 @@ func writeBundleCACert(bundlePath, guestPath string, pem []byte) error {
 		return fmt.Errorf("rename CA cert: %w", err)
 	}
 	return nil
+}
+
+// standardCABundlePaths are the in-container CA-bundle locations
+// common base images use. The injected *_SSL_CERT_FILE env covers
+// tools that honour it (Go's net/http), but others — notably nix's
+// fetcher, which reads a fixed path — need the proxy CA folded into
+// the bundle they actually open.
+//
+//nolint:gochecknoglobals // immutable lookup table of well-known CA bundle paths.
+var standardCABundlePaths = []string{
+	"/etc/ssl/certs/ca-bundle.crt",       // nixos/nix, RHEL
+	"/etc/ssl/certs/ca-certificates.crt", // debian/ubuntu/alpine
+	"/etc/ssl/cert.pem",                  // alpine/openssl
+	"/etc/pki/tls/certs/ca-bundle.crt",   // RHEL/CentOS
+}
+
+// installProxyCA overwrites the image's standard CA bundles with the
+// proxy CA. Under Phase J a configured proxy implies default-deny, so
+// the proxy is the guest's only egress path: the guest validates the
+// proxy's MITM leaves and nothing else (the proxy itself validates
+// real upstream certs host-side). Replacing rather than appending
+// also sidesteps reading the image's existing bundle, which is
+// usually an absolute symlink farm into the read-only nix store that
+// won't resolve from the host. Each target is removed (dropping the
+// symlink) and rewritten as a regular file. Best-effort: absent paths
+// are skipped; a path we can't replace is logged.
+func installProxyCA(bundlePath string, proxyCA []byte) {
+	rootfs := filepath.Join(bundlePath, "rootfs")
+	for _, p := range standardCABundlePaths {
+		dst := filepath.Join(rootfs, filepath.FromSlash(p))
+		if _, err := os.Lstat(dst); err != nil {
+			continue // absent in this image
+		}
+		if err := os.Remove(dst); err != nil {
+			oops.Log("sandboxboot: remove CA bundle "+p, err)
+			continue
+		}
+		//nolint:gosec // G306: a CA bundle is public; container TLS clients must read it.
+		if err := os.WriteFile(dst, proxyCA, 0o644); err != nil {
+			oops.Log("sandboxboot: write CA bundle "+p, err)
+		}
+	}
 }
 
 func validateDeps(d Deps) error {
