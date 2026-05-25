@@ -21,7 +21,7 @@ func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), err er
 	if cfg.Vsock == nil || cfg.Vsock.NetPort == 0 {
 		return func() {}, nil
 	}
-	network, err := sandboxnet.New(sandboxnet.Config{})
+	network, err := sandboxnet.New(sandboxnet.Config{DenyEgress: cfg.DenyEgress})
 	if err != nil {
 		return func() {}, fmt.Errorf("sandbox: sandboxnet.New: %w", err)
 	}

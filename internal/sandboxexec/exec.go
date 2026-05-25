@@ -444,6 +444,11 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 	}
 	if wantVsockForNet {
 		cfg.Vsock.NetPort = agent.DefaultNetVsockPort
+		// With an egress proxy configured, lock the netstack to
+		// default-deny: every legitimate egress is injected to route
+		// through the proxy (J2), so anything dialing elsewhere is a
+		// leak we want dropped + logged rather than silently sent.
+		cfg.DenyEgress = e.egressProxy != nil
 	}
 	return cfg, unlock, nil
 }

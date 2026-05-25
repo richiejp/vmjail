@@ -1830,6 +1830,28 @@ Slices, cheapest-first:
     by env (record locally, replay in CI from pulled cassettes).
     Audit each remote-touching test; the bun test's nix-daemon
     traffic now either routes (J2 daemon-env) or fails-and-is-seen.
+    - **Started**: `DenyEgress` is now wired through the dispatch
+      path (`sandbox.Config.DenyEgress` → `sandboxnet.New`); the
+      executor turns it **on whenever an egress proxy is configured**,
+      so configuring the proxy composes J1+J2 (egress locked to the
+      proxy lane). Proven for HTTP by `TestClusterWorkspaceEgressProxyEnv`
+      running green under deny.
+    - **Spike finding (blocker)**: flipping the bun test to
+      `WithEgressProxy` (proxy+deny) showed nix **does** route its
+      flake/substituter fetch through the proxy (proxy MITM'd
+      `api.github.com`; 0 `egress-deny`; J2c/J2d confirmed for nix) —
+      but nix **rejects the proxy CA**: `OpenSSL verify result:
+      self-signed certificate in certificate chain (19)`, and the
+      proxy logs a client `TLS handshake error … EOF`. So the
+      injected `NIX_SSL_CERT_FILE`/`SSL_CERT_FILE` did not make nix
+      trust the proxy's MITM leaf for the github fetch. **The J5
+      blocker is CA-trust propagation to nix**, not routing or deny.
+      Leading hypotheses: (a) nix's flake/FileTransfer fetch ignores
+      the env CA vars, or (b) the fetch runs in a daemon that didn't
+      inherit the injected env. Next: probe which, then either point
+      nix at a combined (image-CA + proxy-CA) bundle or append the
+      proxy CA to the image's existing bundle rather than overriding
+      via env. The bun test is reverted to direct egress until fixed.
 
 Open questions:
   - **Record bootstrap**: a brand-new cassette needs one WAN-allowed

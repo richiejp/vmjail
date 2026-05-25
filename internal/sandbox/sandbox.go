@@ -93,6 +93,13 @@ type Config struct {
 	// any Vsock.TracePort the same VM uses, otherwise CH rejects
 	// the duplicate guest-side bind.
 	PortForwards []PortForward
+
+	// DenyEgress switches the per-VM netstack to default-deny: the
+	// guest may dial only the host loopback target (the egress
+	// proxy), everything else is dropped + logged (Phase J1). Set by
+	// the executor when an egress proxy is configured, so all
+	// legitimate egress goes through the proxy lane.
+	DenyEgress bool
 }
 
 // PortForward declares one Slice C1 port-forward: traffic the
