@@ -49,6 +49,12 @@ const (
 	// WorkspaceServiceGetChunkProcedure is the fully-qualified name of the WorkspaceService's GetChunk
 	// RPC.
 	WorkspaceServiceGetChunkProcedure = "/daft.workspace.v1.WorkspaceService/GetChunk"
+	// WorkspaceServicePutManifestProcedure is the fully-qualified name of the WorkspaceService's
+	// PutManifest RPC.
+	WorkspaceServicePutManifestProcedure = "/daft.workspace.v1.WorkspaceService/PutManifest"
+	// WorkspaceServicePutChunkProcedure is the fully-qualified name of the WorkspaceService's PutChunk
+	// RPC.
+	WorkspaceServicePutChunkProcedure = "/daft.workspace.v1.WorkspaceService/PutChunk"
 )
 
 // WorkspaceServiceClient is a client for the daft.workspace.v1.WorkspaceService service.
@@ -60,6 +66,18 @@ type WorkspaceServiceClient interface {
 	// validates the digest before sending so a corrupt store can't
 	// silently poison clients.
 	GetChunk(context.Context, *connect.Request[v1.GetChunkRequest]) (*connect.Response[v1.GetChunkResponse], error)
+	// PutManifest stages a manifest under the request's workspace key
+	// and returns the digests of referenced chunks the server is still
+	// missing, so the client uploads only those. The manifest is
+	// published (visible to GetManifest) immediately; a subsequent
+	// GetChunk for a not-yet-uploaded digest returns CodeNotFound until
+	// the matching PutChunk lands.
+	PutManifest(context.Context, *connect.Request[v1.PutManifestRequest]) (*connect.Response[v1.PutManifestResponse], error)
+	// PutChunk installs one compressed chunk. The server decompresses
+	// and verifies the sha256 of the uncompressed payload against
+	// `digest` before storing — a peer can never plant a chunk under a
+	// digest it doesn't hash to.
+	PutChunk(context.Context, *connect.Request[v1.PutChunkRequest]) (*connect.Response[v1.PutChunkResponse], error)
 }
 
 // NewWorkspaceServiceClient constructs a client for the daft.workspace.v1.WorkspaceService service.
@@ -85,6 +103,18 @@ func NewWorkspaceServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(workspaceServiceMethods.ByName("GetChunk")),
 			connect.WithClientOptions(opts...),
 		),
+		putManifest: connect.NewClient[v1.PutManifestRequest, v1.PutManifestResponse](
+			httpClient,
+			baseURL+WorkspaceServicePutManifestProcedure,
+			connect.WithSchema(workspaceServiceMethods.ByName("PutManifest")),
+			connect.WithClientOptions(opts...),
+		),
+		putChunk: connect.NewClient[v1.PutChunkRequest, v1.PutChunkResponse](
+			httpClient,
+			baseURL+WorkspaceServicePutChunkProcedure,
+			connect.WithSchema(workspaceServiceMethods.ByName("PutChunk")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -92,6 +122,8 @@ func NewWorkspaceServiceClient(httpClient connect.HTTPClient, baseURL string, op
 type workspaceServiceClient struct {
 	getManifest *connect.Client[v1.GetManifestRequest, v1.GetManifestResponse]
 	getChunk    *connect.Client[v1.GetChunkRequest, v1.GetChunkResponse]
+	putManifest *connect.Client[v1.PutManifestRequest, v1.PutManifestResponse]
+	putChunk    *connect.Client[v1.PutChunkRequest, v1.PutChunkResponse]
 }
 
 // GetManifest calls daft.workspace.v1.WorkspaceService.GetManifest.
@@ -104,6 +136,16 @@ func (c *workspaceServiceClient) GetChunk(ctx context.Context, req *connect.Requ
 	return c.getChunk.CallUnary(ctx, req)
 }
 
+// PutManifest calls daft.workspace.v1.WorkspaceService.PutManifest.
+func (c *workspaceServiceClient) PutManifest(ctx context.Context, req *connect.Request[v1.PutManifestRequest]) (*connect.Response[v1.PutManifestResponse], error) {
+	return c.putManifest.CallUnary(ctx, req)
+}
+
+// PutChunk calls daft.workspace.v1.WorkspaceService.PutChunk.
+func (c *workspaceServiceClient) PutChunk(ctx context.Context, req *connect.Request[v1.PutChunkRequest]) (*connect.Response[v1.PutChunkResponse], error) {
+	return c.putChunk.CallUnary(ctx, req)
+}
+
 // WorkspaceServiceHandler is an implementation of the daft.workspace.v1.WorkspaceService service.
 type WorkspaceServiceHandler interface {
 	// GetManifest returns the manifest for a workspace by name. The
@@ -113,6 +155,18 @@ type WorkspaceServiceHandler interface {
 	// validates the digest before sending so a corrupt store can't
 	// silently poison clients.
 	GetChunk(context.Context, *connect.Request[v1.GetChunkRequest]) (*connect.Response[v1.GetChunkResponse], error)
+	// PutManifest stages a manifest under the request's workspace key
+	// and returns the digests of referenced chunks the server is still
+	// missing, so the client uploads only those. The manifest is
+	// published (visible to GetManifest) immediately; a subsequent
+	// GetChunk for a not-yet-uploaded digest returns CodeNotFound until
+	// the matching PutChunk lands.
+	PutManifest(context.Context, *connect.Request[v1.PutManifestRequest]) (*connect.Response[v1.PutManifestResponse], error)
+	// PutChunk installs one compressed chunk. The server decompresses
+	// and verifies the sha256 of the uncompressed payload against
+	// `digest` before storing — a peer can never plant a chunk under a
+	// digest it doesn't hash to.
+	PutChunk(context.Context, *connect.Request[v1.PutChunkRequest]) (*connect.Response[v1.PutChunkResponse], error)
 }
 
 // NewWorkspaceServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -134,12 +188,28 @@ func NewWorkspaceServiceHandler(svc WorkspaceServiceHandler, opts ...connect.Han
 		connect.WithSchema(workspaceServiceMethods.ByName("GetChunk")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceServicePutManifestHandler := connect.NewUnaryHandler(
+		WorkspaceServicePutManifestProcedure,
+		svc.PutManifest,
+		connect.WithSchema(workspaceServiceMethods.ByName("PutManifest")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workspaceServicePutChunkHandler := connect.NewUnaryHandler(
+		WorkspaceServicePutChunkProcedure,
+		svc.PutChunk,
+		connect.WithSchema(workspaceServiceMethods.ByName("PutChunk")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.workspace.v1.WorkspaceService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkspaceServiceGetManifestProcedure:
 			workspaceServiceGetManifestHandler.ServeHTTP(w, r)
 		case WorkspaceServiceGetChunkProcedure:
 			workspaceServiceGetChunkHandler.ServeHTTP(w, r)
+		case WorkspaceServicePutManifestProcedure:
+			workspaceServicePutManifestHandler.ServeHTTP(w, r)
+		case WorkspaceServicePutChunkProcedure:
+			workspaceServicePutChunkHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -155,4 +225,12 @@ func (UnimplementedWorkspaceServiceHandler) GetManifest(context.Context, *connec
 
 func (UnimplementedWorkspaceServiceHandler) GetChunk(context.Context, *connect.Request[v1.GetChunkRequest]) (*connect.Response[v1.GetChunkResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.GetChunk is not implemented"))
+}
+
+func (UnimplementedWorkspaceServiceHandler) PutManifest(context.Context, *connect.Request[v1.PutManifestRequest]) (*connect.Response[v1.PutManifestResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.PutManifest is not implemented"))
+}
+
+func (UnimplementedWorkspaceServiceHandler) PutChunk(context.Context, *connect.Request[v1.PutChunkRequest]) (*connect.Response[v1.PutChunkResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.PutChunk is not implemented"))
 }

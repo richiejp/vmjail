@@ -31,6 +31,10 @@ func randomBytes(seed1, seed2 uint64, sz int) []byte {
 
 const osWindows = "windows"
 
+// testAlphaBody is shared test-fixture file content. Extracted to a
+// const so goconst stays quiet across the apply/sync round-trip tests.
+const testAlphaBody = "alpha\n"
+
 func mustOpenStore(t *testing.T) *cas.Store {
 	t.Helper()
 	s, err := cas.Open(t.TempDir())

@@ -41,7 +41,7 @@ func newApplyHarness(t *testing.T) *applyTestHarness {
 	dstStore := mustOpenStore(t)
 	dstRoot := t.TempDir()
 
-	mustWriteFile(t, filepath.Join(srcRoot, "alpha.txt"), []byte("alpha\n"))
+	mustWriteFile(t, filepath.Join(srcRoot, "alpha.txt"), []byte(testAlphaBody))
 	mustMkdir(t, filepath.Join(srcRoot, "sub"))
 	mustWriteFile(t, filepath.Join(srcRoot, "sub", "blob.bin"),
 		bytes.Repeat([]byte("Z"), 3*1024))
@@ -95,8 +95,8 @@ func TestApplyManifestRoundTripReconstructsTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read alpha.txt: %v", err)
 	}
-	if string(got) != "alpha\n" {
-		t.Errorf("alpha.txt = %q, want %q", got, "alpha\n")
+	if string(got) != testAlphaBody {
+		t.Errorf("alpha.txt = %q, want %q", got, testAlphaBody)
 	}
 
 	gotBlob, err := os.ReadFile(filepath.Join(h.dstRoot, "sub", "blob.bin"))
@@ -171,8 +171,8 @@ func TestApplyManifestSecondPassReusesCachedChunks(t *testing.T) {
 	}
 
 	got, _ := os.ReadFile(filepath.Join(dst2, "alpha.txt")) //nolint:gosec // G304: dst2 is t.TempDir().
-	if string(got) != "alpha\n" {
-		t.Errorf("alpha.txt = %q, want %q", got, "alpha\n")
+	if string(got) != testAlphaBody {
+		t.Errorf("alpha.txt = %q, want %q", got, testAlphaBody)
 	}
 }
 

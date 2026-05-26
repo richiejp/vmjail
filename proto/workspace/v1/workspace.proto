@@ -69,8 +69,10 @@ message Manifest {
 }
 
 // WorkspaceService is the wire transport for manifests + chunks.
-// Slice 1 lands the proto only; the handler is added once the
-// transport is needed (orchestrator-side and host-side).
+// Get* fetch a published snapshot; Put* upload one. The `workspace`
+// name on every request is an opaque key — callers that sync a
+// specific mount compose it from (workspace, in-VM target) so two
+// mounts of the same workspace don't collide (see workspace.SyncKey).
 service WorkspaceService {
   // GetManifest returns the manifest for a workspace by name. The
   // server is the source of truth for what's in the workspace.
@@ -79,6 +81,18 @@ service WorkspaceService {
   // validates the digest before sending so a corrupt store can't
   // silently poison clients.
   rpc GetChunk(GetChunkRequest) returns (GetChunkResponse);
+  // PutManifest stages a manifest under the request's workspace key
+  // and returns the digests of referenced chunks the server is still
+  // missing, so the client uploads only those. The manifest is
+  // published (visible to GetManifest) immediately; a subsequent
+  // GetChunk for a not-yet-uploaded digest returns CodeNotFound until
+  // the matching PutChunk lands.
+  rpc PutManifest(PutManifestRequest) returns (PutManifestResponse);
+  // PutChunk installs one compressed chunk. The server decompresses
+  // and verifies the sha256 of the uncompressed payload against
+  // `digest` before storing — a peer can never plant a chunk under a
+  // digest it doesn't hash to.
+  rpc PutChunk(PutChunkRequest) returns (PutChunkResponse);
 }
 
 message GetManifestRequest {
@@ -99,3 +113,23 @@ message GetChunkResponse {
   // digest — never trust the server's framing.
   bytes compressed = 1;
 }
+
+message PutManifestRequest {
+  string workspace = 1;
+  Manifest manifest = 2;
+}
+
+message PutManifestResponse {
+  // Digests referenced by the manifest that the server does not yet
+  // hold. The client should PutChunk each of these to complete the
+  // push; an empty list means the manifest is already fully backed.
+  repeated string missing_digests = 1;
+}
+
+message PutChunkRequest {
+  string digest = 1;
+  // Compressed (zstd) payload, same framing as GetChunkResponse.
+  bytes compressed = 2;
+}
+
+message PutChunkResponse {}

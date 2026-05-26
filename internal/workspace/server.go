@@ -113,3 +113,70 @@ func (s *Server) GetChunk(_ context.Context, req *connect.Request[workspacev1.Ge
 		Compressed: data,
 	}), nil
 }
+
+// PutManifest publishes the request's manifest under its workspace
+// key and replies with the digests of referenced chunks the store
+// doesn't yet hold, so the client uploads only the gaps. Publishing
+// before the chunks land is deliberate: a GetChunk for a missing
+// digest fails cleanly with CodeNotFound, and the alternative
+// (buffer the manifest until every chunk arrives) would force the
+// server to track partial-upload state it doesn't need.
+func (s *Server) PutManifest(_ context.Context, req *connect.Request[workspacev1.PutManifestRequest]) (*connect.Response[workspacev1.PutManifestResponse], error) {
+	name := req.Msg.GetWorkspace()
+	m := req.Msg.GetManifest()
+	// Compute the gap before publishing: if the store can't be probed
+	// we must NOT register a manifest the client believes failed —
+	// that would leave a GETtable but unbacked workspace with no
+	// signal to re-push.
+	missing, err := s.missingDigests(m)
+	if err != nil {
+		return nil, mapStoreError(err)
+	}
+	if err := s.Add(name, m); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	return connect.NewResponse(&workspacev1.PutManifestResponse{
+		MissingDigests: missing,
+	}), nil
+}
+
+// missingDigests returns the deduplicated digests referenced by m
+// that the store doesn't have. Order follows first appearance so the
+// client uploads roughly in manifest order.
+func (s *Server) missingDigests(m *workspacev1.Manifest) ([]string, error) {
+	var missing []string
+	seen := map[string]struct{}{}
+	for _, e := range m.GetEntries() {
+		for _, c := range e.GetChunks() {
+			d := c.GetDigest()
+			if _, ok := seen[d]; ok {
+				continue
+			}
+			seen[d] = struct{}{}
+			have, err := s.store.Has(d)
+			if err != nil {
+				return nil, err
+			}
+			if !have {
+				missing = append(missing, d)
+			}
+		}
+	}
+	return missing, nil
+}
+
+// PutChunk installs one compressed chunk. PutCompressed verifies the
+// uncompressed sha256 against the asserted digest before committing,
+// so a corrupt or mislabelled chunk is rejected as CodeInvalidArgument
+// rather than poisoning the store.
+func (s *Server) PutChunk(_ context.Context, req *connect.Request[workspacev1.PutChunkRequest]) (*connect.Response[workspacev1.PutChunkResponse], error) {
+	err := s.store.PutCompressed(req.Msg.GetDigest(), req.Msg.GetCompressed())
+	switch {
+	case err == nil:
+		return connect.NewResponse(&workspacev1.PutChunkResponse{}), nil
+	case errors.Is(err, cas.ErrInvalidDigest), errors.Is(err, cas.ErrCorrupt):
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	default:
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+}
