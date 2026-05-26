@@ -221,6 +221,83 @@ func TestMaterializeMountMissingChunkErrors(t *testing.T) {
 	}
 }
 
+// TestGetManifestServesLiveMount covers the Slice S4 path: while a sync
+// key is registered live, GetManifest re-builds the manifest from the
+// live backing dir (reflecting writes made after the last push) rather
+// than the stored snapshot, and clearing the registration falls back to
+// the snapshot.
+func TestGetManifestServesLiveMount(t *testing.T) {
+	srv, store := mustNewServer(t)
+	const key = "ws\x00/workspace"
+
+	// Last-pushed snapshot: a single file "pushed.txt".
+	pushed := t.TempDir()
+	mustWriteFile(t, filepath.Join(pushed, "pushed.txt"), []byte("old"))
+	snap, err := BuildManifest(pushed, store, BuildOptions{})
+	if err != nil {
+		t.Fatalf("BuildManifest snapshot: %v", err)
+	}
+	if err := srv.Add(key, snap); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	// Live backing dir the running VM has written a different file into.
+	live := t.TempDir()
+	mustWriteFile(t, filepath.Join(live, "live.txt"), []byte("fresh"))
+	srv.SetLiveMount(key, live)
+
+	c := startTestServer(t, srv)
+	resp, err := c.GetManifest(context.Background(), connect.NewRequest(
+		&workspacev1.GetManifestRequest{Workspace: key},
+	))
+	if err != nil {
+		t.Fatalf("GetManifest (live): %v", err)
+	}
+	if !manifestHasPath(resp.Msg.GetManifest(), "live.txt") {
+		t.Errorf("live manifest missing live.txt: %v", resp.Msg.GetManifest().GetEntries())
+	}
+	if manifestHasPath(resp.Msg.GetManifest(), "pushed.txt") {
+		t.Error("live manifest should not contain the stale pushed.txt")
+	}
+
+	// Clearing the registration falls back to the last-pushed snapshot.
+	srv.ClearLiveMount(key)
+	resp, err = c.GetManifest(context.Background(), connect.NewRequest(
+		&workspacev1.GetManifestRequest{Workspace: key},
+	))
+	if err != nil {
+		t.Fatalf("GetManifest (snapshot): %v", err)
+	}
+	if !manifestHasPath(resp.Msg.GetManifest(), "pushed.txt") {
+		t.Errorf("snapshot manifest missing pushed.txt: %v", resp.Msg.GetManifest().GetEntries())
+	}
+}
+
+// TestGetManifestLiveMountBuildError surfaces a CodeInternal when the
+// live backing dir can't be walked (e.g. it was removed underneath us).
+func TestGetManifestLiveMountBuildError(t *testing.T) {
+	srv, _ := mustNewServer(t)
+	const key = "k"
+	srv.SetLiveMount(key, filepath.Join(t.TempDir(), "does-not-exist"))
+	c := startTestServer(t, srv)
+	_, err := c.GetManifest(context.Background(), connect.NewRequest(
+		&workspacev1.GetManifestRequest{Workspace: key},
+	))
+	var connErr *connect.Error
+	if !errors.As(err, &connErr) || connErr.Code() != connect.CodeInternal {
+		t.Errorf("err = %v, want Internal", err)
+	}
+}
+
+func manifestHasPath(m *workspacev1.Manifest, path string) bool {
+	for _, e := range m.GetEntries() {
+		if e.GetPath() == path {
+			return true
+		}
+	}
+	return false
+}
+
 func TestGetChunkRejectsBadDigest(t *testing.T) {
 	srv, _ := mustNewServer(t)
 	c := startTestServer(t, srv)

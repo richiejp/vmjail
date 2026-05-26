@@ -56,15 +56,24 @@ const (
 // that don't touch the imagestore.
 type Assembler func(ctx context.Context, ref string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error)
 
-// MountMaterializer reconstructs a previously-pushed workspace mount
-// from the node's persistent CAS into a host backing directory, with
-// no network round-trip (Slice S3). syncKey is
-// workspace.SyncKey(workspace_uuid, in-VM target); dest is the absolute
-// backing dir to populate (created if absent). applied is false when
-// nothing was pushed under syncKey — the mount boots as an empty
-// read-write tree. Production wires the node's workspace.Server.
+// MountMaterializer is the node's mount-sync surface, shared between the
+// executor and the CAS-backed workspace.Server. MaterializeMount
+// reconstructs a previously-pushed workspace mount from the node's
+// persistent CAS into a host backing directory, with no network
+// round-trip (Slice S3): syncKey is workspace.SyncKey(workspace_uuid,
+// in-VM target); dest is the absolute backing dir to populate (created
+// if absent); applied is false when nothing was pushed under syncKey,
+// so the mount boots as an empty read-write tree.
+//
+// SetLiveMount / ClearLiveMount bracket the lifetime of a running VM's
+// writable mount (Slice S4): while a (syncKey → dir) entry is live, a
+// `daft workspace pull` re-manifests dir so in-VM writes surface,
+// instead of the last-pushed snapshot. ClearLiveMount is idempotent.
+// Production wires the node's workspace.Server.
 type MountMaterializer interface {
 	MaterializeMount(ctx context.Context, syncKey, dest string) (applied bool, err error)
+	SetLiveMount(syncKey, dir string)
+	ClearLiveMount(syncKey string)
 }
 
 // Runner is the function the Executor calls to boot a VM. The
@@ -388,7 +397,7 @@ func (e *Executor) HandleSandboxEvent(
 		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
 	}
 	defer unlock()
-	defer e.cleanupMounts(uid)
+	defer e.teardownMounts(uid, spec)
 
 	unregisterPorts := e.registerPortRoutes(cfg, spec.GetWorkspaceUuid())
 	defer unregisterPorts()
@@ -702,6 +711,13 @@ func (e *Executor) resolveMounts(ctx context.Context, uid string, spec *sandboxv
 				"daft-sandboxd: mount %s has no pushed data; starting empty (run `daft workspace push`)\n",
 				m.GetTarget())
 		}
+		// Register the backing dir as live so a pull against this
+		// running VM re-manifests it (Slice S4). Read-only mounts are
+		// left out: the VM can't have changed them, so the last-pushed
+		// snapshot is already authoritative. Cleared in teardownMounts.
+		if !m.GetReadOnly() {
+			e.mountMaterializer.SetLiveMount(key, dest)
+		}
 		out = append(out, sandboxboot.Mount{
 			Target:   m.GetTarget(),
 			Source:   dest,
@@ -719,14 +735,23 @@ func (e *Executor) mountDir(uid string, i int) string {
 	return filepath.Join(e.mountBackingDir, uid, fmt.Sprintf("mnt%d", i))
 }
 
-// cleanupMounts removes the per-Sandbox backing tree once the dispatch
-// is over. Materialised mounts are reconstructed fresh from the node
-// CAS on every launch, so leaving them around only leaks disk; in-VM
-// writes that should survive surface via `daft workspace pull` while
-// the VM is live (Slice S4), not from this dir after teardown.
-func (e *Executor) cleanupMounts(uid string) {
+// teardownMounts ends the dispatch's mount lifetime: it clears every
+// live-mount registration (so a post-stop pull falls back to the
+// last-pushed snapshot, Slice S4) and then removes the per-Sandbox
+// backing tree. Order matters — unregister before removing, so a
+// concurrent pull can't re-manifest a half-deleted dir. Materialised
+// mounts are reconstructed fresh from the node CAS on every launch, so
+// leaving the tree around only leaks disk.
+func (e *Executor) teardownMounts(uid string, spec *sandboxv1.SandboxSpec) {
 	if e.mountMaterializer == nil || e.mountBackingDir == "" {
 		return
+	}
+	workspaceUUID := spec.GetWorkspaceUuid()
+	for _, m := range spec.GetMounts() {
+		if filepath.IsAbs(m.GetSource()) || m.GetReadOnly() {
+			continue
+		}
+		e.mountMaterializer.ClearLiveMount(workspace.SyncKey(workspaceUUID, m.GetTarget()))
 	}
 	if err := os.RemoveAll(filepath.Join(e.mountBackingDir, uid)); err != nil {
 		_, _ = fmt.Fprintf(e.stdout, "sandboxexec: cleanup mount backing dir: %v\n", err)

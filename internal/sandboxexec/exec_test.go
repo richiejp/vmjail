@@ -400,6 +400,8 @@ type fakeMaterializer struct {
 	applied bool
 	err     error
 	mkdir   bool
+	liveSet map[string]string
+	cleared []string
 }
 
 func (f *fakeMaterializer) MaterializeMount(_ context.Context, key, dest string) (bool, error) {
@@ -413,6 +415,17 @@ func (f *fakeMaterializer) MaterializeMount(_ context.Context, key, dest string)
 		}
 	}
 	return f.applied, nil
+}
+
+func (f *fakeMaterializer) SetLiveMount(key, dir string) {
+	if f.liveSet == nil {
+		f.liveSet = map[string]string{}
+	}
+	f.liveSet[key] = dir
+}
+
+func (f *fakeMaterializer) ClearLiveMount(key string) {
+	f.cleared = append(f.cleared, key)
 }
 
 func TestNewRejectsMaterializerWithoutBackingDir(t *testing.T) {
@@ -482,6 +495,19 @@ func TestHandleSandboxEventMaterializesMounts(t *testing.T) {
 			t.Errorf("Mounts[%d] = %+v, want %+v", i, seenOpts.Mounts[i], m)
 		}
 	}
+	// The rw mount is registered live (so a pull re-manifests it); the
+	// ro mount is not (the VM can't have changed it). Both are cleared
+	// on teardown.
+	if _, ok := fm.liveSet[workspace.SyncKey(testWSUUID, mntWorkspace)]; !ok {
+		t.Error("rw mount not registered live")
+	}
+	if _, ok := fm.liveSet[workspace.SyncKey(testWSUUID, mntData)]; ok {
+		t.Error("ro mount should not be registered live")
+	}
+	if !slices.Contains(fm.cleared, workspace.SyncKey(testWSUUID, mntWorkspace)) {
+		t.Errorf("rw mount not cleared on teardown: %v", fm.cleared)
+	}
+
 	// The backing tree is cleaned up once the dispatch returns.
 	if _, statErr := os.Stat(filepath.Join(backing, "sb-mat")); !os.IsNotExist(statErr) {
 		t.Errorf("backing dir not cleaned up: stat err = %v", statErr)

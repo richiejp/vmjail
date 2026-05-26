@@ -24,6 +24,15 @@ type Server struct {
 	store     *cas.Store
 	mu        sync.RWMutex
 	manifests map[string]*workspacev1.Manifest
+
+	// live maps a sync key to the host backing dir of a *running*
+	// workspace VM (Slice S4). While an entry is present, GetManifest
+	// re-BuildManifests that live dir on every pull so in-VM writes
+	// surface, rather than serving the last-pushed snapshot from
+	// manifests. The sandbox executor registers an entry when it
+	// materialises a mount for a launch and clears it on teardown.
+	liveMu sync.RWMutex
+	live   map[string]string
 }
 
 // NewServer returns an empty Server backed by store. Call Add to
@@ -35,7 +44,37 @@ func NewServer(store *cas.Store) (*Server, error) {
 	return &Server{
 		store:     store,
 		manifests: map[string]*workspacev1.Manifest{},
+		live:      map[string]string{},
 	}, nil
+}
+
+// SetLiveMount marks dir as the live host backing directory of a
+// running workspace VM, keyed by key (a SyncKey). While the entry is
+// present, GetManifest(key) re-builds the manifest from dir on every
+// pull so writes the VM has made surface, instead of returning the
+// last-pushed snapshot. The sandbox executor registers this when a
+// launch materialises the mount and clears it on teardown (Slice S4).
+func (s *Server) SetLiveMount(key, dir string) {
+	s.liveMu.Lock()
+	s.live[key] = dir
+	s.liveMu.Unlock()
+}
+
+// ClearLiveMount removes the live-dir registration for key. Idempotent:
+// clearing an absent key is a no-op, so the executor can clear keys it
+// may never have set without bookkeeping.
+func (s *Server) ClearLiveMount(key string) {
+	s.liveMu.Lock()
+	delete(s.live, key)
+	s.liveMu.Unlock()
+}
+
+// liveDir returns the registered live backing dir for key, if any.
+func (s *Server) liveDir(key string) (string, bool) {
+	s.liveMu.RLock()
+	defer s.liveMu.RUnlock()
+	dir, ok := s.live[key]
+	return dir, ok
 }
 
 // Add registers a manifest under name. Replacing an existing
@@ -124,6 +163,19 @@ func (s *Server) GetManifest(_ context.Context, req *connect.Request[workspacev1
 	if name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
 			errors.New("workspace: empty workspace name"))
+	}
+	// A live workspace VM wins: re-manifest its backing dir so a pull
+	// reflects in-VM writes (Slice S4). BuildManifest installs any new
+	// chunks into the CAS, so the client's follow-up GetChunk calls
+	// resolve. When the VM isn't running we fall through to the
+	// last-pushed snapshot.
+	if dir, ok := s.liveDir(name); ok {
+		m, err := BuildManifest(dir, s.store, BuildOptions{})
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal,
+				fmt.Errorf("workspace: re-manifest live mount %q: %w", name, err))
+		}
+		return connect.NewResponse(&workspacev1.GetManifestResponse{Manifest: m}), nil
 	}
 	s.mu.RLock()
 	m, ok := s.manifests[name]

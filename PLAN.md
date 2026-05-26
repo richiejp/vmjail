@@ -482,10 +482,36 @@ Phase B — **Workspace as a first-class orchestrator object**:
     *restart* between `push` and `launch` currently needs a re-push;
     durable manifest persistence rides with the Phase-B6 store work
     (the orchestrator catalog is likewise in-memory until then).
-  - **S4:** `pull` against a *running* workspace has sandbox-host
-    re-`BuildManifest` the live backing dir (so in-VM writes surface);
-    when the VM isn't running it serves the last-pushed manifest from
-    the node CAS.
+  - **S4 (landed): `pull` reflects live VM state.** The node's
+    `workspace.Server` gained a live-mount registry (sync key → host
+    backing dir). While a rw mount's VM is running, the sandbox executor
+    registers its S3 backing dir as live (and clears it on teardown,
+    before removing the dir); `GetManifest` then re-`BuildManifest`s that
+    live dir on every pull — installing any new chunks into the CAS so
+    the client's follow-up `GetChunk`s resolve — so in-VM writes surface.
+    When the VM isn't running (no registration) it falls back to the
+    last-pushed snapshot from the in-memory manifest map. The registry is
+    exposed through the same `sandboxexec.MountMaterializer` seam S3 uses
+    (`SetLiveMount`/`ClearLiveMount`), so the executor needs no extra
+    dependency. Read-only mounts are never registered live — the VM
+    can't have changed them, so the snapshot is already authoritative.
+    The `daft workspace pull` CLI is unchanged; this is purely a
+    node-side `GetManifest` change plus the executor's live bracketing.
+  - **S-series e2e (landed):** `internal/testdaemons`
+    `TestClusterWorkspacePushMutatePull` drives the whole dir-local
+    workflow through the real `daft` CLI against a booted VM, exactly as
+    a user would: `mount . /workspace` → `push` → `launch` (asserts the
+    pushed file is readable inside the VM, proving S3) → exec a write
+    into the rw mount → `pull` (asserts the VM-written file lands back in
+    the local dir, proving S4). It's the only test exercising the
+    push → materialise → mutate-in-VM → pull cycle end to end; the other
+    workspace e2e tests use `mount add --source /abs` (a direct host
+    bind that never touches the CAS). The in-VM mutation runs as an
+    off-pane `exec` subprocess because `daft workspace exec --tty=false`
+    doesn't return when its remote command exits — its stdin pump blocks
+    on the never-EOF PTY — so chaining a second pane command after it
+    would wedge the shell (a known `exec` lifecycle gap, separate from
+    the S-series).
 - B4: **Resource-model reshape + K8s-style rename.** One pre-
   deployment wire break that introduces the conventions documented
   in [ARCHITECTURE.md](ARCHITECTURE.md). No backwards-compat
