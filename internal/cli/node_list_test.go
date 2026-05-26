@@ -77,15 +77,6 @@ func TestNodeListSubcommandRegistered(t *testing.T) {
 	}
 }
 
-// TestNodeListRequiresOrchestratorFlag verifies the up-front guard
-// — running without --orchestrator should fail fast, not dial.
-func TestNodeListRequiresOrchestratorFlag(t *testing.T) {
-	_, _, err := runDaft(t, "node", nodeListSubName)
-	if err == nil || !strings.Contains(err.Error(), "--orchestrator is required") {
-		t.Errorf("err = %v, want --orchestrator required", err)
-	}
-}
-
 // TestNodeListRoundTripsAgainstOrchestrator exercises the full
 // happy path: dial an in-process orchestrator over mTLS, hit
 // ListNodes, render the table.

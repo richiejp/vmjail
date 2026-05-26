@@ -61,6 +61,9 @@ func newWorkspaceCmd() *cobra.Command {
 	cmd.AddCommand(newWorkspaceDiffCmd())
 	cmd.AddCommand(newWorkspaceForwardCmd())
 	cmd.AddCommand(newWorkspaceExecCmd())
+	for _, sub := range newWorkspaceConfigCmds() {
+		cmd.AddCommand(sub)
+	}
 	return cmd
 }
 
@@ -522,13 +525,16 @@ func dialWorkspaceClient(cc *clientCtx, addr string, tracer *trace.Tracer) (*htt
 
 func runWorkspaceAttach(ctx context.Context, stdout io.Writer, opts workspaceAttachOpts) error {
 	switch {
-	case opts.orchestrator == "":
-		return errors.New("daft workspace attach: --orchestrator is required")
 	case opts.workspace == "":
 		return errors.New("daft workspace attach: --workspace is required")
 	case opts.sandbox == "":
 		return errors.New("daft workspace attach: --sandbox is required")
 	}
+	orchestrator, err := resolveOrchestrator(opts.orchestrator, opts.configDir)
+	if err != nil {
+		return err
+	}
+	opts.orchestrator = orchestrator
 	_, id, peers, err := openClientIdentity(opts.configDir)
 	if err != nil {
 		return err

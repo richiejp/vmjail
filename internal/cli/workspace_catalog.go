@@ -55,8 +55,6 @@ const (
 	resourcesSubName = "resources"
 )
 
-var errOrchestratorRequired = errors.New("daft workspace: --orchestrator is required")
-
 // workspaceClientOpts is the shared flag set every catalog
 // subcommand uses to address its workspace. --name and --uuid are
 // mutually exclusive; if neither is set, the name defaults to
@@ -96,7 +94,7 @@ func (o workspaceClientOpts) resolveHandle() (*workspacev1.WorkspaceHandle, erro
 	}
 	name := o.name
 	if name == "" {
-		derived, err := deriveWorkspaceNameFromCwd()
+		derived, err := resolveWorkspaceNameDefault()
 		if err != nil {
 			return nil, err
 		}
@@ -191,9 +189,11 @@ func runCatalogCmdNoHandle(
 	verb string,
 	fn catalogFuncNoHandle,
 ) error {
-	if opts.orchestrator == "" {
-		return errOrchestratorRequired
+	orchestrator, err := resolveOrchestrator(opts.orchestrator, opts.configDir)
+	if err != nil {
+		return err
 	}
+	opts.orchestrator = orchestrator
 	ctx, cancel := context.WithTimeout(cmd.Context(), opts.timeout)
 	defer cancel()
 
@@ -275,7 +275,7 @@ func workspaceNameForCreate(opts workspaceClientOpts) (string, error) {
 	if opts.name != "" {
 		return opts.name, nil
 	}
-	return deriveWorkspaceNameFromCwd()
+	return resolveWorkspaceNameDefault()
 }
 
 //nolint:dupl // catalog subcommands are structurally parallel by design — runCatalogCmd factors the body.
@@ -458,13 +458,107 @@ func parseMemoryBytes(s string) (uint64, error) {
 }
 
 func newWorkspaceMountCmd() *cobra.Command {
+	var opts workspaceClientOpts
+	var readOnly bool
 	cmd := &cobra.Command{
-		Use:   mountSubName,
-		Short: "Manage workspace mounts (add | rm)",
+		Use:   mountSubName + " [local] [in-vm-target]",
+		Short: "Map a local directory to an in-VM path (no args: list mappings)",
+		Long: "`daft workspace mount ./local /remote` records the local↔in-VM\n" +
+			"mapping in ./.daft/config.json and registers the mount on the\n" +
+			"workspace (target=/remote). `daft workspace push` then sends the\n" +
+			"local files up; `daft workspace pull` brings changes back. Run\n" +
+			"with no arguments to list the recorded mappings.\n\n" +
+			"The advanced `mount add` / `mount rm` subcommands operate on the\n" +
+			"server-side spec directly (logical source identifiers).",
+		Args:          cobra.MaximumNArgs(2),
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			switch len(args) {
+			case 0:
+				return listDirLocalMounts(cmd.OutOrStdout())
+			case 2:
+				return runWorkspaceMountMap(cmd, opts, args[0], args[1], readOnly)
+			default:
+				return errors.New("daft workspace mount: expected `<local> <in-vm-target>` or no arguments")
+			}
+		},
 	}
+	bindWorkspaceClientFlags(cmd, &opts)
+	cmd.Flags().BoolVar(&readOnly, "read-only", false, "mount read-only in the VM")
 	cmd.AddCommand(newWorkspaceMountAddCmd())
 	cmd.AddCommand(newWorkspaceMountRmCmd())
 	return cmd
+}
+
+// runWorkspaceMountMap registers a local↔in-VM mount: it validates
+// the paths, calls AddMount on the orchestrator (source defaults to
+// the workspace server-side), then records the mapping in
+// ./.daft/config.json so push/pull know which local dir feeds it. The
+// local path is stored absolute so push/pull resolve the same
+// directory regardless of the cwd they run from.
+//
+// The dir-local write happens inside the RPC session: if it fails
+// after AddMount succeeded, we roll the server mount back with
+// RemoveMount so the two never drift out of step.
+func runWorkspaceMountMap(cmd *cobra.Command, opts workspaceClientOpts, local, remote string, readOnly bool) error {
+	if !filepath.IsAbs(remote) {
+		return fmt.Errorf("daft workspace mount: in-VM target must be absolute, got %q", remote)
+	}
+	absLocal, err := filepath.Abs(local)
+	if err != nil {
+		return fmt.Errorf("daft workspace mount: resolve local path: %w", err)
+	}
+	if info, statErr := os.Stat(absLocal); statErr != nil || !info.IsDir() {
+		return fmt.Errorf("daft workspace mount: local path %q must be an existing directory", local)
+	}
+	return runCatalogCmd(cmd, opts, mountSubName,
+		func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
+			resp, err := c.AddMount(ctx, connect.NewRequest(
+				&workspacev1.AddMountRequest{
+					Handle: h,
+					Mount:  &sandboxv1.Mount{Target: remote, ReadOnly: readOnly},
+				},
+			))
+			if err != nil {
+				return err
+			}
+			path, err := addDirLocalMount(mountMapping{Local: absLocal, Remote: remote, ReadOnly: readOnly})
+			if err != nil {
+				// Roll the just-added server mount back so a failed
+				// command leaves neither side recording the mount.
+				// errors.Join drops a nil rollback error, so the happy
+				// rollback path returns just the config-write error.
+				_, rbErr := c.RemoveMount(ctx, connect.NewRequest(
+					&workspacev1.RemoveMountRequest{Handle: h, Target: remote},
+				))
+				return errors.Join(err, rbErr)
+			}
+			if err := writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace()); err != nil {
+				return err
+			}
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(), "mount %s -> %s recorded in %s\n", absLocal, remote, path)
+			return nil
+		})
+}
+
+// listDirLocalMounts prints the mount mappings from ./.daft/config.json.
+func listDirLocalMounts(out io.Writer) error {
+	mounts, err := dirLocalMounts()
+	if err != nil {
+		return err
+	}
+	if len(mounts) == 0 {
+		_, _ = fmt.Fprintln(out, "no mounts recorded in ./.daft/config.json")
+		return nil
+	}
+	for _, m := range mounts {
+		ro := ""
+		if m.ReadOnly {
+			ro = " (read-only)"
+		}
+		_, _ = fmt.Fprintf(out, "%s -> %s%s\n", m.Local, m.Remote, ro)
+	}
+	return nil
 }
 
 func newWorkspaceMountAddCmd() *cobra.Command {
@@ -515,7 +609,7 @@ func newWorkspaceMountRmCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
-			return runCatalogCmd(cmd, opts, mountSubName+"."+rmSubName,
+			if err := runCatalogCmd(cmd, opts, mountSubName+"."+rmSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.RemoveMount(ctx, connect.NewRequest(
 						&workspacev1.RemoveMountRequest{Handle: h, Target: target},
@@ -524,7 +618,16 @@ func newWorkspaceMountRmCmd() *cobra.Command {
 						return err
 					}
 					return writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace())
-				})
+				}); err != nil {
+				return err
+			}
+			// Keep the dir-local mapping in step with the spec.
+			if found, err := removeDirLocalMount(target); err != nil {
+				return err
+			} else if found {
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "dropped local mapping for %s\n", target)
+			}
+			return nil
 		},
 	}
 	bindWorkspaceClientFlags(cmd, &opts)

@@ -370,6 +370,80 @@ Phase B — **Workspace as a first-class orchestrator object**:
   create→image→target→mount→env→port→validate→launch→stop
   sequence and asserts the fake dispatcher saw the composed
   SandboxSpec.
+- B3.1 (landed): **Layered CLI config — no more per-command
+  `--orchestrator`.** New `internal/cli/clientconfig.go` resolves the
+  orchestrator URL through a precedence chain (highest first):
+  `--orchestrator` flag → `DAFT_ORCHESTRATOR` env → project-local
+  `./.daft/config.json` → per-user
+  `$XDG_CONFIG_HOME/daft/client/config.json` → built-in
+  `https://localhost:9443`. The same dir-local file carries a default
+  workspace `name`, taking over from the bare basename($PWD) rule.
+  Generic get/set commands edit each scope:
+  `daft globals get|set <key> <value>` (per-user) and
+  `daft workspace get|set <key> <value>` (dir-local; JSON at
+  `./.daft/config.json`, cwd-only, no parent walk). `daft globals
+  resolve` prints the effective orchestrator + workspace name and the
+  layer each came from. Wired into the catalog verbs, `exec`,
+  `forward`, `attach`, and `node list`; `workspace serve` (dual
+  --addr/--orchestrator mode) and `ping` (--addr) are deliberately
+  untouched. `exec`/`forward` also take the workspace positional as
+  optional now — omit it (lead `exec` with `--` to pass a command)
+  and the dir-local name (or basename($PWD)) fills in, so
+  `cd myapp && daft workspace exec` opens a shell in myapp's VM.
+- B3.2: **Orchestrator-routed file sync — `daft workspace
+  mount|push|pull` (no streaming).** User picks host dirs to mount,
+  pushes files up, pulls changes back, always *through the
+  orchestrator* (a direct peer connection may be used as an
+  optimisation but is invisible to the UX). Eager, not lazy — this is
+  the non-streaming counterpart to the daft-fuse path. Workspace is
+  taken from the cwd like the other verbs. Slices:
+  - **S1 (landed):** `daft workspace mount ./local /remote
+    [--read-only]` records the local↔remote mapping in
+    `./.daft/config.json` (extends [[the dir-local config]]) and calls
+    `AddMount(target=/remote, source=workspace)` on the orchestrator.
+    Bare `daft workspace mount` lists the recorded mappings. The
+    spec-only `mount add|rm` subcommands stay for advanced use.
+  - **S2 (storage decision — the node owns the CAS, not the
+    orchestrator):** `push`/`pull` require the assigned sandbox *node*
+    (sandboxd) to be up; the sandbox *VM* need not be launched. The
+    node serves the file sync, backed by its **persistent** CAS;
+    the orchestrator **relays** the transfer and **stores nothing
+    itself** — "always through the orchestrator" is a relay, with a
+    direct connection as an invisible optimisation. Transport is the
+    existing `workspacebroker` brokered relay (chosen over an
+    `OpenPortBridge`-style reverse channel because the broker already
+    decouples orchestrator-mediated rendezvous from an end-to-end
+    inner-mTLS byte channel, so a future *direct* connection is a
+    transport swap rather than a protocol change). Rationale for
+    node-owned CAS: the user-host client always has the source dirs on
+    disk, so it can re-serve; a node *restart* keeps its CAS, so the
+    only gap is node *reassignment* while the client is *offline* —
+    explicitly **deferred** (would need orchestrator staging or a
+    client re-serve handshake). Sub-slices:
+    - **S2a (landed): the sync data plane.** `WorkspaceService` gains
+      `PutManifest` (publishes a manifest under an opaque key, replies
+      with the digests the server still lacks) + `PutChunk`
+      (digest-verified compressed-chunk install) alongside the
+      existing `GetManifest`/`GetChunk`. The per-mount key is
+      `workspace.SyncKey(workspace, in-VM target)` so two mounts of
+      one workspace don't collide. `workspace.Push` / `workspace.Pull`
+      drive the client side: Push negotiates missing chunks then
+      uploads only those straight from local CAS compressed bytes;
+      Pull is `GetManifest` + `ApplyManifest`. Transport-agnostic —
+      tested over an in-process Connect server.
+    - **S2b:** wire the brokered relay: sandboxd serves the writable
+      `WorkspaceService` over its persistent CAS; the client attaches
+      as the consumer. `push` builds a manifest per dir-local mount;
+      `pull` downloads + `ApplyManifest`.
+  - **S3:** Because `push` already lands the bytes in the node's own
+    CAS, launch just `ApplyManifest`s each mount from that local CAS
+    into a read-write host backing dir that virtiofsd serves — no
+    orchestrator round-trip at launch; replaces the daft-fuse lazy
+    path for pushed mounts.
+  - **S4:** `pull` against a *running* workspace has sandbox-host
+    re-`BuildManifest` the live backing dir (so in-VM writes surface);
+    when the VM isn't running it serves the last-pushed manifest from
+    the node CAS.
 - B4: **Resource-model reshape + K8s-style rename.** One pre-
   deployment wire break that introduces the conventions documented
   in [ARCHITECTURE.md](ARCHITECTURE.md). No backwards-compat
@@ -3145,6 +3219,26 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
 
 ## Open questions
 
+- **Dev-shell purification** (partially done): the dev shell should hold
+  *developer tooling* only (go, gofumpt, golangci-lint, buf, nix); it
+  should not pre-build product artefacts or test fixtures. *Done:* the
+  test-fixture OCI images (`DAFT_NIX_IMAGE`, `DAFT_NIX_TOOLING_IMAGE`,
+  `DAFT_NIX_FLAKE_FIXTURE`) are no longer exported/realised at shell
+  entry — `make integration` `nix build`s them fresh into `bin/` each
+  run, so they can't drift behind the daft binaries they bake in (the
+  `daft-http-fetch -proxy` staleness that kept failing
+  `TestClusterWorkspaceCachingProxy`). *Still to do:* the sandbox
+  *runtime* deps (`DAFT_KERNEL`, `DAFT_CLOUD_HYPERVISOR`,
+  `DAFT_VIRTIOFSD`, `DAFT_CRUN`, `DAFT_UROOT`) are also exported by the
+  shell purely as a convenience for `sandbox.ConfigFromEnv`. Nobody runs
+  the kernel/hypervisor by hand — they're dependencies *of* the sandbox,
+  so they belong baked into a Nix-wrapped `daft-sandboxd` (via
+  `makeWrapper --set DAFT_KERNEL …`) with `ConfigFromEnv` kept as an
+  override seam for tests. That makes the product runnable without an
+  ambient environment (also a deployment prerequisite) and lets the dev
+  shell stop realising VM artefacts on entry. Bigger refactor (flake
+  packaging + how `make integration` / `daft sandbox hello` locate their
+  deps); deferred.
 - **Authentication ergonomics**: TOFU + manual `daft auth approve` works
   for SSH-style trust but is awkward for a fleet of sandbox-hosts. When
   do we promote the orchestrator to a CA and stop bothering the user

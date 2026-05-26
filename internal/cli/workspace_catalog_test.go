@@ -107,15 +107,6 @@ func TestWorkspaceCatalogSubcommandsRegistered(t *testing.T) {
 	}
 }
 
-// TestWorkspaceCreateRequiresOrchestrator pins the up-front flag
-// guard. The test deliberately doesn't dial anything.
-func TestWorkspaceCreateRequiresOrchestrator(t *testing.T) {
-	_, _, err := runDaft(t, "workspace", "create", nameFlag, nameFlagVal)
-	if err == nil || !strings.Contains(err.Error(), "--orchestrator is required") {
-		t.Errorf("err = %v, want --orchestrator required", err)
-	}
-}
-
 // TestWorkspaceRPCErrorsBubbleUp drives several catalog commands
 // against a workspace name that doesn't exist. The orchestrator
 // returns NotFound and the CLI must surface a non-nil error from
@@ -234,6 +225,9 @@ func TestParsePortSpecCoversTCPAndUDPDefaultsAndErrors(t *testing.T) {
 const testE2EWorkspaceName = "e2e"
 
 const testE2EMountTarget = "/workspace"
+
+// testMountRemote is the in-VM target used by the mount-mapping tests.
+const testMountRemote = "/workspace/src"
 
 // workspaceE2EHarness threads the in-process orchestrator + caller
 // identity through the multi-step E2E test below.
@@ -627,5 +621,97 @@ func TestWorkspaceAcquireRejectsZeroTTL(t *testing.T) {
 	_, err := h.runErr(args...)
 	if err == nil {
 		t.Error("expected error for --ttl 0s")
+	}
+}
+
+// TestWorkspaceMountMappingRecordsAndRegisters drives the positional
+// `daft workspace mount <local> <remote>` form: it must register the
+// mount on the orchestrator AND record the local↔in-VM mapping in
+// ./.daft/config.json so push/pull can find it.
+func TestWorkspaceMountMappingRecordsAndRegisters(t *testing.T) {
+	chdirClean(t)
+	clearOrchestratorEnv(t)
+	local := t.TempDir()
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+
+	out := h.run(append([]string{mountSubName, local, testMountRemote}, h.commonArgs...)...)
+	if !strings.Contains(out, "recorded in") {
+		t.Errorf("mount output = %q, want a 'recorded in' line", out)
+	}
+	mounts, err := dirLocalMounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mounts) != 1 || mounts[0].Remote != testMountRemote || mounts[0].Local != local {
+		t.Fatalf("dir-local mounts = %+v, want [{%s /workspace/src}]", mounts, local)
+	}
+	// Bare `mount` lists the mapping.
+	listOut := h.run(append([]string{mountSubName}, h.commonArgs...)...)
+	if !strings.Contains(listOut, testMountRemote) {
+		t.Errorf("mount list = %q, want the /workspace/src mapping", listOut)
+	}
+	// `mount rm` drops both the spec mount and the dir-local mapping.
+	h.run(append([]string{mountSubName, rmSubName, testMountRemote}, h.commonArgs...)...)
+	if mounts, _ := dirLocalMounts(); len(mounts) != 0 {
+		t.Errorf("after rm, dir-local mounts = %+v, want empty", mounts)
+	}
+}
+
+// TestWorkspaceMountMapValidation pins the up-front checks that run
+// before any RPC: the in-VM target must be absolute and the local
+// path must be an existing directory.
+func TestWorkspaceMountMapValidation(t *testing.T) {
+	chdirClean(t)
+	clearOrchestratorEnv(t)
+	if _, _, err := runDaft(t, "workspace", "mount", t.TempDir(), "relative/path"); err == nil {
+		t.Error("relative in-VM target should error")
+	}
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	if _, _, err := runDaft(t, "workspace", "mount", missing, "/remote"); err == nil {
+		t.Error("non-existent local dir should error")
+	}
+}
+
+// TestWorkspaceMountBareListsEmpty: with no mappings recorded, the
+// bare command prints the empty-state line rather than erroring.
+func TestWorkspaceMountBareListsEmpty(t *testing.T) {
+	chdirClean(t)
+	out, _, err := runDaft(t, "workspace", "mount")
+	if err != nil {
+		t.Fatalf("daft workspace mount: %v", err)
+	}
+	if !strings.Contains(out, "no mounts recorded") {
+		t.Errorf("bare mount output = %q, want empty-state line", out)
+	}
+}
+
+// TestWorkspaceMountMapSurfacesConfigWriteError: AddMount succeeds on
+// the orchestrator, but recording the dir-local mapping then fails on
+// a corrupt ./.daft/config.json. The error must surface (and the
+// command rolls the server mount back so the two sides don't drift).
+func TestWorkspaceMountMapSurfacesConfigWriteError(t *testing.T) {
+	chdirClean(t)
+	clearOrchestratorEnv(t)
+	writeBadDirLocal(t)
+	local := t.TempDir()
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	if _, err := h.runErr(append([]string{mountSubName, local, testMountRemote}, h.commonArgs...)...); err == nil {
+		t.Error("mount with corrupt dir-local config: want error after AddMount")
+	}
+}
+
+// TestWorkspaceMountMapRPCError: the positional mount form must
+// surface a failing AddMount (here: a workspace that was never
+// created) rather than recording a dangling local mapping.
+func TestWorkspaceMountMapRPCError(t *testing.T) {
+	chdirClean(t)
+	clearOrchestratorEnv(t)
+	local := t.TempDir()
+	h := newWorkspaceE2EHarness(t)
+	// Deliberately skip create → AddMount targets a missing workspace.
+	if _, err := h.runErr(append([]string{mountSubName, local, testMountRemote}, h.commonArgs...)...); err == nil {
+		t.Error("mount on a missing workspace: want RPC error")
 	}
 }

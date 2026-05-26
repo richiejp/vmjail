@@ -46,13 +46,15 @@ type workspaceForwardOpts struct {
 func newWorkspaceForwardCmd() *cobra.Command {
 	var opts workspaceForwardOpts
 	cmd := &cobra.Command{
-		Use:   forwardSubName + " <local>:<container> <workspace>",
+		Use:   forwardSubName + " <local>:<container> [workspace]",
 		Short: "Forward a local TCP port through the orchestrator into a workspace",
 		Long: "Opens a local TCP listener and tunnels each accepted connection\n" +
 			"through the orchestrator's ForwardPort RPC into the named\n" +
-			"workspace's container at the given port. Closest analog:\n" +
-			"`kubectl port-forward`. Blocks until Ctrl-C.",
-		Args:          cobra.ExactArgs(2),
+			"workspace's container at the given port. The workspace may be\n" +
+			"omitted when ./.daft/config.json sets a name (or to fall back to\n" +
+			"basename of the cwd). Closest analog: `kubectl port-forward`.\n" +
+			"Blocks until Ctrl-C.",
+		Args:          cobra.RangeArgs(1, 2),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			local, container, err := parsePortMappingArg(args[0])
@@ -61,7 +63,9 @@ func newWorkspaceForwardCmd() *cobra.Command {
 			}
 			opts.localPort = local
 			opts.containerPort = container
-			opts.workspace = args[1]
+			if len(args) == 2 {
+				opts.workspace = args[1]
+			}
 			ctx, cancel := signal.NotifyContext(cmd.Context(),
 				os.Interrupt, syscall.SIGTERM)
 			defer cancel()
@@ -162,12 +166,18 @@ func runWorkspaceForwardWith(
 	ctx context.Context, stdout io.Writer,
 	opts workspaceForwardOpts, deps forwardDeps,
 ) error {
-	if opts.orchestrator == "" {
-		return errors.New("daft workspace forward: --orchestrator is required")
-	}
 	if opts.workspace == "" {
-		return errors.New("daft workspace forward: workspace name is required")
+		name, err := resolveWorkspaceNameDefault()
+		if err != nil {
+			return err
+		}
+		opts.workspace = name
 	}
+	orchestrator, err := resolveOrchestrator(opts.orchestrator, opts.configDir)
+	if err != nil {
+		return err
+	}
+	opts.orchestrator = orchestrator
 	client, err := deps.dialOrchestrator(opts.configDir, opts.orchestrator)
 	if err != nil {
 		return err

@@ -114,25 +114,30 @@ func (t *fakeExecTerminal) pushResize(cols, rows uint32) {
 	t.resize <- struct{}{}
 }
 
-// TestRunWorkspaceExecRejectsBadFlags pins the three required-flag
-// validations on the bare command path.
-func TestRunWorkspaceExecRejectsBadFlags(t *testing.T) {
-	cases := []struct {
-		name string
-		opts workspaceExecOpts
-		want string
-	}{
-		{"missing-orch", workspaceExecOpts{workspace: "ws"}, "--orchestrator is required"},
-		{"missing-ws", workspaceExecOpts{orchestrator: testOrchURL}, "workspace name is required"},
+// TestRunWorkspaceExecDefaultsWorkspaceFromConfig pins that an
+// omitted workspace is filled from ./.daft/config.json: with the name
+// set there, resolution succeeds and the command proceeds to dial
+// (here a stubbed dial error), rather than rejecting a missing arg.
+func TestRunWorkspaceExecDefaultsWorkspaceFromConfig(t *testing.T) {
+	clearOrchestratorEnv(t)
+	chdirClean(t)
+	dlPath, err := dirLocalConfigPath()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			err := runWorkspaceExecWith(context.Background(),
-				io.Discard, io.Discard, tc.opts, execDeps{})
-			if err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("err = %v, want substring %q", err, tc.want)
-			}
-		})
+	if err := saveFileConfig(dlPath, fileConfig{Name: "cfgws"}); err != nil {
+		t.Fatal(err)
+	}
+	wantDial := errors.New("dial sentinel")
+	deps := execDeps{
+		dialOrchestrator: func(string, string) (workspacev1connect.WorkspaceCatalogServiceClient, error) {
+			return nil, wantDial
+		},
+	}
+	err = runWorkspaceExecWith(context.Background(), io.Discard, io.Discard,
+		workspaceExecOpts{configDir: t.TempDir()}, deps)
+	if !errors.Is(err, wantDial) {
+		t.Errorf("err = %v, want dial sentinel (proves workspace resolved from config)", err)
 	}
 }
 

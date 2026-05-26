@@ -44,12 +44,13 @@ func newNodeListCmd() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if orchestrator == "" {
-				return fmt.Errorf("daft node list: --orchestrator is required")
+			resolved, err := resolveOrchestrator(orchestrator, configDir)
+			if err != nil {
+				return err
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
-			return runNodeList(ctx, cmd.OutOrStdout(), orchestrator, configDir, time.Now)
+			return runNodeList(ctx, cmd.OutOrStdout(), resolved, configDir, time.Now)
 		},
 	}
 	cmd.Flags().StringVar(&orchestrator, "orchestrator", "",

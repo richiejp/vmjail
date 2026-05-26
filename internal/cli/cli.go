@@ -86,6 +86,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newAuthCmd())
 	root.AddCommand(newPingCmd())
 	root.AddCommand(newWorkspaceCmd())
+	root.AddCommand(newGlobalsCmd())
 	// Note: cobra auto-generates a `completion` sub-command for us; we don't
 	// need to register it explicitly. Keeping it auto-generated means it
 	// stays in sync with cobra's supported shells.

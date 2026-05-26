@@ -36,19 +36,29 @@ type workspaceExecOpts struct {
 func newWorkspaceExecCmd() *cobra.Command {
 	var opts workspaceExecOpts
 	cmd := &cobra.Command{
-		Use:   execSubName + " <workspace> [-- cmd args...]",
+		Use:   execSubName + " [workspace] [-- cmd args...]",
 		Short: "Run a command inside a workspace's container with an interactive PTY",
 		Long: "Opens a bidi PTY stream to the workspace's running sandbox via\n" +
 			"the orchestrator's AttachSandbox RPC. The local terminal goes\n" +
 			"into raw mode for the duration of the session; SIGWINCH\n" +
 			"events propagate to the in-VM PTY. Without a command after\n" +
 			"`--`, the agent runs its default shell (/bin/sh -l).\n\n" +
+			"The workspace may be omitted when ./.daft/config.json sets a\n" +
+			"name (or to fall back to basename of the cwd); to pass a\n" +
+			"command without naming a workspace, lead with `--`, e.g.\n" +
+			"`daft workspace exec -- ls`.\n\n" +
 			"Closest analog: `kubectl exec -it` / `docker exec -it`.",
-		Args:          cobra.MinimumNArgs(1),
+		Args:          cobra.ArbitraryArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts.workspace = args[0]
-			opts.command = args[1:]
+			// ArgsLenAtDash()==0 means the user led with `--`, so every
+			// arg is the command and the workspace comes from config.
+			if cmd.ArgsLenAtDash() == 0 {
+				opts.command = args
+			} else if len(args) > 0 {
+				opts.workspace = args[0]
+				opts.command = args[1:]
+			}
 			ctx, cancel := signal.NotifyContext(cmd.Context(),
 				os.Interrupt, syscall.SIGTERM)
 			defer cancel()
@@ -124,12 +134,18 @@ func runWorkspaceExecWith(
 	ctx context.Context, stdout, stderr io.Writer,
 	opts workspaceExecOpts, deps execDeps,
 ) error {
-	if opts.orchestrator == "" {
-		return errors.New("daft workspace exec: --orchestrator is required")
-	}
 	if opts.workspace == "" {
-		return errors.New("daft workspace exec: workspace name is required")
+		name, err := resolveWorkspaceNameDefault()
+		if err != nil {
+			return err
+		}
+		opts.workspace = name
 	}
+	orchestrator, err := resolveOrchestrator(opts.orchestrator, opts.configDir)
+	if err != nil {
+		return err
+	}
+	opts.orchestrator = orchestrator
 	client, err := deps.dialOrchestrator(opts.configDir, opts.orchestrator)
 	if err != nil {
 		return err

@@ -193,26 +193,31 @@ func TestPumpForwardConnReceiveError(t *testing.T) {
 }
 
 // TestRunWorkspaceForwardRejectsBadInputs pins the validation
-// branches that run before any network IO: empty workspace,
-// missing orchestrator.
-func TestRunWorkspaceForwardRejectsBadInputs(t *testing.T) {
+// TestRunWorkspaceForwardDefaultsWorkspaceFromConfig pins that an
+// omitted workspace is filled from ./.daft/config.json: resolution
+// succeeds and the command proceeds far enough to open the listener
+// (here a stubbed listen error), rather than rejecting a missing arg.
+func TestRunWorkspaceForwardDefaultsWorkspaceFromConfig(t *testing.T) {
+	clearOrchestratorEnv(t)
+	chdirClean(t)
+	dlPath, err := dirLocalConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := saveFileConfig(dlPath, fileConfig{Name: "cfgws"}); err != nil {
+		t.Fatal(err)
+	}
+	wantListen := errors.New("listen sentinel")
 	deps := forwardDeps{
 		dialOrchestrator: func(string, string) (workspacev1connect.WorkspaceCatalogServiceClient, error) {
-			t.Fatal("dialOrchestrator should not be called for invalid input")
-			return nil, errors.New("unreachable")
+			return unreachableForwardClient{}, nil
 		},
-		listenLocal: func(string) (net.Listener, error) {
-			t.Fatal("listenLocal should not be called for invalid input")
-			return nil, errors.New("unreachable")
-		},
+		listenLocal: func(string) (net.Listener, error) { return nil, wantListen },
 	}
-	if err := runWorkspaceForwardWith(context.Background(), io.Discard,
-		workspaceForwardOpts{workspace: "x", localPort: 1, containerPort: 1}, deps); err == nil {
-		t.Error("expected error when --orchestrator is empty")
-	}
-	if err := runWorkspaceForwardWith(context.Background(), io.Discard,
-		workspaceForwardOpts{orchestrator: "u", localPort: 1, containerPort: 1}, deps); err == nil {
-		t.Error("expected error when workspace is empty")
+	err = runWorkspaceForwardWith(context.Background(), io.Discard,
+		workspaceForwardOpts{configDir: t.TempDir(), localPort: 1, containerPort: 1, bind: e2eForwardLoopback}, deps)
+	if !errors.Is(err, wantListen) {
+		t.Errorf("err = %v, want listen sentinel (proves workspace resolved from config)", err)
 	}
 }
 
@@ -233,7 +238,7 @@ func TestRunWorkspaceForwardListenError(t *testing.T) {
 	}
 	err := runWorkspaceForwardWith(context.Background(), io.Discard,
 		workspaceForwardOpts{
-			orchestrator: "u", workspace: "ws", bind: "127.0.0.1",
+			orchestrator: "u", workspace: "ws", bind: e2eForwardLoopback,
 			localPort: 1, containerPort: 1,
 		}, deps)
 	if !errors.Is(err, want) {
@@ -257,7 +262,7 @@ func TestRunWorkspaceForwardDialError(t *testing.T) {
 	}
 	err := runWorkspaceForwardWith(context.Background(), io.Discard,
 		workspaceForwardOpts{
-			orchestrator: "u", workspace: "ws", bind: "127.0.0.1",
+			orchestrator: "u", workspace: "ws", bind: e2eForwardLoopback,
 			localPort: 1, containerPort: 1,
 		}, deps)
 	if !errors.Is(err, want) {
@@ -454,12 +459,19 @@ func TestDialWorkspaceCatalogForForwardConfigError(t *testing.T) {
 // runWorkspaceForward entrypoint forwards to runWorkspaceForwardWith
 // with the production deps — covers the trivial wrapper line.
 func TestRunWorkspaceForwardPassthrough(t *testing.T) {
-	// Pass invalid opts so production deps' dialOrchestrator
-	// errors out early without touching the network.
+	clearOrchestratorEnv(t)
+	chdirClean(t)
+	// A config dir that is actually a file makes orchestrator
+	// resolution (the global-config read) fail fast, so the
+	// production wrapper returns before opening any listener.
+	blocker := t.TempDir() + "/notadir"
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
 	err := runWorkspaceForward(context.Background(), io.Discard,
-		workspaceForwardOpts{}) // empty orchestrator → fast-fail
+		workspaceForwardOpts{configDir: blocker, localPort: 1, containerPort: 1})
 	if err == nil {
-		t.Error("expected error from production runWorkspaceForward with empty opts")
+		t.Error("expected error from production runWorkspaceForward")
 	}
 }
 
@@ -468,7 +480,7 @@ func TestRunWorkspaceForwardPassthrough(t *testing.T) {
 // user-facing CLI.
 func TestNewWorkspaceForwardCmdShape(t *testing.T) {
 	cmd := newWorkspaceForwardCmd()
-	if cmd.Use != forwardSubName+" <local>:<container> <workspace>" {
+	if cmd.Use != forwardSubName+" <local>:<container> [workspace]" {
 		t.Errorf("Use = %q", cmd.Use)
 	}
 	for _, flag := range []string{"orchestrator", "bind", configDirFlag} {
