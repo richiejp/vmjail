@@ -460,11 +460,28 @@ Phase B — **Workspace as a first-class orchestrator object**:
       ones (the VM can't have changed them). The deprecated chunk-sync
       verbs (`serve`/`pull`/`attach`/`diff`) moved under
       `daft workspace debug` to free the top-level `pull` name.
-  - **S3:** Because `push` already lands the bytes in the node's own
-    CAS, launch just `ApplyManifest`s each mount from that local CAS
-    into a read-write host backing dir that virtiofsd serves — no
-    orchestrator round-trip at launch; replaces the daft-fuse lazy
-    path for pushed mounts.
+  - **S3 (landed): launch materialises pushed mounts from the node
+    CAS.** The node's CAS-backed `workspace.Server` (the same instance
+    the broker hosts for `push`/`pull`) is now shared with the dispatch
+    executor via a `sandboxexec.MountMaterializer` seam. On every
+    image-backed dispatch the executor walks `spec.mounts[]`, and for
+    each mount materialises the tree pushed under
+    `SyncKey(spec.workspace_uuid, target)` from the local CAS into a
+    per-Sandbox backing dir (`<config-dir>/mounts/<uid>/mnt<i>`), then
+    points that mount's virtiofs share at the backing dir instead of
+    treating the logical `Source` (a workspace UUID) as a host path.
+    `workspace.ApplyManifest` gained a **local-only mode** (nil client):
+    every chunk must already be in the CAS — `push` put it there — so
+    launch needs **no orchestrator round-trip** and a chunk gap is a
+    hard error rather than a fetch. An unpushed mount materialises as an
+    empty read-write tree (with a stderr hint) so `launch` before
+    `push` still boots. Backing dirs are reconstructed fresh per launch
+    and removed on dispatch exit; in-VM writes surface via `pull` while
+    the VM is live (S4), not from this dir after teardown. **Known gap:**
+    the manifest index is in-memory (only CAS chunks persist), so a node
+    *restart* between `push` and `launch` currently needs a re-push;
+    durable manifest persistence rides with the Phase-B6 store work
+    (the orchestrator catalog is likewise in-memory until then).
   - **S4:** `pull` against a *running* workspace has sandbox-host
     re-`BuildManifest` the live backing dir (so in-VM writes surface);
     when the VM isn't running it serves the last-pushed manifest from

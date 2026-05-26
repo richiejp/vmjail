@@ -108,9 +108,16 @@ func runServe(
 		return err
 	}
 
+	sync, err := buildNodeSync(dir, orchestratorURL, id, peers)
+	if err != nil {
+		return err
+	}
+
 	bridger := sandboxgateway.New()
 	attachRegistry := sandboxgateway.NewAttachRegistry()
-	dispatcher, err := buildDispatcher(stdout, bridger, attachRegistry, vsockDir)
+	mountBackingDir := filepath.Join(dir, "mounts")
+	dispatcher, err := buildDispatcher(stdout, bridger, attachRegistry,
+		vsockDir, sync.server, mountBackingDir)
 	if err != nil {
 		return err
 	}
@@ -127,11 +134,6 @@ func runServe(
 		AttachBridger:     attachRegistry,
 		Stderr:            stdout,
 	})
-	if err != nil {
-		return err
-	}
-
-	sync, err := buildNodeSync(dir, orchestratorURL, id, peers)
 	if err != nil {
 		return err
 	}
@@ -165,6 +167,10 @@ type nodeSync struct {
 	handler   http.Handler
 	sandboxID string
 	casRoot   string
+	// server is the CAS-backed WorkspaceService the broker hosts. It's
+	// shared with the dispatch executor so launch can materialise pushed
+	// mounts straight from the same persistent CAS (Slice S3).
+	server *workspace.Server
 }
 
 // buildNodeSync opens the persistent node CAS under <dir>/cas and
@@ -200,6 +206,7 @@ var buildNodeSync = func(
 		handler:   mux,
 		sandboxID: id.Fingerprint().String(),
 		casRoot:   store.Root(),
+		server:    wsServer,
 	}, nil
 }
 
@@ -249,6 +256,8 @@ var buildDispatcher = func(
 	bridger *sandboxgateway.Bridger,
 	attachRegistry *sandboxgateway.AttachRegistry,
 	vsockDir string,
+	materializer sandboxexec.MountMaterializer,
+	mountBackingDir string,
 ) (*sandboxexec.Executor, error) {
 	base, err := sandbox.ConfigFromEnv()
 	if err != nil {
@@ -264,14 +273,16 @@ var buildDispatcher = func(
 		return nil, err
 	}
 	return sandboxexec.New(sandboxexec.Config{
-		Base:           base,
-		Stdout:         stdout,
-		Assembler:      assembler,
-		Bridger:        bridger,
-		AttachRegistry: attachRegistry,
-		VsockDir:       vsockDir,
-		NetEnabled:     true,
-		EgressProxy:    egress,
+		Base:              base,
+		Stdout:            stdout,
+		Assembler:         assembler,
+		Bridger:           bridger,
+		AttachRegistry:    attachRegistry,
+		VsockDir:          vsockDir,
+		NetEnabled:        true,
+		EgressProxy:       egress,
+		MountMaterializer: materializer,
+		MountBackingDir:   mountBackingDir,
 	})
 }
 

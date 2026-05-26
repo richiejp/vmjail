@@ -18,6 +18,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -35,6 +36,7 @@ import (
 	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
 	"github.com/localai-org/darkaifactory/internal/sandboxnet"
 	"github.com/localai-org/darkaifactory/internal/trace"
+	"github.com/localai-org/darkaifactory/internal/workspace"
 )
 
 // Phase tokens reported on heartbeat. Match the PascalCase values
@@ -53,6 +55,17 @@ const (
 // Production wires sandboxboot.BuildBundleConfig; tests pass fakes
 // that don't touch the imagestore.
 type Assembler func(ctx context.Context, ref string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error)
+
+// MountMaterializer reconstructs a previously-pushed workspace mount
+// from the node's persistent CAS into a host backing directory, with
+// no network round-trip (Slice S3). syncKey is
+// workspace.SyncKey(workspace_uuid, in-VM target); dest is the absolute
+// backing dir to populate (created if absent). applied is false when
+// nothing was pushed under syncKey — the mount boots as an empty
+// read-write tree. Production wires the node's workspace.Server.
+type MountMaterializer interface {
+	MaterializeMount(ctx context.Context, syncKey, dest string) (applied bool, err error)
+}
 
 // Runner is the function the Executor calls to boot a VM. The
 // default in production is sandbox.Serve — the long-running
@@ -100,6 +113,16 @@ type Executor struct {
 	// egressProxy, when non-nil, drives Phase-J proxy-env + CA
 	// injection on every image-backed dispatch (see Config.EgressProxy).
 	egressProxy *EgressProxy
+	// mountMaterializer and mountBackingDir are the Slice S3 launch-time
+	// mount wiring. When set, every image-backed dispatch materialises
+	// each spec mount from the node's persistent CAS into a per-Sandbox
+	// backing dir under mountBackingDir and exports that dir via
+	// virtiofsd (instead of treating the mount's logical Source as a
+	// host path). nil materializer keeps the pre-S3 passthrough (Source
+	// is taken as a host path) so unit tests and the smoke path are
+	// unaffected.
+	mountMaterializer MountMaterializer
+	mountBackingDir   string
 	// nextCID hands out fresh AF_VSOCK Context IDs for each dispatch.
 	// Initialised to 2 so the first .Add(1) returns 3 — the lowest
 	// CID the ABI allows for a guest (0/1/2 are reserved).
@@ -156,6 +179,16 @@ type Config struct {
 	// into the bundle rootfs. Leave nil to keep direct egress (the
 	// pre-Phase-J behaviour).
 	EgressProxy *EgressProxy
+	// MountMaterializer, when non-nil, materialises each image-backed
+	// dispatch's spec mounts from the node's persistent CAS into host
+	// backing dirs at launch (Slice S3). Production wires the node's
+	// workspace.Server. Requires MountBackingDir. Leave nil to keep the
+	// pre-S3 passthrough where a mount's Source is used as a host path.
+	MountMaterializer MountMaterializer
+	// MountBackingDir is the absolute parent directory under which
+	// per-Sandbox mount backing trees are materialised. Required when
+	// MountMaterializer is set; ignored otherwise.
+	MountBackingDir string
 }
 
 // EgressProxy configures the in-stack egress proxy (Phase J6). The
@@ -202,17 +235,27 @@ func New(cfg Config) (*Executor, error) {
 			return nil, fmt.Errorf("sandboxexec: VsockDir %q must be absolute", cfg.VsockDir)
 		}
 	}
+	if cfg.MountMaterializer != nil {
+		if cfg.MountBackingDir == "" {
+			return nil, errors.New("sandboxexec: MountBackingDir required when MountMaterializer is set")
+		}
+		if !filepath.IsAbs(cfg.MountBackingDir) {
+			return nil, fmt.Errorf("sandboxexec: MountBackingDir %q must be absolute", cfg.MountBackingDir)
+		}
+	}
 	e := &Executor{
-		base:           cfg.Base,
-		stdout:         cfg.Stdout,
-		run:            cfg.Runner,
-		assembler:      cfg.Assembler,
-		bridger:        cfg.Bridger,
-		attachRegistry: cfg.AttachRegistry,
-		vsockDir:       cfg.VsockDir,
-		netEnabled:     cfg.NetEnabled,
-		egressProxy:    cfg.EgressProxy,
-		live:           map[string]*liveSandbox{},
+		base:              cfg.Base,
+		stdout:            cfg.Stdout,
+		run:               cfg.Runner,
+		assembler:         cfg.Assembler,
+		bridger:           cfg.Bridger,
+		attachRegistry:    cfg.AttachRegistry,
+		vsockDir:          cfg.VsockDir,
+		netEnabled:        cfg.NetEnabled,
+		egressProxy:       cfg.EgressProxy,
+		mountMaterializer: cfg.MountMaterializer,
+		mountBackingDir:   cfg.MountBackingDir,
+		live:              map[string]*liveSandbox{},
 	}
 	// First .Add(1) returns 3 — the lowest CID the AF_VSOCK ABI
 	// allows for a guest.
@@ -345,6 +388,7 @@ func (e *Executor) HandleSandboxEvent(
 		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
 	}
 	defer unlock()
+	defer e.cleanupMounts(uid)
 
 	unregisterPorts := e.registerPortRoutes(cfg, spec.GetWorkspaceUuid())
 	defer unregisterPorts()
@@ -438,7 +482,7 @@ func (e *Executor) registerAttachRoute(cfg sandbox.Config, uid string) func() {
 // device the C1.3c ingress path will dial through. unlock is
 // always non-nil so callers can defer it unconditionally.
 func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) (sandbox.Config, func(), error) {
-	cfg, unlock, err := e.baseBootConfig(ctx, spec)
+	cfg, unlock, err := e.baseBootConfig(ctx, uid, spec)
 	if err != nil {
 		return sandbox.Config{}, func() {}, err
 	}
@@ -489,13 +533,17 @@ func (e *Executor) assignVsock(uid string) *sandbox.VsockConfig {
 // it; otherwise we fall back to the smoke-test baseline. Split out
 // so port-forward layering above stays a one-liner regardless of
 // which branch produced the cfg.
-func (e *Executor) baseBootConfig(ctx context.Context, spec *sandboxv1.SandboxSpec) (sandbox.Config, func(), error) {
+func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) (sandbox.Config, func(), error) {
 	imageRef := spec.GetImageRef()
 	if imageRef == "" || e.assembler == nil {
 		return e.base, func() {}, nil
 	}
+	mounts, err := e.resolveMounts(ctx, uid, spec)
+	if err != nil {
+		return sandbox.Config{}, func() {}, err
+	}
 	opts := sandboxboot.BootOptions{
-		Mounts: mountsFromSpec(spec.GetMounts()),
+		Mounts: mounts,
 		Env:    envFromSpec(spec.GetEnv()),
 	}
 	// Layer the egress-proxy env after the workspace's own env so the
@@ -615,23 +663,74 @@ func memoryArgFromBytes(b uint64) string {
 	return fmt.Sprintf("%dM", (b+mib-1)/mib)
 }
 
-// mountsFromSpec projects the wire mounts onto sandboxboot's
-// Go-native type. The orchestrator validates Target absolute-ness
-// at AddMount time; sandboxboot revalidates here to keep its API
-// boundary self-contained.
-func mountsFromSpec(in []*sandboxv1.Mount) []sandboxboot.Mount {
-	if len(in) == 0 {
-		return nil
-	}
+// resolveMounts turns the spec's mounts into sandboxboot.Mount
+// entries whose Source is an absolute host path virtiofsd can export.
+//
+// Source determines how each mount resolves:
+//   - An absolute path is a direct host bind (the advanced `mount add
+//     --source /abs` form, and the pre-S3 behaviour): it's exported
+//     as-is, no CAS involved.
+//   - Anything else is a logical identifier — a workspace UUID for the
+//     dir-local push/pull mounts — so the executor materialises the
+//     tree pushed under SyncKey(workspace_uuid, target) from the node's
+//     persistent CAS into a per-Sandbox backing dir (Slice S3) and
+//     points the share at that dir. An unpushed mount materialises as
+//     an empty read-write tree.
+//
+// Without a materializer wired (unit tests, smoke path) every mount
+// falls back to the passthrough so those callers don't need a CAS.
+func (e *Executor) resolveMounts(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) ([]sandboxboot.Mount, error) {
+	in := spec.GetMounts()
 	out := make([]sandboxboot.Mount, 0, len(in))
-	for _, m := range in {
+	for i, m := range in {
+		if e.mountMaterializer == nil || filepath.IsAbs(m.GetSource()) {
+			out = append(out, sandboxboot.Mount{
+				Target:   m.GetTarget(),
+				Source:   m.GetSource(),
+				ReadOnly: m.GetReadOnly(),
+			})
+			continue
+		}
+		dest := e.mountDir(uid, i)
+		key := workspace.SyncKey(spec.GetWorkspaceUuid(), m.GetTarget())
+		applied, err := e.mountMaterializer.MaterializeMount(ctx, key, dest)
+		if err != nil {
+			return nil, fmt.Errorf("materialize mount %s: %w", m.GetTarget(), err)
+		}
+		if !applied {
+			_, _ = fmt.Fprintf(e.stdout,
+				"daft-sandboxd: mount %s has no pushed data; starting empty (run `daft workspace push`)\n",
+				m.GetTarget())
+		}
 		out = append(out, sandboxboot.Mount{
 			Target:   m.GetTarget(),
-			Source:   m.GetSource(),
+			Source:   dest,
 			ReadOnly: m.GetReadOnly(),
 		})
 	}
-	return out
+	return out, nil
+}
+
+// mountDir is the absolute per-Sandbox, per-mount backing directory
+// virtiofsd exports. Keyed by Sandbox uid (unique per launch) so
+// concurrent dispatches never share a tree, and by mount index so the
+// dirs line up with the share tags the assembler mints.
+func (e *Executor) mountDir(uid string, i int) string {
+	return filepath.Join(e.mountBackingDir, uid, fmt.Sprintf("mnt%d", i))
+}
+
+// cleanupMounts removes the per-Sandbox backing tree once the dispatch
+// is over. Materialised mounts are reconstructed fresh from the node
+// CAS on every launch, so leaving them around only leaks disk; in-VM
+// writes that should survive surface via `daft workspace pull` while
+// the VM is live (Slice S4), not from this dir after teardown.
+func (e *Executor) cleanupMounts(uid string) {
+	if e.mountMaterializer == nil || e.mountBackingDir == "" {
+		return
+	}
+	if err := os.RemoveAll(filepath.Join(e.mountBackingDir, uid)); err != nil {
+		_, _ = fmt.Fprintf(e.stdout, "sandboxexec: cleanup mount backing dir: %v\n", err)
+	}
 }
 
 // BaseVsockPort is the first AF_VSOCK port the executor hands out

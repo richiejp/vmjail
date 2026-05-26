@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -20,12 +22,17 @@ import (
 	"github.com/localai-org/darkaifactory/internal/sandboxboot"
 	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
 	"github.com/localai-org/darkaifactory/internal/sandboxnet"
+	"github.com/localai-org/darkaifactory/internal/workspace"
 )
 
 const (
 	testImageRef  = "alpine:3"
 	testSandboxID = "sb-1"
 	testVsockDir  = "/var/run/daft-sandboxd"
+	mntWorkspace  = "/workspace"
+	mntData       = "/data"
+	testWSUUID    = "ws-uuid"
+	hostWS        = "/host/ws"
 )
 
 func noopRunner() Runner {
@@ -363,8 +370,8 @@ func TestHandleSandboxEventPropagatesMounts(t *testing.T) {
 	evt := addedEvent("sb-mnt", &sandboxv1.SandboxSpec{
 		ImageRef: testImageRef,
 		Mounts: []*sandboxv1.Mount{
-			{Target: "/workspace", Source: "/host/ws"},
-			{Target: "/data", Source: "/host/data", ReadOnly: true},
+			{Target: mntWorkspace, Source: hostWS},
+			{Target: mntData, Source: "/host/data", ReadOnly: true},
 		},
 	})
 	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
@@ -374,13 +381,209 @@ func TestHandleSandboxEventPropagatesMounts(t *testing.T) {
 		t.Fatalf("Mounts = %d, want 2", len(seenOpts.Mounts))
 	}
 	want := []sandboxboot.Mount{
-		{Target: "/workspace", Source: "/host/ws"},
-		{Target: "/data", Source: "/host/data", ReadOnly: true},
+		{Target: mntWorkspace, Source: hostWS},
+		{Target: mntData, Source: "/host/data", ReadOnly: true},
 	}
 	for i, m := range want {
 		if seenOpts.Mounts[i] != m {
 			t.Errorf("Mounts[%d] = %+v, want %+v", i, seenOpts.Mounts[i], m)
 		}
+	}
+}
+
+// fakeMaterializer records the sync keys it's asked to materialise and
+// optionally creates the dest dir, so tests can assert the executor
+// drives it with the right key and wires the backing dir as the share
+// Source.
+type fakeMaterializer struct {
+	keys    []string
+	applied bool
+	err     error
+	mkdir   bool
+}
+
+func (f *fakeMaterializer) MaterializeMount(_ context.Context, key, dest string) (bool, error) {
+	f.keys = append(f.keys, key)
+	if f.err != nil {
+		return false, f.err
+	}
+	if f.mkdir {
+		if err := os.MkdirAll(dest, 0o700); err != nil {
+			return false, err
+		}
+	}
+	return f.applied, nil
+}
+
+func TestNewRejectsMaterializerWithoutBackingDir(t *testing.T) {
+	if _, err := New(Config{Stdout: io.Discard, MountMaterializer: &fakeMaterializer{}}); err == nil {
+		t.Error("expected error for materializer without backing dir")
+	}
+	if _, err := New(Config{
+		Stdout:            io.Discard,
+		MountMaterializer: &fakeMaterializer{},
+		MountBackingDir:   "relative/path",
+	}); err == nil {
+		t.Error("expected error for non-absolute backing dir")
+	}
+}
+
+// TestHandleSandboxEventMaterializesMounts pins the Slice S3 path: each
+// spec mount is materialised from the node CAS into a per-Sandbox
+// backing dir, and that dir — not the mount's logical Source — becomes
+// the virtiofs share's host path. The materializer is keyed by
+// SyncKey(workspace_uuid, target).
+func TestHandleSandboxEventMaterializesMounts(t *testing.T) {
+	var seenOpts sandboxboot.BootOptions
+	asm := func(_ context.Context, _ string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		seenOpts = opts
+		return sandbox.Config{}, func() {}, nil
+	}
+	fm := &fakeMaterializer{applied: true, mkdir: true}
+	backing := t.TempDir()
+	e, err := New(Config{
+		Stdout:            io.Discard,
+		Runner:            noopRunner(),
+		Assembler:         asm,
+		MountMaterializer: fm,
+		MountBackingDir:   backing,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	evt := addedEvent("sb-mat", &sandboxv1.SandboxSpec{
+		ImageRef:      testImageRef,
+		WorkspaceUuid: testWSUUID,
+		Mounts: []*sandboxv1.Mount{
+			{Target: mntWorkspace, Source: testWSUUID},
+			{Target: mntData, Source: testWSUUID, ReadOnly: true},
+		},
+	})
+	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+
+	wantKeys := []string{
+		workspace.SyncKey(testWSUUID, mntWorkspace),
+		workspace.SyncKey(testWSUUID, mntData),
+	}
+	if !slices.Equal(fm.keys, wantKeys) {
+		t.Errorf("materializer keys = %v, want %v", fm.keys, wantKeys)
+	}
+	if len(seenOpts.Mounts) != 2 {
+		t.Fatalf("Mounts = %d, want 2", len(seenOpts.Mounts))
+	}
+	want := []sandboxboot.Mount{
+		{Target: mntWorkspace, Source: filepath.Join(backing, "sb-mat", "mnt0")},
+		{Target: mntData, Source: filepath.Join(backing, "sb-mat", "mnt1"), ReadOnly: true},
+	}
+	for i, m := range want {
+		if seenOpts.Mounts[i] != m {
+			t.Errorf("Mounts[%d] = %+v, want %+v", i, seenOpts.Mounts[i], m)
+		}
+	}
+	// The backing tree is cleaned up once the dispatch returns.
+	if _, statErr := os.Stat(filepath.Join(backing, "sb-mat")); !os.IsNotExist(statErr) {
+		t.Errorf("backing dir not cleaned up: stat err = %v", statErr)
+	}
+}
+
+// TestHandleSandboxEventAbsoluteSourceBypassesMaterializer pins the
+// discriminator: a mount whose Source is an absolute host path is a
+// direct bind (the `mount add --source /abs` form) and must NOT be
+// routed through the CAS materializer, even when one is wired.
+func TestHandleSandboxEventAbsoluteSourceBypassesMaterializer(t *testing.T) {
+	var seenOpts sandboxboot.BootOptions
+	asm := func(_ context.Context, _ string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		seenOpts = opts
+		return sandbox.Config{}, func() {}, nil
+	}
+	fm := &fakeMaterializer{applied: true, mkdir: true}
+	e, err := New(Config{
+		Stdout:            io.Discard,
+		Runner:            noopRunner(),
+		Assembler:         asm,
+		MountMaterializer: fm,
+		MountBackingDir:   t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	evt := addedEvent("sb-abs", &sandboxv1.SandboxSpec{
+		ImageRef:      testImageRef,
+		WorkspaceUuid: testWSUUID,
+		Mounts:        []*sandboxv1.Mount{{Target: mntWorkspace, Source: hostWS}},
+	})
+	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if len(fm.keys) != 0 {
+		t.Errorf("materializer called for an absolute-source mount: %v", fm.keys)
+	}
+	if len(seenOpts.Mounts) != 1 || seenOpts.Mounts[0].Source != hostWS {
+		t.Errorf("Mounts = %+v, want Source=/host/ws passthrough", seenOpts.Mounts)
+	}
+}
+
+// TestHandleSandboxEventUnpushedMountWarns covers the applied=false
+// branch: an unpushed mount still wires its (empty) backing dir and the
+// executor logs a hint.
+func TestHandleSandboxEventUnpushedMountWarns(t *testing.T) {
+	var buf bytes.Buffer
+	asm := func(_ context.Context, _ string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		return sandbox.Config{}, func() {}, nil
+	}
+	e, err := New(Config{
+		Stdout:            &buf,
+		Runner:            noopRunner(),
+		Assembler:         asm,
+		MountMaterializer: &fakeMaterializer{applied: false},
+		MountBackingDir:   t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	evt := addedEvent("sb-empty", &sandboxv1.SandboxSpec{
+		ImageRef:      testImageRef,
+		WorkspaceUuid: "ws",
+		Mounts:        []*sandboxv1.Mount{{Target: mntWorkspace, Source: "ws"}},
+	})
+	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if !strings.Contains(buf.String(), "no pushed data") {
+		t.Errorf("stdout missing unpushed-mount hint, got:\n%s", buf.String())
+	}
+}
+
+// TestHandleSandboxEventMaterializeErrorFailsDispatch: a materializer
+// error aborts the boot and marks the sandbox Killed.
+func TestHandleSandboxEventMaterializeErrorFailsDispatch(t *testing.T) {
+	asmCalled := false
+	asm := func(_ context.Context, _ string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		asmCalled = true
+		return sandbox.Config{}, func() {}, nil
+	}
+	e, err := New(Config{
+		Stdout:            io.Discard,
+		Runner:            noopRunner(),
+		Assembler:         asm,
+		MountMaterializer: &fakeMaterializer{err: errors.New("cas gone")},
+		MountBackingDir:   t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	evt := addedEvent("sb-fail", &sandboxv1.SandboxSpec{
+		ImageRef:      testImageRef,
+		WorkspaceUuid: "ws",
+		Mounts:        []*sandboxv1.Mount{{Target: mntWorkspace, Source: "ws"}},
+	})
+	if err := e.HandleSandboxEvent(t.Context(), evt); err == nil {
+		t.Fatal("expected error when materializer fails")
+	}
+	if asmCalled {
+		t.Error("assembler should not run after a materializer error")
 	}
 }
 

@@ -34,6 +34,12 @@ type ApplyOptions struct {
 // first); files are created/replaced atomically (.tmp + Rename) so a
 // crash mid-apply never leaves a partial file at a final path.
 //
+// A nil client puts ApplyManifest in local-only mode: every chunk the
+// manifest references must already be present in store, and a gap is a
+// hard error rather than a fetch. This is the launch-time path (Slice
+// S3) where the node materialises a previously-pushed tree straight
+// from its persistent CAS with no orchestrator round-trip.
+//
 // ApplyManifest does NOT delete entries in dest that aren't in the
 // manifest — it's an additive merge. Callers wanting "make dest look
 // exactly like m" should clear dest themselves first.
@@ -45,9 +51,6 @@ func ApplyManifest(
 	dest string,
 	opts ApplyOptions,
 ) error {
-	if client == nil {
-		return errors.New("workspace: nil client")
-	}
 	if store == nil {
 		return errors.New("workspace: nil cas store")
 	}
@@ -182,6 +185,8 @@ func writeFileEntry(
 }
 
 // ensureChunksLocal fetches any chunks missing from the local CAS.
+// With a nil client (local-only apply) a missing chunk is a hard
+// error: there's nobody to fetch it from, so the store is incomplete.
 func ensureChunksLocal(
 	ctx context.Context,
 	client workspacev1connect.WorkspaceServiceClient,
@@ -195,6 +200,9 @@ func ensureChunksLocal(
 		}
 		if have {
 			continue
+		}
+		if client == nil {
+			return fmt.Errorf("workspace: chunk %s missing from local CAS and no client to fetch it", c.GetDigest())
 		}
 		if err := fetchChunk(ctx, client, store, c.GetDigest()); err != nil {
 			return fmt.Errorf("workspace: fetch %s: %w", c.GetDigest(), err)

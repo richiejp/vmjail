@@ -184,7 +184,6 @@ func TestApplyManifestRejectsBadInputs(t *testing.T) {
 		m      *workspacev1.Manifest
 		dest   string
 	}{
-		"nil client":   {nil, h.dstCAS, h.manifest, h.dstRoot},
 		"nil store":    {h.client, nil, h.manifest, h.dstRoot},
 		"nil manifest": {h.client, h.dstCAS, nil, h.dstRoot},
 		"empty dest":   {h.client, h.dstCAS, h.manifest, ""},
@@ -196,6 +195,31 @@ func TestApplyManifestRejectsBadInputs(t *testing.T) {
 				t.Error("expected error")
 			}
 		})
+	}
+}
+
+// TestApplyManifestLocalOnly covers the nil-client mode (Slice S3):
+// when every chunk is already in the local CAS, ApplyManifest
+// reconstructs the tree with no client at all.
+func TestApplyManifestLocalOnly(t *testing.T) {
+	store := mustOpenStore(t)
+	src := t.TempDir()
+	mustWriteFile(t, filepath.Join(src, "a.txt"), []byte("local-only"))
+	m, err := BuildManifest(src, store, BuildOptions{})
+	if err != nil {
+		t.Fatalf("BuildManifest: %v", err)
+	}
+	dest := t.TempDir()
+	if err := ApplyManifest(context.Background(), nil, store, m, dest, ApplyOptions{}); err != nil {
+		t.Fatalf("ApplyManifest: %v", err)
+	}
+	//nolint:gosec // G304: test-controlled path
+	got, err := os.ReadFile(filepath.Join(dest, "a.txt"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(got) != "local-only" {
+		t.Errorf("body = %q, want %q", got, "local-only")
 	}
 }
 

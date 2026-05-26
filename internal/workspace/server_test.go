@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -123,6 +124,100 @@ func TestServerNamesListsAddedManifests(t *testing.T) {
 	got := srv.Names()
 	if len(got) != 2 {
 		t.Errorf("Names = %v, want length 2", got)
+	}
+}
+
+// TestMaterializeMountAppliesPushedTree covers the Slice S3
+// launch-time path: a tree pushed under a key materialises out of the
+// local CAS — no network — into a fresh backing dir with file bodies
+// intact.
+func TestMaterializeMountAppliesPushedTree(t *testing.T) {
+	srv, store := mustNewServer(t)
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "hello.txt"), []byte("materialized"))
+	m, err := BuildManifest(root, store, BuildOptions{})
+	if err != nil {
+		t.Fatalf("BuildManifest: %v", err)
+	}
+	const key = "ws-uuid\x00/workspace"
+	if err := srv.Add(key, m); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	dest := filepath.Join(t.TempDir(), "backing")
+	applied, err := srv.MaterializeMount(context.Background(), key, dest)
+	if err != nil {
+		t.Fatalf("MaterializeMount: %v", err)
+	}
+	if !applied {
+		t.Fatal("applied = false, want true for a pushed mount")
+	}
+	//nolint:gosec // G304: test-controlled path
+	got, err := os.ReadFile(filepath.Join(dest, "hello.txt"))
+	if err != nil {
+		t.Fatalf("read materialized file: %v", err)
+	}
+	if string(got) != "materialized" {
+		t.Errorf("body = %q, want %q", got, "materialized")
+	}
+}
+
+// TestMaterializeMountUnpushedCreatesEmptyDir: an unknown key yields
+// applied=false and a created-but-empty backing dir, so an unpushed
+// mount boots as an empty read-write tree.
+func TestMaterializeMountUnpushedCreatesEmptyDir(t *testing.T) {
+	srv, _ := mustNewServer(t)
+	dest := filepath.Join(t.TempDir(), "empty")
+	applied, err := srv.MaterializeMount(context.Background(), "never-pushed", dest)
+	if err != nil {
+		t.Fatalf("MaterializeMount: %v", err)
+	}
+	if applied {
+		t.Error("applied = true, want false for an unpushed mount")
+	}
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("backing dir not empty: %v", entries)
+	}
+}
+
+func TestMaterializeMountRejectsEmptyDest(t *testing.T) {
+	srv, _ := mustNewServer(t)
+	if _, err := srv.MaterializeMount(context.Background(), "k", ""); err == nil {
+		t.Error("expected error for empty dest")
+	}
+}
+
+// TestMaterializeMountMissingChunkErrors covers the local-only apply's
+// hard-fail on a gap: with the manifest registered but a referenced
+// chunk evicted from the CAS, there's no client to fetch it, so
+// materialisation must error rather than silently produce a truncated
+// file.
+func TestMaterializeMountMissingChunkErrors(t *testing.T) {
+	srv, store := mustNewServer(t)
+	root := t.TempDir()
+	mustWriteFile(t, filepath.Join(root, "f.txt"), []byte("payload"))
+	m, err := BuildManifest(root, store, BuildOptions{})
+	if err != nil {
+		t.Fatalf("BuildManifest: %v", err)
+	}
+	const key = "k"
+	if err := srv.Add(key, m); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	// Evict every chunk the manifest references.
+	for _, e := range m.GetEntries() {
+		for _, c := range e.GetChunks() {
+			if err := store.Delete(c.GetDigest()); err != nil {
+				t.Fatalf("Delete: %v", err)
+			}
+		}
+	}
+	if _, err := srv.MaterializeMount(context.Background(), key, filepath.Join(t.TempDir(), "d")); err == nil {
+		t.Error("expected error materialising with a missing chunk")
 	}
 }
 

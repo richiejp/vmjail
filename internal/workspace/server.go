@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 
 	"connectrpc.com/connect"
@@ -68,6 +69,45 @@ func (s *Server) Names() []string {
 		out = append(out, n)
 	}
 	return out
+}
+
+// MaterializeMount reconstructs the tree previously pushed under key
+// into dest, using only this server's local CAS — no network. dest is
+// created if absent. It returns applied=false when nothing was pushed
+// under key (dest is left as an empty directory, so an unpushed mount
+// boots as an empty read-write tree the VM can fill); applied=true once
+// the manifest has been laid down. A missing chunk is a hard error: the
+// CAS is the sole source at launch, so an incomplete store is a bug, not
+// a fetch opportunity.
+//
+// This is the launch-time half of Slice S3: `push` lands the bytes here,
+// `launch` materialises them into a host backing dir that virtiofsd
+// serves into the VM.
+func (s *Server) MaterializeMount(ctx context.Context, key, dest string) (applied bool, err error) {
+	if dest == "" {
+		return false, errors.New("workspace: empty dest")
+	}
+	s.mu.RLock()
+	m, ok := s.manifests[key]
+	s.mu.RUnlock()
+	if !ok {
+		// Nothing pushed for this mount yet — ensure an empty backing
+		// dir exists so virtiofsd has something to export.
+		if mkErr := os.MkdirAll(dest, 0o700); mkErr != nil {
+			return false, fmt.Errorf("workspace: mkdir mount backing dir: %w", mkErr)
+		}
+		return false, nil
+	}
+	if err := os.MkdirAll(dest, 0o700); err != nil {
+		return false, fmt.Errorf("workspace: mkdir mount backing dir: %w", err)
+	}
+	// Local-only apply: nil client means every chunk must already be in
+	// store, which it is — push installed them before publishing the
+	// manifest.
+	if err := ApplyManifest(ctx, nil, s.store, m, dest, ApplyOptions{}); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // GetManifest implements the proto endpoint. Unknown workspaces
