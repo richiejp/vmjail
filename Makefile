@@ -185,6 +185,12 @@ fuzz:
 # don't escape into the repo or into /nix/store.
 INITRAMFS_OUT := $(BIN_DIR)/initramfs.cpio.gz
 BUNDLE_OUT    := $(BIN_DIR)/hello-bundle
+# Test-fixture OCI images / flake fixture, built fresh from the flake by
+# `integration-build` (nix build -o) so they track source instead of a
+# frozen dev-shell path.
+NIX_IMAGE_OUT         := $(BIN_DIR)/nix-shell-image
+NIX_TOOLING_IMAGE_OUT := $(BIN_DIR)/nix-tooling-image
+NIX_FLAKE_FIXTURE_OUT := $(BIN_DIR)/nix-flake-fixture
 
 # build-initramfs assembles the sandbox-VM initramfs locally with
 # u-root, using daft-agent + crun from the dev shell. Mirrors the
@@ -233,14 +239,22 @@ integration-build: build-initramfs build-hello-bundle
 	@: "$${DAFT_CLOUD_HYPERVISOR:?DAFT_CLOUD_HYPERVISOR not set — enter the Nix dev shell}"
 	@: "$${DAFT_KERNEL:?DAFT_KERNEL not set — enter the Nix dev shell}"
 	@: "$${DAFT_VIRTIOFSD:?DAFT_VIRTIOFSD not set — enter the Nix dev shell}"
-	@: "$${DAFT_NIX_IMAGE:?DAFT_NIX_IMAGE not set — enter the Nix dev shell}"
-	@: "$${DAFT_NIX_TOOLING_IMAGE:?DAFT_NIX_TOOLING_IMAGE not set — enter the Nix dev shell}"
-	@: "$${DAFT_NIX_FLAKE_FIXTURE:?DAFT_NIX_FLAKE_FIXTURE not set — enter the Nix dev shell}"
+	@# Build the test-fixture OCI images fresh from the flake every
+	@# run (cache hit when unchanged) so the binaries they bake in —
+	@# daft-http-fetch et al. — can't drift behind the source the way
+	@# a frozen shell-entry path did. See PLAN.md "Dev-shell purification".
+	@echo "[images] nix build test-fixture images"
+	@nix build .#nix-shell-image    -o $(NIX_IMAGE_OUT)
+	@nix build .#nix-tooling-image  -o $(NIX_TOOLING_IMAGE_OUT)
+	@nix build .#d6c1-flake-fixture -o $(NIX_FLAKE_FIXTURE_OUT)
 
 integration: integration-build
 	@echo "[e2e] booting real VMs against /dev/kvm..."
 	@DAFT_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT) \
 		DAFT_BUNDLE=$(CURDIR)/$(BUNDLE_OUT) \
+		DAFT_NIX_IMAGE=$$(realpath $(NIX_IMAGE_OUT)) \
+		DAFT_NIX_TOOLING_IMAGE=$$(realpath $(NIX_TOOLING_IMAGE_OUT)) \
+		DAFT_NIX_FLAKE_FIXTURE=$$(realpath $(NIX_FLAKE_FIXTURE_OUT)) \
 		go test -v -tags=integration -count=1 -timeout 20m ./internal/sandbox/ ./internal/testdaemons/
 
 ## Git hooks -----------------------------------------------------------------

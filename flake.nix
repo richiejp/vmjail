@@ -41,19 +41,18 @@
       {
         devShells.default =
           let
-            # Slow-moving sandbox-host artefacts pinned by the flake.
-            # They land on the shell as DAFT_* env vars; `make
-            # integration` reads those vars (with a fall-back to
-            # ./result-* for the legacy nix-build path). Their store
-            # paths change only when their sources change, so a
-            # commit-by-commit iteration doesn't add anything to
-            # /nix/store — unlike the per-commit `initramfs` and
-            # `hello-bundle` derivations, which now assemble locally
-            # under bin/ via Make. See PLAN.md "Dev-shell artefacts"
-            # for the rationale.
+            # Slow-moving sandbox-host *toolchain* artefacts pinned by
+            # the flake. They land on the shell as DAFT_* env vars;
+            # `make integration` reads those vars. Their store paths
+            # change only when their (upstream) sources change, so they
+            # don't churn /nix/store commit-by-commit — unlike the
+            # per-commit `initramfs`/`hello-bundle` (assembled under
+            # bin/ via Make) and the test-fixture OCI images
+            # (`nix build`-ed by `make integration`, NOT inherited here,
+            # so shell entry no longer realises them). See PLAN.md
+            # "Dev-shell artefacts" / "Dev-shell purification".
             inherit (self.packages.${system})
-              cloud-hypervisor kernel virtiofsd crun u-root
-              nix-shell-image nix-tooling-image d6c1-flake-fixture;
+              cloud-hypervisor kernel virtiofsd crun u-root;
           in
           pkgs.mkShell {
             buildInputs = with pkgs; [
@@ -120,22 +119,16 @@
               export DAFT_CRUN="${crun}/bin/crun"
               export DAFT_UROOT="${u-root}/bin/u-root"
               export DAFT_UROOT_SRC="${uRootSrc}"
-              # OCI image tarball for D6b.3+ tests: dash + coreutils
-              # (no nix binary yet — D6b.4 will swap in a full nix
-              # toolchain). The path points at the docker-format
-              # tarball; tests load it via go-containerregistry's
-              # tarball.ImageFromPath and push to an in-process
-              # registry the sandboxd can pull from.
-              export DAFT_NIX_IMAGE="${nix-shell-image}"
-              # D6c.1 hermetic nix-CLI proof. The tooling image
-              # carries pkgs.nix + python3 + the closure they need;
-              # the flake fixture is a tiny flake that exports a
-              # `serve` app whose program is python3 from the same
-              # closure (referenced by store path). Together these
-              # let the test drive `nix run /workspace#serve` inside
-              # the container with no network or substituters.
-              export DAFT_NIX_TOOLING_IMAGE="${nix-tooling-image}"
-              export DAFT_NIX_FLAKE_FIXTURE="${d6c1-flake-fixture}"
+              # NOTE: the test-fixture OCI images (DAFT_NIX_IMAGE,
+              # DAFT_NIX_TOOLING_IMAGE, DAFT_NIX_FLAKE_FIXTURE) are
+              # deliberately NOT exported here. They bake in daft Go
+              # binaries (e.g. daft-http-fetch), so a frozen
+              # shell-entry path goes stale the moment that source
+              # changes. `make integration` now `nix build`s them
+              # fresh into bin/ each run; for a bare `go test
+              # -tags=integration` the test prints the exact
+              # `nix build .#<image> -o bin/<image>` to run. See
+              # PLAN.md "Dev-shell purification".
 
               echo "darkaifactory dev shell ready (version ${version})"
               echo "  make fmt          - format Go code"
