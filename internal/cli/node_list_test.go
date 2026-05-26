@@ -22,6 +22,10 @@ import (
 // a constant so goconst stops flagging the duplicate literal.
 const loopbackAddrAny = "127.0.0.1:0"
 
+// unreachableOrchestrator is a guaranteed-refused orchestrator URL
+// used by negative-path tests; hoisted so goconst stops flagging it.
+const unreachableOrchestrator = "https://127.0.0.1:1"
+
 // runOrchestratorWithNodeRegistry boots an in-process orchestrator
 // with an explicitly-supplied NodeRegistry, runs seed against the
 // live registry before serving starts, and returns the listening
@@ -133,7 +137,7 @@ func TestRunNodeListPropagatesIdentityLoadError(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "cert.pem"), "garbage")
 	mustWrite(t, filepath.Join(dir, "key.pem"), "garbage")
 	var out bytes.Buffer
-	err := runNodeList(context.Background(), &out, "https://127.0.0.1:1", dir, time.Now)
+	err := runNodeList(context.Background(), &out, unreachableOrchestrator, dir, time.Now)
 	if err == nil {
 		t.Fatal("expected error for corrupt identity")
 	}
@@ -148,7 +152,7 @@ func TestRunNodeListPropagatesPeerStoreError(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(dir, peersFilename), "not json")
 	var out bytes.Buffer
-	err := runNodeList(context.Background(), &out, "https://127.0.0.1:1", dir, time.Now)
+	err := runNodeList(context.Background(), &out, unreachableOrchestrator, dir, time.Now)
 	if err == nil {
 		t.Fatal("expected error for corrupt peer store")
 	}
@@ -164,7 +168,7 @@ func TestRunNodeListPropagatesDialError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	var out bytes.Buffer
-	err := runNodeList(ctx, &out, "https://127.0.0.1:1", dir, time.Now)
+	err := runNodeList(ctx, &out, unreachableOrchestrator, dir, time.Now)
 	if err == nil {
 		t.Fatal("expected error dialing unreachable orchestrator")
 	}

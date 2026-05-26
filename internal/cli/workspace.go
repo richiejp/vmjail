@@ -30,6 +30,7 @@ import (
 
 const (
 	workspaceCmdName = "workspace"
+	debugSubName     = "debug"
 	serveSubName     = "serve"
 	pullSubName      = "pull"
 	attachSubName    = "attach"
@@ -55,15 +56,37 @@ func newWorkspaceCmd() *cobra.Command {
 	for _, sub := range newWorkspaceCatalogSubcommands() {
 		cmd.AddCommand(sub)
 	}
-	cmd.AddCommand(newWorkspaceServeCmd())
-	cmd.AddCommand(newWorkspacePullCmd())
-	cmd.AddCommand(newWorkspaceAttachCmd())
-	cmd.AddCommand(newWorkspaceDiffCmd())
+	cmd.AddCommand(newWorkspaceDebugCmd())
 	cmd.AddCommand(newWorkspaceForwardCmd())
 	cmd.AddCommand(newWorkspaceExecCmd())
 	for _, sub := range newWorkspaceConfigCmds() {
 		cmd.AddCommand(sub)
 	}
+	return cmd
+}
+
+// newWorkspaceDebugCmd groups the deprecated chunk-sync commands
+// (serve / pull / attach / diff) under `daft workspace debug`. They
+// predate the catalog-driven workflow and the broker-relayed
+// `daft workspace push`/`pull`; moving them here frees the top-level
+// `pull` name for the catalog verb and keeps them available for
+// one-shot manual content-addressed transfers and diagnostics.
+func newWorkspaceDebugCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   debugSubName,
+		Short: "Low-level content-addressed transfer + diagnostics (advanced)",
+		Long: "Direct manifest/chunk tools predating the workspace catalog:\n" +
+			"  serve  — expose a directory as a content-addressed workspace\n" +
+			"  pull   — reconstruct a served workspace at a destination\n" +
+			"  attach — trigger an orchestrator-brokered serve↔sandbox pairing\n" +
+			"  diff   — compare a local directory against a remote workspace\n\n" +
+			"For the everyday flow use `daft workspace push` / `pull`, which\n" +
+			"resolve dir-local mounts and relay through the orchestrator.",
+	}
+	cmd.AddCommand(newWorkspaceServeCmd())
+	cmd.AddCommand(newWorkspacePullCmd())
+	cmd.AddCommand(newWorkspaceAttachCmd())
+	cmd.AddCommand(newWorkspaceDiffCmd())
 	return cmd
 }
 

@@ -454,7 +454,7 @@ func TestWorkspaceCreateDialsResolvedOrchestrator(t *testing.T) {
 	chdirClean(t)
 	dir := t.TempDir()
 	_, _, err := runDaft(t, "workspace", "create", "--name", "demo",
-		"--orchestrator", "https://127.0.0.1:1", "--config-dir", dir, "--timeout", "2s")
+		"--orchestrator", unreachableOrchestrator, "--config-dir", dir, "--timeout", "2s")
 	if err == nil {
 		t.Error("create against dead orchestrator: want dial error")
 	}

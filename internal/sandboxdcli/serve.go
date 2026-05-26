@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -14,8 +15,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/localai-org/darkaifactory/internal/brokerclient"
 	"github.com/localai-org/darkaifactory/internal/bundled"
+	"github.com/localai-org/darkaifactory/internal/cas"
+	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/localai-org/darkaifactory/internal/httpcache"
+	"github.com/localai-org/darkaifactory/internal/identity"
 	"github.com/localai-org/darkaifactory/internal/mitmproxy"
 	"github.com/localai-org/darkaifactory/internal/nodectrl"
 	"github.com/localai-org/darkaifactory/internal/nodectrlclient"
@@ -24,6 +29,7 @@ import (
 	"github.com/localai-org/darkaifactory/internal/sandboxexec"
 	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
 	"github.com/localai-org/darkaifactory/internal/version"
+	"github.com/localai-org/darkaifactory/internal/workspace"
 )
 
 const serveCmdName = "serve"
@@ -125,14 +131,89 @@ func runServe(
 		return err
 	}
 
+	sync, err := buildNodeSync(dir, orchestratorURL, id, peers)
+	if err != nil {
+		return err
+	}
+
 	_, _ = fmt.Fprintf(stdout,
 		"daft-sandboxd serve: registering with %s\n"+
 			"daft-sandboxd serve: fingerprint %s\n"+
-			"daft-sandboxd serve: advertising %d CPUs, %s\n",
+			"daft-sandboxd serve: advertising %d CPUs, %s\n"+
+			"daft-sandboxd serve: workspace sync cas %s\n",
 		orchestratorURL, id.Fingerprint(),
-		resources.CPUs, formatBytes(resources.MemoryBytes))
+		resources.CPUs, formatBytes(resources.MemoryBytes),
+		sync.casRoot)
+
+	// The node hosts its CAS-backed WorkspaceService over the broker
+	// relay for the daemon's lifetime, alongside the nodectrl control
+	// channel. It's a passive sandbox registration; the user-host
+	// client (the serve owner / initiator) drives push/pull. Run it
+	// concurrently with RegisterAndServe; ctx cancel stops both.
+	go sync.run(ctx, stdout)
 
 	return runRegisterAndServe(ctx, client, resources)
+}
+
+// nodeSync bundles the node's persistent CAS-backed WorkspaceService
+// handler and the broker client that hosts it over the orchestrator
+// relay. sandboxID is the broker key the user-host names to reach it
+// — the node's own fingerprint string, so the workspace's target
+// fingerprint doubles as the sync rendezvous key.
+type nodeSync struct {
+	bc        *brokerclient.Client
+	handler   http.Handler
+	sandboxID string
+	casRoot   string
+}
+
+// buildNodeSync opens the persistent node CAS under <dir>/cas and
+// wires a WorkspaceService handler over it plus a broker client to
+// the orchestrator. The CAS persists across daemon restarts, so a
+// re-pushed mostly-unchanged tree only moves its delta.
+//
+//nolint:gochecknoglobals // single test seam, not state.
+var buildNodeSync = func(
+	dir, orchestratorURL string,
+	id *identity.Identity,
+	peers *identity.PeerStore,
+) (*nodeSync, error) {
+	store, err := cas.Open(filepath.Join(dir, "cas"))
+	if err != nil {
+		return nil, fmt.Errorf("daft-sandboxd serve: open sync cas: %w", err)
+	}
+	wsServer, err := workspace.NewServer(store)
+	if err != nil {
+		return nil, fmt.Errorf("daft-sandboxd serve: workspace server: %w", err)
+	}
+	mux := http.NewServeMux()
+	path, handler := workspacev1connect.NewWorkspaceServiceHandler(wsServer)
+	mux.Handle(path, handler)
+	bc, err := brokerclient.New(brokerclient.Config{
+		URL: orchestratorURL, Identity: id, Peers: peers,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("daft-sandboxd serve: broker client: %w", err)
+	}
+	return &nodeSync{
+		bc:        bc,
+		handler:   mux,
+		sandboxID: id.Fingerprint().String(),
+		casRoot:   store.Root(),
+	}, nil
+}
+
+// run hosts the WorkspaceService over the broker until ctx is
+// cancelled. A serve-loop exit that isn't a ctx cancel (e.g. the
+// orchestrator stream dropped) is logged; the daemon keeps running on
+// its nodectrl channel and sync resumes on the next daemon start.
+func (n *nodeSync) run(ctx context.Context, logw io.Writer) {
+	err := n.bc.ServeBrokeredAsSandbox(ctx, n.sandboxID, brokerclient.ServeOptions{
+		Handler: n.handler,
+	})
+	if err != nil && ctx.Err() == nil {
+		_, _ = fmt.Fprintf(logw, "daft-sandboxd serve: workspace sync stopped: %v\n", err)
+	}
 }
 
 // runRegisterAndServe is a single test seam — production swaps in

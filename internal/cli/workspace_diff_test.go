@@ -28,7 +28,7 @@ func TestWorkspaceDiffEndToEnd(t *testing.T) {
 	addr, clientDir := startDirectServeAndApprove(t, remote)
 
 	stdout, stderr, err := runDaft(
-		t, workspaceCmdName, diffSubName,
+		t, workspaceCmdName, debugSubName, diffSubName,
 		configDirArg, clientDir,
 		"--from", addr,
 		"--workspace", "ws",
@@ -60,7 +60,7 @@ func TestWorkspaceDiffDetailMode(t *testing.T) {
 	addr, clientDir := startDirectServeAndApprove(t, remote)
 
 	stdout, _, err := runDaft(
-		t, workspaceCmdName, diffSubName,
+		t, workspaceCmdName, debugSubName, diffSubName,
 		configDirArg, clientDir,
 		"--from", addr, "--workspace", "ws",
 		"--cas-dir", filepath.Join(clientDir, "cas"),
@@ -90,7 +90,7 @@ func TestWorkspaceDiffDetailTypeChange(t *testing.T) {
 	mustWriteFile(t, filepath.Join(local, "x", "child"), []byte("c"))
 	addr, clientDir := startDirectServeAndApprove(t, remote)
 	stdout, _, err := runDaft(
-		t, workspaceCmdName, diffSubName,
+		t, workspaceCmdName, debugSubName, diffSubName,
 		configDirArg, clientDir,
 		"--from", addr, "--workspace", "ws",
 		"--cas-dir", filepath.Join(clientDir, "cas"),
@@ -107,11 +107,11 @@ func TestWorkspaceDiffDetailTypeChange(t *testing.T) {
 
 func TestWorkspaceDiffBadFlags(t *testing.T) {
 	dir := t.TempDir()
-	if _, _, err := runDaft(t, workspaceCmdName, diffSubName,
+	if _, _, err := runDaft(t, workspaceCmdName, debugSubName, diffSubName,
 		"--workspace", "ws", dir); err == nil {
 		t.Error("expected error for missing --from")
 	}
-	if _, _, err := runDaft(t, workspaceCmdName, diffSubName,
+	if _, _, err := runDaft(t, workspaceCmdName, debugSubName, diffSubName,
 		"--from", "127.0.0.1:1", dir); err == nil {
 		t.Error("expected error for missing --workspace")
 	}
@@ -162,7 +162,7 @@ func startDirectServeAndApprove(t *testing.T, srcDir string) (addr, clientDir st
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 	cmd.SetArgs([]string{
-		workspaceCmdName, serveSubName,
+		workspaceCmdName, debugSubName, serveSubName,
 		"--workspace=ws=" + srcDir,
 		"--addr=" + addr,
 		configDirArg, serverDir,

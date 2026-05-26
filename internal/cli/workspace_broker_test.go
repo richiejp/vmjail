@@ -96,7 +96,7 @@ func startServeBrokered(t *testing.T, clientDir, addr, src string) {
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 	cmd.SetArgs([]string{
-		workspaceCmdName, serveSubName,
+		workspaceCmdName, debugSubName, serveSubName,
 		"--workspace=ws=" + src,
 		"--orchestrator=https://" + addr,
 		configDirArg, clientDir,
@@ -193,7 +193,7 @@ func TestWorkspaceServeBrokeredUnreachable(t *testing.T) {
 	cancel()
 	err := runWorkspaceServe(ctx, &syncBuf{}, workspaceServeOpts{
 		workspaceFlag: "ws=" + src,
-		orchestrator:  "https://127.0.0.1:1",
+		orchestrator:  unreachableOrchestrator,
 		configDir:     clientDir,
 		casDir:        filepath.Join(clientDir, "cas"),
 	})

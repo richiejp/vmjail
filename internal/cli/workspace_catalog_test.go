@@ -114,7 +114,7 @@ func TestWorkspaceCatalogSubcommandsRegistered(t *testing.T) {
 // every thin wrapper.
 func TestWorkspaceRPCErrorsBubbleUp(t *testing.T) {
 	h := newWorkspaceE2EHarness(t)
-	missing := []string{"--orchestrator", h.orchURL, configDirArg, h.clientDir, nameFlag, "no-such-workspace"}
+	missing := []string{orchestratorArg, h.orchURL, configDirArg, h.clientDir, nameFlag, "no-such-workspace"}
 	cases := [][]string{
 		{statusSubName},
 		{imageSubName, testCatalogImage},
@@ -268,7 +268,7 @@ func newWorkspaceE2EHarness(t *testing.T) *workspaceE2EHarness {
 		fake:      fake,
 		sandboxFP: mustGenerate(t).Fingerprint().String(),
 		commonArgs: []string{
-			"--orchestrator", orchURL,
+			orchestratorArg, orchURL,
 			configDirArg, clientDir,
 			"--name", testE2EWorkspaceName,
 		},
@@ -342,7 +342,7 @@ func (h *workspaceE2EHarness) assertStopAndRemovals() {
 	if !strings.Contains(finalOut, "Missing:") {
 		h.t.Errorf("removals should have re-introduced missing fields:\n%s", finalOut)
 	}
-	listOut := h.run(listSubName, "--orchestrator", h.orchURL, configDirArg, h.clientDir, "--mine")
+	listOut := h.run(listSubName, orchestratorArg, h.orchURL, configDirArg, h.clientDir, "--mine")
 	if !strings.Contains(listOut, testE2EWorkspaceName) {
 		h.t.Errorf("list missing %q:\n%s", testE2EWorkspaceName, listOut)
 	}
@@ -374,8 +374,9 @@ func mustGenerate(t *testing.T) *identity.Identity {
 // stub value used by the arg-validation tests; extracted so
 // goconst stops flagging them.
 const (
-	nameFlag    = "--name"
-	nameFlagVal = "x"
+	nameFlag        = "--name"
+	nameFlagVal     = "x"
+	orchestratorArg = "--orchestrator"
 )
 
 const (

@@ -88,6 +88,71 @@ func (c *Client) AttachAndDial(ctx context.Context, opts AttachOptions) (*InnerC
 	return innerClientFromTLSConn(tlsConn, func() { _ = reg.Close() }), nil
 }
 
+// DialServeOptions configures the consumer side of a node-hosted
+// sync attach (the role-inverted twin of AttachAndDial). Workspace
+// is the serve key this client registers under; NodeFingerprint is
+// the target node whose ServeBrokeredAsSandbox is waiting, and
+// doubles as the broker sandbox_id.
+type DialServeOptions struct {
+	Workspace        string
+	NodeFingerprint  identity.Fingerprint
+	HandshakeTimeout time.Duration
+}
+
+// DialBrokeredServe drives the consumer side of a sync attach where
+// the *node* hosts the WorkspaceService (ServeBrokeredAsSandbox) and
+// this client drives it. Unlike AttachAndDial, this side is both the
+// broker serve owner *and* the initiator, so it may legally call
+// RequestAttach (the matcher's ACL is caller==serveOwner): register
+// a serve, RequestAttach naming the node's fingerprint, wait for the
+// pairing on our own serve stream, dial Relay, run inner mTLS as TLS
+// client, and return an InnerClient pointed at the node's
+// WorkspaceService.
+//
+// On success, InnerClient.Close tears down both the inner TLS conn
+// and the outer broker registration.
+func (c *Client) DialBrokeredServe(ctx context.Context, opts DialServeOptions) (*InnerClient, error) {
+	switch {
+	case opts.Workspace == "":
+		return nil, errors.New("brokerclient: DialBrokeredServe: empty workspace")
+	case opts.NodeFingerprint == (identity.Fingerprint{}):
+		return nil, errors.New("brokerclient: DialBrokeredServe: zero node fingerprint")
+	}
+	if opts.HandshakeTimeout == 0 {
+		opts.HandshakeTimeout = 10 * time.Second
+	}
+	self := c.cfg.Identity.Fingerprint()
+	reg, err := c.RegisterServe(ctx, opts.Workspace)
+	if err != nil {
+		return nil, err
+	}
+	done := false
+	defer func() {
+		if !done {
+			_ = reg.Close()
+		}
+	}()
+	sandboxID := opts.NodeFingerprint.String()
+	if _, _, err := c.Attach(ctx, self, opts.Workspace, sandboxID); err != nil {
+		return nil, err
+	}
+	sessionID, err := waitForAttach(ctx, reg, opts.NodeFingerprint)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := c.DialRelay(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("DialRelay: %w", err)
+	}
+	tlsConn, err := c.innerClientHandshake(ctx, conn, opts.NodeFingerprint, opts.HandshakeTimeout)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	done = true
+	return innerClientFromTLSConn(tlsConn, func() { _ = reg.Close() }), nil
+}
+
 func (o AttachOptions) validate() error {
 	switch {
 	case o.Workspace == "":

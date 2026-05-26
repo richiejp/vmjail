@@ -228,6 +228,8 @@ func newWorkspaceCatalogSubcommands() []*cobra.Command {
 		newWorkspaceTargetCmd(),
 		newWorkspaceResourcesCmd(),
 		newWorkspaceMountCmd(),
+		newWorkspacePushCmd(),
+		newWorkspacePullCatalogCmd(),
 		newWorkspaceEnvCmd(),
 		newWorkspacePortCmd(),
 		newWorkspaceValidateCmd(),

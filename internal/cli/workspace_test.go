@@ -74,7 +74,7 @@ func TestWorkspaceServeAndPullRoundTrip(t *testing.T) {
 	cmd.SetOut(stdout)
 	cmd.SetErr(stderr)
 	cmd.SetArgs([]string{
-		workspaceCmdName, serveSubName,
+		workspaceCmdName, debugSubName, serveSubName,
 		"--workspace=ws=" + src,
 		"--addr=" + addr,
 		configDirArg, serverDir,
@@ -109,7 +109,7 @@ func TestWorkspaceServeAndPullRoundTrip(t *testing.T) {
 	}
 
 	dest := t.TempDir()
-	pullStdout, pullStderr, err := runDaft(t, workspaceCmdName, pullSubName,
+	pullStdout, pullStderr, err := runDaft(t, workspaceCmdName, debugSubName, pullSubName,
 		"--from", addr, "--workspace", "ws",
 		configDirArg, clientDir,
 		"--cas-dir", filepath.Join(clientDir, "cas"),
@@ -169,7 +169,7 @@ func TestParseWorkspaceFlag(t *testing.T) {
 
 func TestWorkspaceServeRejectsMissingFlag(t *testing.T) {
 	dir := t.TempDir()
-	_, _, err := runDaft(t, workspaceCmdName, serveSubName,
+	_, _, err := runDaft(t, workspaceCmdName, debugSubName, serveSubName,
 		configDirArg, dir, "--addr=127.0.0.1:0")
 	if err == nil {
 		t.Fatal("expected error when --workspace is missing")
@@ -178,7 +178,7 @@ func TestWorkspaceServeRejectsMissingFlag(t *testing.T) {
 
 func TestWorkspaceServeRejectsBadFlagShape(t *testing.T) {
 	dir := t.TempDir()
-	_, _, err := runDaft(t, workspaceCmdName, serveSubName,
+	_, _, err := runDaft(t, workspaceCmdName, debugSubName, serveSubName,
 		"--workspace=missing-equals",
 		configDirArg, dir, "--addr=127.0.0.1:0")
 	if err == nil {
@@ -188,7 +188,7 @@ func TestWorkspaceServeRejectsBadFlagShape(t *testing.T) {
 
 func TestWorkspaceServeFailsForMissingDir(t *testing.T) {
 	dir := t.TempDir()
-	_, _, err := runDaft(t, workspaceCmdName, serveSubName,
+	_, _, err := runDaft(t, workspaceCmdName, debugSubName, serveSubName,
 		"--workspace=ws=/definitely/does/not/exist",
 		configDirArg, dir, "--addr=127.0.0.1:0")
 	if err == nil {
@@ -198,7 +198,7 @@ func TestWorkspaceServeFailsForMissingDir(t *testing.T) {
 
 func TestWorkspacePullRejectsMissingFrom(t *testing.T) {
 	dir := t.TempDir()
-	_, _, err := runDaft(t, workspaceCmdName, pullSubName,
+	_, _, err := runDaft(t, workspaceCmdName, debugSubName, pullSubName,
 		"--workspace=ws", configDirArg, dir, t.TempDir())
 	if err == nil {
 		t.Fatal("expected error for missing --from")
@@ -207,7 +207,7 @@ func TestWorkspacePullRejectsMissingFrom(t *testing.T) {
 
 func TestWorkspacePullRejectsMissingWorkspaceName(t *testing.T) {
 	dir := t.TempDir()
-	_, _, err := runDaft(t, workspaceCmdName, pullSubName,
+	_, _, err := runDaft(t, workspaceCmdName, debugSubName, pullSubName,
 		"--from=127.0.0.1:1", configDirArg, dir, t.TempDir())
 	if err == nil {
 		t.Fatal("expected error for missing --workspace")
@@ -257,7 +257,7 @@ func TestWorkspacePullFailsForCorruptIdentity(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "key.pem"), []byte("garbage"), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	_, _, err := runDaft(t, workspaceCmdName, pullSubName,
+	_, _, err := runDaft(t, workspaceCmdName, debugSubName, pullSubName,
 		"--from", "127.0.0.1:1", "--workspace", "ws",
 		configDirArg, dir, t.TempDir())
 	if err == nil {
@@ -270,7 +270,7 @@ func TestWorkspacePullFailsForCorruptPeers(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, peersFilename), []byte("not json"), 0o600); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
-	_, _, err := runDaft(t, workspaceCmdName, pullSubName,
+	_, _, err := runDaft(t, workspaceCmdName, debugSubName, pullSubName,
 		"--from", "127.0.0.1:1", "--workspace", "ws",
 		configDirArg, dir, t.TempDir())
 	if err == nil {
@@ -288,7 +288,7 @@ func TestWorkspaceServeFailsForCorruptIdentity(t *testing.T) {
 	}
 	src := t.TempDir()
 	mustWriteFile(t, filepath.Join(src, "x"), []byte("x"))
-	_, _, err := runDaft(t, workspaceCmdName, serveSubName,
+	_, _, err := runDaft(t, workspaceCmdName, debugSubName, serveSubName,
 		"--workspace=ws="+src, configDirArg, dir,
 		"--addr=127.0.0.1:0")
 	if err == nil {
@@ -303,7 +303,7 @@ func TestWorkspaceServeFailsForCorruptPeers(t *testing.T) {
 	}
 	src := t.TempDir()
 	mustWriteFile(t, filepath.Join(src, "x"), []byte("x"))
-	_, _, err := runDaft(t, workspaceCmdName, serveSubName,
+	_, _, err := runDaft(t, workspaceCmdName, debugSubName, serveSubName,
 		"--workspace=ws="+src, configDirArg, dir,
 		"--addr=127.0.0.1:0")
 	if err == nil {
@@ -315,7 +315,7 @@ func TestWorkspaceServeFailsForBadAddr(t *testing.T) {
 	dir := t.TempDir()
 	src := t.TempDir()
 	mustWriteFile(t, filepath.Join(src, "x"), []byte("x"))
-	_, _, err := runDaft(t, workspaceCmdName, serveSubName,
+	_, _, err := runDaft(t, workspaceCmdName, debugSubName, serveSubName,
 		"--workspace=ws="+src, configDirArg, dir,
 		"--addr=not-an-addr")
 	if err == nil {
@@ -325,7 +325,7 @@ func TestWorkspaceServeFailsForBadAddr(t *testing.T) {
 
 func TestWorkspacePullFailsAgainstUnknownAddr(t *testing.T) {
 	_, clientDir := approveBoth(t)
-	_, _, err := runDaft(t, workspaceCmdName, pullSubName,
+	_, _, err := runDaft(t, workspaceCmdName, debugSubName, pullSubName,
 		"--from", "127.0.0.1:1",
 		"--workspace", "ws",
 		"--timeout", "500ms",

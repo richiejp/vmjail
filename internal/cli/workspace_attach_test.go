@@ -22,7 +22,7 @@ func TestWorkspaceAttachRoundTrip(t *testing.T) {
 	sbClient := mustBrokerClient(t, sbID, srvID, addr)
 	attached, attachErr := startAttachAndDial(ctx, sbClient, "ws", "sb-attach", cliID.Fingerprint())
 	stdout, stderr, err := runDaft(
-		t, workspaceCmdName, attachSubName,
+		t, workspaceCmdName, debugSubName, attachSubName,
 		configDirArg, clientDir,
 		"--orchestrator=https://"+addr,
 		"--workspace=ws",
@@ -52,7 +52,7 @@ func TestWorkspaceAttachRejectsBadFlags(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			args := append([]string{workspaceCmdName, attachSubName}, tc.args...)
+			args := append([]string{workspaceCmdName, debugSubName, attachSubName}, tc.args...)
 			_, _, err := runDaft(t, args...)
 			if err == nil {
 				t.Errorf("expected error for %s", tc.name)
@@ -72,7 +72,7 @@ func TestWorkspaceAttachUnreachable(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	err := runWorkspaceAttach(ctx, &syncBuf{}, workspaceAttachOpts{
-		orchestrator: "https://127.0.0.1:1",
+		orchestrator: unreachableOrchestrator,
 		workspace:    "ws",
 		sandbox:      "sb",
 		configDir:    clientDir,

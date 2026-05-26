@@ -241,6 +241,88 @@ func TestRunRegisterAndServeSeamCallsClient(t *testing.T) {
 	_ = runRegisterAndServe(ctx, client, nodectrl.Resources{})
 }
 
+// TestBuildNodeSync covers the production buildNodeSync seam: it
+// opens a persistent CAS under <dir>/cas, builds the
+// WorkspaceService handler over it, and constructs the broker
+// client. The casRoot is reported for the startup banner.
+func TestBuildNodeSync(t *testing.T) {
+	id, err := identityGenerateForTest()
+	if err != nil {
+		t.Fatalf("identity generate: %v", err)
+	}
+	dir := t.TempDir()
+	sync, err := buildNodeSync(dir, "https://orch.invalid:8443", id, memoryPeerStore())
+	if err != nil {
+		t.Fatalf("buildNodeSync: %v", err)
+	}
+	if sync.sandboxID != id.Fingerprint().String() {
+		t.Errorf("sandboxID = %q, want node fingerprint %q", sync.sandboxID, id.Fingerprint())
+	}
+	if sync.casRoot != filepath.Join(dir, "cas") {
+		t.Errorf("casRoot = %q, want %q", sync.casRoot, filepath.Join(dir, "cas"))
+	}
+	if sync.handler == nil || sync.bc == nil {
+		t.Error("buildNodeSync returned nil handler or broker client")
+	}
+}
+
+// TestBuildNodeSyncBadCasDir covers the cas.Open error branch: a
+// regular file where the CAS dir should be makes Open fail.
+func TestBuildNodeSyncBadCasDir(t *testing.T) {
+	id, err := identityGenerateForTest()
+	if err != nil {
+		t.Fatalf("identity generate: %v", err)
+	}
+	dir := t.TempDir()
+	if err := writeBlocker(filepath.Join(dir, "cas")); err != nil {
+		t.Fatalf("writeBlocker: %v", err)
+	}
+	if _, err := buildNodeSync(dir, "https://orch.invalid:8443", id, memoryPeerStore()); err == nil {
+		t.Error("buildNodeSync should fail when <dir>/cas is a regular file")
+	}
+}
+
+// TestNodeSyncRunCtxCancel: a cancelled ctx makes the serve loop exit
+// cleanly with no log line (ctx.Err() != nil suppresses the warning).
+func TestNodeSyncRunCtxCancel(t *testing.T) {
+	id, err := identityGenerateForTest()
+	if err != nil {
+		t.Fatalf("identity generate: %v", err)
+	}
+	sync, err := buildNodeSync(t.TempDir(), "https://orch.invalid:8443", id, memoryPeerStore())
+	if err != nil {
+		t.Fatalf("buildNodeSync: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	var buf strings.Builder
+	sync.run(ctx, &buf) // returns promptly; no log on ctx-cancel exit
+	if buf.Len() != 0 {
+		t.Errorf("unexpected log on ctx-cancel exit: %q", buf.String())
+	}
+}
+
+// TestNodeSyncRunLogsUnexpectedExit: with a live ctx but an
+// unreachable orchestrator, the serve loop returns an error and run
+// logs it (ctx.Err() == nil).
+func TestNodeSyncRunLogsUnexpectedExit(t *testing.T) {
+	id, err := identityGenerateForTest()
+	if err != nil {
+		t.Fatalf("identity generate: %v", err)
+	}
+	sync, err := buildNodeSync(t.TempDir(), "https://127.0.0.1:1", id, memoryPeerStore())
+	if err != nil {
+		t.Fatalf("buildNodeSync: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	var buf strings.Builder
+	sync.run(ctx, &buf)
+	if !strings.Contains(buf.String(), "workspace sync stopped") {
+		t.Errorf("expected an unexpected-exit log line, got %q", buf.String())
+	}
+}
+
 func TestFormatBytes(t *testing.T) {
 	cases := []struct {
 		in   uint64

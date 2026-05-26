@@ -73,15 +73,7 @@ func (c *Client) ServeBrokered(ctx context.Context, opts ServeOptions) error {
 	if opts.Handler == nil {
 		return errors.New("brokerclient: ServeBrokered: nil handler")
 	}
-	if opts.HandshakeTimeout == 0 {
-		opts.HandshakeTimeout = 10 * time.Second
-	}
-	if opts.MaxConcurrentAttaches <= 0 {
-		opts.MaxConcurrentAttaches = defaultMaxConcurrentAttaches
-	}
-	if opts.MaxConcurrentAttaches > maxConcurrentAttachesCeiling {
-		opts.MaxConcurrentAttaches = maxConcurrentAttachesCeiling
-	}
+	opts.normalize()
 	// Cancellability is asserted past the input-validation block
 	// so bad-options callers (typically tests) can use Background:
 	// the assertion only matters if we're about to enter the
@@ -94,13 +86,68 @@ func (c *Client) ServeBrokered(ctx context.Context, opts ServeOptions) error {
 		return err
 	}
 	defer func() { _ = reg.Close() }()
+	return c.serveRegistration(ctx, reg, opts)
+}
 
+// ServeBrokeredAsSandbox is the role-inverted twin of ServeBrokered:
+// it registers a *sandbox* (not a serve) and hosts opts.Handler over
+// each brokered attach, with inner mTLS terminating here as the TLS
+// server. The broker pairs this sandbox registration with whichever
+// peer initiates RequestAttach naming sandboxID — and crucially, the
+// matcher's ACL lets that initiator be a *different* identity, so the
+// HTTP client side can drive the connection while this side stays
+// passive. The node uses this to host its CAS-backed WorkspaceService:
+// the user-host client (the serve owner) initiates, this node serves.
+//
+// sandboxID is the broker key the initiator must name; the node uses
+// its own mTLS fingerprint string so the workspace's target
+// fingerprint doubles as the sync rendezvous key. opts.Workspace is
+// ignored (sandbox registration is keyed by sandboxID, not workspace).
+func (c *Client) ServeBrokeredAsSandbox(ctx context.Context, sandboxID string, opts ServeOptions) error {
+	if sandboxID == "" {
+		return errors.New("brokerclient: ServeBrokeredAsSandbox: empty sandbox_id")
+	}
+	if opts.Handler == nil {
+		return errors.New("brokerclient: ServeBrokeredAsSandbox: nil handler")
+	}
+	opts.normalize()
+	done := ctx.Done()
+	assert.True(done != nil,
+		"ServeBrokeredAsSandbox requires a cancellable context once options are valid; Background/TODO would block forever in the event loop")
+	reg, err := c.RegisterSandbox(ctx, sandboxID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = reg.Close() }()
+	return c.serveRegistration(ctx, reg, opts)
+}
+
+// normalize fills ServeOptions defaults and clamps the concurrency
+// cap to its ceiling. Shared by the serve and sandbox entry points.
+func (opts *ServeOptions) normalize() {
+	if opts.HandshakeTimeout == 0 {
+		opts.HandshakeTimeout = 10 * time.Second
+	}
+	if opts.MaxConcurrentAttaches <= 0 {
+		opts.MaxConcurrentAttaches = defaultMaxConcurrentAttaches
+	}
+	if opts.MaxConcurrentAttaches > maxConcurrentAttachesCeiling {
+		opts.MaxConcurrentAttaches = maxConcurrentAttachesCeiling
+	}
+}
+
+// serveRegistration runs the per-attach accept loop over an
+// already-open registration (serve or sandbox): each PendingAttach
+// dials Relay, handshakes inner mTLS as TLS server, and serves
+// opts.Handler over http2 until the attach closes. Exits on ctx
+// cancel or registration-stream EOF. opts must already be normalized.
+func (c *Client) serveRegistration(ctx context.Context, reg *Registration, opts ServeOptions) error {
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	//daft:lint:disable=chanconst reason="opts.MaxConcurrentAttaches is clamped above to the maxConcurrentAttachesCeiling constant; the bound is statically known."
+	//daft:lint:disable=chanconst reason="opts.MaxConcurrentAttaches is clamped by normalize() to the maxConcurrentAttachesCeiling constant; the bound is statically known."
 	sem := make(chan struct{}, opts.MaxConcurrentAttaches)
 
-	//daft:lint:disable=forloopbound reason="exits on ctx.Done() or registration stream EOF; ctx cancellability asserted at ServeBrokered entry"
+	//daft:lint:disable=forloopbound reason="exits on ctx.Done() or registration stream EOF; ctx cancellability asserted by the caller before entry"
 	for {
 		select {
 		case <-ctx.Done():

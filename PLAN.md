@@ -431,10 +431,35 @@ Phase B — **Workspace as a first-class orchestrator object**:
       uploads only those straight from local CAS compressed bytes;
       Pull is `GetManifest` + `ApplyManifest`. Transport-agnostic —
       tested over an in-process Connect server.
-    - **S2b:** wire the brokered relay: sandboxd serves the writable
-      `WorkspaceService` over its persistent CAS; the client attaches
-      as the consumer. `push` builds a manifest per dir-local mount;
-      `pull` downloads + `ApplyManifest`.
+    - **S2b (landed): the brokered relay + node sync daemon.** The
+      broker is a symmetric byte relay, but `ServeBrokered`/
+      `AttachAndDial` bundled the broker role (serve vs sandbox
+      registrant) with the HTTP role (server vs client). The matcher
+      ACL requires `RequestAttach`'s caller to own the serve, and the
+      *client* must initiate (it knows when it wants to sync) — so the
+      client is the serve owner while still being the HTTP *client*.
+      Two role-inverted `brokerclient` primitives express this:
+      `ServeBrokeredAsSandbox` (register as a sandbox, host an
+      `http.Handler` as inner-mTLS *server*) and `DialBrokeredServe`
+      (register a serve + `RequestAttach` + dial as inner-mTLS
+      *client*, returning an `InnerClient`). `daft-sandboxd serve` now
+      opens a **persistent node CAS** under `<config-dir>/cas`, hosts a
+      CAS-backed `WorkspaceService` via `ServeBrokeredAsSandbox` keyed
+      by the node's own fingerprint, and runs it for the daemon
+      lifetime alongside the nodectrl channel. **No new proto and no
+      NodeEvent**: the workspace's target fingerprint already doubles
+      as the broker `sandbox_id`, so the client reaches the node with
+      what it already knows. (The S2b task note's "may need a NodeEvent
+      trigger" turned out unnecessary once the roles were inverted.)
+    - **S2c (landed): `daft workspace push` / `pull`.** Resolve the
+      cwd workspace's target node from the orchestrator catalog, open a
+      `DialBrokeredServe` relay to that node's `WorkspaceService`, and
+      run `workspace.Push` / `workspace.Pull` per dir-local mount keyed
+      by `SyncKey(uuid, in-VM target)`. Push uploads only the chunks
+      the node lacks; pull reconstructs each mount and skips read-only
+      ones (the VM can't have changed them). The deprecated chunk-sync
+      verbs (`serve`/`pull`/`attach`/`diff`) moved under
+      `daft workspace debug` to free the top-level `pull` name.
   - **S3:** Because `push` already lands the bytes in the node's own
     CAS, launch just `ApplyManifest`s each mount from that local CAS
     into a read-write host backing dir that virtiofsd serves — no
