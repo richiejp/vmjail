@@ -3219,26 +3219,28 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
 
 ## Open questions
 
-- **Dev-shell purification** (partially done): the dev shell should hold
-  *developer tooling* only (go, gofumpt, golangci-lint, buf, nix); it
-  should not pre-build product artefacts or test fixtures. *Done:* the
-  test-fixture OCI images (`DAFT_NIX_IMAGE`, `DAFT_NIX_TOOLING_IMAGE`,
-  `DAFT_NIX_FLAKE_FIXTURE`) are no longer exported/realised at shell
-  entry — `make integration` `nix build`s them fresh into `bin/` each
-  run, so they can't drift behind the daft binaries they bake in (the
-  `daft-http-fetch -proxy` staleness that kept failing
-  `TestClusterWorkspaceCachingProxy`). *Still to do:* the sandbox
-  *runtime* deps (`DAFT_KERNEL`, `DAFT_CLOUD_HYPERVISOR`,
-  `DAFT_VIRTIOFSD`, `DAFT_CRUN`, `DAFT_UROOT`) are also exported by the
-  shell purely as a convenience for `sandbox.ConfigFromEnv`. Nobody runs
+- **Dev-shell purification** (done): the dev shell holds *developer
+  tooling* only (go, gofumpt, golangci-lint, buf, nix, tmux, dash, gzip,
+  cpio); it no longer pre-builds or exports product artefacts or test
+  fixtures. The shellHook used to `export` the test-fixture OCI images
+  *and* the VM toolchain (`DAFT_KERNEL`, `DAFT_CLOUD_HYPERVISOR`,
+  `DAFT_VIRTIOFSD`, `DAFT_CRUN`, `DAFT_UROOT`/`_SRC`) as frozen store
+  paths realised at shell entry — slow entry, and the paths went stale
+  the moment a baked-in daft binary changed (the `daft-http-fetch
+  -proxy` drift that kept failing `TestClusterWorkspaceCachingProxy`).
+  Now `make integration` `nix build`s each one fresh into `bin/` (cache
+  hits when unchanged) and injects the paths for that run; `u-root-src`
+  is exposed as a flake package for the initramfs assembly. Nobody runs
   the kernel/hypervisor by hand — they're dependencies *of* the sandbox,
-  so they belong baked into a Nix-wrapped `daft-sandboxd` (via
-  `makeWrapper --set DAFT_KERNEL …`) with `ConfigFromEnv` kept as an
-  override seam for tests. That makes the product runnable without an
-  ambient environment (also a deployment prerequisite) and lets the dev
-  shell stop realising VM artefacts on entry. Bigger refactor (flake
-  packaging + how `make integration` / `daft sandbox hello` locate their
-  deps); deferred.
+  not dev tools. `sandbox.ConfigFromEnv` stays as the override seam.
+  The production `daft-sandboxd` already embeds its artefacts via
+  `//go:embed`, so it never needed the env at all — and that embedded
+  path is now covered end to end by `TestClusterEmbeddedSandboxdBoot`,
+  which boots a VM from the Nix-built bundled binary with the artefact
+  env scrubbed (proving `Extract()` works, not just the env fallback).
+  A future nicety — a `makeWrapper`-baked dev binary so a hand-run
+  `daft sandbox hello` needs no env — is optional and not tracked as
+  blocking.
 - **Authentication ergonomics**: TOFU + manual `daft auth approve` works
   for SSH-style trust but is awkward for a fleet of sandbox-hosts. When
   do we promote the orchestrator to a CA and stop bothering the user

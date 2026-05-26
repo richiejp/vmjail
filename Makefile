@@ -191,31 +191,52 @@ BUNDLE_OUT    := $(BIN_DIR)/hello-bundle
 NIX_IMAGE_OUT         := $(BIN_DIR)/nix-shell-image
 NIX_TOOLING_IMAGE_OUT := $(BIN_DIR)/nix-tooling-image
 NIX_FLAKE_FIXTURE_OUT := $(BIN_DIR)/nix-flake-fixture
+# Sandbox-VM toolchain artefacts, built fresh from the flake by
+# `build-artefacts` (nix build -o) instead of exported by the dev shell.
+# Nobody runs these by hand — they're dependencies of the sandbox build
+# (initramfs assembly) and runtime (VM boot). See PLAN.md "Dev-shell
+# purification".
+NIX_KERNEL_OUT    := $(BIN_DIR)/kernel
+NIX_CHV_OUT       := $(BIN_DIR)/cloud-hypervisor
+NIX_VIRTIOFSD_OUT := $(BIN_DIR)/virtiofsd
+NIX_CRUN_OUT      := $(BIN_DIR)/crun
+NIX_UROOT_OUT     := $(BIN_DIR)/u-root
+NIX_UROOT_SRC_OUT := $(BIN_DIR)/u-root-src
+# Real (//go:embed-bundled) daft-sandboxd, for the embedded-boot test.
+NIX_SANDBOXD_OUT  := $(BIN_DIR)/daft-sandboxd-bundled
+
+# build-artefacts realises the sandbox-VM toolchain from the flake into
+# bin/ (a cache hit when nothing changed). These used to be exported by
+# the dev shell at entry; building them here on demand keeps the shell
+# to developer tooling and stops their store paths going stale. See
+# PLAN.md "Dev-shell purification".
+build-artefacts:
+	@echo "[artefacts] nix build sandbox-VM toolchain"
+	@nix build .#kernel           -o $(NIX_KERNEL_OUT)
+	@nix build .#cloud-hypervisor -o $(NIX_CHV_OUT)
+	@nix build .#virtiofsd        -o $(NIX_VIRTIOFSD_OUT)
+	@nix build .#crun             -o $(NIX_CRUN_OUT)
+	@nix build .#u-root           -o $(NIX_UROOT_OUT)
+	@nix build .#u-root-src       -o $(NIX_UROOT_SRC_OUT)
 
 # build-initramfs assembles the sandbox-VM initramfs locally with
-# u-root, using daft-agent + crun from the dev shell. Mirrors the
-# layout produced by the flake's `initramfs` derivation (which the
-# `daft-sandboxd` build still uses).
-#
-# Requires the dev shell's DAFT_CRUN / DAFT_UROOT / DAFT_UROOT_SRC
-# env vars to be set; the recipe asserts that up front so a failed
-# build doesn't dump a confusing stack trace.
-build-initramfs: build-daft-agent
-	@: "$${DAFT_UROOT:?DAFT_UROOT not set — enter the Nix dev shell}"
-	@: "$${DAFT_UROOT_SRC:?DAFT_UROOT_SRC not set — enter the Nix dev shell}"
-	@: "$${DAFT_CRUN:?DAFT_CRUN not set — enter the Nix dev shell}"
+# u-root, using daft-agent + crun. Mirrors the layout produced by the
+# flake's `initramfs` derivation (which the `daft-sandboxd` build still
+# uses). u-root, its source, and crun come from build-artefacts.
+build-initramfs: build-daft-agent build-artefacts
 	@echo "[initramfs] assembling $(INITRAMFS_OUT)"
 	@rm -rf $(BIN_DIR)/initramfs-work && mkdir -p $(BIN_DIR)/initramfs-work
-	@cp -r --no-preserve=mode $$DAFT_UROOT_SRC/. $(BIN_DIR)/initramfs-work/
+	@cp -r --no-preserve=mode $(CURDIR)/$(NIX_UROOT_SRC_OUT)/. $(BIN_DIR)/initramfs-work/
 	@# u-root spawns `go` internally to compile cmds/core/init; it
 	@# locates the toolchain via $GOROOT/bin/go, so spell GOROOT out
 	@# explicitly (the dev shell's `go env GOROOT` resolves it).
-	@cd $(BIN_DIR)/initramfs-work && GOROOT="$$(go env GOROOT)" $$DAFT_UROOT \
+	@cd $(BIN_DIR)/initramfs-work && GOROOT="$$(go env GOROOT)" \
+		$(CURDIR)/$(NIX_UROOT_OUT)/bin/u-root \
 		-o ../initramfs.cpio \
 		-defaultsh="" \
 		-base=/dev/null \
 		-files "$(CURDIR)/$(BIN_DIR)/daft-agent:bin/daft-agent" \
-		-files "$$DAFT_CRUN:bin/crun" \
+		-files "$(CURDIR)/$(NIX_CRUN_OUT)/bin/crun:bin/crun" \
 		-uinitcmd=/bin/daft-agent \
 		./cmds/core/init
 	@gzip -f -n $(BIN_DIR)/initramfs.cpio
@@ -233,25 +254,26 @@ build-hello-bundle: build-daft-hello-container
 	@cp contrib/hello-bundle/config.json $(BUNDLE_OUT)/config.json
 
 # integration-build prepares everything `make integration` needs to
-# run. The slow-moving binaries are already on disk from the dev
-# shell; only the per-commit artefacts have to be built.
+# run, all built fresh from the flake (cache hits when unchanged) so
+# nothing depends on dev-shell-exported paths: the VM toolchain
+# (build-artefacts, via build-initramfs), the local initramfs/bundle,
+# the test-fixture OCI images, and the //go:embed-bundled daft-sandboxd
+# the embedded-boot test exercises. See PLAN.md "Dev-shell purification".
 integration-build: build-initramfs build-hello-bundle
-	@: "$${DAFT_CLOUD_HYPERVISOR:?DAFT_CLOUD_HYPERVISOR not set — enter the Nix dev shell}"
-	@: "$${DAFT_KERNEL:?DAFT_KERNEL not set — enter the Nix dev shell}"
-	@: "$${DAFT_VIRTIOFSD:?DAFT_VIRTIOFSD not set — enter the Nix dev shell}"
-	@# Build the test-fixture OCI images fresh from the flake every
-	@# run (cache hit when unchanged) so the binaries they bake in —
-	@# daft-http-fetch et al. — can't drift behind the source the way
-	@# a frozen shell-entry path did. See PLAN.md "Dev-shell purification".
-	@echo "[images] nix build test-fixture images"
+	@echo "[images] nix build test-fixture images + bundled daft-sandboxd"
 	@nix build .#nix-shell-image    -o $(NIX_IMAGE_OUT)
 	@nix build .#nix-tooling-image  -o $(NIX_TOOLING_IMAGE_OUT)
 	@nix build .#d6c1-flake-fixture -o $(NIX_FLAKE_FIXTURE_OUT)
+	@nix build .#daft-sandboxd      -o $(NIX_SANDBOXD_OUT)
 
 integration: integration-build
 	@echo "[e2e] booting real VMs against /dev/kvm..."
 	@DAFT_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT) \
 		DAFT_BUNDLE=$(CURDIR)/$(BUNDLE_OUT) \
+		DAFT_KERNEL=$(CURDIR)/$(NIX_KERNEL_OUT)/bzImage \
+		DAFT_CLOUD_HYPERVISOR=$(CURDIR)/$(NIX_CHV_OUT)/bin/cloud-hypervisor \
+		DAFT_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd \
+		DAFT_SANDBOXD_BUNDLED_BIN=$(CURDIR)/$(NIX_SANDBOXD_OUT)/bin/daft-sandboxd \
 		DAFT_NIX_IMAGE=$$(realpath $(NIX_IMAGE_OUT)) \
 		DAFT_NIX_TOOLING_IMAGE=$$(realpath $(NIX_TOOLING_IMAGE_OUT)) \
 		DAFT_NIX_FLAKE_FIXTURE=$$(realpath $(NIX_FLAKE_FIXTURE_OUT)) \

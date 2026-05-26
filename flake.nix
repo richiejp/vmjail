@@ -88,15 +88,6 @@
               # convention as the KVM-required integration tests).
               tmux
               dash
-            ] ++ [
-              # The slow-moving artefacts as build inputs so their
-              # store paths are realised when the shell starts and
-              # stay alive as long as the shell exists.
-              cloud-hypervisor
-              kernel
-              virtiofsd
-              crun
-              u-root
             ];
 
             shellHook = ''
@@ -109,26 +100,20 @@
               # shell isn't a Nix build sandbox; /tmp is fine.
               export TMPDIR=/tmp
 
-              # Pin the artefact paths that `make integration` consumes.
-              # Updating any of these requires editing the corresponding
-              # derivation in flake.nix; the path stays stable across
-              # commits otherwise.
-              export DAFT_CLOUD_HYPERVISOR="${cloud-hypervisor}/bin/cloud-hypervisor"
-              export DAFT_KERNEL="${kernel}/bzImage"
-              export DAFT_VIRTIOFSD="${virtiofsd}/bin/virtiofsd"
-              export DAFT_CRUN="${crun}/bin/crun"
-              export DAFT_UROOT="${u-root}/bin/u-root"
-              export DAFT_UROOT_SRC="${uRootSrc}"
-              # NOTE: the test-fixture OCI images (DAFT_NIX_IMAGE,
-              # DAFT_NIX_TOOLING_IMAGE, DAFT_NIX_FLAKE_FIXTURE) are
-              # deliberately NOT exported here. They bake in daft Go
-              # binaries (e.g. daft-http-fetch), so a frozen
-              # shell-entry path goes stale the moment that source
-              # changes. `make integration` now `nix build`s them
-              # fresh into bin/ each run; for a bare `go test
-              # -tags=integration` the test prints the exact
-              # `nix build .#<image> -o bin/<image>` to run. See
-              # PLAN.md "Dev-shell purification".
+              # NOTE: the dev shell exports NO sandbox artefacts. The VM
+              # toolchain (cloud-hypervisor, kernel, virtiofsd, crun,
+              # u-root) and the test-fixture OCI images are not developer
+              # tools — nobody runs the kernel at a prompt; they're
+              # dependencies *of* the sandbox. Exporting them here forced
+              # a build of every artefact at shell entry and froze their
+              # store paths, which went stale the moment a baked-in daft
+              # binary changed. `make integration` now `nix build`s each
+              # one fresh into bin/ and injects the paths for that run; a
+              # bare `go test -tags=integration` skips with a hint naming
+              # the exact `nix build .#<pkg> -o bin/<pkg>` to run. The
+              # production daft-sandboxd embeds its artefacts via
+              # //go:embed, so it never needed these either. See PLAN.md
+              # "Dev-shell purification".
 
               echo "darkaifactory dev shell ready (version ${version})"
               echo "  make fmt          - format Go code"
@@ -142,6 +127,13 @@
 
         packages = rec {
           default = daft;
+
+          # u-root-src exposes the pinned u-root submodule source as a
+          # buildable package so `make integration` can `nix build` it
+          # into bin/ (the raw fetchGit result is not a valid flake
+          # package output — same reason goSrc isn't one). build-initramfs
+          # runs u-root against this tree.
+          u-root-src = pkgs.runCommand "u-root-src" { } "cp -r ${uRootSrc} $out";
 
           # goSrc is the project source as Go's tooling sees it. We
           # drop the whole third_party/ tree — none of it is reachable
@@ -429,7 +421,7 @@
             pname = "daft-sandboxd";
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-8YS/GSe85WpSdhgNU9PdPUcmPH3GljNT2s0NuF3akXQ=";
+            vendorHash = "sha256-dxtYE59zlJS56XoPExikTezIQGesl5YWTNESBmPcy8M=";
             env.CGO_ENABLED = "0";
 
             # Stage the real artifacts into internal/bundled/assets/

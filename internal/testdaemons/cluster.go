@@ -144,8 +144,16 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		fn(&o)
 	}
 
-	requireSandboxArtefacts(t)
+	// The bundled binary carries its artefacts embedded, so it needs
+	// neither the artefact env vars nor (below) a go-built binary.
+	if o.bundledSandboxd == "" {
+		requireSandboxArtefacts(t)
+	}
 	bins := ensureBinaries(t)
+	sandboxdBin := bins.sandboxd
+	if o.bundledSandboxd != "" {
+		sandboxdBin = o.bundledSandboxd
+	}
 
 	base := t.TempDir()
 	orchDir := mkConfigDir(t, base, "orch")
@@ -170,7 +178,7 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	orchOut := newOutputCapture(t, "daft-orchestrator")
 	sbxOut := newOutputCapture(t, "daft-sandboxd")
 
-	startDaemon(t, orchOut, nil, bins.orchestrator,
+	startDaemon(t, orchOut, nil, nil, bins.orchestrator,
 		"serve", "--addr", addr, "--config-dir", orchDir)
 	waitForTCP(t, addr, daemonReadyTimeout)
 
@@ -197,7 +205,18 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		}
 	}
 
-	startDaemon(t, sbxOut, sbxEnv, bins.sandboxd,
+	var sbxScrub []string
+	if o.bundledSandboxd != "" {
+		// serve still calls ConfigFromEnv at startup, which demands the
+		// artefact vars be non-empty — but the bundled binary's Extract()
+		// returns the //go:embed'd artefacts and ignores them. Drop the
+		// real (Makefile-injected) paths and substitute bogus ones: the
+		// VM can boot only if extraction won; if embedding were broken,
+		// the env fallback would hit these invalid paths and fail.
+		sbxScrub = artefactEnvKeys
+		sbxEnv = append(sbxEnv, bogusArtefactEnv...)
+	}
+	startDaemon(t, sbxOut, sbxEnv, sbxScrub, sandboxdBin,
 		"serve", "--orchestrator", url, "--config-dir", sbxDir)
 	// Sandboxd registration is asynchronous — the test asserts on
 	// daft node list output to decide when registration completed.
@@ -220,6 +239,10 @@ type ClusterOption func(*clusterOpts)
 
 type clusterOpts struct {
 	egressProxy bool
+	// bundledSandboxd, when set, runs that daft-sandboxd binary instead
+	// of the locally go-built one AND scrubs the artefact env vars from
+	// its environment, forcing it onto the //go:embed-bundled artefacts.
+	bundledSandboxd string
 }
 
 // WithEgressProxy makes the cluster run the in-stack egress proxy:
@@ -229,6 +252,40 @@ type clusterOpts struct {
 // or VIP — just the DAFT_EGRESS_PROXY* env that NewCluster sets.
 func WithEgressProxy() ClusterOption {
 	return func(o *clusterOpts) { o.egressProxy = true }
+}
+
+// WithBundledSandboxd runs the real, //go:embed-bundled daft-sandboxd
+// at binPath (the `nix build .#daft-sandboxd` output) instead of the
+// locally go-built binary, with the artefact env vars pointed at bogus
+// paths. The bundled binary's Extract() returns the embedded artefacts
+// and ignores the env, so a VM boots only if extraction won — if the
+// embedding were broken, the env fallback would hit the bogus paths and
+// fail. This turns a normal cluster test into a proof of the production
+// embed path.
+func WithBundledSandboxd(binPath string) ClusterOption {
+	return func(o *clusterOpts) { o.bundledSandboxd = binPath }
+}
+
+// artefactEnvKeys are the sandbox-artefact env vars dropped from a
+// bundled sandboxd's inherited environment (then replaced by
+// bogusArtefactEnv). Kept in sync with the keys requireSandboxArtefacts
+// demands of the env path.
+//
+//nolint:gochecknoglobals // immutable lookup list shared by the harness.
+var artefactEnvKeys = []string{
+	"DAFT_INITRAMFS", "DAFT_KERNEL", "DAFT_VIRTIOFSD", "DAFT_CLOUD_HYPERVISOR",
+}
+
+// bogusArtefactEnv gives the bundled sandboxd non-empty (so
+// ConfigFromEnv passes) but invalid artefact paths, so only the
+// embedded-extraction path can produce a bootable VM.
+//
+//nolint:gochecknoglobals // immutable fixture shared by the harness.
+var bogusArtefactEnv = []string{
+	"DAFT_CLOUD_HYPERVISOR=/nonexistent/daft-embed-test/cloud-hypervisor",
+	"DAFT_KERNEL=/nonexistent/daft-embed-test/bzImage",
+	"DAFT_INITRAMFS=/nonexistent/daft-embed-test/initramfs.cpio.gz",
+	"DAFT_VIRTIOFSD=/nonexistent/daft-embed-test/virtiofsd",
 }
 
 // binaries holds absolute paths to the freshly-built daft, daft-
@@ -312,6 +369,25 @@ func repoRoot() (string, error) {
 	return filepath.Dir(modPath), nil
 }
 
+// scrubEnv returns env with any "KEY=value" entry whose KEY is in keys
+// removed. Used to deny the bundled sandboxd its artefact env fallback
+// so the test exercises the embedded path or fails.
+func scrubEnv(env, keys []string) []string {
+	drop := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		drop[k] = struct{}{}
+	}
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if _, ok := drop[name]; ok {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // requireSandboxArtefacts fatals if the env vars the daft-
 // sandboxd binary needs to start are not set. Without them
 // sandboxd would exit ~10ms after spawn and the test would only
@@ -389,12 +465,16 @@ func freeLoopbackAddr(t *testing.T) string {
 // and registers a Cleanup that SIGTERMs the whole group then
 // Waits with a bounded delay. Pdeathsig=SIGKILL means a crashed
 // test process can't leak the daemon even if Cleanup never runs.
-func startDaemon(t *testing.T, out *outputCapture, extraEnv []string, prog string, args ...string) *exec.Cmd {
+func startDaemon(t *testing.T, out *outputCapture, extraEnv, scrub []string, prog string, args ...string) *exec.Cmd {
 	t.Helper()
 	//nolint:gosec // G204: prog + args are caller-controlled test-only paths.
 	cmd := exec.Command(prog, args...)
-	if len(extraEnv) > 0 {
-		cmd.Env = append(os.Environ(), extraEnv...)
+	if len(extraEnv) > 0 || len(scrub) > 0 {
+		base := os.Environ()
+		if len(scrub) > 0 {
+			base = scrubEnv(base, scrub)
+		}
+		cmd.Env = append(base, extraEnv...)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid:   true,
