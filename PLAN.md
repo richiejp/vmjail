@@ -3398,6 +3398,21 @@ an opt-in "nested"/"privileged" workspace profile is the obvious follow-up
 (the kernel always building KVM in is fine, but the per-container bind +
 device rule should be conditional).
 
+## Build & test tooling (2026-05-27)
+
+- `make dev` builds every real artefact in the Nix dev shell (Go binaries +
+  VM toolchain + initramfs + bundle), so it reproduces the full build inside
+  a sandbox carrying the same shell. `integration-build` now builds on `dev`
+  (one real-artefact build path) and adds only the e2e test fixtures.
+- Two-tier build gate: the **pre-commit** hook (`make verify`) builds `dev`
+  via `go build` + Make recipes (fast; the vendored toolchain is a nix cache
+  hit). The **pre-push** hook + `validate-build.yml` run `nix flake check`,
+  which builds every flake output via its Nix derivation — the release path
+  the `go build`/Make recipes run parallel to and therefore don't exercise.
+- `goSrc`/`mkDaftBinary` moved out of the flake's `packages` into the outer
+  `let` (they are a source and a function, not derivations) so `nix flake
+  check`, which type-checks every `packages` output as a derivation, passes.
+
 ## How to update this plan
 
 When you (human or agent) change direction, finish a milestone, or surface a

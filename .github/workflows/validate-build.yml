@@ -15,7 +15,15 @@ jobs:
         uses: DeterminateSystems/flake-checker-action@v12
       - name: Install Nix
         uses: DeterminateSystems/determinate-nix-action@v3.19.0
-      - name: Build default package
-        run: nix build
-      - name: Run version
-        run: result/bin/daft version
+      # nix flake check builds every flake package output — the Go
+      # binaries, the VM toolchain (kernel/CH/virtiofsd/crun/u-root),
+      # initramfs, hello-bundle, the bundled daft-sandboxd, and the
+      # test-fixture images — and evaluates the flake's checks. This
+      # gates the full release build, which `make verify` (pre-commit)
+      # does not: that path builds our Go code via `go build` + Make
+      # recipes parallel to the Nix derivations. Mirrors the pre-push
+      # hook (scripts/hooks/pre-push).
+      - name: Build all flake outputs
+        run: nix flake check -L
+      - name: Smoke-test daft binary
+        run: nix build && result/bin/daft version

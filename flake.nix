@@ -37,6 +37,61 @@
         cloudHypervisorSrc = fetchSubmodule "cloud-hypervisor";
         virtiofsdSrc = fetchSubmodule "virtiofsd";
         crunSrc = fetchSubmodule "crun";
+
+        # goSrc is the project source as Go's tooling sees it. We
+        # drop the whole third_party/ tree — none of it is reachable
+        # from our Go build, and including it would (a) drag the
+        # ~1.9 GB linux + u-root checkouts into every flake eval, and
+        # (b) re-introduce the stray Go file in third_party/crun's
+        # libocispec/runtime-spec/schema/ that pulls in a module dep
+        # we don't want in go.sum. The kernel-config fragment and
+        # submodule-revs.json under third_party/ are read by other
+        # derivations directly, not via goSrc. Lives in the `let`
+        # rather than under `packages` because it is a source, not a
+        # derivation, and `nix flake check` type-checks every
+        # `packages` output as a derivation.
+        goSrc = pkgs.lib.cleanSourceWith {
+          src = ./.;
+          filter = path: _type:
+            let rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
+            in !(pkgs.lib.hasPrefix "third_party/" rel);
+        };
+
+        # mkDaftBinary builds one of our cmd/ binaries from the repo's
+        # go.mod. Shared so vendorHash stays defined once — otherwise
+        # it drifts the next time go.mod changes.
+        #
+        # Update vendorHash with `nix build` when go.mod changes; Nix
+        # prints the new value in the error.
+        # All Go binaries default to CGO_ENABLED=0 so we ship static
+        # ELFs that run on any libc. Pure Go has no libc dependency
+        # to begin with; CGO=0 just makes that explicit and prevents
+        # accidental dynamic-link via a future cgo import. Lives in the
+        # `let` rather than under `packages` because it is a function,
+        # not a derivation (see goSrc note re: `nix flake check`).
+        mkDaftBinary = {
+          name,
+          subPackage,
+          description,
+          cgoEnabled ? false,
+          platforms ? pkgs.lib.platforms.unix,
+        }: pkgs.buildGoModule {
+          pname = name;
+          inherit version;
+          src = goSrc;
+          vendorHash = "sha256-dxtYE59zlJS56XoPExikTezIQGesl5YWTNESBmPcy8M=";
+          env.CGO_ENABLED = if cgoEnabled then "1" else "0";
+          ldflags = [
+            "-s" "-w"
+            "-X github.com/localai-org/darkaifactory/internal/version.Version=${version}"
+          ];
+          subPackages = [ subPackage ];
+          meta = with pkgs.lib; {
+            inherit description platforms;
+            license = licenses.mit;
+            maintainers = [ ];
+          };
+        };
       in
       {
         devShells.default =
@@ -131,59 +186,11 @@
           # u-root-src exposes the pinned u-root submodule source as a
           # buildable package so `make integration` can `nix build` it
           # into bin/ (the raw fetchGit result is not a valid flake
-          # package output — same reason goSrc isn't one). build-initramfs
-          # runs u-root against this tree.
+          # package output). build-initramfs runs u-root against this
+          # tree. (goSrc + mkDaftBinary live in the outer `let` — they
+          # are a source and a function, not derivations, so they can't
+          # be `packages` outputs without failing `nix flake check`.)
           u-root-src = pkgs.runCommand "u-root-src" { } "cp -r ${uRootSrc} $out";
-
-          # goSrc is the project source as Go's tooling sees it. We
-          # drop the whole third_party/ tree — none of it is reachable
-          # from our Go build, and including it would (a) drag the
-          # ~1.9 GB linux + u-root checkouts into every flake eval, and
-          # (b) re-introduce the stray Go file in third_party/crun's
-          # libocispec/runtime-spec/schema/ that pulls in a module dep
-          # we don't want in go.sum. The kernel-config fragment and
-          # submodule-revs.json under third_party/ are read by other
-          # derivations directly, not via goSrc.
-          goSrc = pkgs.lib.cleanSourceWith {
-            src = ./.;
-            filter = path: _type:
-              let rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
-              in !(pkgs.lib.hasPrefix "third_party/" rel);
-          };
-
-          # mkDaftBinary builds one of our two cmd/ binaries from the
-          # repo's go.mod. Shared so vendorHash stays defined once —
-          # otherwise it drifts the next time go.mod changes.
-          #
-          # Update vendorHash with `nix build` when go.mod changes; Nix
-          # prints the new value in the error.
-          # All Go binaries default to CGO_ENABLED=0 so we ship static
-          # ELFs that run on any libc. Pure Go has no libc dependency
-          # to begin with; CGO=0 just makes that explicit and prevents
-          # accidental dynamic-link via a future cgo import.
-          mkDaftBinary = {
-            name,
-            subPackage,
-            description,
-            cgoEnabled ? false,
-            platforms ? pkgs.lib.platforms.unix,
-          }: pkgs.buildGoModule {
-            pname = name;
-            inherit version;
-            src = goSrc;
-            vendorHash = "sha256-dxtYE59zlJS56XoPExikTezIQGesl5YWTNESBmPcy8M=";
-            env.CGO_ENABLED = if cgoEnabled then "1" else "0";
-            ldflags = [
-              "-s" "-w"
-              "-X github.com/localai-org/darkaifactory/internal/version.Version=${version}"
-            ];
-            subPackages = [ subPackage ];
-            meta = with pkgs.lib; {
-              inherit description platforms;
-              license = licenses.mit;
-              maintainers = [ ];
-            };
-          };
 
           daft = mkDaftBinary {
             name = "daft";

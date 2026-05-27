@@ -1,4 +1,4 @@
-.PHONY: all check check-submodule-revs verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-initramfs build-hello-bundle integration integration-build proto clean help
+.PHONY: all check check-submodule-revs verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build proto clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -35,12 +35,19 @@ check: check-fmt check-submodule-revs lint test cover-check
 check-submodule-revs:
 	@scripts/check-submodule-revs.sh
 
-# verify is the full gate set used by the pre-commit hook. Active
+# verify is the full gate set used by the pre-commit hook. `dev`
+# builds every real artefact (Go binaries + VM toolchain + initramfs +
+# bundle) so a broken full build fails the commit, not just CI. Active
 # fuzzing runs with a tight 1s/target budget — enough to catch a
 # crash that's deterministic from the seed corpus, not enough to
 # delay commits significantly. Manual / nightly fuzzing uses
 # `make fuzz` (default 30s/target).
-verify: check integration bench-check
+#
+# verify does NOT run `nix flake check` — that builds our Go binaries
+# and initramfs/bundle via their Nix derivations (a path parallel to
+# the `go build`/Make recipes `dev` uses), which is the slow cold
+# build. That gate lives in the pre-push hook + CI instead.
+verify: check dev integration bench-check
 	@FUZZ_TIME=1s scripts/fuzz.sh
 
 help:
@@ -59,8 +66,9 @@ help:
 	@echo "  fuzz        - run every FuzzXxx target (FUZZ_TIME, default 30s, per target)"
 	@echo "  integration - build initramfs + bundle locally, run e2e tests (real VM boot)"
 	@echo "  proto       - regenerate Go code from proto/*.proto"
-	@echo "  hooks       - install git pre-commit hook into .git/hooks"
+	@echo "  hooks       - install git pre-commit (make verify) + pre-push (nix flake check) hooks into .git/hooks"
 	@echo "  build       - build daft, daft-agent, daft-sandboxd, daft-orchestrator into ./bin/ (dev only)"
+	@echo "  dev         - build everything in the dev shell: Go binaries + VM toolchain (kernel/CH/virtiofsd/crun/u-root) + initramfs + bundle"
 
 ## Formatting ----------------------------------------------------------------
 
@@ -253,13 +261,15 @@ build-hello-bundle: build-daft-hello-container
 	@chmod +x $(BUNDLE_OUT)/rootfs/hello
 	@cp contrib/hello-bundle/config.json $(BUNDLE_OUT)/config.json
 
-# integration-build prepares everything `make integration` needs to
-# run, all built fresh from the flake (cache hits when unchanged) so
-# nothing depends on dev-shell-exported paths: the VM toolchain
-# (build-artefacts, via build-initramfs), the local initramfs/bundle,
-# the test-fixture OCI images, and the //go:embed-bundled daft-sandboxd
-# the embedded-boot test exercises. See PLAN.md "Dev-shell purification".
-integration-build: build-initramfs build-hello-bundle
+# integration-build = `dev` (every real artefact) plus the test-only
+# fixtures the e2e suite mounts: the OCI fixture images, the flake
+# fixture, and the //go:embed-bundled daft-sandboxd the embedded-boot
+# test exercises. Building on `dev` keeps it as the single real-artefact
+# build path so `make dev` and the e2e suite produce the same things,
+# rather than maintaining a parallel artefact list here. Fixtures come
+# fresh from the flake (cache hits when unchanged). See PLAN.md
+# "Dev-shell purification".
+integration-build: dev
 	@echo "[images] nix build test-fixture images + bundled daft-sandboxd"
 	@nix build .#nix-shell-image    -o $(NIX_IMAGE_OUT)
 	@nix build .#nix-tooling-image  -o $(NIX_TOOLING_IMAGE_OUT)
@@ -285,7 +295,9 @@ hooks:
 	@mkdir -p .git/hooks
 	@cp scripts/hooks/pre-commit .git/hooks/pre-commit
 	@chmod +x .git/hooks/pre-commit
-	@echo "Installed .git/hooks/pre-commit"
+	@cp scripts/hooks/pre-push .git/hooks/pre-push
+	@chmod +x .git/hooks/pre-push
+	@echo "Installed .git/hooks/pre-commit + .git/hooks/pre-push"
 
 ## Building ------------------------------------------------------------------
 
@@ -301,6 +313,20 @@ hooks:
 #     for any release artefact.
 
 build: build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator
+
+# dev builds every artefact daft produces, entirely within the Nix
+# dev shell: the host-side Go binaries (build), the sandbox-VM
+# toolchain (build-artefacts: kernel, cloud-hypervisor, virtiofsd,
+# crun, u-root), and the assembled VM initramfs + hello-bundle. The
+# point is a single target that reproduces the full build inside a
+# sandbox — which carries the same dev shell — so `nix develop` then
+# `make dev` builds the lot.
+#
+# Note: `build` produces a daft-sandboxd with STUB embedded artefacts
+# (see the `build` target). For a runnable, asset-embedded sandboxd,
+# use `nix build .#daft-sandboxd` (what `make integration-build` does).
+dev: build build-artefacts build-initramfs build-hello-bundle
+	@echo "[dev] full build complete — artefacts under $(BIN_DIR)/"
 
 build-daft:
 	@mkdir -p $(BIN_DIR)
