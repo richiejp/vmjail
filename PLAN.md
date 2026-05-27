@@ -3380,6 +3380,24 @@ and the boot cmdline gains `cgroup_no_v1=all` so u-root's v1 controller
 mounts fail-soft, leaving every controller for v2. crun then runs under v2
 (eBPF device controller via `CONFIG_CGROUP_BPF`).
 
+### Nested virtualisation
+
+The sandbox VM is itself a KVM host so its containers can boot nested VMs —
+needed to develop and test darkaifactory inside a daft sandbox (`make
+integration` boots real VMs against `/dev/kvm`). `daft.config` enables
+`CONFIG_KVM`/`KVM_INTEL`/`KVM_AMD` (built-in; `/dev/kvm` appears via
+devtmpfs), and `runtimespec.go` bind-mounts the VM's `/dev/kvm` into the
+container plus a `10:232` cgroup device-allow (crun's default v2 eBPF device
+filter EPERMs the open otherwise). Cloud Hypervisor already passes the VMX
+CPUID bit through (`--cpus nested` defaults on). Verified by
+`TestClusterNestedKVMProbe` (`KVM_CREATE_VM` succeeds inside a container).
+
+Currently **unconditional** — every container gets `/dev/kvm` + the
+device-allow. That is a real privilege/attack-surface bump; gating it behind
+an opt-in "nested"/"privileged" workspace profile is the obvious follow-up
+(the kernel always building KVM in is fine, but the per-container bind +
+device rule should be conditional).
+
 ## How to update this plan
 
 When you (human or agent) change direction, finish a milestone, or surface a

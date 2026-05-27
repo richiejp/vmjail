@@ -63,8 +63,27 @@ type runtimeMount struct {
 
 type runtimeLinuxConfig struct {
 	Namespaces    []runtimeNamespace `json:"namespaces"`
+	Resources     *runtimeResources  `json:"resources,omitempty"`
 	MaskedPaths   []string           `json:"maskedPaths"`
 	ReadonlyPaths []string           `json:"readonlyPaths"`
+}
+
+// runtimeResources carries the cgroup resource limits. We only populate
+// the device controller, to let the container open the bind-mounted
+// /dev/kvm — crun's default cgroup-v2 eBPF device filter denies anything
+// outside the standard set, so a bind mount alone is not enough.
+type runtimeResources struct {
+	Devices []runtimeDeviceCgroup `json:"devices,omitempty"`
+}
+
+// runtimeDeviceCgroup is one cgroup device rule. Type/Major/Minor are
+// omitted to mean "all" per the OCI spec.
+type runtimeDeviceCgroup struct {
+	Allow  bool   `json:"allow"`
+	Type   string `json:"type,omitempty"`
+	Major  *int64 `json:"major,omitempty"`
+	Minor  *int64 `json:"minor,omitempty"`
+	Access string `json:"access,omitempty"`
 }
 
 type runtimeNamespace struct {
@@ -168,6 +187,8 @@ func mergeEnv(base, overlay []string) []string {
 	return out
 }
 
+func int64Ptr(v int64) *int64 { return &v }
+
 func firstNonEmpty(primary, secondary, fallback string) string {
 	if primary != "" {
 		return primary
@@ -234,6 +255,14 @@ func defaultRuntimeLinuxConfig() runtimeLinuxConfig {
 			{Type: "mount"},
 			{Type: "cgroup"},
 		},
+		// Nested virt: allow char device 10:232 (/dev/kvm) so the
+		// container may open the bind-mounted node. Without an explicit
+		// allow, crun's default cgroup-v2 device filter EPERMs the open.
+		Resources: &runtimeResources{
+			Devices: []runtimeDeviceCgroup{
+				{Allow: true, Type: "c", Major: int64Ptr(10), Minor: int64Ptr(232), Access: "rwm"},
+			},
+		},
 		MaskedPaths: []string{
 			"/proc/kcore", "/proc/keys", "/proc/latency_stats",
 			"/proc/timer_list", "/proc/sched_debug",
@@ -251,6 +280,8 @@ const (
 	mountOptNodev   = "nodev"
 	mountTypeTmpfs  = "tmpfs"
 	mountTypeDevpts = "devpts"
+	mountTypeBind   = "bind"
+	mountOptBind    = "bind"
 )
 
 // defaultRuntimeMounts mirrors contrib/hello-bundle/config.json. Kept
@@ -283,6 +314,15 @@ func defaultRuntimeMounts() []runtimeMount {
 		{
 			Destination: "/dev/pts", Type: mountTypeDevpts, Source: mountTypeDevpts,
 			Options: []string{mountOptNosuid, "noexec", "newinstance", "ptmxmode=0666", "mode=0620"},
+		},
+		// Nested virt: bind the VM's /dev/kvm into the container.
+		// devtmpfs in the VM exposes /dev/kvm once the guest kernel has
+		// CONFIG_KVM built in; the container's /dev is a fresh tmpfs, so
+		// without this bind the node is absent. Paired with the 10:232
+		// cgroup device-allow in defaultRuntimeLinuxConfig.
+		{
+			Destination: "/dev/kvm", Type: mountTypeBind, Source: "/dev/kvm",
+			Options: []string{mountOptBind, "rw"},
 		},
 		{
 			Destination: "/sys", Type: "sysfs", Source: "sysfs",

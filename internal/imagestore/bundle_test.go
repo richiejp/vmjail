@@ -152,7 +152,7 @@ func TestBundleAppliesExtraMounts(t *testing.T) {
 		ExtraMounts: []BundleMount{
 			{
 				Destination: "/workspace",
-				Type:        "bind",
+				Type:        mountTypeBind,
 				Source:      "/workspace",
 				Options:     []string{"rbind", "rw"},
 			},
