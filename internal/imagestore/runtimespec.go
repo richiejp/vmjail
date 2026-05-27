@@ -1,6 +1,7 @@
 package imagestore
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -308,6 +309,14 @@ func writeJSON(path string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return fmt.Errorf("imagestore: marshal %s: %w", path, err)
+	}
+	// Skip the rewrite when the on-disk bytes already match: callers
+	// re-Bundle the same image+opts and rely on config.json staying
+	// untouched (TestBundleIsIdempotent), so an unconditional
+	// write-and-rename would needlessly bump mtime.
+	// #nosec G304 — path is an internal, caller-constructed bundle path.
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, b) {
+		return nil
 	}
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o644); err != nil {
