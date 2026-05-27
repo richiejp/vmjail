@@ -494,12 +494,13 @@
           '';
 
           # Linux kernel for the sandbox VM, built from the pinned
-          # submodule with our defconfig fragment merged on top of the
-          # x86_64 defconfig. Output: bzImage (suitable for Cloud
-          # Hypervisor PVH or bzImage boot).
+          # submodule. Config is assembled from the ground up — tinyconfig
+          # + kvm_guest + our microvm/daft/hardening fragments (see
+          # configurePhase) — not from defconfig. Output: bzImage (suitable
+          # for Cloud Hypervisor PVH or bzImage boot).
           kernel = pkgs.stdenv.mkDerivation {
             pname = "linux-daft";
-            version = "6.19.14";
+            version = "7.0.10";
 
             src = linuxSrc;
 
@@ -518,7 +519,35 @@
               rsync
               zstd
               python3
+              # LLVM toolchain for the *target* kernel: enables KCFI
+              # (CONFIG_CFI, forward-edge control-flow integrity — gcc can't do
+              # this) and trivial cross-compile (one clang targets every arch).
+              # Use the UNWRAPPED clang: the Nix cc-wrapper injects
+              # -nostdlibinc and mishandles the kernel's --target triple, which
+              # breaks the build; the kernel target compile is freestanding
+              # (-nostdinc/-ffreestanding) and only needs clang's own
+              # resource-dir headers, so the wrapper buys us nothing here.
+              llvmPackages.clang-unwrapped
+              lld
+              llvm
             ];
+
+            # Build the *target* kernel with the LLVM toolchain (clang +
+            # ld.lld + llvm-* binutils) to enable KCFI (CONFIG_CFI) and get
+            # trivial cross-compile, while leaving the *host* tools (objtool,
+            # modpost, fixdep) on gcc. A blanket LLVM=1 would also force
+            # HOSTCC=clang, and the Nix clang wrapper misbehaves on the
+            # kernel's `--target=x86_64-linux-gnu` (it expects the
+            # `-unknown-linux-gnu` triple), dropping nativeBuildInput include
+            # paths so host tools can't find e.g. <gelf.h>. The gcc host
+            # wrapper has no such issue. $kmakeTools is expanded into every
+            # `make` in the phases below.
+            kmakeTools = "CC=clang LD=ld.lld AR=llvm-ar NM=llvm-nm STRIP=llvm-strip OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump READELF=llvm-readelf HOSTCC=gcc";
+
+            # The Nix cc-wrapper injects hardening/stack-protector flags that
+            # collide with the kernel's own flag management (gcc host tools);
+            # the kernel sets exactly the flags it wants via Kconfig.
+            hardeningDisable = [ "all" ];
 
             # Some kernel build steps look for /usr/bin/env or /usr/bin/perl
             # via shebangs; let Nix patch them.
@@ -528,11 +557,22 @@
 
             configurePhase = ''
               runHook preConfigure
-              make x86_64_defconfig
-              cat ${./third_party/kernel-config/daft.config} >> .config
-              # Fold the fragment options into a coherent .config (sets
-              # defaults for any new dependencies, drops obsolete keys).
-              make olddefconfig
+              # Build the config from the ground up rather than from a
+              # bloated defconfig: tinyconfig (allnoconfig + tiny.config) is
+              # the minimal base, then merge_config.sh folds the fragments in
+              # order — upstream KVM-guest essentials, our microvm base (re-add
+              # what tinyconfig drops + trim), daft features, and KSPP
+              # hardening last so it wins. allnoconfig sets CONFIG_EXPERT, which
+              # is what lets the fragments turn off otherwise-forced symbols
+              # (e.g. io_uring). -m merges without running conf; olddefconfig
+              # then resolves dependencies and new-symbol defaults.
+              make $kmakeTools tinyconfig
+              ./scripts/kconfig/merge_config.sh -m -O . .config \
+                kernel/configs/kvm_guest.config \
+                ${./third_party/kernel-config/microvm-base.config} \
+                ${./third_party/kernel-config/daft.config} \
+                ${./third_party/kernel-config/microvm-hardening.config}
+              make $kmakeTools olddefconfig
               # `make olddefconfig` has been observed to silently drop
               # CONFIG_TUN between otherwise-identical builds (same
               # source, same fragment, different output) — likely a
@@ -541,14 +581,14 @@
               # can't open /dev/net/tun and every egress test fails
               # with ENETUNREACH.
               ./scripts/config --enable TUN
-              make olddefconfig
+              make $kmakeTools olddefconfig
               grep -q '^CONFIG_TUN=y$' .config || (echo "kernel: CONFIG_TUN missing after olddefconfig" >&2; exit 1)
               runHook postConfigure
             '';
 
             buildPhase = ''
               runHook preBuild
-              make -j$NIX_BUILD_CORES bzImage
+              make $kmakeTools -j$NIX_BUILD_CORES bzImage
               runHook postBuild
             '';
 

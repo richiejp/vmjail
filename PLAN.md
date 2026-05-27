@@ -3345,6 +3345,41 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Highlights:
   *inside* the VM — first-come-first-served on the driver, or do
   we expose a queue?
 
+## Sandbox VM platform (2026-05-27)
+
+The sandbox-VM kernel and its cgroup layout were reworked together — the
+kernel is now built minimal-and-hardened from the ground up, and the VM runs
+containers under cgroup v2.
+
+### Kernel: microvm config + clang/CFI + KSPP hardening
+
+- Built from `tinyconfig` + `kernel/configs/kvm_guest.config` +
+  `microvm-base.config` (re-add the essentials allnoconfig drops + trim
+  bloat) + `daft.config` (features) + `microvm-hardening.config` (KSPP),
+  merged via `merge_config.sh` in the flake's kernel derivation — not
+  `defconfig`. Result ~3.5 MB bzImage (vs ~14.7 MB defconfig). Linux 7.0.10.
+- Built with **clang** (`CC=clang`, host tools on gcc) for KCFI
+  (`CONFIG_CFI`) and, with `X86_KERNEL_IBT`, **FineIBT** — forward-edge CFI
+  gcc can't do.
+- KSPP hardening: KASLR, full SLUB + freelist hardening, RANDOM_KMALLOC_CACHES,
+  INIT_ON_ALLOC, FORTIFY_SOURCE, HARDENED_USERCOPY, PAGE_TABLE_CHECK,
+  ZERO_CALL_USED_REGS, CPU mitigations + retpoline, and **KFENCE** (sampling
+  UAF/OOB detector) @100ms. io_uring is **off** (high-value exploit surface;
+  the allnoconfig base sets EXPERT, which is what makes it disableable — on
+  defconfig it is force-`default y`).
+- `CONFIG_FILE_LOCKING=y` is restored in `microvm-base.config`: tinyconfig
+  drops it (EXPERT-gated), and without it `fcntl` locks return ENOSYS, so
+  in-VM `nix` dies with "acquiring/releasing lock: Function not implemented"
+  (this broke the bun/nix-run e2e until found).
+
+### cgroup v2 by default
+
+The legacy v1 layout came from u-root's libinit, not crun. Rather than patch
+u-root, `daft-agent` mounts the unified hierarchy itself (`ensureCgroupV2`)
+and the boot cmdline gains `cgroup_no_v1=all` so u-root's v1 controller
+mounts fail-soft, leaving every controller for v2. crun then runs under v2
+(eBPF device controller via `CONFIG_CGROUP_BPF`).
+
 ## How to update this plan
 
 When you (human or agent) change direction, finish a milestone, or surface a

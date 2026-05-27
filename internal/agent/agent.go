@@ -131,6 +131,11 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 		// piece for DNS to resolve through the sandboxnet gateway.
 		WriteContainerResolvConf(w, bundle)
 	}
+	// Put /sys/fs/cgroup on v2 before crun runs so it manages the
+	// container under the unified hierarchy (see ensureCgroupV2).
+	if bundle != "" {
+		ensureCgroupV2(w)
+	}
 	runContainerFromCmdline(ctx, w, d, cmdline)
 	bootSpan.End()
 

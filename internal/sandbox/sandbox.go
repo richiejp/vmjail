@@ -368,7 +368,7 @@ type virtiofsdSidecar struct{}
 // to the host's controlling terminal; reboot=t/panic=-1 ensures the
 // guest doesn't hang on a panic. helloWith appends `daft.share=...` on
 // top when Share is configured.
-const kernelCmdlineBase = "console=hvc0 reboot=t panic=-1"
+const kernelCmdlineBase = "console=hvc0 reboot=t panic=-1 cgroup_no_v1=all"
 
 // defaultMemory is the guest RAM size used when Config.Memory is empty.
 const defaultMemory = "256M"
