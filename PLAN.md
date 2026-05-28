@@ -1472,6 +1472,48 @@ the user-host or in CI today.
            the cache.nixos.org fetch entirely. Slice 2's
            bun dev-shell becomes a launch + run, no network.
 
+- D6c.4: **dogfood — build daft inside a daft sandbox.** The
+  whole point of the sandbox-VM platform work (microvm kernel,
+  cgroup v2, nested virt, `make dev` umbrella) is to make the
+  daft dev loop run *inside* a daft workspace. Sliced:
+    1. `make check` (fmt + lint + tests + coverage gate) inside.
+       **landed (test only)**:
+       `testdaemons.TestClusterWorkspaceDaftSelfBuild` tars the
+       tracked tree of HEAD via `git archive`, virtiofs-mounts
+       it at /workspace, exec's `nix develop --command make
+       check` in the nixos/nix container, and waits for a
+       `DAFT-SELFBUILD-OK` sentinel. Same source-delivery and
+       nix-flag wiring as the D6c.3 bun test (HOME/USER inline
+       for the crun-exec env gap, `--option build-users-group ""`
+       around the D7 CAP_CHOWN gap, NIX_SSL_CERT_FILE pointing
+       at the image's cacert). 8 GiB / 4 vCPU sizing because
+       the 256 MiB default OOM-kills nix evaluation.
+       Gated behind `DAFT_RUN_SELFBUILD=1` and capped at 60 min:
+       a cold first run substitutes the entire dev-shell closure
+       (Go toolchain + golangci-lint + gofumpt + …) from
+       cache.nixos.org through sandboxnet egress, which on a
+       fresh VM is the network-heaviest workload the integration
+       suite can produce. Without D6c.3 slice 3 (host-mounted
+       persistent /nix/store) the test isn't fast enough to live
+       in the default integration budget; with it the closure is
+       already on /nix/store and the test reduces to evaluate +
+       run. So D6c.3 slice 3 is the unblocker that lets D6c.4
+       slice 1 graduate from opt-in to default. **Open**: pick
+       between baking a `daft-dev-shell-image` extending nixos/
+       nix with the closure pre-populated vs leaning on D6c.3
+       slice 3's host-mounted store; both solve the same cost.
+    2. `make dev` (full artefacts: Go binaries + kernel +
+       initramfs + bundle). Pulls in the clang/lld/llvm + kernel
+       source closure on top of slice 1. Larger memory envelope
+       (kernel link peaks 1.5–2 GB), longer warm path.
+    3. `make integration` (e2e: boots real VMs against
+       /dev/kvm via the nested-virt path). Requires the
+       /dev/kvm bind to be conditional on a workspace profile
+       (the code-review follow-up from the sandbox-vm batch:
+       PLAN.md "Nested virtualisation" → currently
+       unconditional). `make integration` is the canonical
+       profile that opts in.
+
 - D7: **Rootless storage translation** — bridge the
   CAP_CHOWN gap between the sandbox-host process and the
   container's view of the bundle / workspace.
