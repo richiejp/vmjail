@@ -221,6 +221,17 @@
             description = "darkaifactory orchestrator control-plane";
           };
 
+          # kconfig-verify is a build-time tool: it asserts that every
+          # Kconfig symbol our fragments request survived `olddefconfig`
+          # (which silently demotes symbols with unmet deps). Used by the
+          # kernel derivation's configurePhase below.
+          kconfig-verify = mkDaftBinary {
+            name = "kconfig-verify";
+            subPackage = "cmd/kconfig-verify";
+            description = "darkaifactory kernel-config survival checker";
+            platforms = pkgs.lib.platforms.linux;
+          };
+
           # daft-hello-container is the workload binary in the v0
           # smoke-test OCI bundle. It runs *inside the container*
           # (which runs inside the sandbox VM), prints
@@ -537,6 +548,9 @@
               llvmPackages.clang-unwrapped
               lld
               llvm
+              # Our build-time checker (resolves to the flake package via the
+              # packages `rec` scope, not pkgs); see configurePhase.
+              kconfig-verify
             ];
 
             # Build the *target* kernel with the LLVM toolchain (clang +
@@ -589,7 +603,16 @@
               # with ENETUNREACH.
               ./scripts/config --enable TUN
               make $kmakeTools olddefconfig
-              grep -q '^CONFIG_TUN=y$' .config || (echo "kernel: CONFIG_TUN missing after olddefconfig" >&2; exit 1)
+              # Fail the build if olddefconfig silently demoted any symbol our
+              # fragments requested (unmet deps after a toolchain/kernel bump —
+              # an explicit CONFIG_X=y is only a request). This subsumes the
+              # old CONFIG_TUN grep guard and also covers CFI/FineIBT, the KSPP
+              # hardening set, FILE_LOCKING, KVM, etc. — the kind of silent
+              # drop that otherwise only surfaces as a runtime e2e failure.
+              kconfig-verify .config \
+                ${./third_party/kernel-config/microvm-base.config} \
+                ${./third_party/kernel-config/daft.config} \
+                ${./third_party/kernel-config/microvm-hardening.config}
               runHook postConfigure
             '';
 

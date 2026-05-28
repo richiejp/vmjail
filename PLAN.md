@@ -3412,6 +3412,17 @@ device rule should be conditional).
 - `goSrc`/`mkDaftBinary` moved out of the flake's `packages` into the outer
   `let` (they are a source and a function, not derivations) so `nix flake
   check`, which type-checks every `packages` output as a derivation, passes.
+- A Go build-time check (`cmd/kconfig-verify`, backed by `internal/kconfig`)
+  runs in the kernel derivation's `configurePhase` and exits non-zero if
+  `olddefconfig` silently demoted any symbol our fragments requested — an
+  explicit `CONFIG_X=y` is only a request, and a toolchain/kernel bump can
+  unmeet a dependency without erroring (the same class of failure that hid
+  the `CONFIG_TUN` drop). Replaces the lone TUN grep guard. On its first
+  run it surfaced two latent regressions now fixed: `CONFIG_BPF_LSM=y` was
+  silently absent on the microvm kernel because its `BPF_EVENTS` dep chain
+  was unmet — added `PERF_EVENTS`/`FTRACE`/`KPROBES` (~0.9 MB of bzImage);
+  and `# CONFIG_WIRELESS is not set` was being overridden by `menuconfig
+  WLAN`'s `default y` + `select WIRELESS`, so we now disable WLAN itself.
 
 ## How to update this plan
 
