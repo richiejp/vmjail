@@ -24,17 +24,29 @@ import (
 // confused with the container merely having booted.
 const daftSelfBuildSentinel = "DAFT-SELFBUILD-OK"
 
-// daftSelfBuildSlowBoot caps the cold-path wait. First run inside
-// a fresh VM has to (a) evaluate the daft flake, (b) substitute
-// the dev-shell closure (Go toolchain, golangci-lint, gofumpt,
-// gocyclo, goconst, scc, buf, tmux, dash …) from cache.nixos.org
-// through sandboxnet's egress NAT, (c) run `make check` (fmt +
-// lint + tests + coverage). Warm path is several minutes; the
-// generous cap covers a cold large closure. A future slice will
-// bake the dev-shell closure into a custom test-fixture image so
-// the substitution cost amortises across runs and the test fits
-// the normal `make integration` budget.
-const daftSelfBuildSlowBoot = 60 * time.Minute
+// daftSelfBuildSlowBoot is a strict deadline, not a generous
+// ceiling — per CONTRIBUTING.md "Slowness is a bug". Measured
+// budget on a healthy machine + healthy egress:
+//
+//   - ~2–3 min for nix to substitute the dev-shell closure (~1.5
+//     GB: Go toolchain + golangci-lint + gofumpt + gocyclo +
+//     goconst + scc + buf + tmux + dash …) from cache.nixos.org
+//     through sandboxnet's egress NAT;
+//   - ~3 min for `make check` itself with cold Go build / module
+//     / lint caches (host baseline: 32 s warm, 2 m 45 s fully
+//     cold).
+//
+// Total healthy cold ≈ 5–6 min; with a warm `/nix/store` (D6c.3
+// slice 3, host-mounted via virtiofs) it drops to ~1 min. 6 min
+// is the tight cap: anything longer is the known 50 KB/s
+// sandboxnet-egress throughput floor (PLAN.md D6c.3 slice 2
+// "Throughput floor under investigation") surfacing as a
+// failure, which is the point. Caching policy: if a true cold
+// substitution legitimately exceeds 6 min on your machine,
+// rerun — the closure now sits on /nix/store and the next run
+// is warm. We do not extend the deadline to accommodate the
+// first uncached run.
+const daftSelfBuildSlowBoot = 6 * time.Minute
 
 // TestClusterWorkspaceDaftSelfBuild is D6c.4 slice 1: prove the
 // dogfooding loop — boot a workspace, drop the daft source in,
@@ -56,7 +68,7 @@ const daftSelfBuildSlowBoot = 60 * time.Minute
 // TestWorkspaceThroughputExperiment.
 func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 	if os.Getenv("DAFT_RUN_SELFBUILD") != "1" {
-		t.Skip("set DAFT_RUN_SELFBUILD=1 to run the daft-in-daft self-build test (cold path tens of minutes)")
+		t.Skip("set DAFT_RUN_SELFBUILD=1 to run the daft-in-daft self-build test (~5–6 min healthy cold, fails at 6 min)")
 	}
 
 	srcDir := t.TempDir()

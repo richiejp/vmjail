@@ -1488,20 +1488,30 @@ the user-host or in CI today.
        around the D7 CAP_CHOWN gap, NIX_SSL_CERT_FILE pointing
        at the image's cacert). 8 GiB / 4 vCPU sizing because
        the 256 MiB default OOM-kills nix evaluation.
-       Gated behind `DAFT_RUN_SELFBUILD=1` and capped at 60 min:
-       a cold first run substitutes the entire dev-shell closure
-       (Go toolchain + golangci-lint + gofumpt + …) from
-       cache.nixos.org through sandboxnet egress, which on a
-       fresh VM is the network-heaviest workload the integration
-       suite can produce. Without D6c.3 slice 3 (host-mounted
-       persistent /nix/store) the test isn't fast enough to live
-       in the default integration budget; with it the closure is
-       already on /nix/store and the test reduces to evaluate +
-       run. So D6c.3 slice 3 is the unblocker that lets D6c.4
-       slice 1 graduate from opt-in to default. **Open**: pick
-       between baking a `daft-dev-shell-image` extending nixos/
-       nix with the closure pre-populated vs leaning on D6c.3
-       slice 3's host-mounted store; both solve the same cost.
+       Gated behind `DAFT_RUN_SELFBUILD=1` and capped at 6 min
+       — a strict deadline, not a generous ceiling (CONTRIBUTING.md
+       "Slowness is a bug"). Budget comes from measurement:
+       `make check` is 32 s warm, 2 m 45 s fully cold (empty Go
+       build cache + modcache + golangci-lint cache, 971 MB
+       footprint); inside the sandbox add ~2–3 min for nix to
+       substitute the dev-shell closure (~1.5 GB: Go toolchain
+       + golangci-lint + gofumpt + …) from cache.nixos.org
+       through sandboxnet's egress NAT, so a healthy cold run
+       is ~5–6 min total. With a warm `/nix/store` (D6c.3 slice
+       3, host-mounted via virtiofs) it drops to ~1 min. Caching
+       policy: a true cold-substitute run that legitimately
+       exceeds 6 min lands the closure on `/nix/store` anyway —
+       rerun and the next attempt is warm. Anything longer than
+       6 min on a *cached* run is the known 50 KB/s sandboxnet-
+       egress throughput floor (D6c.3 slice 2 "Throughput floor
+       under investigation") surfacing as a failure, which is
+       the point. Stays opt-in until the throughput regression
+       is fixed or D6c.3 slice 3 lands; with the host-mounted
+       store the test fits the default integration budget.
+       **Open**: choose between baking a `daft-dev-shell-image`
+       extending nixos/nix with the closure pre-populated vs
+       leaning on D6c.3 slice 3's host-mounted store; both solve
+       the same substitution cost.
     2. `make dev` (full artefacts: Go binaries + kernel +
        initramfs + bundle). Pulls in the clang/lld/llvm + kernel
        source closure on top of slice 1. Larger memory envelope

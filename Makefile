@@ -276,18 +276,37 @@ integration-build: dev
 	@nix build .#d6c1-flake-fixture -o $(NIX_FLAKE_FIXTURE_OUT)
 	@nix build .#daft-sandboxd      -o $(NIX_SANDBOXD_OUT)
 
+# Lock file for `make integration`. Two concurrent runs race on
+# /dev/kvm, host ports, vsock CIDs, and tap interface names, and
+# corrupt each other in ways the test framework does not detect
+# (silent hangs, EADDRINUSE, ghost taps). flock --nonblock makes a
+# second invocation fail fast with a clear message naming the
+# holder instead. See CONTRIBUTING.md "Concurrent integration runs
+# are gated".
+INTEGRATION_LOCK := $(CURDIR)/.git/daft-integration.lock
+
 integration: integration-build
-	@echo "[e2e] booting real VMs against /dev/kvm..."
-	@DAFT_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT) \
-		DAFT_BUNDLE=$(CURDIR)/$(BUNDLE_OUT) \
-		DAFT_KERNEL=$(CURDIR)/$(NIX_KERNEL_OUT)/bzImage \
-		DAFT_CLOUD_HYPERVISOR=$(CURDIR)/$(NIX_CHV_OUT)/bin/cloud-hypervisor \
-		DAFT_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd \
-		DAFT_SANDBOXD_BUNDLED_BIN=$(CURDIR)/$(NIX_SANDBOXD_OUT)/bin/daft-sandboxd \
-		DAFT_NIX_IMAGE=$$(realpath $(NIX_IMAGE_OUT)) \
-		DAFT_NIX_TOOLING_IMAGE=$$(realpath $(NIX_TOOLING_IMAGE_OUT)) \
-		DAFT_NIX_FLAKE_FIXTURE=$$(realpath $(NIX_FLAKE_FIXTURE_OUT)) \
-		go test -v -tags=integration -count=1 -timeout 20m ./internal/sandbox/ ./internal/testdaemons/
+	@command -v flock >/dev/null || { echo "flock(1) not on PATH — install util-linux"; exit 1; }
+	@( \
+		exec 9>$(INTEGRATION_LOCK); \
+		flock -n 9 || { \
+			echo "make integration: another run already holds $(INTEGRATION_LOCK)"; \
+			echo "  holder: $$(fuser $(INTEGRATION_LOCK) 2>&1 | tr -s ' ')"; \
+			echo "  wait for it to finish, or kill it, then retry."; \
+			exit 1; \
+		}; \
+		echo "[e2e] booting real VMs against /dev/kvm..."; \
+		DAFT_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT) \
+			DAFT_BUNDLE=$(CURDIR)/$(BUNDLE_OUT) \
+			DAFT_KERNEL=$(CURDIR)/$(NIX_KERNEL_OUT)/bzImage \
+			DAFT_CLOUD_HYPERVISOR=$(CURDIR)/$(NIX_CHV_OUT)/bin/cloud-hypervisor \
+			DAFT_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd \
+			DAFT_SANDBOXD_BUNDLED_BIN=$(CURDIR)/$(NIX_SANDBOXD_OUT)/bin/daft-sandboxd \
+			DAFT_NIX_IMAGE=$$(realpath $(NIX_IMAGE_OUT)) \
+			DAFT_NIX_TOOLING_IMAGE=$$(realpath $(NIX_TOOLING_IMAGE_OUT)) \
+			DAFT_NIX_FLAKE_FIXTURE=$$(realpath $(NIX_FLAKE_FIXTURE_OUT)) \
+			go test -v -tags=integration -count=1 -timeout 20m ./internal/sandbox/ ./internal/testdaemons/; \
+	)
 
 ## Git hooks -----------------------------------------------------------------
 

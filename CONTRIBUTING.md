@@ -291,6 +291,89 @@ write them.
 Coverage is the price of merge — pay it on the way in, not by
 relaxing the gate.
 
+### Slowness is a bug
+
+Every gate enforces a deadline. Tests that "sometimes take a while"
+are reported as failing, not as expected. Outliers are debugged, not
+accommodated. Chronic slowness is a defect with the same standing as
+a wrong answer.
+
+Reference points for what "fast" means here:
+
+- the sandbox kernel compiles from clang + LTO + KSPP hardening in
+  ~2 minutes,
+- the VM boots in well under a second (`BenchmarkHelloBoot`),
+- `make check` (fmt + lint + tests + coverage) runs in ~30 seconds
+  warm, ~2 minutes 45 seconds fully cold (Go build cache + modcache
+  + golangci-lint cache empty).
+
+If a test wants more time than the work it does should plausibly
+take, the test is buggy, the code it exercises is buggy, or the
+environment it depends on (egress, registry, filesystem) is buggy.
+In all three cases the answer is **fix it, not extend the timeout.**
+
+Two corollaries:
+
+1. **External fetches must be cached.** When a test or build
+   legitimately needs to pull from cache.nixos.org, GitHub, an OCI
+   registry, the Go module proxy, etc., the deadline applies to the
+   *cached* case. The first run may pay the uncached cost and that
+   is fine; subsequent runs are fast because the cache catches the
+   bytes. If your test depends on uncached external data on every
+   run, that itself is the bug — design the cache. (See
+   `testdaemons.FetchNixOfficialImage`, `internal/imagestore`'s
+   on-disk LRU, and the host-mounted `/nix/store` work under D6c.3
+   slice 3 in PLAN.md for the established patterns.)
+2. **Deadlines are assertions, not maxes.** A test's timeout is a
+   claim about how long the work should take on a healthy machine,
+   not a generous ceiling under which "anything goes." Setting it
+   to 10× the measured budget defeats the point — the deadline
+   must be tight enough that genuine slowness surfaces as a
+   failure. Rule of thumb: pick the *measured warm path* and double
+   it. Generosity beyond that is hiding a bug from future-you.
+
+In practice this means:
+
+- Per-test `waitFor` / sentinel deadlines reflect the measured warm
+  budget (often seconds), and fail loud when exceeded.
+- `go test -timeout` in `make integration` is tight, not generous;
+  it surfaces hangs as failures with our diagnostic dumps, not as
+  the framework's panic at the end of a forgiving budget.
+- New deadline constants name the measurement in their comment
+  ("measured: X s warm / Y s cold"). Bumping a constant upward
+  requires the commit message to name the new measurement and why
+  the old number was wrong — same shape as updating `bench.txt` or
+  `coverage.txt`.
+- A test that is genuinely slow today with no realistic short-term
+  fix (e.g. an unfixed external bottleneck like the
+  sandboxnet-egress throughput floor under D6c.3) belongs behind an
+  explicit env-var opt-in (the `DAFT_RUN_*=1` pattern). The skip
+  message spells out the carrying cost. Mainline gates do not
+  accommodate it.
+
+Same shape as the coverage and benchmark gates: monotonic, no
+exemptions, the answer to a violation is to fix the slowness, not
+to relax the gate. Slowness compounds — every "just this once"
+addition of a generous timeout makes the next regression invisible
+under it.
+
+### Concurrent integration runs are gated
+
+`make integration` boots real VMs, allocates host-side ports and
+vsock CIDs, names tap interfaces, and uses `/dev/kvm`. Two
+concurrent invocations on the same host race for all of those and
+corrupt each other in ways the test framework does not detect
+(silent hangs, mysterious `EADDRINUSE`, ghost tap interfaces).
+
+The target wraps its work in `flock --nonblock`. A second run on
+the same machine — typical case: pre-commit hook fires while you
+already had `make integration` going in another pane — fails
+immediately with a clear message naming the lock file and the
+process holding it. Wait or kill the running one; do not "force"
+the second run. There is no escape hatch flag for this; if you
+need to run two suites in parallel, run them in separate worktrees
+on separate hosts.
+
 ### Performance claims need a benchmark — and a profile
 
 Performance is testable, not declarable. Sentences like "this is the
