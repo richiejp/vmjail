@@ -236,6 +236,88 @@ func TestEndToEndMITM(t *testing.T) {
 	}
 }
 
+// TestPassthrough404PreservesStatusAndBody reproduces the
+// real-world workload that broke the D6c.4 selfbuild test:
+// cache.nixos.org returns 404 with a 3-byte "404" body for a
+// narinfo path it does not have, and nix needs both the 404
+// status code AND the body unchanged. If the proxy quietly
+// downgrades the status (e.g. to 200 by leaking the body), nix
+// reads "404\n" and parses it as narinfo content, then bails
+// with "is corrupt: expecting ':' at line 1". The test asserts
+// the proxy passes both pieces through verbatim.
+func TestPassthrough404PreservesStatusAndBody(t *testing.T) {
+	// Mimic cache.nixos.org's actual 404 shape: text/plain "404".
+	const wantBody = "404"
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, wantBody)
+	}))
+	t.Cleanup(upstream.Close)
+
+	certs, err := NewCertCache()
+	if err != nil {
+		t.Fatalf("NewCertCache: %v", err)
+	}
+	logSink := &syncBuffer{}
+	p := New(certs, true, logSink)
+
+	proxyLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = proxyLn.Close() })
+
+	proxySrv := &http.Server{Handler: p, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = proxySrv.Serve(proxyLn) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = proxySrv.Shutdown(ctx)
+	})
+
+	pool := x509.NewCertPool()
+	pool.AddCert(certs.caCert)
+	proxyURL, _ := url.Parse("http://" + proxyLn.Addr().String())
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy:           http.ProxyURL(proxyURL),
+			TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
+		},
+	}
+
+	upURL, _ := url.Parse(upstream.URL)
+	_, port, _ := net.SplitHostPort(upURL.Host)
+	target := "https://localhost:" + port + "/r0i7rbsdnw9hacy43if0m0yv5k2qdbrq.narinfo"
+
+	p.upstream.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		_, port, _ := net.SplitHostPort(addr)
+		return (&net.Dialer{}).DialContext(ctx, network, "127.0.0.1:"+port)
+	}
+
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, target, http.NoBody)
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", resp.StatusCode)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if string(got) != wantBody {
+		t.Fatalf("body = %q, want %q", got, wantBody)
+	}
+
+	if !logSink.waitForContains(t, "-> 404 bytes=", 2*time.Second) {
+		t.Errorf("log missing 404 status: %q", logSink.String())
+	}
+}
+
 // TestProxyRejectsPlainHTTP confirms the small-surface choice:
 // non-CONNECT requests get 405. nix uses HTTPS for the workload the
 // proxy was built to study, so handling plain HTTP would be dead

@@ -24,29 +24,29 @@ import (
 // confused with the container merely having booted.
 const daftSelfBuildSentinel = "DAFT-SELFBUILD-OK"
 
-// daftSelfBuildSlowBoot is a strict deadline, not a generous
-// ceiling — per CONTRIBUTING.md "Slowness is a bug". Measured
-// budget on a healthy machine + healthy egress:
-//
-//   - ~2–3 min for nix to substitute the dev-shell closure (~1.5
-//     GB: Go toolchain + golangci-lint + gofumpt + gocyclo +
-//     goconst + scc + buf + tmux + dash …) from cache.nixos.org
-//     through sandboxnet's egress NAT;
-//   - ~3 min for `make check` itself with cold Go build / module
-//     / lint caches (host baseline: 32 s warm, 2 m 45 s fully
-//     cold).
-//
-// Total healthy cold ≈ 5–6 min; with a warm `/nix/store` (D6c.3
-// slice 3, host-mounted via virtiofs) it drops to ~1 min. 6 min
-// is the tight cap: anything longer is the known 50 KB/s
-// sandboxnet-egress throughput floor (PLAN.md D6c.3 slice 2
-// "Throughput floor under investigation") surfacing as a
-// failure, which is the point. Caching policy: if a true cold
-// substitution legitimately exceeds 6 min on your machine,
-// rerun — the closure now sits on /nix/store and the next run
-// is warm. We do not extend the deadline to accommodate the
-// first uncached run.
-const daftSelfBuildSlowBoot = 6 * time.Minute
+// daftSelfBuildInnerTimeout caps `nix develop … make check` from
+// inside the sandbox. If nix hangs (the symptom of the
+// not-yet-diagnosed narinfo-on-404 bug — proxy passthrough is
+// verified by TestPassthrough404PreservesStatusAndBody but the
+// in-VM nix client mis-handles the response anyway), GNU
+// `timeout` kills the inner pipeline with SIGKILL; the daft
+// `workspace exec` subprocess then exits and
+// waitForFileContains fails-fast on `proc.exited()` rather than
+// waiting out the outer cap. Budget: ~30 s nix-develop env
+// activation + ~3 min make check (host cold baseline 2 m 45 s)
+// = ~3.5 min worst case. 4 min leaves a small buffer.
+const daftSelfBuildInnerTimeout = 240 // seconds, formatted into the wrapper shell
+
+// daftSelfBuildSlowBoot is the outer cap for waitForFileContains.
+// Strict deadline, not a generous ceiling — per CONTRIBUTING.md
+// "Slowness is a bug". Just past the inner GNU-timeout so any
+// hang in nix surfaces as a fast subprocess-exit failure (~5 s
+// after the inner kill), not an outer-timeout fatal that swallows
+// the cause. If the test legitimately exceeds 4.5 min the cache
+// is cold; rerun once `/nix/store` is partially populated (D6c.3
+// slice 3, host-mounted virtiofs, is the proper fix). We do not
+// extend the deadline to accommodate the first uncached run.
+const daftSelfBuildSlowBoot = 270 * time.Second
 
 // TestClusterWorkspaceDaftSelfBuild is D6c.4 slice 1: prove the
 // dogfooding loop — boot a workspace, drop the daft source in,
@@ -68,7 +68,7 @@ const daftSelfBuildSlowBoot = 6 * time.Minute
 // TestWorkspaceThroughputExperiment.
 func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 	if os.Getenv("DAFT_RUN_SELFBUILD") != "1" {
-		t.Skip("set DAFT_RUN_SELFBUILD=1 to run the daft-in-daft self-build test (~5–6 min healthy cold, fails at 6 min)")
+		t.Skip("set DAFT_RUN_SELFBUILD=1 to run the daft-in-daft self-build test (inner 4 min cap on nix, outer 4.5 min on the sentinel wait)")
 	}
 
 	srcDir := t.TempDir()
@@ -146,14 +146,26 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 	//     detect success without relying on the absence of error
 	//     output (which `go test -v` produces in volume even on a
 	//     green run).
-	execShell := "cd /workspace && exec env " +
-		"HOME=/tmp USER=root " +
-		"NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt " +
-		"/bin/sh -lc 'nix " +
-		"--extra-experimental-features \"nix-command flakes\" " +
-		"--option build-users-group \"\" " +
-		"develop --command sh -c \"make check && echo " +
-		daftSelfBuildSentinel + "\"'"
+	// `timeout --signal=KILL Ns` bounds the inner pipeline. If nix
+	// hangs (currently observed against cache.nixos.org 404s; see
+	// TestPassthrough404PreservesStatusAndBody and PLAN.md D6c.4),
+	// SIGKILL fires, the wrapper shell exits, `daft workspace
+	// exec` propagates the non-zero exit, and waitForFileContains
+	// fails-fast on `proc.exited()` instead of waiting out the
+	// outer cap. SIGKILL not SIGTERM because nix's substitution
+	// loop has historically ignored SIGTERM until the active fetch
+	// completes — same reason `make integration`'s VMs are killed
+	// not terminated.
+	execShell := fmt.Sprintf(
+		"cd /workspace && exec env "+
+			"HOME=/tmp USER=root "+
+			"NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt "+
+			"/bin/sh -lc 'timeout --signal=KILL %ds nix "+
+			"--extra-experimental-features \"nix-command flakes\" "+
+			"--option build-users-group \"\" "+
+			"develop --command sh -c \"make check && echo %s\"'",
+		daftSelfBuildInnerTimeout, daftSelfBuildSentinel,
+	)
 
 	buildProc := startDaftSubprocess(
 		t, buildLog,

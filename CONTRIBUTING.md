@@ -344,12 +344,33 @@ In practice this means:
   requires the commit message to name the new measurement and why
   the old number was wrong — same shape as updating `bench.txt` or
   `coverage.txt`.
-- A test that is genuinely slow today with no realistic short-term
-  fix (e.g. an unfixed external bottleneck like the
-  sandboxnet-egress throughput floor under D6c.3) belongs behind an
-  explicit env-var opt-in (the `DAFT_RUN_*=1` pattern). The skip
-  message spells out the carrying cost. Mainline gates do not
-  accommodate it.
+
+**The only tests permitted to be slow are stress tests and fuzz
+targets.** Both are slow by intent, run by intent, never on the
+default pre-commit path:
+
+- **Stress tests** measure capacity, throughput, latency under
+  load, or longevity. The existing `TestWorkspace…Throughput`
+  family (gated behind `DAFT_RUN_THROUGHPUT_EXPERIMENT=1`) is the
+  reference shape: opt-in, instrumented, the slowness *is the
+  experiment*. A test whose purpose is "exercise the system long
+  enough to learn its limits" earns its time budget.
+- **Fuzz targets** (`FuzzXxx`) run for a configured time budget
+  (`FUZZ_TIME` in the Makefile) by design. `make fuzz` is opt-in;
+  `make verify` runs only a 1 s sweep per target as a smoke check.
+
+Everything else must be fast. There is no `DAFT_RUN_*=1` escape
+hatch for "this functional test happens to be slow because of an
+unfixed bottleneck." That framing is a defect on two counts: the
+bottleneck, and the test that swallows it instead of failing on
+it. The right move is one of:
+
+- **Fix the bottleneck** so the test fits a tight budget.
+- **Cache the cold path** (host-mounted store, persisted fixture,
+  baked image) so the deadline applies to the warm case.
+- **Leave the test out** until one of the above is possible.
+  PLAN.md is the right place for the deferred work; a slow test
+  hiding behind an opt-in env var is not.
 
 Same shape as the coverage and benchmark gates: monotonic, no
 exemptions, the answer to a violation is to fix the slowness, not

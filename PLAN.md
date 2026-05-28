@@ -1512,6 +1512,25 @@ the user-host or in CI today.
        extending nixos/nix with the closure pre-populated vs
        leaning on D6c.3 slice 3's host-mounted store; both solve
        the same substitution cost.
+
+       **Active bug surfaced by the first run (2026-05-28):** the
+       in-VM nix client mis-handles cache.nixos.org's 404 for a
+       not-cached narinfo — it parses the 404 response body (the
+       string `"404"`) as narinfo content and bails with `NAR
+       info file ... is corrupt: expecting ':' at line 1`, then
+       either retries forever or hangs (zero further egress
+       requests for the remaining outer cap). The proxy is
+       exonerated: `mitmproxy.TestPassthrough404PreservesStatusAndBody`
+       confirms the proxy forwards 404 status + body verbatim,
+       and the proxy's TLS server advertises no ALPN so nix↔proxy
+       speaks HTTP/1.1 (no HTTP/2 framing surprise). Suspects
+       remaining: nix's narinfo client behavior on a 404 from a
+       binary-cache substituter when going through an HTTPS
+       proxy chain, or interaction with the bundled
+       experimental-features flags. Test wrapper now bounds nix
+       at 4 min via `timeout --signal=KILL` so a hang surfaces
+       as a subprocess-exit failure within seconds — not a
+       4.5 min outer-cap fatal that swallows the cause.
     2. `make dev` (full artefacts: Go binaries + kernel +
        initramfs + bundle). Pulls in the clang/lld/llvm + kernel
        source closure on top of slice 1. Larger memory envelope
