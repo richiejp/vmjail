@@ -1,6 +1,7 @@
 package mitmproxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rsa"
@@ -316,6 +317,138 @@ func TestPassthrough404PreservesStatusAndBody(t *testing.T) {
 	if !logSink.waitForContains(t, "-> 404 bytes=", 2*time.Second) {
 		t.Errorf("log missing 404 status: %q", logSink.String())
 	}
+}
+
+// TestPassthroughHTTP2UpstreamWrittenAsHTTP11 pins the
+// passthrough-path Proto normalisation. cache.nixos.org speaks
+// HTTP/2 to the proxy's upstream client (Go default for HTTPS);
+// without the fix in serveOne, `resp.Write` would emit
+// "HTTP/2.0 404 Not Found" as the wire status line of an HTTP/1.x
+// exchange — invalid wire format, parsed as HTTP/1.0 by curl,
+// silently broken for the strict client in nix's binary-cache
+// substituter (the D6c.4 selfbuild bug).
+//
+// This test stands up an httptest TLS server that advertises h2
+// via ALPN; Go's http.Client speaks HTTP/2 to it. The test reads
+// the raw bytes the proxy writes back on the leaf-cert tunnel and
+// asserts they begin with "HTTP/1.1 ".
+func TestPassthroughHTTP2UpstreamWrittenAsHTTP11(t *testing.T) {
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, "404")
+	}))
+	// EnableHTTP2 + StartTLS makes the server advertise h2 in ALPN;
+	// Go's http.Client picks h2 for the upstream call from the
+	// proxy. The server is now strictly an HTTP/2 upstream.
+	upstream.EnableHTTP2 = true
+	upstream.StartTLS()
+	t.Cleanup(upstream.Close)
+
+	certs, err := NewCertCache()
+	if err != nil {
+		t.Fatalf("NewCertCache: %v", err)
+	}
+	logSink := &syncBuffer{}
+	p := New(certs, true, logSink)
+
+	proxyLn := startProxyServer(t, p)
+	upURL, _ := url.Parse(upstream.URL)
+	_, port, _ := net.SplitHostPort(upURL.Host)
+	p.upstream.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		_, port, _ := net.SplitHostPort(addr)
+		return (&net.Dialer{}).DialContext(ctx, network, "127.0.0.1:"+port)
+	}
+
+	// Hand-rolled CONNECT + TLS + GET so we can read the wire bytes
+	// the proxy writes back. A normal http.Client would parse the
+	// response and hide the status line, which is the only signal
+	// that pins the regression.
+	respStatus := rawProbeStatusLine(t, proxyLn.Addr().String(), certs, port)
+	if !strings.HasPrefix(respStatus, "HTTP/1.1 ") {
+		t.Fatalf("status line = %q, want HTTP/1.1 prefix (HTTP/2 from upstream must be normalised)", respStatus)
+	}
+	if !strings.Contains(respStatus, "404") {
+		t.Fatalf("status line = %q, want 404", respStatus)
+	}
+}
+
+// startProxyServer wires Proxy p behind an http.Server on a free
+// loopback port, registers t.Cleanup for both, and returns the
+// listener so the caller can read its address. Used by tests that
+// drive raw bytes against the proxy.
+func startProxyServer(t *testing.T, p *Proxy) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	srv := &http.Server{Handler: p, ReadHeaderTimeout: 5 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+	return ln
+}
+
+// rawProbeStatusLine drives CONNECT localhost:upstreamPort, TLS
+// handshake, GET /probe through the proxy at proxyAddr, and returns
+// the trimmed status line of the response. Bypasses http.Client so
+// the caller can assert on the raw wire bytes (the "HTTP/1.1 " vs
+// "HTTP/2.0 " distinction at the heart of the Proto-normalisation
+// regression).
+func rawProbeStatusLine(t *testing.T, proxyAddr string, certs *CertCache, upstreamPort string) string {
+	t.Helper()
+	rawConn, err := net.Dial("tcp", proxyAddr)
+	if err != nil {
+		t.Fatalf("dial proxy: %v", err)
+	}
+	t.Cleanup(func() { _ = rawConn.Close() })
+	connect := "CONNECT localhost:" + upstreamPort + " HTTP/1.1\r\nHost: localhost:" + upstreamPort + "\r\n\r\n"
+	if _, err := io.WriteString(rawConn, connect); err != nil {
+		t.Fatalf("send CONNECT: %v", err)
+	}
+	br := bufio.NewReader(rawConn)
+	st, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read CONNECT response: %v", err)
+	}
+	if !strings.HasPrefix(st, "HTTP/1.1 200") {
+		t.Fatalf("CONNECT status = %q, want HTTP/1.1 200", strings.TrimRight(st, "\r\n"))
+	}
+	//daft:lint:disable=forloopbound reason="exits on blank-line header terminator or t.Fatalf on read error"
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("drain CONNECT headers: %v", err)
+		}
+		if line == "\r\n" || line == "\n" {
+			break
+		}
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(certs.caCert)
+	tlsConn := tls.Client(rawConn, &tls.Config{
+		ServerName: "localhost",
+		RootCAs:    pool,
+		MinVersion: tls.VersionTLS12,
+	})
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatalf("client TLS handshake: %v", err)
+	}
+	getReq := "GET /probe HTTP/1.1\r\nHost: localhost:" + upstreamPort + "\r\nConnection: close\r\n\r\n"
+	if _, err := io.WriteString(tlsConn, getReq); err != nil {
+		t.Fatalf("send GET: %v", err)
+	}
+	respStatus, err := bufio.NewReader(tlsConn).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read response status: %v", err)
+	}
+	return strings.TrimRight(respStatus, "\r\n")
 }
 
 // TestProxyRejectsPlainHTTP confirms the small-surface choice:

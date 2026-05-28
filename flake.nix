@@ -344,14 +344,20 @@
                 rootPaths = [
                   pkgs.nix pkgs.bashInteractive pkgs.coreutils
                   pkgs.dash pkgs.cacert pyEnv pkgs.python3
+                  pkgs.curl
                 ];
               };
             in pkgs.dockerTools.buildLayeredImage {
               name = "daft-nix-tooling";
               tag = "v1";
+              # pkgs.curl is on board so the D6c.4 narinfo probe
+              # (TestClusterWorkspace404NarinfoProbe) can drive an
+              # HTTPS GET through the egress proxy without involving
+              # nix. Useful diagnostic any time the nix↔proxy edge
+              # behaves suspiciously.
               contents = [
                 pkgs.dash pkgs.coreutils pkgs.bashInteractive
-                pkgs.nix pkgs.cacert pkgs.python3
+                pkgs.nix pkgs.cacert pkgs.python3 pkgs.curl
               ];
               # fakeRootCommands runs inside a proot chroot rooted
               # at the assembled image; /nix/store reflects the

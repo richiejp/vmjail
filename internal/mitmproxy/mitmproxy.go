@@ -199,6 +199,23 @@ func (p *Proxy) serveOne(tlsClient io.Writer, req *http.Request) {
 		return
 	}
 
+	// `resp.Write` formats the status line as
+	// `HTTP/<ProtoMajor>.<ProtoMinor> <code> <text>` — so an HTTP/2
+	// upstream (Go's default for HTTPS) leaks
+	// "HTTP/2.0 404 Not Found" as the wire status line of an
+	// HTTP/1.x exchange. Forgiving clients (curl 8.x, Go's own
+	// http.Client) downgrade to HTTP/1.0 and keep parsing; strict
+	// clients (libcurl + custom layering as in nix's binary-cache
+	// substituter) get confused and may treat the body as the
+	// payload of the failed parse — the symptom that hung the D6c.4
+	// selfbuild test. Normalise to HTTP/1.1 before writing.
+	// serveFromCache already constructs its response with
+	// Proto="HTTP/1.1" so this only needed fixing on the
+	// passthrough path. Regression-guarded by
+	// TestPassthroughHTTP2UpstreamWrittenAsHTTP11.
+	resp.Proto = "HTTP/1.1"
+	resp.ProtoMajor = 1
+	resp.ProtoMinor = 1
 	cw := &countingWriter{w: tlsClient}
 	wErr := resp.Write(cw)
 	elapsed := time.Since(start)

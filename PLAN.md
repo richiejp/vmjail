@@ -1513,24 +1513,35 @@ the user-host or in CI today.
        leaning on D6c.3 slice 3's host-mounted store; both solve
        the same substitution cost.
 
-       **Active bug surfaced by the first run (2026-05-28):** the
-       in-VM nix client mis-handles cache.nixos.org's 404 for a
-       not-cached narinfo — it parses the 404 response body (the
-       string `"404"`) as narinfo content and bails with `NAR
-       info file ... is corrupt: expecting ':' at line 1`, then
-       either retries forever or hangs (zero further egress
-       requests for the remaining outer cap). The proxy is
-       exonerated: `mitmproxy.TestPassthrough404PreservesStatusAndBody`
-       confirms the proxy forwards 404 status + body verbatim,
-       and the proxy's TLS server advertises no ALPN so nix↔proxy
-       speaks HTTP/1.1 (no HTTP/2 framing surprise). Suspects
-       remaining: nix's narinfo client behavior on a 404 from a
-       binary-cache substituter when going through an HTTPS
-       proxy chain, or interaction with the bundled
-       experimental-features flags. Test wrapper now bounds nix
-       at 4 min via `timeout --signal=KILL` so a hang surfaces
-       as a subprocess-exit failure within seconds — not a
-       4.5 min outer-cap fatal that swallows the cause.
+       **Bug surfaced by the first run (2026-05-28, fixed
+       same day):** the in-VM nix client mis-handled
+       cache.nixos.org's 404 for a not-cached narinfo, parsing
+       the 404 body (`"404"`) as narinfo content and bailing
+       with `NAR info file ... is corrupt: expecting ':' at line
+       1`, then hanging. Root cause was in our egress
+       mitmproxy, not nix: cache.nixos.org speaks HTTP/2 to the
+       proxy's upstream client (Go's default for HTTPS), and
+       `http.Response.Write` formats the wire status line from
+       `ProtoMajor`/`Minor` — so the proxy was emitting
+       `HTTP/2.0 404 Not Found` as the first line of an HTTP/1.x
+       exchange. Forgiving clients (curl 8.x, Go's own
+       http.Client) downgrade to HTTP/1.0 and keep parsing;
+       strict ones (libcurl + custom layering as in nix's
+       binary-cache substituter) mis-parsed and ended up
+       treating the body as narinfo content. `serveFromCache`
+       already constructed its own response with
+       `Proto="HTTP/1.1"`; the passthrough path didn't. Fixed by
+       normalising `resp.Proto`/`ProtoMajor`/`ProtoMinor` to
+       HTTP/1.1 before `resp.Write`. Two regression guards
+       landed alongside the fix:
+       `mitmproxy.TestPassthroughHTTP2UpstreamWrittenAsHTTP11`
+       reads the raw wire status line via a hand-rolled CONNECT
+       + TLS handshake against an `EnableHTTP2` upstream; and
+       `testdaemons.TestClusterWorkspace404NarinfoProbe` runs
+       curl through the full sandbox+egress stack against the
+       real cache.nixos.org and asserts `< HTTP/1.1 404` on the
+       wire. Required adding `pkgs.curl` to `nix-tooling-image`.
+       Probe runs in ~10 s; fits the default integration budget.
     2. `make dev` (full artefacts: Go binaries + kernel +
        initramfs + bundle). Pulls in the clang/lld/llvm + kernel
        source closure on top of slice 1. Larger memory envelope
