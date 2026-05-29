@@ -596,6 +596,80 @@ func TestValidatePortForwardsRejectsZeroPorts(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsRelativeObserverLogPath: ObserverLogPath
+// must be absolute. Relative paths would be resolved against
+// whatever cwd daft-sandboxd happens to be in — surprising and
+// post-launch-fragile (cwd can change). Caught at validate so
+// no half-spawned cloud-hypervisor leaks before the operator
+// sees the diagnostic.
+func TestValidateRejectsRelativeObserverLogPath(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.ObserverLogPath = "obs.jsonl"
+	err := cfg.validate()
+	if err == nil || !strings.Contains(err.Error(), "ObserverLogPath") {
+		t.Fatalf("err = %v, want ObserverLogPath-relative error", err)
+	}
+}
+
+// TestValidateAcceptsEmptyObserverLogPath: empty disables the
+// observer entirely, which is the right default for unit tests
+// that don't want a goroutine writing to the filesystem. Pin
+// this so a future "always require an observer path" change is
+// at least a deliberate decision rather than a drive-by.
+func TestValidateAcceptsEmptyObserverLogPath(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.ObserverLogPath = ""
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate with empty ObserverLogPath: %v", err)
+	}
+}
+
+// TestStartObserverIfConfigured covers the cfg.ObserverLogPath
+// switch + best-effort error handling in the helper extracted
+// from cloudHypervisorRunner.run. The fully wired path
+// (real cloud-hypervisor, real PID) is covered by integration
+// tests; this fills the unit-test side so the lookup decisions
+// don't drift silently.
+func TestStartObserverIfConfigured(t *testing.T) {
+	t.Run("empty path returns nil", func(t *testing.T) {
+		obs := startObserverIfConfigured(Config{}, 1)
+		if obs != nil {
+			_ = obs.Stop()
+			t.Fatal("want nil, got Observer")
+		}
+	})
+	t.Run("invalid pid logs and returns nil", func(t *testing.T) {
+		cfg := Config{ObserverLogPath: "/tmp/x.jsonl"}
+		obs := startObserverIfConfigured(cfg, 0)
+		if obs != nil {
+			_ = obs.Stop()
+			t.Fatal("want nil for pid=0, got Observer")
+		}
+	})
+	t.Run("relative path logs and returns nil", func(t *testing.T) {
+		// observability.New rejects relative paths; we want
+		// startObserverIfConfigured to swallow that to nil rather
+		// than panic.
+		cfg := Config{ObserverLogPath: "relative.jsonl"}
+		obs := startObserverIfConfigured(cfg, 1)
+		if obs != nil {
+			_ = obs.Stop()
+			t.Fatal("want nil for relative path, got Observer")
+		}
+	})
+	t.Run("happy path returns started observer", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := Config{ObserverLogPath: filepath.Join(dir, "obs.jsonl")}
+		obs := startObserverIfConfigured(cfg, os.Getpid())
+		if obs == nil {
+			t.Fatal("want Observer, got nil")
+		}
+		if err := obs.Stop(); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	})
+}
+
 // TestValidatePortForwardsRejectsTracePortCollision pins the
 // cross-field invariant: a PortForward.VsockPort that matches the
 // already-assigned Vsock.TracePort would result in CH refusing the

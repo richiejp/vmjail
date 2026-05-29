@@ -25,6 +25,7 @@ import (
 
 	"github.com/localai-org/darkaifactory/internal/agent"
 	"github.com/localai-org/darkaifactory/internal/assert"
+	"github.com/localai-org/darkaifactory/internal/observability"
 	"github.com/localai-org/darkaifactory/internal/oops"
 	"github.com/localai-org/darkaifactory/internal/trace"
 )
@@ -113,6 +114,22 @@ type Config struct {
 	// ProxyPort is the gateway TCP port ProxyHandler listens on; zero
 	// lets sandboxnet pick its DefaultProxyPort.
 	ProxyPort uint16
+
+	// ObserverLogPath, when non-empty, enables per-VM host-side
+	// telemetry: a goroutine samples the cloud-hypervisor process's
+	// /proc/<pid>/{stat,status,io} at 1 Hz and writes one JSON line
+	// per sample to this absolute path. Survives the VM dying so
+	// post-mortem inspection still works. See
+	// internal/observability and docs/observability.md for the data
+	// schema and rotation behaviour. Empty disables the observer
+	// (only for callers that have a reason — every sandbox-test
+	// and user-facing daft-sandboxd launch should set this).
+	ObserverLogPath string
+	// ObserverMaxBytes caps the on-disk footprint at roughly this
+	// many bytes (one current file + one rotated backup). Zero
+	// uses observability.DefaultMaxBytes (50 MB); negative
+	// disables rotation. Ignored when ObserverLogPath is empty.
+	ObserverMaxBytes int64
 }
 
 // PortForward declares one Slice C1 port-forward: traffic the
@@ -222,6 +239,9 @@ func (c *Config) validate() error {
 	}
 	if err := c.validatePortForwards(); err != nil {
 		return err
+	}
+	if c.ObserverLogPath != "" && !strings.HasPrefix(c.ObserverLogPath, "/") {
+		return fmt.Errorf("sandbox: ObserverLogPath %q must be absolute", c.ObserverLogPath)
 	}
 	return nil
 }
@@ -591,6 +611,29 @@ func buildCloudHypervisorArgs(cfg Config, shareSockets []string) []string {
 	return args
 }
 
+// startObserverIfConfigured constructs and starts a per-VM
+// observability.Observer for pid if cfg.ObserverLogPath is set.
+// Errors are reported via oops.Log and the function returns nil
+// so callers can treat "no observer" and "observer failed to
+// start" the same way — observability is a debugging surface, not
+// a correctness invariant of the sandbox launch.
+func startObserverIfConfigured(cfg Config, pid int) *observability.Observer {
+	if cfg.ObserverLogPath == "" {
+		return nil
+	}
+	obs, err := observability.New(pid, cfg.ObserverLogPath,
+		observability.Options{MaxBytes: cfg.ObserverMaxBytes})
+	if err != nil {
+		oops.Log("observability.New", err)
+		return nil
+	}
+	if err := obs.Start(); err != nil {
+		oops.Log("observability.Start", err)
+		return nil
+	}
+	return obs
+}
+
 func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string) (io.ReadCloser, func(), error) {
 	args := buildCloudHypervisorArgs(cfg, shareSockets)
 	// #nosec G204 — cfg.CloudHypervisor is the operator-supplied
@@ -613,7 +656,18 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 		return nil, nil, fmt.Errorf("sandbox: start cloud-hypervisor: %w", err)
 	}
 
+	// Per-VM observer is best-effort: a failed observer must not
+	// fail the sandbox launch, so the helper logs via oops and
+	// returns nil on any error.
+	var obs *observability.Observer
+	if cmd.Process != nil {
+		obs = startObserverIfConfigured(cfg, cmd.Process.Pid)
+	}
+
 	stop := func() {
+		if obs != nil {
+			oops.Log("observability.Stop", obs.Stop())
+		}
 		if cmd.Process != nil {
 			oops.Skip("kill cloud-hypervisor", cmd.Process.Kill(), os.ErrProcessDone)
 		}
