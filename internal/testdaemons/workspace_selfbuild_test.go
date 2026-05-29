@@ -179,6 +179,13 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 		daftSelfBuildInnerTimeout, daftSelfBuildSentinel,
 	)
 
+	// Profiler attaches before the build exec so its first sample
+	// covers the lint window. With the previous order — build first,
+	// profiler after — `daft workspace exec` spin-up for the profiler
+	// delayed the first sample by ~10 s, and failures inside that
+	// window (e.g. the GOCACHE-cold typecheck race) left no
+	// resource-usage trace at all.
+	attachWorkspaceProfiler(t, c, wsName)
 	buildProc := startDaftSubprocess(
 		t, buildLog,
 		c.DaftBin, "--config-dir", c.ClientConfigDir,
@@ -187,7 +194,6 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 		"--orchestrator", c.OrchestratorURL,
 		"--", "/bin/sh", "-c", execShell,
 	)
-	attachWorkspaceProfiler(t, c, wsName)
 	waitForFileContains(t, buildProc, buildLog,
 		daftSelfBuildSentinel, daftSelfBuildSlowBoot,
 		func() string { return s.Capture() })
