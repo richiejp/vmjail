@@ -156,6 +156,18 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 	// loop has historically ignored SIGTERM until the active fetch
 	// completes — same reason `make integration`'s VMs are killed
 	// not terminated.
+	// `nix develop path:.` forces flake evaluation in plain-path
+	// mode rather than git mode. With git mode, nix's libgit2
+	// would try to walk `.git/objects` to identify tracked files;
+	// our `.git/` copy ships HEAD/index/refs but not the object
+	// store (~700 MB of blob CAS that `make check` does not
+	// touch), so libgit2 errors with code = 6 (GIT_ENOTFOUND).
+	// Plain-path mode treats the workdir as the source verbatim
+	// and reads every file present — exactly what we want, since
+	// `git archive HEAD` already gave us the hermetic HEAD
+	// content. Trade-off: any uncommitted scratch in this dir
+	// would now be visible to the flake, but the export is a
+	// fresh tempdir so there isn't any.
 	execShell := fmt.Sprintf(
 		"cd /workspace && exec env "+
 			"HOME=/tmp USER=root "+
@@ -163,7 +175,7 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 			"/bin/sh -lc 'timeout --signal=KILL %ds nix "+
 			"--extra-experimental-features \"nix-command flakes\" "+
 			"--option build-users-group \"\" "+
-			"develop --command sh -c \"make check && echo %s\"'",
+			"develop path:. --command sh -c \"make check && echo %s\"'",
 		daftSelfBuildInnerTimeout, daftSelfBuildSentinel,
 	)
 
@@ -182,21 +194,26 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 }
 
 // exportDaftSourceTo writes the tracked-at-HEAD daft tree under
-// dst. `git archive HEAD` (rather than `cp -r`) guarantees the
-// payload is hermetic: no bin/, no result*, no untracked editor
-// scratch, no .git. nix doesn't need .git either — the flake's
-// submodule pins live in third_party/submodule-revs.json (a
-// tracked file), and `nix develop` happily evaluates a flake
-// from a plain directory.
+// dst, plus the minimal `.git/` metadata `make check` needs.
+// `git archive HEAD` gives a hermetic file payload — no bin/, no
+// result*, no untracked editor scratch. We layer on `.git/` next
+// so `git rev-parse --show-toplevel`, `git submodule status`, and
+// the `check-submodule-revs.sh` gate that wraps them all keep
+// working inside the sandbox. The submodule worktrees themselves
+// stay empty (gitlinks aren't extracted by `git archive`); the
+// drift gate reads SHAs from `.git/index` + `.git/modules/<name>/
+// HEAD`, never the worktrees, and treats "not initialized"
+// submodules as "use the index-pinned SHA".
 //
-// Runs `git archive HEAD | tar -x -C dst`. The pipe is wired in
-// Go because exec.Cmd.StdoutPipe + os/exec orchestration is
-// clearer (and lets us surface either side's error) than shelling
-// out to /bin/sh.
+// Objects + logs + hooks + lfs are excluded so the metadata copy
+// is ~11 MB rather than ~838 MB (almost all of the latter is
+// `.git/modules/third_party/{linux,clang,…}/objects`, none of
+// which is referenced by `make check`).
 func exportDaftSourceTo(t *testing.T, dst string) {
 	t.Helper()
 	root := daftRepoRoot(t)
 
+	// 1. tracked HEAD content via git archive | tar -x.
 	archive := exec.Command("git", "-C", root, "archive", "--format=tar", "HEAD")
 	untar := exec.Command("tar", "-x", "-C", dst)
 
@@ -220,6 +237,56 @@ func exportDaftSourceTo(t *testing.T, dst string) {
 	}
 	if err := untar.Wait(); err != nil {
 		t.Fatalf("tar extract: %v (stderr: %s)", err, untarStderr.String())
+	}
+
+	// 2. Minimal `.git/` metadata so `make check-submodule-revs`
+	// works inside the sandbox. We tar from the host repo's
+	// `.git/` directly into dst/.git/, excluding the heavy blob
+	// stores. tar's --transform/-s flags vary across versions,
+	// so we drive a single `tar -C $root/.git -cf - <selected> |
+	// tar -C $dst/.git -xf -` pipeline, with the selection
+	// implemented by --exclude.
+	gitDst := filepath.Join(dst, ".git")
+	if err := os.MkdirAll(gitDst, 0o755); err != nil {
+		t.Fatalf("mkdir .git: %v", err)
+	}
+	gitSrc := filepath.Join(root, ".git")
+	// Exclude paths chosen so libgit2 (nix flake evaluator) still
+	// recognises the result as a valid repo. `objects/info` stays
+	// in (libgit2 walks it during repo discovery); only the blob
+	// stores under `objects/[0-9a-f][0-9a-f]/` and `objects/pack/`
+	// are dropped. Without that nuance nix bails with "libgit2
+	// error code = 6" (GIT_ENOTFOUND).
+	cp := exec.Command("tar",
+		"-C", gitSrc,
+		"--exclude=objects/[0-9a-f][0-9a-f]",
+		"--exclude=objects/pack",
+		"--exclude=lfs",
+		"--exclude=logs",
+		"--exclude=hooks",
+		"-cf", "-",
+		".")
+	xcp := exec.Command("tar", "-C", gitDst, "-xf", "-")
+	pipe2, err := cp.StdoutPipe()
+	if err != nil {
+		t.Fatalf("git-meta pipe: %v", err)
+	}
+	xcp.Stdin = pipe2
+
+	var cpErr, xcpErr strings.Builder
+	cp.Stderr = &cpErr
+	xcp.Stderr = &xcpErr
+
+	if err := xcp.Start(); err != nil {
+		t.Fatalf("start git-meta extract: %v", err)
+	}
+	if err := cp.Run(); err != nil {
+		_ = xcp.Process.Kill()
+		_, _ = xcp.Process.Wait()
+		t.Fatalf("git-meta tar: %v (stderr: %s)", err, cpErr.String())
+	}
+	if err := xcp.Wait(); err != nil {
+		t.Fatalf("git-meta extract: %v (stderr: %s)", err, xcpErr.String())
 	}
 }
 
