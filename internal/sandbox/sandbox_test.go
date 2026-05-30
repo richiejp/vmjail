@@ -8,9 +8,9 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -114,6 +114,7 @@ type fakeRunner struct {
 	stopCalled      bool
 	gotShareSockets []string                        // captured shareSockets arg, for share tests
 	gotCollectNet   func() *observability.NetSample // captured callback, for net counter tests
+	gotCgroupDir    string                          // captured cgroupDir arg, for shared-cgroup tests
 	// neverEOF keeps the returned stdout reader blocking after the
 	// output has been drained so Serve tests can verify the
 	// ctx-cancel branch (a real VMM's stdout stays open until the
@@ -121,8 +122,9 @@ type fakeRunner struct {
 	neverEOF bool
 }
 
-func (f *fakeRunner) run(_ context.Context, _ Config, shareSockets []string, collectNet func() *observability.NetSample) (io.ReadCloser, func(), error) {
+func (f *fakeRunner) run(_ context.Context, _ Config, shareSockets []string, cgroupDir string, collectNet func() *observability.NetSample) (io.ReadCloser, func(), error) {
 	f.gotCollectNet = collectNet
+	f.gotCgroupDir = cgroupDir
 	f.gotShareSockets = shareSockets
 	if f.startErr != nil {
 		return nil, nil, f.startErr
@@ -147,12 +149,14 @@ func (f *fakeRunner) run(_ context.Context, _ Config, shareSockets []string, col
 // without spawning anything. Used to test the share-orchestration
 // branches of helloWith.
 type fakeShareSidecar struct {
-	sockets    []string
-	startErr   error
-	stopCalled bool
+	sockets      []string
+	startErr     error
+	stopCalled   bool
+	gotCgroupDir string // captured cgroupDir arg, for shared-cgroup tests
 }
 
-func (f *fakeShareSidecar) start(_ context.Context, cfg Config) (sockets []string, stop func(), err error) {
+func (f *fakeShareSidecar) start(_ context.Context, cfg Config, cgroupDir string) (sockets []string, stop func(), err error) {
+	f.gotCgroupDir = cgroupDir
 	if f.startErr != nil {
 		return nil, nil, f.startErr
 	}
@@ -174,7 +178,7 @@ func (f *fakeShareSidecar) start(_ context.Context, cfg Config) (sockets []strin
 // was never invoked (panics on call).
 type noShareSidecar struct{}
 
-func (noShareSidecar) start(context.Context, Config) (sockets []string, stop func(), err error) {
+func (noShareSidecar) start(context.Context, Config, string) (sockets []string, stop func(), err error) {
 	panic("noShareSidecar.start called: helloWith should not start virtiofsd when Shares is empty")
 }
 
@@ -443,6 +447,34 @@ func TestHelloWithShareStartsSidecarAndPassesSocketsToRunner(t *testing.T) {
 	}
 	if len(r.gotShareSockets) != 1 || r.gotShareSockets[0] != sc.sockets[0] {
 		t.Errorf("runner saw shareSockets=%v, want %v", r.gotShareSockets, sc.sockets)
+	}
+}
+
+// TestHelloWithSharedCgroupThreadsSameDirToRunnerAndShare pins
+// the invariant that helloWith creates the per-VM cgroup once and
+// threads the SAME path into both the share sidecar (virtiofsd
+// placement) and the runner (CH placement). Anything else would
+// split accounting across two cgroups and break the cgroup view's
+// "VM tree in one place" promise.
+func TestHelloWithSharedCgroupThreadsSameDirToRunnerAndShare(t *testing.T) {
+	dir := t.TempDir()
+	cfg := validCfg()
+	cfg.Virtiofsd = testFakeVirtiofsd
+	cfg.Shares = []*ShareConfig{
+		{HostDir: dir, Tag: testTagWorkspace, Mountpoint: testMountpoint},
+	}
+	r := &fakeRunner{output: agent.Banner + "\n"}
+	sc := &fakeShareSidecar{sockets: []string{"/tmp/fake.sock"}}
+
+	if err := helloWith(t.Context(), io.Discard, cfg, r, sc); err != nil {
+		t.Fatalf("helloWith: %v", err)
+	}
+	// Both must receive the same value, whatever it is. On a
+	// non-delegated host that's ""; on a delegated host it's the
+	// fresh cgroup dir. Either way they have to agree.
+	if r.gotCgroupDir != sc.gotCgroupDir {
+		t.Errorf("runner.cgroupDir=%q != share.cgroupDir=%q (must be same path)",
+			r.gotCgroupDir, sc.gotCgroupDir)
 	}
 }
 
@@ -749,37 +781,30 @@ func TestVMCgroupName_HandlesEmptyLogPath(t *testing.T) {
 
 // TestSetupVMCgroup_GracefulOnNoDelegation: on stock systemd
 // hosts the user session scope doesn't have Delegate=yes, so
-// CreateSubCgroup returns EACCES. The helper must return
-// ("", -1) (no fd, no path) rather than aborting — observability
-// is best-effort and the sandbox must boot anyway. This is the
-// most-common-in-CI / on-laptop scenario for the wrap.
-func TestSetupVMCgroup_GracefulOnNoDelegation(t *testing.T) {
+// CreateSubCgroup returns EACCES. The helper must return ""
+// rather than aborting — observability is best-effort and the
+// sandbox must boot anyway. This is the most-common-in-CI /
+// on-laptop scenario for the wrap.
+func TestCreateVMCgroup_GracefulOnNoDelegation(t *testing.T) {
 	// We don't try to predict whether THIS test host has
-	// delegation. Both outcomes are valid: ("", -1) on no
-	// delegation, (path, fd>=0) on delegated. We just verify
-	// the function doesn't panic and returns a consistent pair.
+	// delegation. Both outcomes are valid: "" on no delegation,
+	// non-empty path on delegated. We just verify the function
+	// doesn't panic.
 	name := vmCgroupName(Config{ObserverLogPath: "/tmp/setup-test"})
-	path, fd := setupVMCgroup(name)
+	path := createVMCgroup(name)
 	t.Cleanup(func() {
-		if fd >= 0 {
-			_ = syscall.Close(fd)
-		}
 		if path != "" {
 			_ = observability.RemoveCgroup(path)
 		}
 	})
-	if (path == "") != (fd < 0) {
-		t.Errorf("inconsistent return: path=%q fd=%d (want both populated or both empty)", path, fd)
-	}
 }
 
-// TestSetupVMCgroup_SuccessUnderFakeRoot drives the entire
-// create→openfd→cleanup path against a tempdir cgroup root, so
-// the success-side branches stay covered on hosts without real
-// cgroup delegation. We pre-populate the tempdir with the
-// session-scope path that /proc/self/cgroup reports, so
-// CurrentCgroup returns a writable parent.
-func TestSetupVMCgroup_SuccessUnderFakeRoot(t *testing.T) {
+// TestCreateVMCgroup_SuccessUnderFakeRoot drives the create path
+// against a tempdir cgroup root, so the success-side branch stays
+// covered on hosts without real cgroup delegation. We pre-populate
+// the tempdir with the session-scope path that /proc/self/cgroup
+// reports, so CurrentCgroup returns a writable parent.
+func TestCreateVMCgroup_SuccessUnderFakeRoot(t *testing.T) {
 	fakeRoot := t.TempDir()
 	prev := observability.SwapCgroupRoot(fakeRoot)
 	t.Cleanup(func() { observability.SwapCgroupRoot(prev) })
@@ -795,20 +820,63 @@ func TestSetupVMCgroup_SuccessUnderFakeRoot(t *testing.T) {
 		t.Fatalf("seed fake parent %s: %v", realParent, err)
 	}
 
-	path, fd := setupVMCgroup(vmCgroupName(Config{ObserverLogPath: "/tmp/setup-success-test"}))
+	path := createVMCgroup(vmCgroupName(Config{ObserverLogPath: "/tmp/setup-success-test"}))
 	t.Cleanup(func() {
-		if fd >= 0 {
-			_ = syscall.Close(fd)
-		}
 		if path != "" {
 			_ = observability.RemoveCgroup(path)
 		}
 	})
-	if path == "" || fd < 0 {
-		t.Fatalf("setupVMCgroup failed under fake root: path=%q fd=%d", path, fd)
+	if path == "" {
+		t.Fatal("createVMCgroup returned \"\" under fake root")
 	}
 	if info, err := os.Stat(path); err != nil || !info.IsDir() {
 		t.Errorf("cgroup dir not created at %s: err=%v info=%v", path, err, info)
+	}
+}
+
+// TestPlaceInCgroup_EmptyDirNoop pins that placeInCgroup with no
+// cgroup is a no-op: it doesn't touch SysProcAttr and the returned
+// closer is safe to call.
+func TestPlaceInCgroup_EmptyDirNoop(t *testing.T) {
+	cmd := exec.Command("/bin/true")
+	closeFD := placeInCgroup(cmd, "")
+	if cmd.SysProcAttr != nil {
+		t.Errorf("SysProcAttr modified for empty cgroup dir: %+v", cmd.SysProcAttr)
+	}
+	closeFD() // must not panic
+}
+
+// TestPlaceInCgroup_OpensFD drives the open + wire path under a
+// fake cgroup root so we exercise the SysProcAttr.UseCgroupFD
+// branch without needing real delegation. The returned closer
+// must release the fd; we don't fork — placeInCgroup hands off
+// to cmd.Start, which the orchestrator owns.
+func TestPlaceInCgroup_OpensFD(t *testing.T) {
+	fakeRoot := t.TempDir()
+	prev := observability.SwapCgroupRoot(fakeRoot)
+	t.Cleanup(func() { observability.SwapCgroupRoot(prev) })
+
+	realParent, err := observability.CurrentCgroup()
+	if err != nil {
+		t.Fatalf("CurrentCgroup: %v", err)
+	}
+	if err := os.MkdirAll(realParent, 0o750); err != nil {
+		t.Fatalf("seed fake parent: %v", err)
+	}
+	dir := createVMCgroup(vmCgroupName(Config{ObserverLogPath: "/tmp/place-fd-test"}))
+	if dir == "" {
+		t.Fatal("createVMCgroup returned \"\" under fake root")
+	}
+	t.Cleanup(func() { _ = observability.RemoveCgroup(dir) })
+
+	cmd := exec.Command("/bin/true")
+	closeFD := placeInCgroup(cmd, dir)
+	t.Cleanup(closeFD)
+	// SysProcAttr being non-nil and the CgroupFD-style wiring
+	// being applied is platform-specific; we just pin that the
+	// helper didn't fall back to a no-op when it had a valid dir.
+	if cmd.SysProcAttr == nil {
+		t.Fatal("SysProcAttr nil after placeInCgroup with valid dir")
 	}
 }
 
@@ -957,7 +1025,7 @@ func TestVirtiofsdSidecarStartViaFakeBinary(t *testing.T) {
 		}},
 	}
 
-	sockets, stop, err := virtiofsdSidecar{}.start(t.Context(), cfg)
+	sockets, stop, err := virtiofsdSidecar{}.start(t.Context(), cfg, "")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -992,7 +1060,7 @@ func TestVirtiofsdSidecarTimesOutWhenSocketNeverAppears(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 
-	_, _, err := virtiofsdSidecar{}.start(ctx, cfg)
+	_, _, err := virtiofsdSidecar{}.start(ctx, cfg, "")
 	if err == nil {
 		t.Fatal("start succeeded with no socket; want timeout error")
 	}

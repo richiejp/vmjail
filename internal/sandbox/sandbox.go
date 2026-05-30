@@ -365,7 +365,7 @@ var ErrBannerNotSeen = errors.New("sandbox: agent banner not seen on console")
 // Config) keeps Config a description-of-intent and the runner
 // stateless.
 type runner interface {
-	run(ctx context.Context, cfg Config, shareSockets []string, collectNet func() *observability.NetSample) (io.ReadCloser, func(), error)
+	run(ctx context.Context, cfg Config, shareSockets []string, cgroupDir string, collectNet func() *observability.NetSample) (io.ReadCloser, func(), error)
 }
 
 // shareSidecar abstracts the virtiofsd subprocess. Lifecycle: start
@@ -374,7 +374,7 @@ type runner interface {
 // cfg.Shares entry, in the same order. Like runner, swappable in
 // tests.
 type shareSidecar interface {
-	start(ctx context.Context, cfg Config) (socketPaths []string, stop func(), err error)
+	start(ctx context.Context, cfg Config, cgroupDir string) (socketPaths []string, stop func(), err error)
 }
 
 // cloudHypervisorRunner runs cloud-hypervisor as a child process and
@@ -404,7 +404,14 @@ const virtiofsdReadyTimeout = 5 * time.Second
 // start spawns one virtiofsd per cfg.Shares entry, returning a slice
 // of socket paths (parallel to cfg.Shares). The returned stop tears
 // down every spawned process and removes the temp dirs.
-func (virtiofsdSidecar) start(ctx context.Context, cfg Config) (sockets []string, stop func(), err error) {
+//
+// cgroupDir, when non-empty, fork-places every virtiofsd into the
+// shared per-VM cgroup via CLONE_INTO_CGROUP so memory.peak / io.stat
+// account for the share sidecar's contributions alongside CH's.
+// Empty is best-effort: virtiofsd boots in the parent cgroup and the
+// observer's cgroup view simply doesn't see its bytes — same fallback
+// as the rest of the cgroup wrap.
+func (virtiofsdSidecar) start(ctx context.Context, cfg Config, cgroupDir string) (sockets []string, stop func(), err error) {
 	sockets = make([]string, 0, len(cfg.Shares))
 	stops := make([]func(), 0, len(cfg.Shares))
 
@@ -416,7 +423,7 @@ func (virtiofsdSidecar) start(ctx context.Context, cfg Config) (sockets []string
 	}
 
 	for i, share := range cfg.Shares {
-		sock, oneStop, oneErr := startOneVirtiofsd(ctx, cfg.Virtiofsd, share)
+		sock, oneStop, oneErr := startOneVirtiofsd(ctx, cfg.Virtiofsd, share, cgroupDir)
 		if oneErr != nil {
 			stopAll()
 			return nil, nil, fmt.Errorf("sandbox: share %d (%s): %w", i, share.Tag, oneErr)
@@ -430,7 +437,10 @@ func (virtiofsdSidecar) start(ctx context.Context, cfg Config) (sockets []string
 // startOneVirtiofsd spawns a single virtiofsd against share, writes
 // its socket into a fresh temp dir, and waits for the socket to
 // appear before returning. stop tears down the process + temp dir.
-func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig) (socket string, stop func(), err error) {
+// cgroupDir, when non-empty, places the spawned process in the shared
+// per-VM cgroup (CLONE_INTO_CGROUP) so its resource use rolls up
+// into the same accounting as CH; empty is a no-op.
+func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig, cgroupDir string) (socket string, stop func(), err error) {
 	dir, err := os.MkdirTemp("", "daft-virtiofs-")
 	if err != nil {
 		return "", nil, fmt.Errorf("tmpdir: %w", err)
@@ -466,10 +476,14 @@ func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig) (
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 
+	closeCgroupFD := placeInCgroup(cmd, cgroupDir)
+
 	if err := cmd.Start(); err != nil {
+		closeCgroupFD()
 		cleanup()
 		return "", nil, fmt.Errorf("spawn virtiofsd: %w", err)
 	}
+	closeCgroupFD()
 
 	stop = func() {
 		// Best-effort teardown. Kill on an already-exited process
@@ -666,40 +680,64 @@ func removeVMCgroupBestEffort(path string) {
 	}
 }
 
-// setupVMCgroup creates a per-VM cgroup v2 sub-directory and
-// returns its path plus an O_PATH fd suitable for
-// SysProcAttr.CgroupFD, so the cloud-hypervisor child is placed
-// into the cgroup atomically at fork (CLONE_INTO_CGROUP). Best-
-// effort: any failure (no cgroup v2, no delegation, the typical
-// "Permission denied" on un-delegated user sessions) is reported
-// via oops.Log and the function returns ("", -1) — the caller
-// proceeds without the wrap, the observer falls back to /proc-
-// only sampling, and the sandbox still boots.
+// createVMCgroup creates a per-VM cgroup v2 sub-directory and
+// returns its absolute path. Best-effort: any failure (no cgroup
+// v2, no delegation, the typical "Permission denied" on
+// un-delegated user sessions) is reported via oops.Log and the
+// function returns "" — callers proceed without the wrap, the
+// observer falls back to /proc-only sampling, and the sandbox
+// still boots.
 //
 // `name` should be a unique identifier for this VM; the caller is
 // responsible for ensuring uniqueness within the parent cgroup.
-// The lifecycle pairs with RemoveCgroup in the cleanup closure.
-func setupVMCgroup(name string) (path string, fd int) {
+// The lifecycle pairs with removeVMCgroupBestEffort in the
+// cleanup closure.
+//
+// Returning the path (rather than an O_PATH fd) lets multiple
+// spawn-helpers (cloud-hypervisor + every virtiofsd sidecar) open
+// their own fd at fork time via placeInCgroup, so the whole VM
+// process tree lands in one accounting unit without coordinating
+// fd ownership across helpers.
+func createVMCgroup(name string) string {
 	parent, err := observability.CurrentCgroup()
 	if err != nil {
 		oops.Log("observability.CurrentCgroup", err)
-		return "", -1
+		return ""
 	}
 	dir, err := observability.CreateSubCgroup(parent, name)
 	if err != nil {
 		oops.Log("observability.CreateSubCgroup", err)
-		return "", -1
+		return ""
 	}
-	openedFD, err := observability.OpenCgroupFD(dir)
-	if err != nil {
-		oops.Log("observability.OpenCgroupFD", err)
-		removeVMCgroupBestEffort(dir)
-		return "", -1
-	}
-	return dir, openedFD
+	return dir
 }
 
-func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string, collectNet func() *observability.NetSample) (io.ReadCloser, func(), error) {
+// placeInCgroup wires cmd.SysProcAttr so cmd.Start fork-places the
+// child into the cgroup at cgroupDir via CLONE_INTO_CGROUP. The
+// returned closeFD must be called AFTER cmd.Start (whether it
+// succeeded or not) to release the O_PATH fd; the kernel keeps
+// its own reference via the clone arg. cgroupDir == "" is a
+// no-op (no delegation, no wrap) and the closeFD is also a no-op.
+//
+// Any failure to open the fd is best-effort: logged via oops and
+// the cmd is left without cgroup placement, matching createVMCgroup's
+// "sandbox still boots without observability" contract.
+func placeInCgroup(cmd *exec.Cmd, cgroupDir string) (closeFD func()) {
+	if cgroupDir == "" {
+		return func() {}
+	}
+	fd, err := observability.OpenCgroupFD(cgroupDir)
+	if err != nil {
+		oops.Log("observability.OpenCgroupFD", err)
+		return func() {}
+	}
+	cmd.SysProcAttr = withCgroupFD(cmd.SysProcAttr, fd)
+	return func() {
+		oops.Skip("close cgroup fd", syscall.Close(fd), nil)
+	}
+}
+
+func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string, cgroupDir string, collectNet func() *observability.NetSample) (io.ReadCloser, func(), error) {
 	args := buildCloudHypervisorArgs(cfg, shareSockets)
 	// #nosec G204 — cfg.CloudHypervisor is the operator-supplied
 	// VMM path; argv elements are derived from validated Config
@@ -717,30 +755,17 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 	}
 	cmd.Stderr = io.Discard
 
-	// Per-VM cgroup wrap. Best-effort: on hosts without cgroup v2
-	// delegation (the typical user-session case on stock systemd
-	// setups) this fails with EACCES; we log and proceed without
-	// the wrap. The observer falls back to /proc-only sampling.
-	cgroupDir, cgroupFD := setupVMCgroup(vmCgroupName(cfg))
-	if cgroupFD >= 0 {
-		// CLONE_INTO_CGROUP via Go 1.22+ SysProcAttr — the CH
-		// child is placed in the cgroup atomically at fork, so
-		// no PID ever lives in the parent cgroup. fd is closed
-		// after Start (the kernel keeps its own reference via
-		// the clone arg).
-		cmd.SysProcAttr = withCgroupFD(cmd.SysProcAttr, cgroupFD)
-	}
+	// Per-VM cgroup wrap is best-effort and owned by the
+	// orchestration layer (helloWith/serveWith) so that virtiofsd
+	// and CH share the same accounting unit. placeInCgroup is a
+	// no-op when cgroupDir == "" — i.e. on hosts without delegation.
+	closeCgroupFD := placeInCgroup(cmd, cgroupDir)
 
 	if err := cmd.Start(); err != nil {
-		if cgroupFD >= 0 {
-			oops.Skip("close cgroup fd", syscall.Close(cgroupFD), nil)
-		}
-		removeVMCgroupBestEffort(cgroupDir)
+		closeCgroupFD()
 		return nil, nil, fmt.Errorf("sandbox: start cloud-hypervisor: %w", err)
 	}
-	if cgroupFD >= 0 {
-		oops.Skip("close cgroup fd", syscall.Close(cgroupFD), nil)
-	}
+	closeCgroupFD()
 
 	// Per-VM observer is best-effort: a failed observer must not
 	// fail the sandbox launch, so the helper logs via oops and
@@ -771,11 +796,9 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 				oops.Must("wait cloud-hypervisor", waitErr)
 			}
 		}
-		// rmdir the cgroup only after Wait has reaped CH — the
-		// kernel refuses rmdir while any task is still in the
-		// cgroup. Failure here is non-fatal; a leaked empty
-		// cgroup is annoying but not a correctness problem.
-		removeVMCgroupBestEffort(cgroupDir)
+		// The cgroup itself is removed at the orchestration layer
+		// after stopShare reaps the virtiofsd sidecars too — rmdir
+		// only succeeds when every task in the cgroup is gone.
 	}
 	return stdout, stop, nil
 }
@@ -850,7 +873,16 @@ func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	cfg = cfg.withDefaults()
 
-	shareSockets, stopShare, err := startShares(ctx, cfg, sc)
+	// Create the per-VM cgroup BEFORE startShares so virtiofsd
+	// fork-places into it alongside cloud-hypervisor. Best-effort:
+	// returns "" on hosts without delegation; the rest of the chain
+	// becomes a no-op cgroup-wise but boots normally. Defer removal
+	// FIRST so it runs LAST (after every stop closure has reaped its
+	// process) — rmdir succeeds only when every task is gone.
+	cgroupDir := createVMCgroup(vmCgroupName(cfg))
+	defer removeVMCgroupBestEffort(cgroupDir)
+
+	shareSockets, stopShare, err := startShares(ctx, cfg, sc, cgroupDir)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
@@ -868,7 +900,7 @@ func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	defer stopNet()
 
-	stdout, stop, err := runVMM(ctx, cfg, shareSockets, r, collectNet)
+	stdout, stop, err := runVMM(ctx, cfg, shareSockets, r, cgroupDir, collectNet)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
@@ -916,7 +948,12 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	runCtx, cancel := context.WithTimeout(ctx, HelloTimeout)
 	defer cancel()
 
-	shareSockets, stopShare, err := startShares(runCtx, cfg, sc)
+	// Same cgroup choreography as serveWith — see the long
+	// comment there.
+	cgroupDir := createVMCgroup(vmCgroupName(cfg))
+	defer removeVMCgroupBestEffort(cgroupDir)
+
+	shareSockets, stopShare, err := startShares(runCtx, cfg, sc, cgroupDir)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
@@ -934,7 +971,7 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	defer stopNet()
 
-	stdout, stop, err := runVMM(runCtx, cfg, shareSockets, r, collectNet)
+	stdout, stop, err := runVMM(runCtx, cfg, shareSockets, r, cgroupDir, collectNet)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
@@ -953,14 +990,14 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 // caller can defer stopShare unconditionally. Wrapped in its own
 // span so the cold-boot trace breaks down virtiofsd-spawn time
 // separately from VMM-spawn time.
-func startShares(ctx context.Context, cfg Config, sc shareSidecar) (sockets []string, stop func(), err error) {
+func startShares(ctx context.Context, cfg Config, sc shareSidecar, cgroupDir string) (sockets []string, stop func(), err error) {
 	if len(cfg.Shares) == 0 {
 		return nil, func() {}, nil
 	}
 	ctx, span := trace.Start(ctx, "sandbox.start_virtiofsd",
 		trace.WithAttributes(trace.KV{Key: traceAttrShares, Value: strconv.Itoa(len(cfg.Shares))}))
 	defer span.End()
-	sockets, stop, err = sc.start(ctx, cfg)
+	sockets, stop, err = sc.start(ctx, cfg, cgroupDir)
 	if err != nil {
 		return nil, func() {}, trace.RecordError(ctx,
 			fmt.Errorf("sandbox: start virtiofsd: %w", err))
@@ -971,10 +1008,10 @@ func startShares(ctx context.Context, cfg Config, sc shareSidecar) (sockets []st
 // runVMM spawns the configured VMM (Cloud Hypervisor today) and
 // returns its stdout pipe. Wrapped in its own span so the trace
 // distinguishes "VMM spawn" from "wait for guest banner".
-func runVMM(ctx context.Context, cfg Config, shareSockets []string, r runner, collectNet func() *observability.NetSample) (stdout io.ReadCloser, stop func(), err error) {
+func runVMM(ctx context.Context, cfg Config, shareSockets []string, r runner, cgroupDir string, collectNet func() *observability.NetSample) (stdout io.ReadCloser, stop func(), err error) {
 	ctx, span := trace.Start(ctx, "sandbox.run_cloud_hypervisor")
 	defer span.End()
-	stdout, stop, err = r.run(ctx, cfg, shareSockets, collectNet)
+	stdout, stop, err = r.run(ctx, cfg, shareSockets, cgroupDir, collectNet)
 	if err != nil {
 		return nil, nil, trace.RecordError(ctx, err)
 	}

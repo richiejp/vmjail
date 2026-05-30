@@ -57,20 +57,25 @@ and one backup is kept. Default `MaxBytes` is 50 MB; total disk
 per sandbox is therefore ~50 MB worst case (~25 MB live + ~25 MB
 rotated), `~30 KB / min` at 1 Hz, `~43 MB / day` before rotation.
 
-**Where it runs:** `internal/sandbox/sandbox.go` (`cloudHypervisorRunner.run`).
-Before `cmd.Start()` we try to create a per-VM cgroup v2
-sub-directory under our own cgroup via `observability.CreateSubCgroup`,
-then pass an O_PATH fd to `SysProcAttr.UseCgroupFD` so the
-cloud-hypervisor child is placed in the cgroup atomically at fork
-via `CLONE_INTO_CGROUP`. The observer is started with the CH PID
-*and* the cgroup directory, so each sample carries both views.
-The cleanup `stop` closure calls `obs.Stop()` before `cmd.Wait()`
-so the final samples flush before the process is reaped, then
-`removeVMCgroupBestEffort` rmdir's the cgroup after the kernel
-has reaped the task. A failed observer or cgroup setup is
-reported via `oops.Log` and the sandbox proceeds without the
-affected surface — observability is a debugging surface, not a
-correctness invariant.
+**Where it runs:** `internal/sandbox/sandbox.go` (orchestration in
+`helloWith` / `serveWith`). `createVMCgroup` runs FIRST, before
+the share sidecars and the VMM, so the cgroup directory exists
+when virtiofsd is spawned. `placeInCgroup` then opens one O_PATH
+fd per spawn — each `cmd.Start` does its own `CLONE_INTO_CGROUP`
+via `SysProcAttr.UseCgroupFD`, so every virtiofsd sidecar AND the
+cloud-hypervisor process all land in the same per-VM cgroup
+atomically at fork. The observer is started with the CH PID *and*
+the cgroup directory, so each sample carries both views.
+
+Teardown order is enforced by Go's defer LIFO: the cgroup removal
+is deferred first (runs last), then the share-sidecar stop, then
+the trace+net receivers, then the VMM stop. By the time
+`removeVMCgroupBestEffort` rmdir's the directory every task in
+the cgroup has been reaped — the kernel refuses rmdir while any
+task is still inside, so the ordering matters. A failed observer
+or cgroup setup is reported via `oops.Log` and the sandbox
+proceeds without the affected surface — observability is a
+debugging surface, not a correctness invariant.
 
 **Cgroup wrap requires delegation.** On stock systemd hosts the
 user session scope doesn't have `Delegate=yes`, so mkdir under
@@ -183,11 +188,6 @@ caller picks a location appropriate for its lifetime:
 
 **What it does NOT do (yet):**
 
-- No virtiofsd in the cgroup. Today the cgroup wraps only
-  cloud-hypervisor — `memory.peak` / `io.stat` therefore miss the
-  virtiofsd sidecar's contributions to host I/O. Follow-up:
-  thread the cgroup fd through `virtiofsdSidecar.start` so the
-  whole VM tree is one accounting unit.
 - No per-protocol or per-flow network detail. The sandboxnet
   byte counters answer "is the guest moving bytes through the
   userspace stack at all" but not "to which destinations" or
@@ -290,26 +290,24 @@ the top tying it to a specific recurring symptom.
 
 In rough order:
 
-1. **Tier 1** (landed) — `/proc` sampler + per-VM cgroup wrap +
-   sandboxnet byte counters in `internal/observability`, wired into
+1. **Tier 1** (landed) — `/proc` sampler + per-VM cgroup wrap
+   (CH + virtiofsd) + sandboxnet byte counters in
+   `internal/observability`, wired into
    `sandbox.Config.ObserverLogPath`.
-2. **virtiofsd in the cgroup** — thread the cgroup fd through
-   `virtiofsdSidecar.start` so `memory.peak` / `io.stat` account
-   for the share sidecar too.
-3. **`daft-sandboxd` per-sandbox state dir** — pick a stable path
+2. **`daft-sandboxd` per-sandbox state dir** — pick a stable path
    (likely `$XDG_STATE_HOME/daft/sandboxes/<id>/`) and default
    `ObserverLogPath` there for user-facing launches.
-4. **`daft sandbox observer-tail <name>` CLI surface** — convenience
+3. **`daft sandbox observer-tail <name>` CLI surface** — convenience
    for `tail -f` against a running sandbox's observer log without
    needing to know the path.
-5. **`testdaemons.Cluster` integration** — every integration test
+4. **`testdaemons.Cluster` integration** — every integration test
    workspace gets an observer log path under `t.TempDir()`, surfaced
    in failure messages so the file is grabbable before tempdir
    cleanup.
-6. **Tier 2 kickoff** — kconfig commit (BTF/UPROBES/KALLSYMS_ALL/
+5. **Tier 2 kickoff** — kconfig commit (BTF/UPROBES/KALLSYMS_ALL/
    FTRACE_SYSCALLS/BPF_EVENTS) + `cilium/ebpf` dependency + first
    gadget (`open-snoop`).
-7. **More gadgets** — `biolatency`, `tcpstat`, `runqlat`, `pktstat`,
+6. **More gadgets** — `biolatency`, `tcpstat`, `runqlat`, `pktstat`,
    each motivated by a real recurring symptom.
 
 ## Related
