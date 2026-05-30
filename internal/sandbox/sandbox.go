@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/fs"
 	"net/http"
@@ -21,6 +22,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/localai-org/darkaifactory/internal/agent"
@@ -617,12 +620,20 @@ func buildCloudHypervisorArgs(cfg Config, shareSockets []string) []string {
 // so callers can treat "no observer" and "observer failed to
 // start" the same way — observability is a debugging surface, not
 // a correctness invariant of the sandbox launch.
-func startObserverIfConfigured(cfg Config, pid int) *observability.Observer {
+//
+// cgroupDir is the path of the per-VM cgroup the workload runs
+// under, or "" if the cgroup wrap step failed (no delegation, etc.).
+// Empty just disables cgroup sampling; the /proc sampler still
+// runs and produces a useful (if more limited) trace.
+func startObserverIfConfigured(cfg Config, pid int, cgroupDir string) *observability.Observer {
 	if cfg.ObserverLogPath == "" {
 		return nil
 	}
 	obs, err := observability.New(pid, cfg.ObserverLogPath,
-		observability.Options{MaxBytes: cfg.ObserverMaxBytes})
+		observability.Options{
+			MaxBytes:  cfg.ObserverMaxBytes,
+			CgroupDir: cgroupDir,
+		})
 	if err != nil {
 		oops.Log("observability.New", err)
 		return nil
@@ -632,6 +643,54 @@ func startObserverIfConfigured(cfg Config, pid int) *observability.Observer {
 		return nil
 	}
 	return obs
+}
+
+// removeVMCgroupBestEffort wraps observability.RemoveCgroup with
+// the project's "log and proceed" pattern. Empty path is a no-op
+// so callers can use it unconditionally even when the cgroup
+// wrap was skipped. Factored out of run()'s three cleanup sites
+// so the error-handling branch is covered once instead of three
+// times.
+func removeVMCgroupBestEffort(path string) {
+	if path == "" {
+		return
+	}
+	if err := observability.RemoveCgroup(path); err != nil {
+		oops.Log("observability.RemoveCgroup", err)
+	}
+}
+
+// setupVMCgroup creates a per-VM cgroup v2 sub-directory and
+// returns its path plus an O_PATH fd suitable for
+// SysProcAttr.CgroupFD, so the cloud-hypervisor child is placed
+// into the cgroup atomically at fork (CLONE_INTO_CGROUP). Best-
+// effort: any failure (no cgroup v2, no delegation, the typical
+// "Permission denied" on un-delegated user sessions) is reported
+// via oops.Log and the function returns ("", -1) — the caller
+// proceeds without the wrap, the observer falls back to /proc-
+// only sampling, and the sandbox still boots.
+//
+// `name` should be a unique identifier for this VM; the caller is
+// responsible for ensuring uniqueness within the parent cgroup.
+// The lifecycle pairs with RemoveCgroup in the cleanup closure.
+func setupVMCgroup(name string) (path string, fd int) {
+	parent, err := observability.CurrentCgroup()
+	if err != nil {
+		oops.Log("observability.CurrentCgroup", err)
+		return "", -1
+	}
+	dir, err := observability.CreateSubCgroup(parent, name)
+	if err != nil {
+		oops.Log("observability.CreateSubCgroup", err)
+		return "", -1
+	}
+	openedFD, err := observability.OpenCgroupFD(dir)
+	if err != nil {
+		oops.Log("observability.OpenCgroupFD", err)
+		removeVMCgroupBestEffort(dir)
+		return "", -1
+	}
+	return dir, openedFD
 }
 
 func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string) (io.ReadCloser, func(), error) {
@@ -652,8 +711,29 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 	}
 	cmd.Stderr = io.Discard
 
+	// Per-VM cgroup wrap. Best-effort: on hosts without cgroup v2
+	// delegation (the typical user-session case on stock systemd
+	// setups) this fails with EACCES; we log and proceed without
+	// the wrap. The observer falls back to /proc-only sampling.
+	cgroupDir, cgroupFD := setupVMCgroup(vmCgroupName(cfg))
+	if cgroupFD >= 0 {
+		// CLONE_INTO_CGROUP via Go 1.22+ SysProcAttr — the CH
+		// child is placed in the cgroup atomically at fork, so
+		// no PID ever lives in the parent cgroup. fd is closed
+		// after Start (the kernel keeps its own reference via
+		// the clone arg).
+		cmd.SysProcAttr = withCgroupFD(cmd.SysProcAttr, cgroupFD)
+	}
+
 	if err := cmd.Start(); err != nil {
+		if cgroupFD >= 0 {
+			oops.Skip("close cgroup fd", syscall.Close(cgroupFD), nil)
+		}
+		removeVMCgroupBestEffort(cgroupDir)
 		return nil, nil, fmt.Errorf("sandbox: start cloud-hypervisor: %w", err)
+	}
+	if cgroupFD >= 0 {
+		oops.Skip("close cgroup fd", syscall.Close(cgroupFD), nil)
 	}
 
 	// Per-VM observer is best-effort: a failed observer must not
@@ -661,7 +741,7 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 	// returns nil on any error.
 	var obs *observability.Observer
 	if cmd.Process != nil {
-		obs = startObserverIfConfigured(cfg, cmd.Process.Pid)
+		obs = startObserverIfConfigured(cfg, cmd.Process.Pid, cgroupDir)
 	}
 
 	stop := func() {
@@ -685,8 +765,38 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 				oops.Must("wait cloud-hypervisor", waitErr)
 			}
 		}
+		// rmdir the cgroup only after Wait has reaped CH — the
+		// kernel refuses rmdir while any task is still in the
+		// cgroup. Failure here is non-fatal; a leaked empty
+		// cgroup is annoying but not a correctness problem.
+		removeVMCgroupBestEffort(cgroupDir)
 	}
 	return stdout, stop, nil
+}
+
+// vmCgroupName returns the cgroup directory name for this VM. We
+// don't have a sandbox UUID at this layer (the sandboxd reconciler
+// owns that and doesn't propagate it down) so we derive a unique
+// name from the cloud-hypervisor PID plus a process-lifetime
+// counter — collisions are impossible within a sandboxd process
+// because PIDs don't repeat and the counter is monotonic.
+// vmCgroupSeq is mutated atomically.
+//
+//nolint:gochecknoglobals // process-lifetime monotonic counter, intentional package singleton.
+var vmCgroupSeq atomic.Uint64
+
+func vmCgroupName(cfg Config) string {
+	// cfg.ObserverLogPath, when set, makes a perfectly good seed
+	// for naming: it already encodes the test's tempdir / the
+	// caller's identifier. Hash it into 8 hex chars + seq. Empty
+	// path → name based only on seq + a fixed prefix so the
+	// no-observer no-cgroup case still works for the
+	// theoretical future caller that wants the wrap without the
+	// observer.
+	seq := vmCgroupSeq.Add(1)
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(cfg.ObserverLogPath))
+	return fmt.Sprintf("daft-vm-%016x-%d", h.Sum64(), seq)
 }
 
 // Hello boots a minimal sandbox VM with the given Config, mirrors its

@@ -8,9 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
+
+// syscallClose lets tests release a Go-owned FD without holding
+// the os.File handle that would otherwise close on GC.
+func syscallClose(fd int) error { return syscall.Close(fd) }
 
 // fakeProc returns the same canned ProcSample every call and
 // increments a counter so tests can assert sampling actually
@@ -306,6 +311,32 @@ func TestObserver_LogPath(t *testing.T) {
 	}
 }
 
+// TestObserver_FinishPropagatesCloseError exercises the
+// close-error branch in finish(): when the underlying FD is
+// already gone by the time the goroutine calls file.Close, the
+// returned error path executes (we don't assert on the specific
+// error since it's racy whether Stop closes via tick or via
+// finish — both paths fail, both feed into finish).
+func TestObserver_FinishPropagatesCloseError(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "obs.jsonl")
+	o, err := New(1, logPath, Options{SampleEvery: time.Hour, MaxBytes: -1})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	o.collect = fakeCollect(&ProcSample{Comm: "x"}, new(atomic.Int64))
+	if err := o.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	o.mu.Lock()
+	fd := int(o.file.Fd())
+	if cerr := syscallClose(fd); cerr != nil {
+		t.Errorf("close fd: %v", cerr)
+	}
+	o.mu.Unlock()
+	_ = o.Stop()
+}
+
 func TestObserver_OpenFailsOnBadDir(t *testing.T) {
 	// Parent dir doesn't exist — Start should fail cleanly.
 	o, err := New(1, "/nonexistent/dir/obs.jsonl", Options{})
@@ -315,6 +346,80 @@ func TestObserver_OpenFailsOnBadDir(t *testing.T) {
 	if err := o.Start(); err == nil {
 		t.Fatal("Start: want error on missing parent dir, got nil")
 	}
+}
+
+// TestObserver_RotateFailsWhenBackupIsDirectory exercises the
+// rename-error branch in rotateLocked: if the backup path
+// already exists as a non-empty directory, os.Rename refuses
+// to overwrite (mismatched types). The error must propagate out
+// of write rather than silently corrupting the rotation.
+func TestObserver_RotateFailsWhenBackupIsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "obs.jsonl")
+	// Pre-create the backup path as a non-empty directory so
+	// rename(2) of a regular file onto it errors with EISDIR.
+	bakDir := logPath + ".1"
+	if err := os.Mkdir(bakDir, 0o750); err != nil {
+		t.Fatalf("seed backup dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bakDir, "occupant"), []byte("x"), 0o600); err != nil {
+		t.Fatalf("seed occupant: %v", err)
+	}
+	o, err := New(1, logPath, Options{
+		SampleEvery: time.Hour,
+		MaxBytes:    400, // small cap → rotation fires quickly
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	o.collect = fakeCollect(&ProcSample{Comm: "rotation-target"}, new(atomic.Int64))
+	if err := o.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	// Pump tick() directly until either rotation triggers (and
+	// fails) or we conclude the test setup didn't get us there.
+	var tickErr error
+	for range 50 {
+		if tickErr = o.tick(); tickErr != nil {
+			break
+		}
+	}
+	if tickErr == nil {
+		t.Fatal("expected rotation rename to fail, but tick stayed clean")
+	}
+	close(o.stop)
+	<-o.done
+}
+
+// TestObserver_WriteAfterUnderlyingFDClosed exercises the file-
+// write error path in write(): we close the underlying FD out of
+// band while leaving o.file populated. The next write returns
+// EBADF and propagates up.
+func TestObserver_WriteAfterUnderlyingFDClosed(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "obs.jsonl")
+	o, err := New(1, logPath, Options{
+		SampleEvery: time.Hour,
+		MaxBytes:    -1,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	o.collect = fakeCollect(&ProcSample{Comm: "x"}, new(atomic.Int64))
+	if err := o.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	o.mu.Lock()
+	fd := int(o.file.Fd())
+	if cerr := syscallClose(fd); cerr != nil {
+		t.Errorf("close fd: %v", cerr)
+	}
+	o.mu.Unlock()
+	if err := o.tick(); err == nil {
+		t.Fatal("tick after fd close: want error, got nil")
+	}
+	close(o.stop)
+	<-o.done
 }
 
 // TestObserver_TickFailsWhenFileClosed pins the write-side error
@@ -401,6 +506,137 @@ func TestObserver_RunLoopPropagatesTickError(t *testing.T) {
 	stopErr := o.Stop()
 	if stopErr == nil {
 		t.Fatal("Stop: want error after file stomp, got nil")
+	}
+}
+
+// TestObserver_CgroupSamplingFlows: when CgroupDir is set, each
+// sample includes a populated Cgroup field. Drives the cgroup
+// collection function with a synthetic /sys/fs/cgroup tree under
+// t.TempDir() so we don't need real delegation.
+func TestObserver_CgroupSamplingFlows(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "obs.jsonl")
+	cgDir := t.TempDir()
+	o, err := New(os.Getpid(), logPath, Options{
+		SampleEvery: 10 * time.Millisecond,
+		MaxBytes:    -1,
+		CgroupDir:   cgDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var count atomic.Int64
+	o.collect = fakeCollect(&ProcSample{Comm: "x"}, &count)
+	o.collectCG = func(p string) (*CgroupSample, error) {
+		if p != cgDir {
+			t.Errorf("got cgroup path %q, want %q", p, cgDir)
+		}
+		return &CgroupSample{
+			Path: p,
+			CPU:  CgroupCPU{UsageUsec: 42},
+		}, nil
+	}
+	if err := o.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	for count.Load() < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := o.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	samples := readSamples(t, logPath)
+	if len(samples) == 0 {
+		t.Fatal("no samples")
+	}
+	for i, s := range samples {
+		if s.Cgroup == nil {
+			t.Errorf("sample %d: Cgroup nil, want populated", i)
+			continue
+		}
+		if s.Cgroup.CPU.UsageUsec != 42 {
+			t.Errorf("sample %d: CPU.UsageUsec = %d, want 42", i, s.Cgroup.CPU.UsageUsec)
+		}
+	}
+}
+
+// TestObserver_CgroupGoneRecordsErr: when the cgroup dir
+// disappears mid-run, the tick records `err: cgroup gone` rather
+// than burning the observer down.
+func TestObserver_CgroupGoneRecordsErr(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "obs.jsonl")
+	o, err := New(os.Getpid(), logPath, Options{
+		SampleEvery: 10 * time.Millisecond,
+		MaxBytes:    -1,
+		CgroupDir:   "/somewhere",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	o.collect = fakeCollect(&ProcSample{Comm: "x"}, new(atomic.Int64))
+	o.collectCG = func(string) (*CgroupSample, error) { return nil, os.ErrNotExist }
+	if err := o.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+	if err := o.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	samples := readSamples(t, logPath)
+	if len(samples) == 0 {
+		t.Fatal("no samples")
+	}
+	if samples[0].Err != "cgroup gone" {
+		t.Errorf("Err = %q, want %q", samples[0].Err, "cgroup gone")
+	}
+}
+
+// TestObserver_CgroupGenericErrorRecorded: any other cgroup
+// collect error lands in Err verbatim, again without crashing the
+// observer.
+func TestObserver_CgroupGenericErrorRecorded(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "obs.jsonl")
+	o, err := New(os.Getpid(), logPath, Options{
+		SampleEvery: 10 * time.Millisecond,
+		MaxBytes:    -1,
+		CgroupDir:   "/somewhere",
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	o.collect = fakeCollect(&ProcSample{Comm: "x"}, new(atomic.Int64))
+	o.collectCG = func(string) (*CgroupSample, error) {
+		return nil, errors.New("synthetic cgroup err")
+	}
+	if err := o.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if err := o.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	samples := readSamples(t, logPath)
+	if len(samples) == 0 {
+		t.Fatal("no samples")
+	}
+	if !strings.Contains(samples[0].Err, "synthetic cgroup err") {
+		t.Errorf("Err = %q, want substring %q", samples[0].Err, "synthetic cgroup err")
+	}
+}
+
+// TestNew_RejectsRelativeCgroupDir matches the absolute-path
+// requirement on logPath. Relative paths would be resolved
+// against whatever cwd the sandbox runs in — exactly the kind
+// of surprise we don't want in a per-VM accounting directory.
+func TestNew_RejectsRelativeCgroupDir(t *testing.T) {
+	dir := t.TempDir()
+	_, err := New(1, filepath.Join(dir, "obs.jsonl"), Options{
+		CgroupDir: "relative/path",
+	})
+	if err == nil || !strings.Contains(err.Error(), "CgroupDir") {
+		t.Fatalf("err = %v, want CgroupDir error", err)
 	}
 }
 

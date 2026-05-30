@@ -41,32 +41,56 @@ The observer earns its keep when:
 - A regression makes one specific phase slower; we have a per-
   second time series of every resource counter to localise it.
 
-## Tier 1 — host-side `/proc` sampler (lands first)
+## Tier 1 — host-side `/proc` sampler + per-VM cgroup wrap
 
 **What:** `internal/observability.Observer` runs as a goroutine
 inside the sandboxd process. For each tick (default 1 Hz) it reads
-`/proc/<cloud-hypervisor-pid>/{stat,status,io}` and appends one JSON
-line to a configured log path. The total on-disk footprint is
-bounded by rotation: when the live file reaches `MaxBytes / 2` it's
-renamed to `<path>.1`, a new file is opened, and one backup is kept.
-Default `MaxBytes` is 50 MB; total disk per sandbox is therefore
-~50 MB worst case (~25 MB live + ~25 MB rotated), `~30 KB / min` at
-1 Hz, `~43 MB / day` before any rotation kicks in.
+`/proc/<cloud-hypervisor-pid>/{stat,status,io}` and, when a per-VM
+cgroup wrap is in place, the cgroup v2 files
+`cpu.stat` / `memory.{current,peak,max,swap.current}` / `io.stat` /
+`pids.current` from the workload's own cgroup. One JSON line per
+tick is appended to a configured log path. The total on-disk
+footprint is bounded by rotation: when the live file reaches
+`MaxBytes / 2` it's renamed to `<path>.1`, a new file is opened,
+and one backup is kept. Default `MaxBytes` is 50 MB; total disk
+per sandbox is therefore ~50 MB worst case (~25 MB live + ~25 MB
+rotated), `~30 KB / min` at 1 Hz, `~43 MB / day` before rotation.
 
 **Where it runs:** `internal/sandbox/sandbox.go` (`cloudHypervisorRunner.run`).
-After `cmd.Start()` succeeds and we have the CH PID, the observer is
-constructed and started; the cleanup `stop` closure calls
-`obs.Stop()` before `cmd.Wait()` so the final samples flush before
-the process is reaped. A failed `Observer.New` or `Observer.Start`
-is reported via `oops.Log` and the sandbox proceeds without the
-observer — observability is a debugging surface, not a correctness
-invariant.
+Before `cmd.Start()` we try to create a per-VM cgroup v2
+sub-directory under our own cgroup via `observability.CreateSubCgroup`,
+then pass an O_PATH fd to `SysProcAttr.UseCgroupFD` so the
+cloud-hypervisor child is placed in the cgroup atomically at fork
+via `CLONE_INTO_CGROUP`. The observer is started with the CH PID
+*and* the cgroup directory, so each sample carries both views.
+The cleanup `stop` closure calls `obs.Stop()` before `cmd.Wait()`
+so the final samples flush before the process is reaped, then
+`removeVMCgroupBestEffort` rmdir's the cgroup after the kernel
+has reaped the task. A failed observer or cgroup setup is
+reported via `oops.Log` and the sandbox proceeds without the
+affected surface — observability is a debugging surface, not a
+correctness invariant.
+
+**Cgroup wrap requires delegation.** On stock systemd hosts the
+user session scope doesn't have `Delegate=yes`, so mkdir under
+`/sys/fs/cgroup/user.slice/user-<uid>.slice/session-<n>.scope`
+returns EACCES. When that happens, `setupVMCgroup` logs and
+returns `("", -1)`; the observer falls back to `/proc`-only
+sampling. To get the cgroup view on a stock host, launch
+`daft-sandboxd` under a delegated transient unit:
+
+```sh
+systemd-run --user --scope --property=Delegate=yes daft-sandboxd ...
+```
+
+CI / production deployments running under a delegated systemd
+service unit (or as root) get the cgroup wrap automatically.
 
 **What's in each sample:**
 
 ```json
 {
-  "ts": "2026-05-29T07:01:32.123456789Z",
+  "ts": "2026-05-30T07:01:32.123456789Z",
   "pid": 12345,
   "proc": {
     "comm": "cloud-hyperviso",
@@ -82,9 +106,31 @@ invariant.
     "syscw": 21146,
     "read_bytes": 0,
     "write_bytes": 0
+  },
+  "cgroup": {
+    "path": "/sys/fs/cgroup/.../daft-vm-<hash>-<seq>",
+    "cpu": {
+      "usage_usec": 5234567,
+      "user_usec": 3800000,
+      "system_usec": 1434567
+    },
+    "memory": {
+      "current_bytes": 268435456,
+      "peak_bytes": 312345600,
+      "max_bytes": -1
+    },
+    "io": [
+      {"device": "8:0", "rbytes": 1048576, "wbytes": 524288, "rios": 100, "wios": 50}
+    ],
+    "pids": {"current": 8}
   }
 }
 ```
+
+The `cgroup` block is omitted when the cgroup wrap couldn't
+be set up (no delegation); `proc` is omitted when the target
+exited between samples. `memory.max_bytes: -1` is the JSON
+encoding of the kernel's `"max"` sentinel — no limit.
 
 **Reading them in post-mortem:** counters are cumulative; deltas
 between two samples give per-second rates. `jq` or `awk` is enough:
@@ -123,18 +169,16 @@ caller picks a location appropriate for its lifetime:
 
 **What it does NOT do (yet):**
 
-- No cgroup metrics. `/proc/<pid>` charges memory and IO to the
-  cloud-hypervisor process; cgroup v2 (`memory.peak`, `io.stat`)
-  would account for the *whole* sandbox sub-tree (CH + virtiofsd
-  + descendant helpers) without per-PID iteration. Follow-up: wrap
-  CH in a per-VM cgroup we own.
+- No virtiofsd in the cgroup. Today the cgroup wraps only
+  cloud-hypervisor — `memory.peak` / `io.stat` therefore miss the
+  virtiofsd sidecar's contributions to host I/O. Follow-up:
+  thread the cgroup fd through `virtiofsdSidecar.start` so the
+  whole VM tree is one accounting unit.
 - No network metrics. The guest network goes through
   `gvisor-tap-vsock`, a userspace TCP/IP stack in sandboxd's
   address space — there is no host tap, so `/proc/net/dev` doesn't
   see it. Follow-up: hook a byte/packet counter into the
   gvisor-tap-vsock switch.
-- No virtiofsd PID. Each share gets its own virtiofsd process;
-  follow-up will sample all of them.
 
 ## Tier 2 — guest-side eBPF library (follow-up)
 
@@ -227,12 +271,10 @@ the top tying it to a specific recurring symptom.
 
 In rough order:
 
-1. **Tier 1** (this commit) — `/proc` sampler in `internal/observability`,
-   wired into `sandbox.Config.ObserverLogPath`.
-2. **Per-VM cgroup wrap** — create a cgroup v2 sub-tree per sandbox,
-   put cloud-hypervisor in it at launch, switch the observer to
-   reading `cpu.stat` / `memory.peak` / `io.stat` directly.
-3. **gvisor-tap-vsock byte/packet counter** — instrument the switch
+1. **Tier 1** (landed) — `/proc` sampler + per-VM cgroup wrap in
+   `internal/observability`, wired into
+   `sandbox.Config.ObserverLogPath`.
+2. **gvisor-tap-vsock byte/packet counter** — instrument the switch
    in `internal/sandboxnet` so the observer can record per-VM
    network bytes/packets.
 4. **`daft-sandboxd` per-sandbox state dir** — pick a stable path

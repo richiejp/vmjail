@@ -56,6 +56,13 @@ type Sample struct {
 	// — e.g. the target exited between two samples — in which
 	// case Err carries the reason.
 	Proc *ProcSample `json:"proc,omitempty"`
+	// Cgroup is the per-VM cgroup v2 reading. Absent when the
+	// observer was configured without a CgroupDir, or when the
+	// cgroup files couldn't be read this tick. The cgroup view
+	// aggregates every PID in the workload's cgroup tree (CH +
+	// future virtiofsd/helpers), so it's the more meaningful
+	// signal once the cgroup wrap is in place.
+	Cgroup *CgroupSample `json:"cgroup,omitempty"`
 	// Err is the read error this tick, if any. Present alongside
 	// no Proc; the observer keeps running so the next successful
 	// sample lands as soon as the target reappears (or the
@@ -96,6 +103,13 @@ type Options struct {
 	// Negative means "no rotation" — for tests that want the
 	// whole log in one file.
 	MaxBytes int64
+	// CgroupDir, when non-empty, instructs the observer to read
+	// the workload's cgroup v2 files (cpu.stat / memory.* /
+	// io.stat / pids.*) once per tick in addition to /proc/<pid>.
+	// Path must be the absolute filesystem path to the cgroup
+	// directory (e.g. /sys/fs/cgroup/.../daft-<id>). Empty
+	// disables cgroup sampling; the /proc sampler still runs.
+	CgroupDir string
 	// Now is the clock source for the TS field. nil means
 	// time.Now. Injectable so tests can pin timestamps.
 	Now func() time.Time
@@ -108,10 +122,12 @@ type Options struct {
 type Observer struct {
 	pid         int
 	logPath     string
+	cgroupDir   string
 	sampleEvery time.Duration
 	maxBytes    int64
 	now         func() time.Time
 	collect     func(pid int) (*ProcSample, error)
+	collectCG   func(dir string) (*CgroupSample, error)
 
 	mu      sync.Mutex
 	file    *os.File
@@ -150,13 +166,18 @@ func New(pid int, logPath string, opts Options) (*Observer, error) {
 	if now == nil {
 		now = time.Now
 	}
+	if opts.CgroupDir != "" && !filepath.IsAbs(opts.CgroupDir) {
+		return nil, fmt.Errorf("observability: CgroupDir must be absolute, got %q", opts.CgroupDir)
+	}
 	return &Observer{
 		pid:         pid,
 		logPath:     logPath,
+		cgroupDir:   opts.CgroupDir,
 		sampleEvery: every,
 		maxBytes:    maxBytes,
 		now:         now,
 		collect:     collectProcSample,
+		collectCG:   collectCgroupSample,
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 	}, nil
@@ -256,6 +277,24 @@ func (o *Observer) tick() error {
 		sample.Err = "pid gone"
 	default:
 		sample.Err = err.Error()
+	}
+	if o.cgroupDir != "" {
+		cg, cgErr := o.collectCG(o.cgroupDir)
+		switch {
+		case cgErr == nil:
+			sample.Cgroup = cg
+		case errors.Is(cgErr, os.ErrNotExist):
+			// Cgroup directory gone — the workload's been
+			// cleaned up. Don't overwrite Err if /proc already
+			// set it; just leave Cgroup nil.
+			if sample.Err == "" {
+				sample.Err = "cgroup gone"
+			}
+		default:
+			if sample.Err == "" {
+				sample.Err = cgErr.Error()
+			}
+		}
 	}
 	return o.write(sample)
 }

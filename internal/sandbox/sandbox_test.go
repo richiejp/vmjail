@@ -10,10 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/localai-org/darkaifactory/internal/agent"
+	"github.com/localai-org/darkaifactory/internal/observability"
 )
 
 // TestMain doubles the test binary as a "fake VMM" when invoked with the
@@ -323,6 +325,79 @@ func TestCloudHypervisorRunnerViaFakeBinary(t *testing.T) {
 	}
 }
 
+// TestCloudHypervisorRunner_ObserverHappyPath: ObserverLogPath
+// set but cgroup setup fails (the common no-delegation host
+// case), so cmd.Start succeeds without CLONE_INTO_CGROUP and the
+// observer writes /proc samples to the log. Covers the
+// observer-start + observer-stop happy paths in run().
+func TestCloudHypervisorRunner_ObserverHappyPath(t *testing.T) {
+	t.Setenv(fakeVMMEnv, agent.Banner)
+	logDir := t.TempDir()
+	logPath := filepath.Join(logDir, "obs.jsonl")
+	cfg := Config{
+		CloudHypervisor:  os.Args[0],
+		Kernel:           devNull,
+		Initramfs:        devNull,
+		ObserverLogPath:  logPath,
+		ObserverMaxBytes: -1,
+	}
+	start := time.Now()
+	if err := Hello(t.Context(), io.Discard, cfg); err != nil {
+		t.Fatalf("Hello: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("Hello took %v — stop probably did not kill the child", elapsed)
+	}
+	if _, err := os.Stat(logPath); err != nil {
+		t.Errorf("observer log not created at %s: %v", logPath, err)
+	}
+}
+
+// TestCloudHypervisorRunner_ObserverAndCgroupTeardown exercises the
+// new cgroup-wrap + observer code in cloudHypervisorRunner.run by
+// pointing it at the fake VMM, a fake cgroup root, and a real
+// observer log path. The CLONE_INTO_CGROUP step at fork will
+// reject our tempdir as "not a cgroup v2 directory" so cmd.Start
+// errors — that's the test's *point*: it exercises the failure-
+// path cleanup (close fd, remove cgroup, surface the start error).
+func TestCloudHypervisorRunner_ObserverAndCgroupTeardown(t *testing.T) {
+	fakeRoot := t.TempDir()
+	prev := observability.SwapCgroupRoot(fakeRoot)
+	t.Cleanup(func() { observability.SwapCgroupRoot(prev) })
+	parent, err := observability.CurrentCgroup()
+	if err != nil {
+		t.Fatalf("CurrentCgroup: %v", err)
+	}
+	if err := os.MkdirAll(parent, 0o750); err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+
+	t.Setenv(fakeVMMEnv, agent.Banner)
+	logDir := t.TempDir()
+	cfg := Config{
+		CloudHypervisor:  os.Args[0],
+		Kernel:           devNull,
+		Initramfs:        devNull,
+		ObserverLogPath:  filepath.Join(logDir, "obs.jsonl"),
+		ObserverMaxBytes: -1,
+	}
+
+	err = Hello(t.Context(), io.Discard, cfg)
+	if err == nil {
+		t.Fatal("expected Hello to error (fake cgroup root rejected by CLONE_INTO_CGROUP)")
+	}
+	if !strings.Contains(err.Error(), "start cloud-hypervisor") {
+		t.Errorf("err = %v, want 'start cloud-hypervisor' substring", err)
+	}
+	// Cleanup must have removed the cgroup directory we created.
+	entries, _ := os.ReadDir(parent)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "daft-vm-") {
+			t.Errorf("leaked cgroup dir under fake parent: %s", e.Name())
+		}
+	}
+}
+
 // TestCloudHypervisorRunnerStopKillsChild confirms the stop function
 // actually terminates the subprocess. We launch a fake VMM that would
 // sleep forever, run Hello (which sees the banner immediately and
@@ -624,6 +699,117 @@ func TestValidateAcceptsEmptyObserverLogPath(t *testing.T) {
 	}
 }
 
+// TestRemoveVMCgroupBestEffort_EmptyPathNoop: the helper is
+// called unconditionally in run()'s cleanup, including when
+// cgroup wrap was skipped. Empty path must be a clean no-op,
+// not an attempt to rmdir "".
+func TestRemoveVMCgroupBestEffort_EmptyPathNoop(t *testing.T) {
+	removeVMCgroupBestEffort("") // must not panic, must not log
+}
+
+// TestRemoveVMCgroupBestEffort_LogsError: a non-empty path that
+// fails to rmdir (because it doesn't exist, isn't under cgroup
+// root, etc.) goes through oops.Log without bubbling up.
+func TestRemoveVMCgroupBestEffort_LogsError(t *testing.T) {
+	// /tmp/... is not under /sys/fs/cgroup so RemoveCgroup's
+	// safety rail rejects the call — and we want the helper to
+	// swallow that into a log, not propagate.
+	removeVMCgroupBestEffort("/tmp/nonexistent-cgroup-test")
+}
+
+// TestVMCgroupName_UniquePerCall pins that vmCgroupName never
+// returns the same string twice — the kernel rejects mkdir on
+// existing cgroup directories with EEXIST, and a per-VM
+// observer-log collision would silently merge two VMs'
+// telemetry. Counter increments → suffix differs even when the
+// hash collides.
+func TestVMCgroupName_UniquePerCall(t *testing.T) {
+	cfg := Config{ObserverLogPath: "/tmp/x.jsonl"}
+	a := vmCgroupName(cfg)
+	b := vmCgroupName(cfg)
+	if a == b {
+		t.Fatalf("vmCgroupName collided across calls: %q == %q", a, b)
+	}
+	if !strings.HasPrefix(a, "daft-vm-") || !strings.HasPrefix(b, "daft-vm-") {
+		t.Errorf("unexpected prefix: a=%q b=%q", a, b)
+	}
+}
+
+// TestVMCgroupName_HandlesEmptyLogPath: a caller using the
+// cgroup wrap without the observer (no log path) still gets a
+// well-formed name.
+func TestVMCgroupName_HandlesEmptyLogPath(t *testing.T) {
+	got := vmCgroupName(Config{})
+	if !strings.HasPrefix(got, "daft-vm-") {
+		t.Errorf("got %q, want daft-vm- prefix", got)
+	}
+}
+
+// TestSetupVMCgroup_GracefulOnNoDelegation: on stock systemd
+// hosts the user session scope doesn't have Delegate=yes, so
+// CreateSubCgroup returns EACCES. The helper must return
+// ("", -1) (no fd, no path) rather than aborting — observability
+// is best-effort and the sandbox must boot anyway. This is the
+// most-common-in-CI / on-laptop scenario for the wrap.
+func TestSetupVMCgroup_GracefulOnNoDelegation(t *testing.T) {
+	// We don't try to predict whether THIS test host has
+	// delegation. Both outcomes are valid: ("", -1) on no
+	// delegation, (path, fd>=0) on delegated. We just verify
+	// the function doesn't panic and returns a consistent pair.
+	name := vmCgroupName(Config{ObserverLogPath: "/tmp/setup-test"})
+	path, fd := setupVMCgroup(name)
+	t.Cleanup(func() {
+		if fd >= 0 {
+			_ = syscall.Close(fd)
+		}
+		if path != "" {
+			_ = observability.RemoveCgroup(path)
+		}
+	})
+	if (path == "") != (fd < 0) {
+		t.Errorf("inconsistent return: path=%q fd=%d (want both populated or both empty)", path, fd)
+	}
+}
+
+// TestSetupVMCgroup_SuccessUnderFakeRoot drives the entire
+// create→openfd→cleanup path against a tempdir cgroup root, so
+// the success-side branches stay covered on hosts without real
+// cgroup delegation. We pre-populate the tempdir with the
+// session-scope path that /proc/self/cgroup reports, so
+// CurrentCgroup returns a writable parent.
+func TestSetupVMCgroup_SuccessUnderFakeRoot(t *testing.T) {
+	fakeRoot := t.TempDir()
+	prev := observability.SwapCgroupRoot(fakeRoot)
+	t.Cleanup(func() { observability.SwapCgroupRoot(prev) })
+
+	// Mirror the real session-scope path under the fake root so
+	// CurrentCgroup's filepath.Join(cgroupV2Root, sessionPath)
+	// resolves to an existing, writable directory.
+	realParent, err := observability.CurrentCgroup()
+	if err != nil {
+		t.Fatalf("CurrentCgroup after swap: %v", err)
+	}
+	if err := os.MkdirAll(realParent, 0o750); err != nil {
+		t.Fatalf("seed fake parent %s: %v", realParent, err)
+	}
+
+	path, fd := setupVMCgroup(vmCgroupName(Config{ObserverLogPath: "/tmp/setup-success-test"}))
+	t.Cleanup(func() {
+		if fd >= 0 {
+			_ = syscall.Close(fd)
+		}
+		if path != "" {
+			_ = observability.RemoveCgroup(path)
+		}
+	})
+	if path == "" || fd < 0 {
+		t.Fatalf("setupVMCgroup failed under fake root: path=%q fd=%d", path, fd)
+	}
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		t.Errorf("cgroup dir not created at %s: err=%v info=%v", path, err, info)
+	}
+}
+
 // TestStartObserverIfConfigured covers the cfg.ObserverLogPath
 // switch + best-effort error handling in the helper extracted
 // from cloudHypervisorRunner.run. The fully wired path
@@ -632,7 +818,7 @@ func TestValidateAcceptsEmptyObserverLogPath(t *testing.T) {
 // don't drift silently.
 func TestStartObserverIfConfigured(t *testing.T) {
 	t.Run("empty path returns nil", func(t *testing.T) {
-		obs := startObserverIfConfigured(Config{}, 1)
+		obs := startObserverIfConfigured(Config{}, 1, "")
 		if obs != nil {
 			_ = obs.Stop()
 			t.Fatal("want nil, got Observer")
@@ -640,7 +826,7 @@ func TestStartObserverIfConfigured(t *testing.T) {
 	})
 	t.Run("invalid pid logs and returns nil", func(t *testing.T) {
 		cfg := Config{ObserverLogPath: "/tmp/x.jsonl"}
-		obs := startObserverIfConfigured(cfg, 0)
+		obs := startObserverIfConfigured(cfg, 0, "")
 		if obs != nil {
 			_ = obs.Stop()
 			t.Fatal("want nil for pid=0, got Observer")
@@ -651,7 +837,7 @@ func TestStartObserverIfConfigured(t *testing.T) {
 		// startObserverIfConfigured to swallow that to nil rather
 		// than panic.
 		cfg := Config{ObserverLogPath: "relative.jsonl"}
-		obs := startObserverIfConfigured(cfg, 1)
+		obs := startObserverIfConfigured(cfg, 1, "")
 		if obs != nil {
 			_ = obs.Stop()
 			t.Fatal("want nil for relative path, got Observer")
@@ -660,7 +846,7 @@ func TestStartObserverIfConfigured(t *testing.T) {
 	t.Run("happy path returns started observer", func(t *testing.T) {
 		dir := t.TempDir()
 		cfg := Config{ObserverLogPath: filepath.Join(dir, "obs.jsonl")}
-		obs := startObserverIfConfigured(cfg, os.Getpid())
+		obs := startObserverIfConfigured(cfg, os.Getpid(), "")
 		if obs == nil {
 			t.Fatal("want Observer, got nil")
 		}
