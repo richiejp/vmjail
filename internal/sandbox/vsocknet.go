@@ -8,18 +8,26 @@ import (
 	"os"
 	"sync"
 
+	"github.com/localai-org/darkaifactory/internal/observability"
 	"github.com/localai-org/darkaifactory/internal/oops"
 	"github.com/localai-org/darkaifactory/internal/sandboxnet"
 )
 
 // startVsockNetReceiver opens a UDS listener at
 // <HostSocket>_<NetPort> and hands every accepted conn to a
-// per-VM sandboxnet.Network. No-op (returns a do-nothing stop)
-// when cfg has no Vsock or no NetPort. The returned stop is
-// always safe to call.
-func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), err error) {
+// per-VM sandboxnet.Network. No-op (returns a do-nothing stop and
+// nil collector) when cfg has no Vsock or no NetPort. The returned
+// stop is always safe to call.
+//
+// collectNet, when non-nil, is a snapshot function over the per-VM
+// network's byte counters in the shape the observer expects. The
+// observer pulls it once per tick to record rx/tx bytes through the
+// userspace netstack — a layer /proc can't see because the traffic
+// never crosses a host tap. Returned nil when no network is wired
+// (cfg.Vsock or NetPort unset).
+func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), collectNet func() *observability.NetSample, err error) {
 	if cfg.Vsock == nil || cfg.Vsock.NetPort == 0 {
-		return func() {}, nil
+		return func() {}, nil, nil
 	}
 	network, err := sandboxnet.New(sandboxnet.Config{
 		DenyEgress:   cfg.DenyEgress,
@@ -27,7 +35,7 @@ func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), err er
 		ProxyPort:    cfg.ProxyPort,
 	})
 	if err != nil {
-		return func() {}, fmt.Errorf("sandbox: sandboxnet.New: %w", err)
+		return func() {}, nil, fmt.Errorf("sandbox: sandboxnet.New: %w", err)
 	}
 
 	sockPath := fmt.Sprintf("%s_%d", cfg.Vsock.HostSocket, cfg.Vsock.NetPort)
@@ -35,7 +43,7 @@ func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), err er
 
 	listener, err := net.Listen("unix", sockPath)
 	if err != nil {
-		return func() {}, fmt.Errorf("sandbox: listen %s: %w", sockPath, err)
+		return func() {}, nil, fmt.Errorf("sandbox: listen %s: %w", sockPath, err)
 	}
 
 	// Detached from ctx so stop() owns teardown — a request-scoped
@@ -59,7 +67,11 @@ func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), err er
 		oops.Skip("remove vsock net socket on shutdown",
 			os.Remove(sockPath), fs.ErrNotExist)
 	}
-	return stop, nil
+	collectNet = func() *observability.NetSample {
+		c := network.Counters()
+		return &observability.NetSample{RxBytes: c.RxBytes, TxBytes: c.TxBytes}
+	}
+	return stop, collectNet, nil
 }
 
 // connSet tracks accepted conns so stop() can close them all and

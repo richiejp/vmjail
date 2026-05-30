@@ -63,6 +63,14 @@ type Sample struct {
 	// future virtiofsd/helpers), so it's the more meaningful
 	// signal once the cgroup wrap is in place.
 	Cgroup *CgroupSample `json:"cgroup,omitempty"`
+	// Net is the per-VM userspace network reading. Absent when the
+	// observer was configured without a CollectNet callback (no
+	// sandboxnet wired in), or when the callback returns nil. The
+	// counters are wire-bytes through the StdioProtocol vsock conn
+	// between sandboxd and the guest agent — they include the
+	// 2-byte size prefix per frame. Cumulative from VM start;
+	// deltas reconstructed in post.
+	Net *NetSample `json:"net,omitempty"`
 	// Err is the read error this tick, if any. Present alongside
 	// no Proc; the observer keeps running so the next successful
 	// sample lands as soon as the target reappears (or the
@@ -93,6 +101,15 @@ type ProcSample struct {
 	WriteBytes uint64 `json:"write_bytes"`
 }
 
+// NetSample is the per-tick projection of the per-VM userspace
+// network stack's wire counters. RxBytes is bytes flowing from the
+// guest into sandboxd; TxBytes is bytes flowing from sandboxd to
+// the guest. Both include StdioProtocol 2-byte size headers.
+type NetSample struct {
+	RxBytes uint64 `json:"rx_bytes"`
+	TxBytes uint64 `json:"tx_bytes"`
+}
+
 // Options tunes an Observer at construction time.
 type Options struct {
 	// SampleEvery is the cadence between /proc reads. Zero means
@@ -110,6 +127,13 @@ type Options struct {
 	// directory (e.g. /sys/fs/cgroup/.../daft-<id>). Empty
 	// disables cgroup sampling; the /proc sampler still runs.
 	CgroupDir string
+	// CollectNet, when non-nil, is called once per tick to capture
+	// the current per-VM network byte counters. nil disables the
+	// network block; the rest of the sample still ticks. Returning
+	// nil from the callback also omits the block for this tick.
+	// Implementation must be safe for concurrent use — it shares
+	// state with the netstack's accept loop.
+	CollectNet func() *NetSample
 	// Now is the clock source for the TS field. nil means
 	// time.Now. Injectable so tests can pin timestamps.
 	Now func() time.Time
@@ -128,6 +152,7 @@ type Observer struct {
 	now         func() time.Time
 	collect     func(pid int) (*ProcSample, error)
 	collectCG   func(dir string) (*CgroupSample, error)
+	collectNet  func() *NetSample
 
 	mu      sync.Mutex
 	file    *os.File
@@ -178,6 +203,7 @@ func New(pid int, logPath string, opts Options) (*Observer, error) {
 		now:         now,
 		collect:     collectProcSample,
 		collectCG:   collectCgroupSample,
+		collectNet:  opts.CollectNet,
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 	}, nil
@@ -277,6 +303,9 @@ func (o *Observer) tick() error {
 		sample.Err = "pid gone"
 	default:
 		sample.Err = err.Error()
+	}
+	if o.collectNet != nil {
+		sample.Net = o.collectNet()
 	}
 	if o.cgroupDir != "" {
 		cg, cgErr := o.collectCG(o.cgroupDir)

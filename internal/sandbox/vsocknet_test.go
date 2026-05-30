@@ -36,7 +36,7 @@ func TestStartVsockNetReceiverNilWhenDisabled(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			stop, err := startVsockNetReceiver(context.Background(), tc.cfg)
+			stop, _, err := startVsockNetReceiver(context.Background(), tc.cfg)
 			if err != nil {
 				t.Fatalf("startVsockNetReceiver: %v", err)
 			}
@@ -47,7 +47,10 @@ func TestStartVsockNetReceiverNilWhenDisabled(t *testing.T) {
 
 // TestStartVsockNetReceiverRoundTrip pins the byte path end to
 // end: dial the listener as a "fake guest", send an ARP request
-// for the gateway, and assert an ARP reply comes back.
+// for the gateway, and assert an ARP reply comes back. Also pins
+// the observer's net-counter callback: after the round trip both
+// rx_bytes and tx_bytes must be non-zero, since the ARP frame went
+// in and a reply came out.
 func TestStartVsockNetReceiverRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	cfg := validCfg()
@@ -56,11 +59,14 @@ func TestStartVsockNetReceiverRoundTrip(t *testing.T) {
 		GuestCID:   3,
 		NetPort:    8001,
 	}
-	stop, err := startVsockNetReceiver(context.Background(), cfg)
+	stop, collectNet, err := startVsockNetReceiver(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("startVsockNetReceiver: %v", err)
 	}
 	t.Cleanup(stop)
+	if collectNet == nil {
+		t.Fatal("collectNet nil; expected non-nil when net is enabled")
+	}
 
 	conn, err := net.Dial("unix", cfg.Vsock.HostSocket+"_8001")
 	if err != nil {
@@ -76,6 +82,32 @@ func TestStartVsockNetReceiverRoundTrip(t *testing.T) {
 	reply := sandboxnettest.ReadFrame(t, conn, vsocknetReadTimeout)
 	sandboxnettest.AssertARPReply(t, reply,
 		sandboxnet.DefaultGatewayMAC, guestMAC)
+
+	got := collectNet()
+	if got == nil {
+		t.Fatal("collectNet returned nil after round trip")
+	}
+	if got.RxBytes == 0 {
+		t.Errorf("RxBytes = 0; want non-zero after sending ARP request")
+	}
+	if got.TxBytes == 0 {
+		t.Errorf("TxBytes = 0; want non-zero after receiving ARP reply")
+	}
+}
+
+// TestStartVsockNetReceiverNoCollectorWhenDisabled pins the
+// invariant that the collector is nil when net is off — observers
+// downstream rely on this to skip the Net block cleanly without
+// invoking a closure that would deref a nil network.
+func TestStartVsockNetReceiverNoCollectorWhenDisabled(t *testing.T) {
+	stop, collectNet, err := startVsockNetReceiver(context.Background(), validCfg())
+	if err != nil {
+		t.Fatalf("startVsockNetReceiver: %v", err)
+	}
+	defer stop()
+	if collectNet != nil {
+		t.Fatal("collectNet non-nil, want nil when Vsock is nil")
+	}
 }
 
 //nolint:dupl // structurally parallel to TracePort by design.
@@ -95,7 +127,7 @@ func TestStartVsockNetReceiverPreCleansStaleSocket(t *testing.T) {
 	}
 	_ = stale.Close()
 
-	stop, err := startVsockNetReceiver(context.Background(), cfg)
+	stop, _, err := startVsockNetReceiver(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("startVsockNetReceiver against stale socket: %v", err)
 	}
@@ -114,7 +146,7 @@ func TestStartVsockNetReceiverStopUnblocksConnectedGuest(t *testing.T) {
 		GuestCID:   3,
 		NetPort:    8001,
 	}
-	stop, err := startVsockNetReceiver(context.Background(), cfg)
+	stop, _, err := startVsockNetReceiver(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("startVsockNetReceiver: %v", err)
 	}
@@ -150,7 +182,7 @@ func TestStartVsockNetReceiverSurfacesListenError(t *testing.T) {
 		GuestCID:   3,
 		NetPort:    8001,
 	}
-	stop, err := startVsockNetReceiver(context.Background(), cfg)
+	stop, _, err := startVsockNetReceiver(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected error from Listen on bad path")
 	}

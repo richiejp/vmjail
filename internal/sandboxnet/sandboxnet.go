@@ -134,7 +134,13 @@ type Network struct {
 	nat     map[tcpip.Address]tcpip.Address
 	natLock sync.Mutex
 	deny    bool
+	ctrs    counters
 }
+
+// Counters returns a snapshot of the network's wire-level byte
+// counters. Safe to call concurrently with Accept. Returns the zero
+// value before any conn is accepted.
+func (n *Network) Counters() Counters { return n.ctrs.snapshot() }
 
 // New constructs the netstack from cfg. The returned Network has
 // no conns attached yet; call Accept to plug one in.
@@ -214,5 +220,5 @@ func New(cfg Config) (*Network, error) {
 // CAM table — callers can re-Accept a fresh conn (guest reboot) on
 // the same Network.
 func (n *Network) Accept(ctx context.Context, conn net.Conn) error {
-	return n.sw.Accept(ctx, conn, types.StdioProtocol)
+	return n.sw.Accept(ctx, &countingConn{Conn: conn, c: &n.ctrs}, types.StdioProtocol)
 }

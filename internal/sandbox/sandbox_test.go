@@ -112,7 +112,8 @@ type fakeRunner struct {
 	output          string
 	startErr        error
 	stopCalled      bool
-	gotShareSockets []string // captured shareSockets arg, for share tests
+	gotShareSockets []string                        // captured shareSockets arg, for share tests
+	gotCollectNet   func() *observability.NetSample // captured callback, for net counter tests
 	// neverEOF keeps the returned stdout reader blocking after the
 	// output has been drained so Serve tests can verify the
 	// ctx-cancel branch (a real VMM's stdout stays open until the
@@ -120,7 +121,8 @@ type fakeRunner struct {
 	neverEOF bool
 }
 
-func (f *fakeRunner) run(_ context.Context, _ Config, shareSockets []string) (io.ReadCloser, func(), error) {
+func (f *fakeRunner) run(_ context.Context, _ Config, shareSockets []string, collectNet func() *observability.NetSample) (io.ReadCloser, func(), error) {
+	f.gotCollectNet = collectNet
 	f.gotShareSockets = shareSockets
 	if f.startErr != nil {
 		return nil, nil, f.startErr
@@ -818,7 +820,7 @@ func TestSetupVMCgroup_SuccessUnderFakeRoot(t *testing.T) {
 // don't drift silently.
 func TestStartObserverIfConfigured(t *testing.T) {
 	t.Run("empty path returns nil", func(t *testing.T) {
-		obs := startObserverIfConfigured(Config{}, 1, "")
+		obs := startObserverIfConfigured(Config{}, 1, "", nil)
 		if obs != nil {
 			_ = obs.Stop()
 			t.Fatal("want nil, got Observer")
@@ -826,7 +828,7 @@ func TestStartObserverIfConfigured(t *testing.T) {
 	})
 	t.Run("invalid pid logs and returns nil", func(t *testing.T) {
 		cfg := Config{ObserverLogPath: "/tmp/x.jsonl"}
-		obs := startObserverIfConfigured(cfg, 0, "")
+		obs := startObserverIfConfigured(cfg, 0, "", nil)
 		if obs != nil {
 			_ = obs.Stop()
 			t.Fatal("want nil for pid=0, got Observer")
@@ -837,7 +839,7 @@ func TestStartObserverIfConfigured(t *testing.T) {
 		// startObserverIfConfigured to swallow that to nil rather
 		// than panic.
 		cfg := Config{ObserverLogPath: "relative.jsonl"}
-		obs := startObserverIfConfigured(cfg, 1, "")
+		obs := startObserverIfConfigured(cfg, 1, "", nil)
 		if obs != nil {
 			_ = obs.Stop()
 			t.Fatal("want nil for relative path, got Observer")
@@ -846,7 +848,7 @@ func TestStartObserverIfConfigured(t *testing.T) {
 	t.Run("happy path returns started observer", func(t *testing.T) {
 		dir := t.TempDir()
 		cfg := Config{ObserverLogPath: filepath.Join(dir, "obs.jsonl")}
-		obs := startObserverIfConfigured(cfg, os.Getpid(), "")
+		obs := startObserverIfConfigured(cfg, os.Getpid(), "", nil)
 		if obs == nil {
 			t.Fatal("want Observer, got nil")
 		}

@@ -41,15 +41,16 @@ The observer earns its keep when:
 - A regression makes one specific phase slower; we have a per-
   second time series of every resource counter to localise it.
 
-## Tier 1 — host-side `/proc` sampler + per-VM cgroup wrap
+## Tier 1 — host-side `/proc` sampler + per-VM cgroup wrap + sandboxnet byte counters
 
 **What:** `internal/observability.Observer` runs as a goroutine
 inside the sandboxd process. For each tick (default 1 Hz) it reads
-`/proc/<cloud-hypervisor-pid>/{stat,status,io}` and, when a per-VM
-cgroup wrap is in place, the cgroup v2 files
-`cpu.stat` / `memory.{current,peak,max,swap.current}` / `io.stat` /
-`pids.current` from the workload's own cgroup. One JSON line per
-tick is appended to a configured log path. The total on-disk
+`/proc/<cloud-hypervisor-pid>/{stat,status,io}`, the per-VM
+sandboxnet network's rx/tx byte counters (when sandboxnet is wired
+in), and — when a per-VM cgroup wrap is in place — the cgroup v2
+files `cpu.stat` / `memory.{current,peak,max,swap.current}` /
+`io.stat` / `pids.current` from the workload's own cgroup. One JSON
+line per tick is appended to a configured log path. The total on-disk
 footprint is bounded by rotation: when the live file reaches
 `MaxBytes / 2` it's renamed to `<path>.1`, a new file is opened,
 and one backup is kept. Default `MaxBytes` is 50 MB; total disk
@@ -123,14 +124,23 @@ service unit (or as root) get the cgroup wrap automatically.
       {"device": "8:0", "rbytes": 1048576, "wbytes": 524288, "rios": 100, "wios": 50}
     ],
     "pids": {"current": 8}
+  },
+  "net": {
+    "rx_bytes": 4096,
+    "tx_bytes": 8192
   }
 }
 ```
 
 The `cgroup` block is omitted when the cgroup wrap couldn't
 be set up (no delegation); `proc` is omitted when the target
-exited between samples. `memory.max_bytes: -1` is the JSON
-encoding of the kernel's `"max"` sentinel — no limit.
+exited between samples; `net` is omitted for sandboxes without
+a vsock-net device (no userspace netstack to count). `rx_bytes`
+counts bytes the guest sent to sandboxd over the StdioProtocol
+vsock conn; `tx_bytes` counts bytes sandboxd sent to the guest.
+Both include the 2-byte StdioProtocol size prefix per frame.
+`memory.max_bytes: -1` is the JSON encoding of the kernel's
+`"max"` sentinel — no limit.
 
 **Reading them in post-mortem:** counters are cumulative; deltas
 between two samples give per-second rates. `jq` or `awk` is enough:
@@ -174,11 +184,16 @@ caller picks a location appropriate for its lifetime:
   virtiofsd sidecar's contributions to host I/O. Follow-up:
   thread the cgroup fd through `virtiofsdSidecar.start` so the
   whole VM tree is one accounting unit.
-- No network metrics. The guest network goes through
-  `gvisor-tap-vsock`, a userspace TCP/IP stack in sandboxd's
-  address space — there is no host tap, so `/proc/net/dev` doesn't
-  see it. Follow-up: hook a byte/packet counter into the
-  gvisor-tap-vsock switch.
+- No per-protocol or per-flow network detail. The sandboxnet
+  byte counters answer "is the guest moving bytes through the
+  userspace stack at all" but not "to which destinations" or
+  "how many TCP retransmits". Per-flow and per-syscall network
+  detail is a Tier 2 gadget (`pktstat`, `tcpstat`).
+- No packet counts. Wire-byte counts are enough for the
+  idle-vs-busy question; adding frame counters means either
+  parsing StdioProtocol headers in the wrapper or coordinating
+  with gvisor-tap-vsock's switch. Deferred until a Tier 2 gadget
+  asks for it.
 
 ## Tier 2 — guest-side eBPF library (follow-up)
 
@@ -271,26 +286,26 @@ the top tying it to a specific recurring symptom.
 
 In rough order:
 
-1. **Tier 1** (landed) — `/proc` sampler + per-VM cgroup wrap in
-   `internal/observability`, wired into
+1. **Tier 1** (landed) — `/proc` sampler + per-VM cgroup wrap +
+   sandboxnet byte counters in `internal/observability`, wired into
    `sandbox.Config.ObserverLogPath`.
-2. **gvisor-tap-vsock byte/packet counter** — instrument the switch
-   in `internal/sandboxnet` so the observer can record per-VM
-   network bytes/packets.
-4. **`daft-sandboxd` per-sandbox state dir** — pick a stable path
+2. **virtiofsd in the cgroup** — thread the cgroup fd through
+   `virtiofsdSidecar.start` so `memory.peak` / `io.stat` account
+   for the share sidecar too.
+3. **`daft-sandboxd` per-sandbox state dir** — pick a stable path
    (likely `$XDG_STATE_HOME/daft/sandboxes/<id>/`) and default
    `ObserverLogPath` there for user-facing launches.
-5. **`daft sandbox observer-tail <name>` CLI surface** — convenience
+4. **`daft sandbox observer-tail <name>` CLI surface** — convenience
    for `tail -f` against a running sandbox's observer log without
    needing to know the path.
-6. **`testdaemons.Cluster` integration** — every integration test
+5. **`testdaemons.Cluster` integration** — every integration test
    workspace gets an observer log path under `t.TempDir()`, surfaced
    in failure messages so the file is grabbable before tempdir
    cleanup.
-7. **Tier 2 kickoff** — kconfig commit (BTF/UPROBES/KALLSYMS_ALL/
+6. **Tier 2 kickoff** — kconfig commit (BTF/UPROBES/KALLSYMS_ALL/
    FTRACE_SYSCALLS/BPF_EVENTS) + `cilium/ebpf` dependency + first
    gadget (`open-snoop`).
-8. **More gadgets** — `biolatency`, `tcpstat`, `runqlat`, `pktstat`,
+7. **More gadgets** — `biolatency`, `tcpstat`, `runqlat`, `pktstat`,
    each motivated by a real recurring symptom.
 
 ## Related

@@ -640,6 +640,88 @@ func TestNew_RejectsRelativeCgroupDir(t *testing.T) {
 	}
 }
 
+// TestObserver_NetSamplingFlows: when CollectNet is set, each sample
+// includes a populated Net field. Drives the callback with a
+// hand-built NetSample so the test doesn't need a live netstack.
+func TestObserver_NetSamplingFlows(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "obs.jsonl")
+	var calls atomic.Int64
+	o, err := New(os.Getpid(), logPath, Options{
+		SampleEvery: 10 * time.Millisecond,
+		MaxBytes:    -1,
+		CollectNet: func() *NetSample {
+			calls.Add(1)
+			return &NetSample{RxBytes: 100, TxBytes: 200}
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var procCount atomic.Int64
+	o.collect = fakeCollect(&ProcSample{Comm: "x"}, &procCount)
+	if err := o.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	for procCount.Load() < 2 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := o.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if calls.Load() == 0 {
+		t.Fatal("CollectNet was never called")
+	}
+	samples := readSamples(t, logPath)
+	if len(samples) == 0 {
+		t.Fatal("no samples")
+	}
+	for i, s := range samples {
+		if s.Net == nil {
+			t.Errorf("sample %d: Net nil, want populated", i)
+			continue
+		}
+		if s.Net.RxBytes != 100 || s.Net.TxBytes != 200 {
+			t.Errorf("sample %d: Net = %+v, want {100 200}", i, *s.Net)
+		}
+	}
+}
+
+// TestObserver_NetSamplingNilReturnOmitsBlock: a CollectNet that
+// returns nil leaves the Net field absent in the JSON, which is how
+// callers signal "net wasn't ready this tick" without faking zero
+// counters that look real.
+func TestObserver_NetSamplingNilReturnOmitsBlock(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "obs.jsonl")
+	o, err := New(os.Getpid(), logPath, Options{
+		SampleEvery: 10 * time.Millisecond,
+		MaxBytes:    -1,
+		CollectNet:  func() *NetSample { return nil },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	var procCount atomic.Int64
+	o.collect = fakeCollect(&ProcSample{Comm: "x"}, &procCount)
+	if err := o.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	for procCount.Load() < 1 {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := o.Stop(); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	samples := readSamples(t, logPath)
+	if len(samples) == 0 {
+		t.Fatal("no samples")
+	}
+	if samples[0].Net != nil {
+		t.Errorf("Net = %+v, want nil", *samples[0].Net)
+	}
+}
+
 // readSamples drains the on-disk log into Sample structs so tests
 // can assert structure without re-implementing the JSON-lines
 // reader.

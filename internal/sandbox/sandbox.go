@@ -365,7 +365,7 @@ var ErrBannerNotSeen = errors.New("sandbox: agent banner not seen on console")
 // Config) keeps Config a description-of-intent and the runner
 // stateless.
 type runner interface {
-	run(ctx context.Context, cfg Config, shareSockets []string) (io.ReadCloser, func(), error)
+	run(ctx context.Context, cfg Config, shareSockets []string, collectNet func() *observability.NetSample) (io.ReadCloser, func(), error)
 }
 
 // shareSidecar abstracts the virtiofsd subprocess. Lifecycle: start
@@ -625,14 +625,20 @@ func buildCloudHypervisorArgs(cfg Config, shareSockets []string) []string {
 // under, or "" if the cgroup wrap step failed (no delegation, etc.).
 // Empty just disables cgroup sampling; the /proc sampler still
 // runs and produces a useful (if more limited) trace.
-func startObserverIfConfigured(cfg Config, pid int, cgroupDir string) *observability.Observer {
+//
+// collectNet, when non-nil, is the per-VM sandboxnet byte-counter
+// snapshot; the observer pulls it once per tick to record rx/tx
+// bytes through the userspace netstack. nil disables the network
+// block — appropriate for sandboxes without a vsock net device.
+func startObserverIfConfigured(cfg Config, pid int, cgroupDir string, collectNet func() *observability.NetSample) *observability.Observer {
 	if cfg.ObserverLogPath == "" {
 		return nil
 	}
 	obs, err := observability.New(pid, cfg.ObserverLogPath,
 		observability.Options{
-			MaxBytes:  cfg.ObserverMaxBytes,
-			CgroupDir: cgroupDir,
+			MaxBytes:   cfg.ObserverMaxBytes,
+			CgroupDir:  cgroupDir,
+			CollectNet: collectNet,
 		})
 	if err != nil {
 		oops.Log("observability.New", err)
@@ -693,7 +699,7 @@ func setupVMCgroup(name string) (path string, fd int) {
 	return dir, openedFD
 }
 
-func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string) (io.ReadCloser, func(), error) {
+func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string, collectNet func() *observability.NetSample) (io.ReadCloser, func(), error) {
 	args := buildCloudHypervisorArgs(cfg, shareSockets)
 	// #nosec G204 — cfg.CloudHypervisor is the operator-supplied
 	// VMM path; argv elements are derived from validated Config
@@ -741,7 +747,7 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 	// returns nil on any error.
 	var obs *observability.Observer
 	if cmd.Process != nil {
-		obs = startObserverIfConfigured(cfg, cmd.Process.Pid, cgroupDir)
+		obs = startObserverIfConfigured(cfg, cmd.Process.Pid, cgroupDir, collectNet)
 	}
 
 	stop := func() {
@@ -856,13 +862,13 @@ func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	defer stopVsock()
 
-	stopNet, err := startVsockNetReceiver(ctx, cfg)
+	stopNet, collectNet, err := startVsockNetReceiver(ctx, cfg)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
 	defer stopNet()
 
-	stdout, stop, err := runVMM(ctx, cfg, shareSockets, r)
+	stdout, stop, err := runVMM(ctx, cfg, shareSockets, r, collectNet)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
@@ -922,13 +928,13 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	defer stopVsock()
 
-	stopNet, err := startVsockNetReceiver(ctx, cfg)
+	stopNet, collectNet, err := startVsockNetReceiver(ctx, cfg)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
 	defer stopNet()
 
-	stdout, stop, err := runVMM(runCtx, cfg, shareSockets, r)
+	stdout, stop, err := runVMM(runCtx, cfg, shareSockets, r, collectNet)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
@@ -965,10 +971,10 @@ func startShares(ctx context.Context, cfg Config, sc shareSidecar) (sockets []st
 // runVMM spawns the configured VMM (Cloud Hypervisor today) and
 // returns its stdout pipe. Wrapped in its own span so the trace
 // distinguishes "VMM spawn" from "wait for guest banner".
-func runVMM(ctx context.Context, cfg Config, shareSockets []string, r runner) (stdout io.ReadCloser, stop func(), err error) {
+func runVMM(ctx context.Context, cfg Config, shareSockets []string, r runner, collectNet func() *observability.NetSample) (stdout io.ReadCloser, stop func(), err error) {
 	ctx, span := trace.Start(ctx, "sandbox.run_cloud_hypervisor")
 	defer span.End()
-	stdout, stop, err = r.run(ctx, cfg, shareSockets)
+	stdout, stop, err = r.run(ctx, cfg, shareSockets, collectNet)
 	if err != nil {
 		return nil, nil, trace.RecordError(ctx, err)
 	}
