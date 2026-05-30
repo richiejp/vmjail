@@ -135,12 +135,16 @@ service unit (or as root) get the cgroup wrap automatically.
 The `cgroup` block is omitted when the cgroup wrap couldn't
 be set up (no delegation); `proc` is omitted when the target
 exited between samples; `net` is omitted for sandboxes without
-a vsock-net device (no userspace netstack to count). `rx_bytes`
-counts bytes the guest sent to sandboxd over the StdioProtocol
-vsock conn; `tx_bytes` counts bytes sandboxd sent to the guest.
-Both include the 2-byte StdioProtocol size prefix per frame.
-`memory.max_bytes: -1` is the JSON encoding of the kernel's
-`"max"` sentinel — no limit.
+a vsock-net device, AND for the pre-conn window of sandboxes
+that have one — until the guest dials in and the netstack's
+`Accept` runs, `net` stays absent so a flat `{0,0}` block can
+only mean "wired and idle since first connect", never "wired
+but never connected". `rx_bytes` counts bytes the guest sent to
+sandboxd over the StdioProtocol vsock conn; `tx_bytes` counts
+bytes sandboxd sent to the guest. Both include the 2-byte
+StdioProtocol size prefix per frame. `memory.max_bytes: -1`
+is the JSON encoding of the kernel's `"max"` sentinel — no
+limit.
 
 **Reading them in post-mortem:** counters are cumulative; deltas
 between two samples give per-second rates. `jq` or `awk` is enough:

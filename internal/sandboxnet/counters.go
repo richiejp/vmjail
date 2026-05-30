@@ -30,10 +30,14 @@ type Counters struct {
 
 // counters holds the live atomic byte counters embedded in a
 // Network. Methods are pointer-receiver so the atomics stay
-// stable across copies.
+// stable across copies. `accepted` is flipped by Accept on first
+// conn and never resets — observers use it to distinguish
+// "netstack idle but wired" from "no conn ever seen", which look
+// identical from the byte counters alone.
 type counters struct {
-	rx atomic.Uint64
-	tx atomic.Uint64
+	rx       atomic.Uint64
+	tx       atomic.Uint64
+	accepted atomic.Bool
 }
 
 func (c *counters) snapshot() Counters {

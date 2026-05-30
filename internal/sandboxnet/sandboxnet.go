@@ -142,6 +142,15 @@ type Network struct {
 // value before any conn is accepted.
 func (n *Network) Counters() Counters { return n.ctrs.snapshot() }
 
+// Active reports whether Accept has been entered for at least one
+// conn since this Network was constructed. Used by the observer to
+// distinguish "netstack wired but no conn yet" (zero counters
+// because nothing has connected) from "netstack accepting conns
+// but currently idle" (zero counters between bursts). The flag
+// never resets; once any conn has touched the switch the network
+// stays "active" for accounting purposes.
+func (n *Network) Active() bool { return n.ctrs.accepted.Load() }
+
 // New constructs the netstack from cfg. The returned Network has
 // no conns attached yet; call Accept to plug one in.
 func New(cfg Config) (*Network, error) {
@@ -220,5 +229,6 @@ func New(cfg Config) (*Network, error) {
 // CAM table — callers can re-Accept a fresh conn (guest reboot) on
 // the same Network.
 func (n *Network) Accept(ctx context.Context, conn net.Conn) error {
+	n.ctrs.accepted.Store(true)
 	return n.sw.Accept(ctx, &countingConn{Conn: conn, c: &n.ctrs}, types.StdioProtocol)
 }

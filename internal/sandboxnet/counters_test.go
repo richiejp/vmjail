@@ -84,3 +84,25 @@ func TestNetworkCounters_StartsZero(t *testing.T) {
 		t.Fatalf("fresh Network Counters: %+v", got)
 	}
 }
+
+func TestNetworkActive_FalseUntilAccept(t *testing.T) {
+	n, err := New(Config{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if n.Active() {
+		t.Fatal("Active() true before any Accept")
+	}
+
+	// Drive one Accept with a conn that closes immediately. The
+	// switch will error out of rxStream, but Active must already
+	// have flipped to true before any I/O happens.
+	a, b := net.Pipe()
+	if err := b.Close(); err != nil {
+		t.Fatalf("close peer: %v", err)
+	}
+	_ = n.Accept(t.Context(), a) // returns rx error, that's fine
+	if !n.Active() {
+		t.Fatal("Active() false after Accept")
+	}
+}

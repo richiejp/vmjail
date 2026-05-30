@@ -68,6 +68,15 @@ func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), collec
 			os.Remove(sockPath), fs.ErrNotExist)
 	}
 	collectNet = func() *observability.NetSample {
+		// Until the netstack has accepted at least one conn, the
+		// observer can't tell zero-counters-because-idle from
+		// zero-counters-because-never-connected. Return nil for
+		// the pre-conn window so the Net block is omitted and
+		// the distinction lives in the JSON shape, not in a
+		// number that means two different things.
+		if !network.Active() {
+			return nil
+		}
 		c := network.Counters()
 		return &observability.NetSample{RxBytes: c.RxBytes, TxBytes: c.TxBytes}
 	}

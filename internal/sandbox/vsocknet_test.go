@@ -67,6 +67,12 @@ func TestStartVsockNetReceiverRoundTrip(t *testing.T) {
 	if collectNet == nil {
 		t.Fatal("collectNet nil; expected non-nil when net is enabled")
 	}
+	// Before any guest dials in, the closure must return nil so
+	// the observer can omit the Net block — the "wired but never
+	// connected" window is distinguishable from "wired and idle".
+	if got := collectNet(); got != nil {
+		t.Errorf("collectNet() = %+v before Accept, want nil", *got)
+	}
 
 	conn, err := net.Dial("unix", cfg.Vsock.HostSocket+"_8001")
 	if err != nil {
