@@ -90,6 +90,44 @@ func TestClusterWorkspaceLaunchAgainstHelloBundle(t *testing.T) {
 	// the sandboxd's stdout (which testdaemons captures into the
 	// cluster's outputCapture).
 	c.WaitForSandboxdOutput(t, agent.ContainerBanner, 60*time.Second)
+
+	// With the VM booted, the Tier-1 observer must have sampled the
+	// cloud-hypervisor PID at least once into
+	// <ObserverDir>/<uid>/observer.jsonl — proof that NewCluster's
+	// DAFT_STATE_DIR wiring lights up host-side observability for every
+	// testdaemons VM (it was dark before roadmap item #4). The dump-on-
+	// failure Cleanup surfaces the same file if this assertion fails.
+	waitForObserverSample(t, c.ObserverDir, 15*time.Second)
+}
+
+// waitForObserverSample polls observerDir until some VM's
+// observer.jsonl holds at least one `"pid"` sample line, or fatals
+// citing the dir. The observer samples at ~1 Hz, so a freshly-booted
+// VM yields its first line within a second or two.
+func waitForObserverSample(t *testing.T, observerDir string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		var sampled bool
+		_ = filepath.WalkDir(observerDir, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || d.Name() != "observer.jsonl" {
+				return nil //nolint:nilerr // skip unreadable/irrelevant entries; keep walking.
+			}
+			b, rerr := os.ReadFile(path) //nolint:gosec // path is under the test's own TempDir.
+			if rerr == nil && bytes.Contains(b, []byte("\"pid\"")) {
+				sampled = true
+			}
+			return nil
+		})
+		if sampled {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no observer sample under %s after %s — Tier-1 wiring dark?",
+				observerDir, timeout)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // requireBundle fatals with a clear pointer when DAFT_BUNDLE is

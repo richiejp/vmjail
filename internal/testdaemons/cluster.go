@@ -22,6 +22,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -34,6 +35,7 @@ import (
 	"time"
 
 	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/sandboxdcli"
 	"github.com/localai-org/darkaifactory/internal/sandboxnet"
 	"github.com/localai-org/darkaifactory/internal/testtmux"
 )
@@ -98,6 +100,15 @@ type Cluster struct {
 	SandboxdFP     identity.Fingerprint
 	ClientFP       identity.Fingerprint
 
+	// ObserverDir is the per-sandbox state root NewCluster points the
+	// sandboxd subprocess at (via DAFT_STATE_DIR), so every
+	// orchestrator-dispatched VM writes its Tier-1 observer log to
+	// <ObserverDir>/<sandbox-uid>/observer.jsonl. It lives under the
+	// test's TempDir and is dumped (tail) into the test log on failure
+	// — see the dumpObserverLogs cleanup NewCluster registers. See
+	// OBSERVABILITY.md for the per-VM /proc + cgroup + net sampler.
+	ObserverDir string
+
 	// sandboxdOut accumulates everything the sandboxd subprocess
 	// writes to stdout/stderr (in addition to t.Log forwarding).
 	// Tests assert on it via WaitForSandboxdOutput.
@@ -125,6 +136,102 @@ func (c *Cluster) WaitForSandboxdOutput(t *testing.T, substr string, timeout tim
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+// newObserverStateDir returns the per-test sandbox state root that
+// NewCluster points sandboxd at (via DAFT_STATE_DIR), so every
+// dispatched VM's Tier-1 trace lands at <dir>/<uid>/observer.jsonl. It
+// registers a failure-only Cleanup that dumps the tail of each log into
+// the test log — the TempDir is wiped on cleanup, so citing the path
+// alone wouldn't make the trace grabbable. Registered before the
+// daemons start, so the Cleanup runs (LIFO) after they're torn down and
+// the logs have stopped growing.
+func newObserverStateDir(t *testing.T, base string) string {
+	t.Helper()
+	dir := filepath.Join(base, "observer-state")
+	t.Cleanup(func() {
+		if t.Failed() {
+			dumpObserverLogs(t, dir)
+		}
+	})
+	return dir
+}
+
+// observerTailBytes caps how much of each observer log's tail is
+// read for the failure dump. ~64 KiB is hundreds of 1 Hz JSON-lines
+// samples — far more than enough to see what the VM was doing as a
+// test failed, without spilling a 25 MB live log into the test output.
+const observerTailBytes = 64 * 1024
+
+// observerTailLines caps the number of trailing sample lines logged
+// per observer file, so even a dense log stays a readable tail.
+const observerTailLines = 60
+
+// dumpObserverLogs walks the per-test observer-state root and logs the
+// path plus a bounded tail of every observer.jsonl (and rotated .1
+// backup) it finds. Called from a failure-only Cleanup because the
+// test's TempDir — and these logs with it — is wiped once Cleanup
+// returns, so the trace has to be surfaced into the test log here or
+// it's gone. Best-effort: a sandbox that never booted leaves no file
+// and an unreadable one is noted, neither fails the (already-failing)
+// test further.
+func dumpObserverLogs(t *testing.T, observerDir string) {
+	t.Helper()
+	var found int
+	_ = filepath.WalkDir(observerDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil //nolint:nilerr // skip an unreadable/absent entry and keep walking; a missing log is non-fatal to an already-failing test.
+		}
+		name := d.Name()
+		if name != "observer.jsonl" && name != "observer.jsonl.1" {
+			return nil
+		}
+		found++
+		tail, terr := readTail(path, observerTailBytes, observerTailLines)
+		if terr != nil {
+			t.Logf("observer log %s: unreadable: %v", path, terr)
+			return nil
+		}
+		t.Logf("observer log (Tier-1 host trace) %s — last %d lines:\n%s",
+			path, observerTailLines, tail)
+		return nil
+	})
+	if found == 0 {
+		t.Logf("no observer logs under %s (no sandbox reached boot?)", observerDir)
+	}
+}
+
+// readTail returns the last up-to-maxLines lines from the final
+// maxBytes of the file at path, without reading the whole file (an
+// observer log can reach ~25 MB before rotation).
+func readTail(path string, maxBytes int64, maxLines int) (string, error) {
+	f, err := os.Open(path) //nolint:gosec // G304: test-harness dump of a path under the test's own TempDir.
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return "", err
+	}
+	start := info.Size() - maxBytes
+	if start < 0 {
+		start = 0
+	}
+	buf := make([]byte, info.Size()-start)
+	if _, err := f.ReadAt(buf, start); err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	lines := strings.Split(strings.TrimRight(string(buf), "\n"), "\n")
+	if start > 0 && len(lines) > 0 {
+		// The first line is probably a fragment of a sample split by the
+		// byte cap — drop it so every logged line is whole JSON.
+		lines = lines[1:]
+	}
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 // NewCluster generates identities, cross-approves them, builds
@@ -172,6 +279,8 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	approvePeer(t, sbxDir, orchID.Fingerprint())
 	approvePeer(t, cliDir, orchID.Fingerprint())
 
+	observerDir := newObserverStateDir(t, base)
+
 	addr := freeLoopbackAddr(t)
 	url := "https://" + addr
 
@@ -205,6 +314,12 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		}
 	}
 
+	// Redirect sandboxd's per-sandbox state root at the per-test dir so
+	// the observer logs are isolated and discoverable (sandboxesStateRoot
+	// honours DAFT_STATE_DIR ahead of XDG_STATE_HOME). Appended after the
+	// egress branch, which reassigns sbxEnv wholesale.
+	sbxEnv = append(sbxEnv, sandboxdcli.EnvStateDir+"="+observerDir)
+
 	var sbxScrub []string
 	if o.bundledSandboxd != "" {
 		// serve still calls ConfigFromEnv at startup, which demands the
@@ -230,6 +345,7 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		OrchestratorFP:  orchID.Fingerprint(),
 		SandboxdFP:      sbxID.Fingerprint(),
 		ClientFP:        cliID.Fingerprint(),
+		ObserverDir:     observerDir,
 		sandboxdOut:     sbxOut,
 	}
 }

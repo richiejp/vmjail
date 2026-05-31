@@ -196,9 +196,13 @@ so a flatline at the end of a log is unambiguous.
 `Config.ObserverLogPath`. There is no implicit default — each
 caller picks a location appropriate for its lifetime:
 
-- **Integration tests:** `t.TempDir() + "/observer-<id>.jsonl"`.
-  Auto-cleaned with the test; failure reports cite the path so the
-  log is grabbable before the temp dir is removed.
+- **Integration tests:** `testdaemons.Cluster` points the sandboxd
+  subprocess's state root (`DAFT_STATE_DIR`) at `Cluster.ObserverDir`
+  under the test's `t.TempDir()`, so every dispatched VM writes to
+  `<ObserverDir>/<uid>/observer.jsonl`. On test failure a Cleanup
+  dumps the tail of each log into the test output — the temp dir is
+  wiped on cleanup, so the trace is surfaced there rather than left
+  to be grabbed from a path that's about to vanish.
 - **`daft-sandboxd` user-facing launches:** placed under a
   per-sandbox state dir, surfaced via a future
   `daft sandbox observer-tail <name>` subcommand. Path lookup is
@@ -342,10 +346,20 @@ In rough order:
    (default) stays open like `tail -f`; `--follow=false` dumps the
    current log and exits. Read-only and mTLS-authenticated end to end
    (same peer-fingerprint model as attach).
-4. **`testdaemons.Cluster` integration** — every integration test
-   workspace gets an observer log path under `t.TempDir()`, surfaced
-   in failure messages so the file is grabbable before tempdir
-   cleanup.
+4. **`testdaemons.Cluster` integration** (landed) — `NewCluster`
+   points the sandboxd subprocess's per-sandbox state root at a
+   `t.TempDir()` subdir via `DAFT_STATE_DIR` (`Cluster.ObserverDir`),
+   so every orchestrator-dispatched VM's Tier-1 trace lands at
+   `<ObserverDir>/<uid>/observer.jsonl` — host-side observability was
+   dark for testdaemons VMs before this. A failure-only Cleanup dumps
+   the bounded tail of each log into the test output (the temp dir is
+   wiped on cleanup, so the trace is surfaced inline, not left at a
+   vanishing path). `TestClusterWorkspaceLaunchAgainstHelloBundle`
+   asserts a real booted VM produces a sample. The in-guest
+   `attachWorkspaceProfiler` stays for now: its retirement is gated on
+   *both* this wiring **and** Tier 2 gadgets covering the guest-internal
+   detail (PSI, per-process wchan, store-path counts) the host-side
+   sampler can't see — so only the first half of that gate is met.
 5. **Tier 2 kickoff** — kconfig commit (BTF/UPROBES/KALLSYMS_ALL/
    FTRACE_SYSCALLS/BPF_EVENTS) + `cilium/ebpf` dependency + first
    gadget (`open-snoop`).
@@ -370,9 +384,15 @@ In rough order:
   `ObserverTail`, orchestrator↔node `ObserverStream` rendezvous).
 - `internal/cli/sandbox_observer_tail.go` — the `daft sandbox
   observer-tail` command.
+- `internal/testdaemons/cluster.go` — `NewCluster` wires the sandboxd
+  subprocess's state root to `Cluster.ObserverDir` (a `t.TempDir()`
+  subdir) via `DAFT_STATE_DIR`, and registers the failure-only
+  `dumpObserverLogs` Cleanup (`readTail` bounds each dump).
 - `internal/testdaemons/workspace_profiler_test.go` — the in-guest
-  `attachWorkspaceProfiler` is **transitional** and will be retired
-  once Tier 1 is wired through `testdaemons.Cluster` and Tier 2
-  gadgets cover the cases the in-guest sampler currently does.
+  `attachWorkspaceProfiler` is **transitional**. Tier 1 is now wired
+  through `testdaemons.Cluster` (roadmap #4), meeting the first half
+  of its retirement gate; it stays until Tier 2 gadgets cover the
+  guest-internal detail (PSI, per-process wchan, store-path counts)
+  the host-side sampler can't see.
 - `CONTRIBUTING.md` "Slowness is a bug" — the policy this
   infrastructure exists to support.
