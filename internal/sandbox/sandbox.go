@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -416,10 +417,14 @@ func (virtiofsdSidecar) start(ctx context.Context, cfg Config, cgroupDir string)
 	stops := make([]func(), 0, len(cfg.Shares))
 
 	stopAll := func() {
-		// Tear down in reverse spawn order, mostly cosmetic.
-		for i := len(stops) - 1; i >= 0; i-- {
-			stops[i]()
+		// Reap every virtiofsd concurrently so one wedged on a stuck
+		// backing fs (D-state) doesn't strand the reap of its healthy
+		// siblings — same no-stranding rationale as vmTeardown.run.
+		var wg sync.WaitGroup
+		for _, s := range stops {
+			wg.Go(s)
 		}
+		wg.Wait()
 	}
 
 	for i, share := range cfg.Shares {
@@ -476,6 +481,11 @@ func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig, c
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 
+	// Setpgid + Pdeathsig + WaitDelay + group-kill-on-cancel so a
+	// wedged or orphaned virtiofsd can't hang our reaper (see
+	// hardenSpawn).
+	hardenSpawn(cmd)
+
 	closeCgroupFD := placeInCgroup(cmd, cgroupDir)
 
 	if err := cmd.Start(); err != nil {
@@ -486,22 +496,28 @@ func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig, c
 	closeCgroupFD()
 
 	stop = func() {
-		// Best-effort teardown. Kill on an already-exited process
-		// returns os.ErrProcessDone — fine, race between us and the
-		// VM. Anything else (e.g. EPERM) is a real problem we can't
+		// Best-effort teardown. Group-kill on an already-exited
+		// process returns ESRCH (normalised to nil by
+		// killProcessGroup) — fine, race between us and the VM.
+		// Anything else (e.g. EPERM) is a real problem we can't
 		// recover from, so let oops.Skip exit on it.
+		pid := 0
 		if cmd.Process != nil {
-			oops.Skip("kill virtiofsd", cmd.Process.Kill(), os.ErrProcessDone)
+			pid = cmd.Process.Pid
+			oops.Skip("kill virtiofsd group",
+				killProcessGroup(cmd), os.ErrProcessDone)
 		}
-		// Wait returns *exec.ExitError after we Kill'd the process —
-		// that's expected and informational. Other error types
-		// (e.g. ECHILD, runtime broken) signal a real problem.
-		if waitErr := cmd.Wait(); waitErr != nil {
-			var exitErr *exec.ExitError
-			if !errors.As(waitErr, &exitErr) {
+		// Wait returns *exec.ExitError after the kill — expected and
+		// informational; benignReapError also tolerates a WaitDelay
+		// overrun or ctx-cancel race. Other error types (ECHILD,
+		// runtime broken) signal a real problem. The watchdog keeps
+		// the wait loud if virtiofsd is wedged in D-state on a stuck
+		// backing fs.
+		reapWithWatchdog("virtiofsd", pid, procWatchdogFirst, procWatchdogMax, func() {
+			if waitErr := cmd.Wait(); waitErr != nil && !benignReapError(waitErr) {
 				oops.Must("wait virtiofsd", waitErr)
 			}
-		}
+		})
 		cleanup()
 	}
 
@@ -754,6 +770,167 @@ func placeInCgroup(cmd *exec.Cmd, cgroupDir string) (closeFD func()) {
 	}
 }
 
+// procWaitDelay bounds how long cmd.Wait tolerates the child's stdio
+// pipes staying open after the process itself has exited — e.g. an
+// orphaned grandchild that inherited them and escaped the process
+// group. Past this, Wait force-closes the pipes and returns instead
+// of blocking forever. It does NOT bound a process still alive in
+// uninterruptible kernel sleep (D-state); reapWithWatchdog covers
+// that case.
+const procWaitDelay = 5 * time.Second
+
+// Watchdog escalation for a reap that won't complete: warn after
+// procWatchdogFirst, then back off (doubling) up to procWatchdogMax
+// between warnings, so a permanently-wedged VM keeps signalling
+// without flooding the log. The first interval is deliberately longer
+// than procWaitDelay so the orphan-pipe case (already bounded by
+// WaitDelay) never trips the watchdog — a warning here means the
+// genuine D-state case.
+const (
+	procWatchdogFirst = 10 * time.Second
+	procWatchdogMax   = 60 * time.Second
+)
+
+// hardenSpawn configures a VMM/sidecar subprocess so a wedged or
+// orphaned child can neither outlive its supervisor nor stall its
+// reaper:
+//
+//   - Setpgid puts the child in its own process group, so stop() can
+//     reap the whole tree (the VMM plus any helper it forks — vhost-
+//     user backends, virtiofsd's own children) with one negative-PID
+//     kill. Without it, an orphan that inherited our stdio pipe keeps
+//     the pipe open and hangs cmd.Wait forever.
+//   - Pdeathsig (Linux only) SIGKILLs the child if sandboxd dies, so a
+//     supervisor crash doesn't strand running VMMs.
+//   - WaitDelay bounds the post-exit wait for those pipes to close
+//     (the rare orphan that escaped the process group).
+//   - Cancel group-kills on ctx cancellation; CommandContext's default
+//     kills only the leader PID, missing the group.
+//
+// It does not address a child wedged in uninterruptible kernel sleep
+// (D-state) — nothing in userspace can kill one; reapWithWatchdog
+// keeps that case loud and attributable instead.
+func hardenSpawn(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.Setpgid = true
+	setParentDeathSignal(cmd.SysProcAttr)
+	cmd.WaitDelay = procWaitDelay
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+}
+
+// killProcessGroup SIGKILLs cmd's entire process group (the negative
+// PID that Setpgid made distinct). Safe only before cmd.Wait reaps the
+// child: until then the zombie pins the PID/PGID so the negative-PID
+// target can't be recycled onto an unrelated group. ESRCH (the group
+// is already gone) is normalised to nil, and an unstarted cmd is a
+// no-op.
+func killProcessGroup(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil &&
+		!errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
+}
+
+// benignReapError reports whether a cmd.Wait error during teardown is
+// expected rather than a problem worth crashing on. A killed process
+// surfaces as *exec.ExitError; an orphan holding a pipe past WaitDelay
+// surfaces as exec.ErrWaitDelay; a ctx cancellation that raced ahead of
+// a clean exit surfaces as context.Canceled / DeadlineExceeded.
+// Anything else (ECHILD, a broken runtime) is real and reaches
+// oops.Must.
+func benignReapError(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr) ||
+		errors.Is(err, exec.ErrWaitDelay) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
+}
+
+// reapWithWatchdog runs wait — a blocking cmd.Wait teardown — and,
+// until it returns, emits an escalating loud warning naming what we're
+// stuck reaping. It never abandons the wait. A child wedged in
+// uninterruptible kernel sleep (D-state) can't be killed, and giving up
+// reclaims nothing: the cgroup rmdir EBUSYs while the task lingers and
+// the PID stays unreapable, so abandoning would only discard the one
+// signal that points at daft as the holder of those resources while the
+// host slowly leaks them. So daft keeps waiting and keeps complaining,
+// loudly enough that the cause is attributable instead of mysterious.
+func reapWithWatchdog(what string, pid int, first, maxInterval time.Duration, wait func()) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		wait()
+	}()
+	interval := first
+	waited := time.Duration(0)
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	//daft:lint:disable=forloopbound reason="returns when the reap goroutine closes done; intentionally unbounded otherwise — a D-state reap is meant to be waited on forever (see doc comment)"
+	for {
+		select {
+		case <-done:
+			return
+		case <-timer.C:
+			waited += interval
+			oops.Log("sandbox: reap stalled", fmt.Errorf(
+				"still waiting to reap %s (pid %d) after %s — likely wedged in "+
+					"uninterruptible kernel sleep (D-state); its cgroup, memory and "+
+					"vCPU threads stay held until the kernel releases it, and daft "+
+					"will keep waiting", what, pid, waited,
+			))
+			if interval < maxInterval {
+				interval *= 2
+				if interval > maxInterval {
+					interval = maxInterval
+				}
+			}
+			timer.Reset(interval)
+		}
+	}
+}
+
+// vmTeardown collects a VM's shutdown steps so they run in the right
+// order regardless of which setup step failed: the pure-Go receivers
+// first, the process children reaped concurrently, the cgroup last.
+type vmTeardown struct {
+	cgroupDir string
+	// funcStops are the pure-Go receiver shutdowns (vsock, sandboxnet).
+	// They're fast and never block on a D-state task; closing their
+	// listeners + tracked conns also unblocks per-conn goroutines still
+	// pumping to the about-to-die VMM.
+	funcStops []func()
+	// procStops reap spawned processes (the VMM, each virtiofsd). Each
+	// kills its own process group, drains, and Waits via
+	// reapWithWatchdog.
+	procStops []func()
+}
+
+func (td *vmTeardown) run() {
+	for i := len(td.funcStops) - 1; i >= 0; i-- {
+		td.funcStops[i]()
+	}
+	// Reap concurrently so a child wedged in uninterruptible sleep
+	// can't strand the reap of a healthy sibling. run() still blocks
+	// until every reap returns, so a wedged VMM keeps daft visibly
+	// waiting (and, via reapWithWatchdog, loudly complaining) rather
+	// than silently leaking.
+	var wg sync.WaitGroup
+	for _, stop := range td.procStops {
+		wg.Go(stop)
+	}
+	wg.Wait()
+	// The cgroup can only be reclaimed once every task is gone — rmdir
+	// EBUSYs otherwise, which is also why a wedged reap is worth
+	// blocking on rather than abandoning.
+	removeVMCgroupBestEffort(td.cgroupDir)
+}
+
 func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string, cgroupDir string, collectNet func() *observability.NetSample) (io.ReadCloser, func(), error) {
 	args := buildCloudHypervisorArgs(cfg, shareSockets)
 	// #nosec G204 — cfg.CloudHypervisor is the operator-supplied
@@ -771,6 +948,10 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 		return nil, nil, fmt.Errorf("sandbox: stdout pipe: %w", err)
 	}
 	cmd.Stderr = io.Discard
+
+	// Setpgid + Pdeathsig + WaitDelay + group-kill-on-cancel so a
+	// wedged or orphaned CH can't hang our reaper (see hardenSpawn).
+	hardenSpawn(cmd)
 
 	// Per-VM cgroup wrap is best-effort and owned by the
 	// orchestration layer (helloWith/serveWith) so that virtiofsd
@@ -796,23 +977,25 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 		if obs != nil {
 			oops.Log("observability.Stop", obs.Stop())
 		}
+		pid := 0
 		if cmd.Process != nil {
-			oops.Skip("kill cloud-hypervisor", cmd.Process.Kill(), os.ErrProcessDone)
+			pid = cmd.Process.Pid
+			oops.Skip("kill cloud-hypervisor group",
+				killProcessGroup(cmd), os.ErrProcessDone)
 		}
-		// Drain stdout before Wait so the kernel buffer doesn't keep
-		// the writer parked. Either Wait or this drain may have already
-		// raced past EOF — io.Copy returns nil on EOF, and a closed
-		// pipe surfaces as os.ErrClosed which is fine here.
-		if _, copyErr := io.Copy(io.Discard, stdout); copyErr != nil {
-			oops.Skip("drain cloud-hypervisor stdout", copyErr,
-				io.EOF, os.ErrClosed)
-		}
-		if waitErr := cmd.Wait(); waitErr != nil {
-			var exitErr *exec.ExitError
-			if !errors.As(waitErr, &exitErr) {
+		reapWithWatchdog("cloud-hypervisor", pid, procWatchdogFirst, procWatchdogMax, func() {
+			// Drain stdout before Wait so the kernel buffer doesn't
+			// keep the writer parked. Either Wait or this drain may
+			// have already raced past EOF — io.Copy returns nil on
+			// EOF, and a closed pipe surfaces as os.ErrClosed.
+			if _, copyErr := io.Copy(io.Discard, stdout); copyErr != nil {
+				oops.Skip("drain cloud-hypervisor stdout", copyErr,
+					io.EOF, os.ErrClosed)
+			}
+			if waitErr := cmd.Wait(); waitErr != nil && !benignReapError(waitErr) {
 				oops.Must("wait cloud-hypervisor", waitErr)
 			}
-		}
+		})
 		// The cgroup itself is removed at the orchestration layer
 		// after stopShare reaps the virtiofsd sidecars too — rmdir
 		// only succeeds when every task in the cgroup is gone.
@@ -893,35 +1076,37 @@ func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	// Create the per-VM cgroup BEFORE startShares so virtiofsd
 	// fork-places into it alongside cloud-hypervisor. Best-effort:
 	// returns "" on hosts without delegation; the rest of the chain
-	// becomes a no-op cgroup-wise but boots normally. Defer removal
-	// FIRST so it runs LAST (after every stop closure has reaped its
-	// process) — rmdir succeeds only when every task is gone.
+	// becomes a no-op cgroup-wise but boots normally. A single
+	// vmTeardown orders shutdown (pure-Go receivers, then processes
+	// reaped concurrently, then the cgroup last) on every return path,
+	// including the early error returns below.
 	cgroupDir := createVMCgroup(vmCgroupName(cfg))
-	defer removeVMCgroupBestEffort(cgroupDir)
+	td := &vmTeardown{cgroupDir: cgroupDir}
+	defer td.run()
 
 	shareSockets, stopShare, err := startShares(ctx, cfg, sc, cgroupDir)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	defer stopShare()
+	td.procStops = append(td.procStops, stopShare)
 
 	stopVsock, err := startVsockTraceReceiver(ctx, cfg)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	defer stopVsock()
+	td.funcStops = append(td.funcStops, stopVsock)
 
 	stopNet, collectNet, err := startVsockNetReceiver(ctx, cfg)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	defer stopNet()
+	td.funcStops = append(td.funcStops, stopNet)
 
 	stdout, stop, err := runVMM(ctx, cfg, shareSockets, r, cgroupDir, collectNet)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	defer stop()
+	td.procStops = append(td.procStops, stop)
 
 	// Mirror stdout for the VMM's full lifetime in a background
 	// goroutine. The drain inside stop() catches any residual
@@ -965,34 +1150,35 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	runCtx, cancel := context.WithTimeout(ctx, HelloTimeout)
 	defer cancel()
 
-	// Same cgroup choreography as serveWith — see the long
+	// Same cgroup + teardown choreography as serveWith — see the long
 	// comment there.
 	cgroupDir := createVMCgroup(vmCgroupName(cfg))
-	defer removeVMCgroupBestEffort(cgroupDir)
+	td := &vmTeardown{cgroupDir: cgroupDir}
+	defer td.run()
 
 	shareSockets, stopShare, err := startShares(runCtx, cfg, sc, cgroupDir)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	defer stopShare()
+	td.procStops = append(td.procStops, stopShare)
 
 	stopVsock, err := startVsockTraceReceiver(ctx, cfg)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	defer stopVsock()
+	td.funcStops = append(td.funcStops, stopVsock)
 
 	stopNet, collectNet, err := startVsockNetReceiver(ctx, cfg)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	defer stopNet()
+	td.funcStops = append(td.funcStops, stopNet)
 
 	stdout, stop, err := runVMM(runCtx, cfg, shareSockets, r, cgroupDir, collectNet)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	defer stop()
+	td.procStops = append(td.procStops, stop)
 
 	bannerCtx, bannerSpan := trace.Start(runCtx, "sandbox.scan_for_banner")
 	defer bannerSpan.End()

@@ -12,3 +12,9 @@ import "syscall"
 func withCgroupFD(existing *syscall.SysProcAttr, _ int) *syscall.SysProcAttr {
 	return existing
 }
+
+// setParentDeathSignal is a no-op on non-Linux platforms: Pdeathsig
+// is a Linux-only SysProcAttr field. The sandbox package builds on
+// macOS for unit tests; the parent-death-kill guarantee simply
+// doesn't apply there.
+func setParentDeathSignal(_ *syscall.SysProcAttr) {}

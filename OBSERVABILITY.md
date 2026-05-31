@@ -67,15 +67,36 @@ cloud-hypervisor process all land in the same per-VM cgroup
 atomically at fork. The observer is started with the CH PID *and*
 the cgroup directory, so each sample carries both views.
 
-Teardown order is enforced by Go's defer LIFO: the cgroup removal
-is deferred first (runs last), then the share-sidecar stop, then
-the trace+net receivers, then the VMM stop. By the time
-`removeVMCgroupBestEffort` rmdir's the directory every task in
-the cgroup has been reaped — the kernel refuses rmdir while any
-task is still inside, so the ordering matters. A failed observer
-or cgroup setup is reported via `oops.Log` and the sandbox
-proceeds without the affected surface — observability is a
-debugging surface, not a correctness invariant.
+Teardown is orchestrated by a single `vmTeardown` (replacing the
+old defer-LIFO chain) so a wedged child can't strand the cleanup
+of a healthy one. It runs three phases: (1) the pure-Go receivers
+(trace + net listeners) close first — fast, and closing their
+tracked conns unblocks any per-conn goroutine still pumping to the
+about-to-die VMM; (2) the process children (the VMM and every
+virtiofsd) are reaped **concurrently**, so one wedged in
+uninterruptible kernel sleep (D-state) doesn't block the reap of
+its siblings; (3) `removeVMCgroupBestEffort` rmdir's the directory
+last, only after every task is reaped — the kernel refuses rmdir
+while any task is still inside.
+
+Each spawn is hardened (`hardenSpawn`): `Setpgid` puts it in its
+own process group so teardown can group-kill the whole tree (the
+VMM plus any helper it forks) with one negative-PID `SIGKILL`;
+`Pdeathsig` SIGKILLs it if sandboxd dies; `WaitDelay` bounds
+`cmd.Wait` against an orphan that escaped the group and is holding
+a stdio pipe open. None of that can kill a child wedged in
+D-state — nothing in userspace can. That case is handled by
+`reapWithWatchdog`: it **keeps waiting** (abandoning reclaims
+nothing — the cgroup rmdir EBUSYs and the PID stays unreapable
+either way) and emits an escalating loud `oops` warning naming the
+process and PID, so a host-level resource leak is attributable to
+daft rather than mysterious. If you see `sandbox: reap stalled`
+logs, a VMM/virtiofsd is wedged in the kernel and its cgroup +
+memory stay held until the kernel releases it.
+
+A failed observer or cgroup setup is reported via `oops.Log` and
+the sandbox proceeds without the affected surface — observability
+is a debugging surface, not a correctness invariant.
 
 **Cgroup wrap requires delegation.** On stock systemd hosts the
 user session scope doesn't have `Delegate=yes`, so mkdir under
