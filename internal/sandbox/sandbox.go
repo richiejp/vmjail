@@ -698,6 +698,16 @@ func removeVMCgroupBestEffort(path string) {
 // their own fd at fork time via placeInCgroup, so the whole VM
 // process tree lands in one accounting unit without coordinating
 // fd ownership across helpers.
+//
+// Before returning the path, createVMCgroup probes that an O_PATH
+// fd can actually be opened on the new directory and closes it
+// immediately. This keeps the all-or-nothing precondition the old
+// single-shot setupVMCgroup enforced: either every spawn-helper
+// can place into the cgroup, or we fall back to /proc-only
+// sampling for all of them. Without the probe, a cgroup that's
+// creatable-but-not-openable would let some processes place and
+// others not, silently corrupting the cgroup accounting view
+// (memory.peak / io.stat missing whichever helper failed to open).
 func createVMCgroup(name string) string {
 	parent, err := observability.CurrentCgroup()
 	if err != nil {
@@ -709,6 +719,13 @@ func createVMCgroup(name string) string {
 		oops.Log("observability.CreateSubCgroup", err)
 		return ""
 	}
+	fd, err := observability.OpenCgroupFD(dir)
+	if err != nil {
+		oops.Log("observability.OpenCgroupFD probe", err)
+		removeVMCgroupBestEffort(dir)
+		return ""
+	}
+	oops.Skip("close cgroup probe fd", syscall.Close(fd), nil)
 	return dir
 }
 

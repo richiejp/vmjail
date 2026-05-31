@@ -80,10 +80,10 @@ debugging surface, not a correctness invariant.
 **Cgroup wrap requires delegation.** On stock systemd hosts the
 user session scope doesn't have `Delegate=yes`, so mkdir under
 `/sys/fs/cgroup/user.slice/user-<uid>.slice/session-<n>.scope`
-returns EACCES. When that happens, `setupVMCgroup` logs and
-returns `("", -1)`; the observer falls back to `/proc`-only
-sampling. To get the cgroup view on a stock host, launch
-`daft-sandboxd` under a delegated transient unit:
+returns EACCES. When that happens, `createVMCgroup` logs and
+returns `""`; the observer falls back to `/proc`-only sampling.
+To get the cgroup view on a stock host, launch `daft-sandboxd`
+under a delegated transient unit:
 
 ```sh
 systemd-run --user --scope --property=Delegate=yes daft-sandboxd ...
