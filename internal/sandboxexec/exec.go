@@ -114,6 +114,12 @@ type Executor struct {
 	// to wrap the framed conn as an AttachSession. Sharing
 	// VsockDir with bridger is enforced by New().
 	attachRegistry *sandboxgateway.AttachRegistry
+	// observerRegistry, when non-nil, is the per-sandbox observer-log
+	// table the executor populates on dispatch (sandbox_uid → the
+	// dispatched Config.ObserverLogPath). The orchestrator-driven
+	// ObserverStream handler resolves a uid to a path to tail. Only
+	// dispatches whose ObserverLogPath is set register a route.
+	observerRegistry *sandboxgateway.ObserverRegistry
 	// netEnabled toggles the sandboxnet listener wiring on every
 	// dispatched VM (Slice D6c.2 step 3). When true, resolveBootConfig
 	// allocates a Vsock device if one isn't already there and sets
@@ -177,6 +183,13 @@ type Config struct {
 	// Bridger). Leave nil for tests/baselines that don't exercise
 	// attach.
 	AttachRegistry *sandboxgateway.AttachRegistry
+	// ObserverRegistry, when non-nil, is the per-sandbox observer-log
+	// table the executor populates on every dispatch whose
+	// ObserverLogPath is set (sandbox_uid → path). The
+	// orchestrator-driven ObserverStream handler resolves through it to
+	// tail a running sandbox's log. Leave nil for tests/baselines that
+	// don't exercise observer-tail.
+	ObserverRegistry *sandboxgateway.ObserverRegistry
 	// VsockDir is the absolute parent directory where per-Sandbox
 	// hybrid-vsock UDS files live (one per running VM, named after
 	// the Sandbox uid). Required when Bridger or AttachRegistry is
@@ -277,6 +290,7 @@ func New(cfg Config) (*Executor, error) {
 		assembler:         cfg.Assembler,
 		bridger:           cfg.Bridger,
 		attachRegistry:    cfg.AttachRegistry,
+		observerRegistry:  cfg.ObserverRegistry,
 		vsockDir:          cfg.VsockDir,
 		netEnabled:        cfg.NetEnabled,
 		egressProxy:       cfg.EgressProxy,
@@ -422,6 +436,8 @@ func (e *Executor) HandleSandboxEvent(
 	defer unregisterPorts()
 	unregisterAttach := e.registerAttachRoute(cfg, uid)
 	defer unregisterAttach()
+	unregisterObserver := e.registerObserverRoute(cfg, uid)
+	defer unregisterObserver()
 
 	if err := e.run(ctx, e.stdout, cfg); err != nil {
 		e.markPhase(uid, phaseKilled, 0)
@@ -502,6 +518,25 @@ func (e *Executor) registerAttachRoute(cfg sandbox.Config, uid string) func() {
 		return func() {}
 	}
 	return func() { e.attachRegistry.Unregister(uid) }
+}
+
+// registerObserverRoute adds one ObserverRegistry entry mapping this
+// dispatch's sandbox_uid to its host-side observer-log path so the
+// orchestrator-driven ObserverStream handler can tail it. Returns an
+// unregister func the caller defers so the route vanishes on dispatch
+// exit. No-op when no ObserverRegistry is configured or the dispatch
+// has no observer log (ObserverLogPath unset).
+func (e *Executor) registerObserverRoute(cfg sandbox.Config, uid string) func() {
+	if e.observerRegistry == nil || cfg.ObserverLogPath == "" || uid == "" {
+		return func() {}
+	}
+	if err := e.observerRegistry.Register(uid, cfg.ObserverLogPath); err != nil {
+		// Same executor-bug class as duplicate attach routes —
+		// surface it on stdout and leave the table clean.
+		_, _ = fmt.Fprintf(e.stdout, "sandboxexec: register observer route: %v\n", err)
+		return func() {}
+	}
+	return func() { e.observerRegistry.Unregister(uid) }
 }
 
 // resolveBootConfig picks between the baseline Hello config and

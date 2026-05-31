@@ -108,6 +108,7 @@ func newSandboxCmd() *cobra.Command {
 			"described in ARCHITECTURE.md.",
 	}
 	cmd.AddCommand(newSandboxHelloCmd())
+	cmd.AddCommand(newSandboxObserverTailCmd())
 	return cmd
 }
 

@@ -72,6 +72,20 @@ service NodeControlService {
   // orchestrator — the agent inside the VM is the actual PTY
   // endpoint. See PLAN.md Slice D2.
   rpc AttachStream(stream AttachStreamMessage) returns (stream AttachStreamMessage) {}
+
+  // ObserverStream is the byte channel for a single observer-log
+  // tail. The Node dials this in response to an ObserverRequest
+  // event delivered on its RegisterNode stream; the orchestrator
+  // splices the resulting stream to the caller (a `daft sandbox
+  // observer-tail` client).
+  //
+  // First message on each direction MUST be an
+  // ObserverStreamMessage{hello} carrying the announced session_id
+  // so the orchestrator can match this stream to its pending
+  // request. After the Hello, data flows Node → orchestrator only
+  // (the log is read-only); the orchestrator's return direction
+  // carries nothing and closing it cancels the tail.
+  rpc ObserverStream(stream ObserverStreamMessage) returns (stream ObserverStreamMessage) {}
 }
 
 // ProtocolVersion is the wire-protocol version exchanged at
@@ -121,6 +135,7 @@ message NodeEvent {
     SandboxWatchEvent sandbox = 2;
     OpenPortRequest open_port = 3;
     AttachRequest attach = 4;
+    ObserverRequest observer = 5;
   }
 }
 
@@ -199,6 +214,37 @@ message AttachStreamHello {
 message AttachStreamResize {
   uint32 cols = 1;
   uint32 rows = 2;
+}
+
+// ObserverRequest asks the Node to dial ObserverStream for one
+// observer-log tail. The Node identifies the live sandbox by
+// sandbox_uid (matching Sandbox.metadata.uid), opens that sandbox's
+// host-side observer log, and echoes session_id back on the
+// ObserverStream Hello so the orchestrator can splice.
+message ObserverRequest {
+  // Opaque rendezvous token (random 32 bytes, base64-url).
+  string session_id = 1;
+  // Sandbox.metadata.uid of the live sandbox whose observer log to
+  // tail. The Node uses this as the routing key into its local
+  // sandboxgateway ObserverRegistry.
+  string sandbox_uid = 2;
+  // Keep streaming appended lines (tail -f) rather than sending the
+  // current file once and closing.
+  bool follow = 3;
+}
+
+// ObserverStreamMessage is the ObserverStream frame. First message
+// on each direction is a Hello; subsequent frames carry opaque
+// observer-log bytes (Node → orchestrator only).
+message ObserverStreamMessage {
+  oneof body {
+    ObserverStreamHello hello = 1;
+    bytes data = 2;
+  }
+}
+
+message ObserverStreamHello {
+  string session_id = 1;
 }
 
 // SandboxWatchEvent reports a Sandbox lifecycle transition the

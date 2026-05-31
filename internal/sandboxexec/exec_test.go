@@ -529,6 +529,51 @@ func TestHandleSandboxEventObserverLogMkdirFailureIsBestEffort(t *testing.T) {
 	}
 }
 
+// TestHandleSandboxEventRegistersObserverRoute pins that a dispatch
+// with an ObserverRegistry + ObserverDir registers a uid→log-path
+// route for the duration of the run and unregisters it on exit.
+func TestHandleSandboxEventRegistersObserverRoute(t *testing.T) {
+	reg := sandboxgateway.NewObserverRegistry()
+	observerDir := t.TempDir()
+	var pathDuringRun string
+	var resolveErr error
+	runner := func(_ context.Context, _ io.Writer, _ sandbox.Config) error {
+		pathDuringRun, resolveErr = reg.Resolve("sb-obs")
+		return nil
+	}
+	e, err := New(Config{Stdout: io.Discard, Runner: runner, ObserverDir: observerDir, ObserverRegistry: reg})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-obs", &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	want := filepath.Join(observerDir, "sb-obs", "observer.jsonl")
+	if resolveErr != nil || pathDuringRun != want {
+		t.Errorf("route during run = %q (err %v), want %q", pathDuringRun, resolveErr, want)
+	}
+	if _, err := reg.Resolve("sb-obs"); err == nil {
+		t.Error("observer route should be unregistered after the dispatch exits")
+	}
+}
+
+// TestHandleSandboxEventNoObserverRouteWithoutDir pins that an
+// ObserverRegistry without an ObserverDir (so no ObserverLogPath)
+// registers nothing.
+func TestHandleSandboxEventNoObserverRouteWithoutDir(t *testing.T) {
+	reg := sandboxgateway.NewObserverRegistry()
+	e, err := New(Config{Stdout: io.Discard, Runner: noopRunner(), ObserverRegistry: reg})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-x", &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if _, err := reg.Resolve("sb-x"); err == nil {
+		t.Error("no observer route should be registered without an ObserverDir")
+	}
+}
+
 // TestHandleSandboxEventObserverLogBaselineWins pins that an explicit
 // baseline ObserverLogPath is not overridden by the per-uid default.
 func TestHandleSandboxEventObserverLogBaselineWins(t *testing.T) {

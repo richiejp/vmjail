@@ -63,11 +63,12 @@ type WorkspaceAttachBridger interface {
 // mutation lands in B2d.
 type WorkspaceCatalogHandler struct {
 	workspacev1connect.UnimplementedWorkspaceCatalogServiceHandler
-	store         *workspacecatalog.Store
-	dispatcher    Dispatcher
-	preAction     preActionReconciler
-	portBridger   WorkspacePortBridger
-	attachBridger WorkspaceAttachBridger
+	store           *workspacecatalog.Store
+	dispatcher      Dispatcher
+	preAction       preActionReconciler
+	portBridger     WorkspacePortBridger
+	attachBridger   WorkspaceAttachBridger
+	observerBridger WorkspaceObserverBridger
 }
 
 // SetPortBridger wires the WorkspacePortBridger ForwardPort calls

@@ -78,6 +78,11 @@ type NodeControlHandler struct {
 	// pendingPorts; populated before AttachRequest event is
 	// pushed, drained when AttachStream arrives. See attach.go.
 	pendingAttaches map[string]*pendingAttach
+	// pendingObservers is the parallel map for OpenObserverBridge:
+	// the rendezvous slot for `daft sandbox observer-tail`. Same
+	// session_id pattern; populated before the ObserverRequest event
+	// is pushed, drained when ObserverStream arrives. See observer.go.
+	pendingObservers map[string]*pendingObserver
 }
 
 // SetReconciler wires the LivenessReconciler invoked on every
@@ -96,10 +101,11 @@ func NewNodeControlHandler(reg *nodectrl.Registry) (*NodeControlHandler, error) 
 		return nil, errors.New("orchestrator: nil nodectrl registry")
 	}
 	return &NodeControlHandler{
-		reg:             reg,
-		streams:         map[identity.Fingerprint]chan *nodectrlv1.NodeEvent{},
-		pendingPorts:    map[string]*pendingPort{},
-		pendingAttaches: map[string]*pendingAttach{},
+		reg:              reg,
+		streams:          map[identity.Fingerprint]chan *nodectrlv1.NodeEvent{},
+		pendingPorts:     map[string]*pendingPort{},
+		pendingAttaches:  map[string]*pendingAttach{},
+		pendingObservers: map[string]*pendingObserver{},
 	}, nil
 }
 

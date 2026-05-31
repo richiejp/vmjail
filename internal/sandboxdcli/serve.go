@@ -115,9 +115,10 @@ func runServe(
 
 	bridger := sandboxgateway.New()
 	attachRegistry := sandboxgateway.NewAttachRegistry()
+	observerRegistry := sandboxgateway.NewObserverRegistry()
 	mountBackingDir := filepath.Join(dir, "mounts")
 	dispatcher, err := buildDispatcher(stdout, bridger, attachRegistry,
-		vsockDir, sync.server, mountBackingDir)
+		observerRegistry, vsockDir, sync.server, mountBackingDir)
 	if err != nil {
 		return err
 	}
@@ -132,6 +133,7 @@ func runServe(
 		LiveSnapshot:      dispatcher.LiveSnapshot,
 		Bridger:           bridger,
 		AttachBridger:     attachRegistry,
+		ObserverResolver:  observerRegistry,
 		Stderr:            stdout,
 	})
 	if err != nil {
@@ -255,6 +257,7 @@ var buildDispatcher = func(
 	stdout io.Writer,
 	bridger *sandboxgateway.Bridger,
 	attachRegistry *sandboxgateway.AttachRegistry,
+	observerRegistry *sandboxgateway.ObserverRegistry,
 	vsockDir string,
 	materializer sandboxexec.MountMaterializer,
 	mountBackingDir string,

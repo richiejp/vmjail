@@ -97,6 +97,12 @@ type Config struct {
 	// fake that returns a pre-paired AttachSession.
 	WorkspaceAttachBridger WorkspaceAttachBridger
 
+	// WorkspaceObserverBridger backs WorkspaceCatalogService.ObserverTail.
+	// Defaults to the orchestrator's own NodeControlHandler (its
+	// OpenObserverBridge); tests inject a fake returning a canned
+	// io.ReadCloser.
+	WorkspaceObserverBridger WorkspaceObserverBridger
+
 	// Reconciler tunables (Slice B5). Zero values fall through to
 	// the reconciler package's defaults — tests usually override
 	// MissThreshold and SweepInterval to fire quickly.
@@ -198,8 +204,7 @@ func New(cfg Config) (*Server, error) {
 	rec := buildReconciler(cfg, workspaceCat, nodeReg)
 	sandboxCtrl.SetReconciler(rec)
 	workspaceCtrl.SetPreActionReconciler(rec)
-	workspaceCtrl.SetPortBridger(resolvePortBridger(cfg, sandboxCtrl))
-	workspaceCtrl.SetAttachBridger(resolveAttachBridger(cfg, sandboxCtrl))
+	wireWorkspaceBridgers(workspaceCtrl, cfg, sandboxCtrl)
 	// The broker handler needs the orchestrator's bound address
 	// to return as the relay endpoint, but the listener doesn't
 	// bind until Listen(). Close over a late-bound *mtls.Server
@@ -277,6 +282,25 @@ func resolveAttachBridger(cfg Config, sandboxCtrl *NodeControlHandler) Workspace
 		return cfg.WorkspaceAttachBridger
 	}
 	return sandboxCtrl
+}
+
+// resolveObserverBridger returns cfg.WorkspaceObserverBridger when
+// set, otherwise the orchestrator's own NodeControlHandler. Same
+// shape as resolveAttachBridger.
+func resolveObserverBridger(cfg Config, sandboxCtrl *NodeControlHandler) WorkspaceObserverBridger {
+	if cfg.WorkspaceObserverBridger != nil {
+		return cfg.WorkspaceObserverBridger
+	}
+	return sandboxCtrl
+}
+
+// wireWorkspaceBridgers attaches the port/attach/observer bridgers to
+// the workspace handler, each falling back to the orchestrator's own
+// NodeControlHandler. Factored out of New to keep it under funlen.
+func wireWorkspaceBridgers(workspaceCtrl *WorkspaceCatalogHandler, cfg Config, sandboxCtrl *NodeControlHandler) {
+	workspaceCtrl.SetPortBridger(resolvePortBridger(cfg, sandboxCtrl))
+	workspaceCtrl.SetAttachBridger(resolveAttachBridger(cfg, sandboxCtrl))
+	workspaceCtrl.SetObserverBridger(resolveObserverBridger(cfg, sandboxCtrl))
 }
 
 // registerServices installs every Connect-RPC handler plus the

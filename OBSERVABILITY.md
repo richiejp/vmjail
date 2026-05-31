@@ -329,9 +329,19 @@ In rough order:
    `internal/sandboxdcli/state.go`; the filename is
    `observability.DefaultLogFilename` (one source of truth shared with
    item 3).
-3. **`daft sandbox observer-tail <name>` CLI surface** — convenience
-   for `tail -f` against a running sandbox's observer log without
-   needing to know the path.
+3. **`daft sandbox observer-tail <workspace>` CLI surface** (landed) —
+   streams a running sandbox's observer log to the user-host over the
+   orchestrator, brokered exactly like `daft workspace exec` (attach):
+   the client opens `WorkspaceCatalogService.ObserverTail`; the
+   orchestrator resolves the workspace to its `current_sandbox`
+   (node fingerprint + uid) and rendezvous-brokers a
+   `NodeControlService.ObserverStream`; the node (`daft-sandboxd`)
+   resolves the uid through a per-dispatch `sandboxgateway.ObserverRegistry`
+   and tails the on-disk log (`internal/observertail`, which follows
+   across the rename-based rotation) back to the client. `--follow`
+   (default) stays open like `tail -f`; `--follow=false` dumps the
+   current log and exits. Read-only and mTLS-authenticated end to end
+   (same peer-fingerprint model as attach).
 4. **`testdaemons.Cluster` integration** — every integration test
    workspace gets an observer log path under `t.TempDir()`, surfaced
    in failure messages so the file is grabbable before tempdir
@@ -350,7 +360,16 @@ In rough order:
   (`$XDG_STATE_HOME/daft/sandboxes`, `DAFT_STATE_DIR` override) and the
   default `ObserverLogPath` for the `hello`/`run` launch paths.
 - `internal/sandboxexec/exec.go` — `Config.ObserverDir` defaults each
-  orchestrator-dispatched VM's `ObserverLogPath` to `<uid>/observer.jsonl`.
+  orchestrator-dispatched VM's `ObserverLogPath` to `<uid>/observer.jsonl`
+  and `registerObserverRoute` publishes uid→path into the per-node
+  `sandboxgateway.ObserverRegistry`.
+- `internal/observertail/` — the read-only tail/follow consumer of an
+  observer log (handles rename-based rotation).
+- `internal/orchestrator/observer.go` + `internal/nodectrlclient/observer.go`
+  — the `observer-tail` cross-machine stream (client→orchestrator
+  `ObserverTail`, orchestrator↔node `ObserverStream` rendezvous).
+- `internal/cli/sandbox_observer_tail.go` — the `daft sandbox
+  observer-tail` command.
 - `internal/testdaemons/workspace_profiler_test.go` — the in-guest
   `attachWorkspaceProfiler` is **transitional** and will be retired
   once Tier 1 is wired through `testdaemons.Cluster` and Tier 2

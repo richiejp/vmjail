@@ -175,6 +175,38 @@ service WorkspaceCatalogService {
   // current_sandbox); Unavailable when the Node is offline.
   // See PLAN.md Slice D2.
   rpc AttachSandbox(stream AttachFrame) returns (stream AttachFrame) {}
+
+  // ObserverTail streams a running workspace's per-sandbox host-side
+  // observer log (the newline-delimited JSON Tier-1 trace) back to a
+  // user-host CLI — `daft sandbox observer-tail`. The orchestrator
+  // resolves the workspace to its current_sandbox, calls
+  // OpenObserverBridge to open a sandboxd-side ObserverStream, and
+  // relays the log chunks. Read-only: data flows sandbox → client
+  // only. When follow is false the current file is sent once and the
+  // stream ends; when true the stream stays open and forwards new
+  // lines as the observer appends them (tail -f).
+  //
+  // Errors: NotFound when the handle doesn't resolve;
+  // FailedPrecondition when the workspace isn't RUNNING (no
+  // current_sandbox); Unavailable when the Node is offline.
+  rpc ObserverTail(ObserverTailRequest) returns (stream ObserverChunk) {}
+}
+
+// ObserverTailRequest names the workspace whose current sandbox's
+// observer log to stream. Name resolution is scoped to the calling
+// identity's mTLS fingerprint, matching the rest of the catalog.
+message ObserverTailRequest {
+  WorkspaceHandle workspace = 1;
+  // Keep the stream open and forward appended lines (tail -f) instead
+  // of sending the current file once and closing.
+  bool follow = 2;
+}
+
+// ObserverChunk carries an opaque slice of the observer log. The
+// bytes are forwarded verbatim; the client writes them straight to
+// its output. Lines may be split across chunks.
+message ObserverChunk {
+  bytes data = 1;
 }
 
 // ForwardFrame is the wire envelope for the ForwardPort byte

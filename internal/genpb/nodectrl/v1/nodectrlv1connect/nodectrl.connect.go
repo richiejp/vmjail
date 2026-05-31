@@ -66,6 +66,9 @@ const (
 	// NodeControlServiceAttachStreamProcedure is the fully-qualified name of the NodeControlService's
 	// AttachStream RPC.
 	NodeControlServiceAttachStreamProcedure = "/daft.nodectrl.v1.NodeControlService/AttachStream"
+	// NodeControlServiceObserverStreamProcedure is the fully-qualified name of the NodeControlService's
+	// ObserverStream RPC.
+	NodeControlServiceObserverStreamProcedure = "/daft.nodectrl.v1.NodeControlService/ObserverStream"
 )
 
 // NodeControlServiceClient is a client for the daft.nodectrl.v1.NodeControlService service.
@@ -113,6 +116,19 @@ type NodeControlServiceClient interface {
 	// orchestrator — the agent inside the VM is the actual PTY
 	// endpoint. See PLAN.md Slice D2.
 	AttachStream(context.Context) *connect.BidiStreamForClient[v1.AttachStreamMessage, v1.AttachStreamMessage]
+	// ObserverStream is the byte channel for a single observer-log
+	// tail. The Node dials this in response to an ObserverRequest
+	// event delivered on its RegisterNode stream; the orchestrator
+	// splices the resulting stream to the caller (a `daft sandbox
+	// observer-tail` client).
+	//
+	// First message on each direction MUST be an
+	// ObserverStreamMessage{hello} carrying the announced session_id
+	// so the orchestrator can match this stream to its pending
+	// request. After the Hello, data flows Node → orchestrator only
+	// (the log is read-only); the orchestrator's return direction
+	// carries nothing and closing it cancels the tail.
+	ObserverStream(context.Context) *connect.BidiStreamForClient[v1.ObserverStreamMessage, v1.ObserverStreamMessage]
 }
 
 // NewNodeControlServiceClient constructs a client for the daft.nodectrl.v1.NodeControlService
@@ -156,6 +172,12 @@ func NewNodeControlServiceClient(httpClient connect.HTTPClient, baseURL string, 
 			connect.WithSchema(nodeControlServiceMethods.ByName("AttachStream")),
 			connect.WithClientOptions(opts...),
 		),
+		observerStream: connect.NewClient[v1.ObserverStreamMessage, v1.ObserverStreamMessage](
+			httpClient,
+			baseURL+NodeControlServiceObserverStreamProcedure,
+			connect.WithSchema(nodeControlServiceMethods.ByName("ObserverStream")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -166,6 +188,7 @@ type nodeControlServiceClient struct {
 	listNodes      *connect.Client[v1.ListNodesRequest, v1.ListNodesResponse]
 	openPortStream *connect.Client[v1.PortStreamMessage, v1.PortStreamMessage]
 	attachStream   *connect.Client[v1.AttachStreamMessage, v1.AttachStreamMessage]
+	observerStream *connect.Client[v1.ObserverStreamMessage, v1.ObserverStreamMessage]
 }
 
 // RegisterNode calls daft.nodectrl.v1.NodeControlService.RegisterNode.
@@ -191,6 +214,11 @@ func (c *nodeControlServiceClient) OpenPortStream(ctx context.Context) *connect.
 // AttachStream calls daft.nodectrl.v1.NodeControlService.AttachStream.
 func (c *nodeControlServiceClient) AttachStream(ctx context.Context) *connect.BidiStreamForClient[v1.AttachStreamMessage, v1.AttachStreamMessage] {
 	return c.attachStream.CallBidiStream(ctx)
+}
+
+// ObserverStream calls daft.nodectrl.v1.NodeControlService.ObserverStream.
+func (c *nodeControlServiceClient) ObserverStream(ctx context.Context) *connect.BidiStreamForClient[v1.ObserverStreamMessage, v1.ObserverStreamMessage] {
+	return c.observerStream.CallBidiStream(ctx)
 }
 
 // NodeControlServiceHandler is an implementation of the daft.nodectrl.v1.NodeControlService
@@ -239,6 +267,19 @@ type NodeControlServiceHandler interface {
 	// orchestrator — the agent inside the VM is the actual PTY
 	// endpoint. See PLAN.md Slice D2.
 	AttachStream(context.Context, *connect.BidiStream[v1.AttachStreamMessage, v1.AttachStreamMessage]) error
+	// ObserverStream is the byte channel for a single observer-log
+	// tail. The Node dials this in response to an ObserverRequest
+	// event delivered on its RegisterNode stream; the orchestrator
+	// splices the resulting stream to the caller (a `daft sandbox
+	// observer-tail` client).
+	//
+	// First message on each direction MUST be an
+	// ObserverStreamMessage{hello} carrying the announced session_id
+	// so the orchestrator can match this stream to its pending
+	// request. After the Hello, data flows Node → orchestrator only
+	// (the log is read-only); the orchestrator's return direction
+	// carries nothing and closing it cancels the tail.
+	ObserverStream(context.Context, *connect.BidiStream[v1.ObserverStreamMessage, v1.ObserverStreamMessage]) error
 }
 
 // NewNodeControlServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -278,6 +319,12 @@ func NewNodeControlServiceHandler(svc NodeControlServiceHandler, opts ...connect
 		connect.WithSchema(nodeControlServiceMethods.ByName("AttachStream")),
 		connect.WithHandlerOptions(opts...),
 	)
+	nodeControlServiceObserverStreamHandler := connect.NewBidiStreamHandler(
+		NodeControlServiceObserverStreamProcedure,
+		svc.ObserverStream,
+		connect.WithSchema(nodeControlServiceMethods.ByName("ObserverStream")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.nodectrl.v1.NodeControlService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case NodeControlServiceRegisterNodeProcedure:
@@ -290,6 +337,8 @@ func NewNodeControlServiceHandler(svc NodeControlServiceHandler, opts ...connect
 			nodeControlServiceOpenPortStreamHandler.ServeHTTP(w, r)
 		case NodeControlServiceAttachStreamProcedure:
 			nodeControlServiceAttachStreamHandler.ServeHTTP(w, r)
+		case NodeControlServiceObserverStreamProcedure:
+			nodeControlServiceObserverStreamHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -317,4 +366,8 @@ func (UnimplementedNodeControlServiceHandler) OpenPortStream(context.Context, *c
 
 func (UnimplementedNodeControlServiceHandler) AttachStream(context.Context, *connect.BidiStream[v1.AttachStreamMessage, v1.AttachStreamMessage]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("daft.nodectrl.v1.NodeControlService.AttachStream is not implemented"))
+}
+
+func (UnimplementedNodeControlServiceHandler) ObserverStream(context.Context, *connect.BidiStream[v1.ObserverStreamMessage, v1.ObserverStreamMessage]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("daft.nodectrl.v1.NodeControlService.ObserverStream is not implemented"))
 }

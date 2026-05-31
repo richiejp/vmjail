@@ -107,6 +107,14 @@ type Config struct {
 	// Stderr. Production wiring (`daft-sandboxd serve`) wires this
 	// to the agent-vsock implementation landing in D2b.
 	AttachBridger AttachBridger
+	// ObserverResolver resolves a sandbox_uid to its host-side
+	// observer-log path when the orchestrator pushes an ObserverRequest
+	// event (`daft sandbox observer-tail`). Nil ⇒ ObserverRequest
+	// events surface as errors on Stderr. Production wiring
+	// (`daft-sandboxd serve`) shares one sandboxgateway.ObserverRegistry
+	// with the sandboxexec Executor so the routes the executor
+	// registers are the same table this transport reads from.
+	ObserverResolver ObserverResolver
 	// Stderr is where per-bridge errors are logged. Defaults to
 	// os.Stderr when nil.
 	Stderr io.Writer
@@ -295,6 +303,16 @@ func (c *Client) dispatchEvent(ctx context.Context, msg *nodectrlv1.NodeEvent) e
 		go func() {
 			if err := c.handleAttach(ctx, at); err != nil {
 				_, _ = fmt.Fprintf(c.cfg.openPortLogSink(), "nodectrlclient: attach bridge: %v\n", err)
+			}
+		}()
+		return nil
+	}
+	if obs := msg.GetObserver(); obs != nil {
+		// Own goroutine — a long-lived follow tail must not block
+		// subsequent events on the registration stream.
+		go func() {
+			if err := c.handleObserver(ctx, obs); err != nil {
+				_, _ = fmt.Fprintf(c.cfg.openPortLogSink(), "nodectrlclient: observer tail: %v\n", err)
 			}
 		}()
 		return nil

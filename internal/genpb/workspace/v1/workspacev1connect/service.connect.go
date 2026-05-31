@@ -118,6 +118,9 @@ const (
 	// WorkspaceCatalogServiceAttachSandboxProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's AttachSandbox RPC.
 	WorkspaceCatalogServiceAttachSandboxProcedure = "/daft.workspace.v1.WorkspaceCatalogService/AttachSandbox"
+	// WorkspaceCatalogServiceObserverTailProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's ObserverTail RPC.
+	WorkspaceCatalogServiceObserverTailProcedure = "/daft.workspace.v1.WorkspaceCatalogService/ObserverTail"
 )
 
 // WorkspaceCatalogServiceClient is a client for the daft.workspace.v1.WorkspaceCatalogService
@@ -244,6 +247,20 @@ type WorkspaceCatalogServiceClient interface {
 	// current_sandbox); Unavailable when the Node is offline.
 	// See PLAN.md Slice D2.
 	AttachSandbox(context.Context) *connect.BidiStreamForClient[v1.AttachFrame, v1.AttachFrame]
+	// ObserverTail streams a running workspace's per-sandbox host-side
+	// observer log (the newline-delimited JSON Tier-1 trace) back to a
+	// user-host CLI — `daft sandbox observer-tail`. The orchestrator
+	// resolves the workspace to its current_sandbox, calls
+	// OpenObserverBridge to open a sandboxd-side ObserverStream, and
+	// relays the log chunks. Read-only: data flows sandbox → client
+	// only. When follow is false the current file is sent once and the
+	// stream ends; when true the stream stays open and forwards new
+	// lines as the observer appends them (tail -f).
+	//
+	// Errors: NotFound when the handle doesn't resolve;
+	// FailedPrecondition when the workspace isn't RUNNING (no
+	// current_sandbox); Unavailable when the Node is offline.
+	ObserverTail(context.Context, *connect.Request[v1.ObserverTailRequest]) (*connect.ServerStreamForClient[v1.ObserverChunk], error)
 }
 
 // NewWorkspaceCatalogServiceClient constructs a client for the
@@ -371,6 +388,12 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("AttachSandbox")),
 			connect.WithClientOptions(opts...),
 		),
+		observerTail: connect.NewClient[v1.ObserverTailRequest, v1.ObserverChunk](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceObserverTailProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("ObserverTail")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -395,6 +418,7 @@ type workspaceCatalogServiceClient struct {
 	release       *connect.Client[v1.ReleaseRequest, v1.WorkspaceResponse]
 	forwardPort   *connect.Client[v1.ForwardFrame, v1.ForwardFrame]
 	attachSandbox *connect.Client[v1.AttachFrame, v1.AttachFrame]
+	observerTail  *connect.Client[v1.ObserverTailRequest, v1.ObserverChunk]
 }
 
 // Create calls daft.workspace.v1.WorkspaceCatalogService.Create.
@@ -490,6 +514,11 @@ func (c *workspaceCatalogServiceClient) ForwardPort(ctx context.Context) *connec
 // AttachSandbox calls daft.workspace.v1.WorkspaceCatalogService.AttachSandbox.
 func (c *workspaceCatalogServiceClient) AttachSandbox(ctx context.Context) *connect.BidiStreamForClient[v1.AttachFrame, v1.AttachFrame] {
 	return c.attachSandbox.CallBidiStream(ctx)
+}
+
+// ObserverTail calls daft.workspace.v1.WorkspaceCatalogService.ObserverTail.
+func (c *workspaceCatalogServiceClient) ObserverTail(ctx context.Context, req *connect.Request[v1.ObserverTailRequest]) (*connect.ServerStreamForClient[v1.ObserverChunk], error) {
+	return c.observerTail.CallServerStream(ctx, req)
 }
 
 // WorkspaceCatalogServiceHandler is an implementation of the
@@ -616,6 +645,20 @@ type WorkspaceCatalogServiceHandler interface {
 	// current_sandbox); Unavailable when the Node is offline.
 	// See PLAN.md Slice D2.
 	AttachSandbox(context.Context, *connect.BidiStream[v1.AttachFrame, v1.AttachFrame]) error
+	// ObserverTail streams a running workspace's per-sandbox host-side
+	// observer log (the newline-delimited JSON Tier-1 trace) back to a
+	// user-host CLI — `daft sandbox observer-tail`. The orchestrator
+	// resolves the workspace to its current_sandbox, calls
+	// OpenObserverBridge to open a sandboxd-side ObserverStream, and
+	// relays the log chunks. Read-only: data flows sandbox → client
+	// only. When follow is false the current file is sent once and the
+	// stream ends; when true the stream stays open and forwards new
+	// lines as the observer appends them (tail -f).
+	//
+	// Errors: NotFound when the handle doesn't resolve;
+	// FailedPrecondition when the workspace isn't RUNNING (no
+	// current_sandbox); Unavailable when the Node is offline.
+	ObserverTail(context.Context, *connect.Request[v1.ObserverTailRequest], *connect.ServerStream[v1.ObserverChunk]) error
 }
 
 // NewWorkspaceCatalogServiceHandler builds an HTTP handler from the service implementation. It
@@ -739,6 +782,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("AttachSandbox")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceObserverTailHandler := connect.NewServerStreamHandler(
+		WorkspaceCatalogServiceObserverTailProcedure,
+		svc.ObserverTail,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("ObserverTail")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.workspace.v1.WorkspaceCatalogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkspaceCatalogServiceCreateProcedure:
@@ -779,6 +828,8 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceForwardPortHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceAttachSandboxProcedure:
 			workspaceCatalogServiceAttachSandboxHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceObserverTailProcedure:
+			workspaceCatalogServiceObserverTailHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -862,4 +913,8 @@ func (UnimplementedWorkspaceCatalogServiceHandler) ForwardPort(context.Context, 
 
 func (UnimplementedWorkspaceCatalogServiceHandler) AttachSandbox(context.Context, *connect.BidiStream[v1.AttachFrame, v1.AttachFrame]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.AttachSandbox is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) ObserverTail(context.Context, *connect.Request[v1.ObserverTailRequest], *connect.ServerStream[v1.ObserverChunk]) error {
+	return connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.ObserverTail is not implemented"))
 }
