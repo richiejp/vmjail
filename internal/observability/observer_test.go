@@ -751,3 +751,29 @@ func readSamples(t *testing.T, path string) []Sample {
 	}
 	return out
 }
+
+func TestDefaultPath(t *testing.T) {
+	parent := t.TempDir()
+	got, err := DefaultPath(parent, "sb-42")
+	if err != nil {
+		t.Fatalf("DefaultPath: %v", err)
+	}
+	want := filepath.Join(parent, "sb-42", DefaultLogFilename)
+	if got != want {
+		t.Errorf("path = %q, want %q", got, want)
+	}
+	if fi, err := os.Stat(filepath.Dir(got)); err != nil || !fi.IsDir() {
+		t.Errorf("id dir not created: stat err=%v", err)
+	}
+}
+
+func TestDefaultPathMkdirFailure(t *testing.T) {
+	// A parent that is a regular file makes MkdirAll fail.
+	blocker := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	if _, err := DefaultPath(blocker, "sb"); err == nil {
+		t.Fatal("expected mkdir failure when parent is a regular file")
+	}
+}

@@ -128,6 +128,9 @@ type runDeps struct {
 	pullWorkspaceBroker   func(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir string, cleanup func(), err error)
 	attachWorkspaceFrom   func(ctx context.Context, opts pullWorkspaceOpts) (dir string, cleanup func(), err error)
 	attachWorkspaceBroker func(ctx context.Context, opts pullWorkspaceBrokerOpts) (dir string, cleanup func(), err error)
+	// observerLog resolves the per-sandbox observer-log path so the
+	// boot gets a default ObserverLogPath. nil disables defaulting.
+	observerLog func() (string, error)
 }
 
 // pullWorkspaceOpts gathers the inputs to pullWorkspaceFrom so the
@@ -175,6 +178,7 @@ func defaultRunDeps() runDeps {
 		pullWorkspaceBroker:   pullWorkspaceBroker,
 		attachWorkspaceFrom:   attachLazyWorkspaceFrom,
 		attachWorkspaceBroker: attachLazyWorkspaceBroker,
+		observerLog:           defaultObserverLog,
 	}
 }
 
@@ -455,6 +459,7 @@ func runRun(ctx context.Context, w io.Writer, opts runOptions, deps runDeps) err
 	}
 	defer unlock()
 
+	applyObserverLog(w, &cfg, deps.observerLog)
 	return trace.RecordError(ctx, deps.boot(ctx, w, cfg))
 }
 

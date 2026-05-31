@@ -272,6 +272,17 @@ var buildDispatcher = func(
 	if err != nil {
 		return nil, err
 	}
+	// Default every dispatched VM's observer log under the per-sandbox
+	// state dir, keyed by the orchestrator-assigned uid so
+	// `observer-tail` can find it. Best-effort: a state-dir resolution
+	// failure leaves ObserverDir empty (no per-VM observer) rather than
+	// refusing to build the dispatcher — observability never gates the
+	// daemon coming up.
+	observerDir, err := sandboxesStateRoot()
+	if err != nil {
+		_, _ = fmt.Fprintf(stdout, "daft-sandboxd serve: observer logs disabled: %v\n", err)
+		observerDir = ""
+	}
 	return sandboxexec.New(sandboxexec.Config{
 		Base:              base,
 		Stdout:            stdout,
@@ -283,6 +294,7 @@ var buildDispatcher = func(
 		EgressProxy:       egress,
 		MountMaterializer: materializer,
 		MountBackingDir:   mountBackingDir,
+		ObserverDir:       observerDir,
 	})
 }
 

@@ -30,6 +30,7 @@ import (
 	"github.com/localai-org/darkaifactory/internal/assert"
 	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
+	"github.com/localai-org/darkaifactory/internal/observability"
 	"github.com/localai-org/darkaifactory/internal/sandbox"
 	"github.com/localai-org/darkaifactory/internal/sandboxattach"
 	"github.com/localai-org/darkaifactory/internal/sandboxboot"
@@ -132,6 +133,14 @@ type Executor struct {
 	// unaffected.
 	mountMaterializer MountMaterializer
 	mountBackingDir   string
+	// observerDir, when non-empty, is the absolute parent directory
+	// under which each dispatch gets a per-uid host-side observer log
+	// (<observerDir>/<uid>/observer.jsonl). resolveBootConfig defaults
+	// the dispatched Config.ObserverLogPath to it unless the baseline
+	// already carries one. Empty disables the default (the pre-Tier-1
+	// behaviour); observability is best-effort and never fails a
+	// dispatch.
+	observerDir string
 	// nextCID hands out fresh AF_VSOCK Context IDs for each dispatch.
 	// Initialised to 2 so the first .Add(1) returns 3 — the lowest
 	// CID the ABI allows for a guest (0/1/2 are reserved).
@@ -198,6 +207,12 @@ type Config struct {
 	// per-Sandbox mount backing trees are materialised. Required when
 	// MountMaterializer is set; ignored otherwise.
 	MountBackingDir string
+	// ObserverDir, when non-empty, is the absolute parent directory
+	// under which each dispatched VM gets a per-uid host-side observer
+	// log. `daft-sandboxd serve` sets it to the per-sandbox state dir
+	// ($XDG_STATE_HOME/daft/sandboxes); leave empty in tests/baselines
+	// that don't want observer logs written.
+	ObserverDir string
 }
 
 // EgressProxy configures the in-stack egress proxy (Phase J6). The
@@ -252,6 +267,9 @@ func New(cfg Config) (*Executor, error) {
 			return nil, fmt.Errorf("sandboxexec: MountBackingDir %q must be absolute", cfg.MountBackingDir)
 		}
 	}
+	if cfg.ObserverDir != "" && !filepath.IsAbs(cfg.ObserverDir) {
+		return nil, fmt.Errorf("sandboxexec: ObserverDir %q must be absolute", cfg.ObserverDir)
+	}
 	e := &Executor{
 		base:              cfg.Base,
 		stdout:            cfg.Stdout,
@@ -264,6 +282,7 @@ func New(cfg Config) (*Executor, error) {
 		egressProxy:       cfg.EgressProxy,
 		mountMaterializer: cfg.MountMaterializer,
 		mountBackingDir:   cfg.MountBackingDir,
+		observerDir:       cfg.ObserverDir,
 		live:              map[string]*liveSandbox{},
 	}
 	// First .Add(1) returns 3 — the lowest CID the AF_VSOCK ABI
@@ -519,7 +538,26 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 			cfg.ProxyPort = e.proxyPort()
 		}
 	}
+	e.applyObserverLog(&cfg, uid)
 	return cfg, unlock, nil
+}
+
+// applyObserverLog defaults cfg.ObserverLogPath to a per-uid file
+// under the executor's observer dir, mkdir'ing the leaf so the
+// observer can open it. It is best-effort: an unset observerDir, an
+// already-set path (baseline override wins), an empty uid, or a mkdir
+// failure all leave the config untouched and the dispatch proceeds —
+// observability is a debugging surface, never a launch precondition.
+func (e *Executor) applyObserverLog(cfg *sandbox.Config, uid string) {
+	if e.observerDir == "" || cfg.ObserverLogPath != "" || uid == "" {
+		return
+	}
+	path, err := observability.DefaultPath(e.observerDir, uid)
+	if err != nil {
+		_, _ = fmt.Fprintf(e.stdout, "sandboxexec: observer log disabled for %s: %v\n", uid, err)
+		return
+	}
+	cfg.ObserverLogPath = path
 }
 
 // assignVsock mints a per-Sandbox hybrid-vsock device: a fresh

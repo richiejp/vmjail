@@ -42,7 +42,27 @@ import (
 const (
 	DefaultSampleEvery = time.Second
 	DefaultMaxBytes    = int64(50 * 1024 * 1024) // 50 MB total, ~25 MB current + ~25 MB .1
+	// DefaultLogFilename is the conventional basename for a per-sandbox
+	// observer trace living at <state-dir>/<sandbox-id>/<here>. The
+	// daft-sandboxd launch paths default Config.ObserverLogPath to it
+	// and `daft sandbox observer-tail` (roadmap) finds the log from a
+	// sandbox id alone — one source of truth so the two never drift.
+	DefaultLogFilename = "observer.jsonl"
 )
+
+// DefaultPath returns the per-sandbox observer-log path
+// <parent>/<id>/observer.jsonl, creating the <parent>/<id> directory
+// (which persists past VM exit for post-mortem inspection). It is the
+// single place that joins the DefaultLogFilename convention onto a
+// state dir + sandbox id, shared by every daft-sandboxd launch path
+// (CLI hello/run and orchestrator dispatch) so the layout can't drift.
+func DefaultPath(parent, id string) (string, error) {
+	dir := filepath.Join(parent, id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("observability: mkdir log dir %s: %w", dir, err)
+	}
+	return filepath.Join(dir, DefaultLogFilename), nil
+}
 
 // Sample is the per-tick record written to the log. JSON tags are
 // the public schema; renames require a doc update and a version

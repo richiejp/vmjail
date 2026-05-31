@@ -441,6 +441,120 @@ func TestNewRejectsMaterializerWithoutBackingDir(t *testing.T) {
 	}
 }
 
+func TestNewRejectsRelativeObserverDir(t *testing.T) {
+	if _, err := New(Config{
+		Stdout:      io.Discard,
+		Runner:      noopRunner(),
+		ObserverDir: "relative/observers",
+	}); err == nil {
+		t.Error("expected error for non-absolute ObserverDir")
+	}
+}
+
+// TestHandleSandboxEventDefaultsObserverLog pins the Tier-1 wiring: a
+// dispatch under an executor with an ObserverDir set boots with
+// ObserverLogPath defaulted to <ObserverDir>/<uid>/observer.jsonl,
+// and the per-uid directory is created so the observer can open it.
+func TestHandleSandboxEventDefaultsObserverLog(t *testing.T) {
+	observerDir := t.TempDir()
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	e, err := New(Config{Stdout: io.Discard, Runner: runner, ObserverDir: observerDir})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-obs", &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	want := filepath.Join(observerDir, "sb-obs", "observer.jsonl")
+	if seen.ObserverLogPath != want {
+		t.Errorf("ObserverLogPath = %q, want %q", seen.ObserverLogPath, want)
+	}
+	if fi, err := os.Stat(filepath.Dir(want)); err != nil || !fi.IsDir() {
+		t.Errorf("per-uid observer dir not created: stat err=%v", err)
+	}
+}
+
+// TestHandleSandboxEventObserverLogDisabledWhenNoDir pins the default
+// (pre-Tier-1) behaviour: with no ObserverDir, the dispatched config
+// carries no ObserverLogPath.
+func TestHandleSandboxEventObserverLogDisabledWhenNoDir(t *testing.T) {
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	e, err := New(Config{Stdout: io.Discard, Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-x", &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if seen.ObserverLogPath != "" {
+		t.Errorf("ObserverLogPath = %q, want empty when no ObserverDir", seen.ObserverLogPath)
+	}
+}
+
+// TestHandleSandboxEventObserverLogMkdirFailureIsBestEffort pins that a
+// per-uid observer dir that cannot be created (its parent is a regular
+// file) disables the observer for that dispatch rather than failing it.
+func TestHandleSandboxEventObserverLogMkdirFailureIsBestEffort(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	var out bytes.Buffer
+	// ObserverDir lives under the regular file, so MkdirAll ENOTDIRs.
+	e, err := New(Config{Stdout: &out, Runner: runner, ObserverDir: filepath.Join(blocker, "observers")})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-fail", &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if seen.ObserverLogPath != "" {
+		t.Errorf("ObserverLogPath = %q, want empty when the dir can't be made", seen.ObserverLogPath)
+	}
+	if !strings.Contains(out.String(), "observer log disabled") {
+		t.Errorf("stdout = %q, want a disabled notice", out.String())
+	}
+}
+
+// TestHandleSandboxEventObserverLogBaselineWins pins that an explicit
+// baseline ObserverLogPath is not overridden by the per-uid default.
+func TestHandleSandboxEventObserverLogBaselineWins(t *testing.T) {
+	const baselinePath = "/explicit/observer.jsonl"
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	e, err := New(Config{
+		Base:        sandbox.Config{ObserverLogPath: baselinePath},
+		Stdout:      io.Discard,
+		Runner:      runner,
+		ObserverDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-base", &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if seen.ObserverLogPath != baselinePath {
+		t.Errorf("ObserverLogPath = %q, want baseline %q untouched", seen.ObserverLogPath, baselinePath)
+	}
+}
+
 // TestHandleSandboxEventMaterializesMounts pins the Slice S3 path: each
 // spec mount is materialised from the node CAS into a per-Sandbox
 // backing dir, and that dir — not the mount's logical Source — becomes

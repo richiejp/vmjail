@@ -105,13 +105,19 @@ type helloDeps struct {
 	cacheDir func() (string, error)
 	extract  func(string) (bundled.Paths, error)
 	boot     func(context.Context, io.Writer, sandbox.Config) error
+	// observerLog resolves the per-sandbox host-side observer-log
+	// path (mkdir'ing its dir) so the boot gets a default
+	// ObserverLogPath. nil disables defaulting — used by tests that
+	// don't want to touch the state dir.
+	observerLog func() (string, error)
 }
 
 func defaultHelloDeps() helloDeps {
 	return helloDeps{
-		cacheDir: userCacheDir,
-		extract:  bundled.Extract,
-		boot:     sandbox.Hello,
+		cacheDir:    userCacheDir,
+		extract:     bundled.Extract,
+		boot:        sandbox.Hello,
+		observerLog: defaultObserverLog,
 	}
 }
 
@@ -135,12 +141,33 @@ func runHelloWith(ctx context.Context, w io.Writer, deps helloDeps) error {
 	if err != nil {
 		return err
 	}
-	return deps.boot(ctx, w, sandbox.Config{
+	cfg := sandbox.Config{
 		CloudHypervisor: paths.CloudHypervisor,
 		Kernel:          paths.Kernel,
 		Initramfs:       paths.Initramfs,
 		Virtiofsd:       paths.Virtiofsd,
-	})
+	}
+	applyObserverLog(w, &cfg, deps.observerLog)
+	return deps.boot(ctx, w, cfg)
+}
+
+// applyObserverLog defaults cfg.ObserverLogPath from resolve and
+// announces the chosen path on w. Observability is a debugging
+// surface, never a launch precondition: a nil resolver or a
+// state-dir error leaves the observer disabled and the boot
+// proceeds. An already-set path is left untouched so an explicit
+// caller override wins.
+func applyObserverLog(w io.Writer, cfg *sandbox.Config, resolve func() (string, error)) {
+	if resolve == nil || cfg.ObserverLogPath != "" {
+		return
+	}
+	path, err := resolve()
+	if err != nil {
+		_, _ = fmt.Fprintf(w, "daft-sandboxd: observer log disabled: %v\n", err)
+		return
+	}
+	cfg.ObserverLogPath = path
+	_, _ = fmt.Fprintf(w, "daft-sandboxd: observer log %s\n", path)
 }
 
 // userCacheDir returns the directory we extract artifacts into. Uses

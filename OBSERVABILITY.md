@@ -315,9 +315,20 @@ In rough order:
    (CH + virtiofsd) + sandboxnet byte counters in
    `internal/observability`, wired into
    `sandbox.Config.ObserverLogPath`.
-2. **`daft-sandboxd` per-sandbox state dir** — pick a stable path
-   (likely `$XDG_STATE_HOME/daft/sandboxes/<id>/`) and default
-   `ObserverLogPath` there for user-facing launches.
+2. **`daft-sandboxd` per-sandbox state dir** (landed) — each sandbox
+   gets a `$XDG_STATE_HOME/daft/sandboxes/<id>/` dir (falling back to
+   `~/.local/state/...`; override the root outright with
+   `DAFT_STATE_DIR`), and `ObserverLogPath` defaults to
+   `<id>/observer.jsonl` there for every user-facing launch. The
+   orchestrator-dispatched path (`daft-sandboxd serve` →
+   `sandboxexec.Executor`) keys `<id>` on the Sandbox uid, so the log
+   is discoverable from the uid alone; the debug `hello`/`run` paths,
+   which have no uid, mint a sortable `<UTC-timestamp>-<hex>` id and
+   print the chosen path. The dir persists past VM exit for
+   post-mortem inspection. Resolution helpers live in
+   `internal/sandboxdcli/state.go`; the filename is
+   `observability.DefaultLogFilename` (one source of truth shared with
+   item 3).
 3. **`daft sandbox observer-tail <name>` CLI surface** — convenience
    for `tail -f` against a running sandbox's observer log without
    needing to know the path.
@@ -335,6 +346,11 @@ In rough order:
 
 - `internal/observability/` — the Tier 1 package.
 - `internal/sandbox/sandbox.go` — wiring (`cloudHypervisorRunner.run`).
+- `internal/sandboxdcli/state.go` — per-sandbox state-dir resolution
+  (`$XDG_STATE_HOME/daft/sandboxes`, `DAFT_STATE_DIR` override) and the
+  default `ObserverLogPath` for the `hello`/`run` launch paths.
+- `internal/sandboxexec/exec.go` — `Config.ObserverDir` defaults each
+  orchestrator-dispatched VM's `ObserverLogPath` to `<uid>/observer.jsonl`.
 - `internal/testdaemons/workspace_profiler_test.go` — the in-guest
   `attachWorkspaceProfiler` is **transitional** and will be retired
   once Tier 1 is wired through `testdaemons.Cluster` and Tier 2
