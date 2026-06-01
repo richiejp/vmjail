@@ -508,15 +508,17 @@ In rough order:
        `<observerDir>/<uid>/observe/`), points the open-snoop trace +
        build-progress summary guest paths into it, and registers the host
        summary path in a `sandboxgateway.SummaryRegistry` so the node can
-       resolve it. **Opt-in, off by default** (`DAFT_OBSERVE_SUMMARY`
-       truthy): the gadget load + extra virtiofs device per VM is a cost
-       the operator chooses. Also fixed a latent gap — the production
+       resolve it. **On by default** so `daft sandbox observe` works out of
+       the box; an operator who does not want the gadget load + extra
+       virtiofs device per VM opts a node out with a falsy
+       `DAFT_OBSERVE_SUMMARY` (`0`/`false`/`no`/`off`). Also fixed a latent gap — the production
        executor never received the `ObserverRegistry`, so observer-tail
        routes were never registered; both registries are now wired.
      - *6c-2* — the dedicated `ObserveSummary` RPC chain (proto +
        orchestrator + node one-shot read over the rendezvous broker).
      - *6c-3* — the `daft sandbox observe <workspace>` CLI: render the
-       summary, `--follow` polls ~1 s; cluster e2e with the opt-in on.
+       summary, `--follow` polls ~1 s; cluster e2e exercises the summary
+     (on by default).
    - **6d — stuck/slow heuristics + in-sandbox build e2e.** Flag stalls
      and pathological churn in the summary; an e2e runs a real build and
      asserts the summary reflects forward progress and then a stall.
@@ -546,8 +548,8 @@ In rough order:
   aggregator. `Config.ObserveSummaryPath` emits the token.
 - `internal/sandboxexec/exec.go` — the #6c-1 dispatch plumbing
   (`applyObserveSummary` + `registerSummaryRoute`): exports the observe
-  share and registers the host summary path. Gated by `DAFT_OBSERVE_SUMMARY`
-  (`internal/sandboxdcli/serve.go`, off by default).
+  share and registers the host summary path. On by default; a falsy
+  `DAFT_OBSERVE_SUMMARY` opts a node out (`internal/sandboxdcli/serve.go`).
 - `internal/sandboxgateway/observer.go` — `SummaryRegistry` (and the
   `ObserverRegistry` it shares a generic table with): per-sandbox
   `uid → host file path` routing the node-side handlers resolve through.

@@ -306,20 +306,16 @@ var buildDispatcher = func(
 	})
 }
 
-// envObserveSummary opts a node into the Tier-2 observe share (open-snoop
-// gadget + build-progress summary) on every image-backed dispatch. Off by
-// default — the gadget load + extra virtiofs device per VM is a cost the
-// operator chooses — so observeSummaryFromEnv enables it only on a truthy
-// value ("1"/"true"/"yes"/"on").
+// envObserveSummary gates the Tier-2 observe share (open-snoop gadget +
+// build-progress summary) on every image-backed dispatch. It is ON BY
+// DEFAULT so the `daft sandbox observe` progress summary works out of the
+// box; an operator who does not want the gadget load + extra virtiofs
+// device per VM sets it to a falsy value ("0"/"false"/"no"/"off",
+// case-insensitive) to opt a node out.
 const envObserveSummary = "DAFT_OBSERVE_SUMMARY"
 
 func observeSummaryFromEnv() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(envObserveSummary))) {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
+	return envEnabledByDefault(envObserveSummary)
 }
 
 // Env vars that configure the in-stack egress proxy (Phase J6). Set by
@@ -379,7 +375,15 @@ func egressProxyFromEnv(logSink io.Writer) (*sandboxexec.EgressProxy, error) {
 // by default — only an explicit falsy DAFT_EGRESS_PROXY ("0"/"false"/
 // "no"/"off", case-insensitive) opts a node out.
 func egressProxyEnabled() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv(envEgressProxy))) {
+	return envEnabledByDefault(envEgressProxy)
+}
+
+// envEnabledByDefault reports whether the env var named key is on. On by
+// default; only an explicit falsy value ("0"/"false"/"no"/"off",
+// case-insensitive) returns false. The dual of envTruthy, for the
+// opt-out flags (egress proxy, observe summary).
+func envEnabledByDefault(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
 	case "0", "false", "no", "off":
 		return false
 	default:

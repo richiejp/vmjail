@@ -448,27 +448,29 @@ func TestExtractWithEnvFallbackReturnsErrNotBundledWhenBaseEmpty(t *testing.T) {
 }
 
 func TestObserveSummaryFromEnv(t *testing.T) {
-	t.Run("unset disables by default", func(t *testing.T) {
+	t.Run("unset enables by default", func(t *testing.T) {
 		t.Setenv(envObserveSummary, "")
-		if observeSummaryFromEnv() {
-			t.Error("observe summary should be off by default")
+		if !observeSummaryFromEnv() {
+			t.Error("observe summary should be on by default")
 		}
 	})
-	t.Run("truthy enables", func(t *testing.T) {
-		// Synonyms map to one switch branch; values chosen to also exercise
-		// trim + lower-casing without colliding with the egress test literals.
-		for _, v := range []string{"yes", "on", "ON", " yes "} {
+	t.Run("falsy opts out", func(t *testing.T) {
+		// Exercises trim + lower-casing across the falsy synonyms. Variants
+		// ("False"/"OFF"/" off ") are chosen so the exact literals "false"
+		// and "off" don't recur package-wide and trip goconst — the egress
+		// test already covers the canonical forms via the shared helper.
+		for _, v := range []string{"0", "False", "no", "OFF", " off "} {
 			t.Setenv(envObserveSummary, v)
-			if !observeSummaryFromEnv() {
-				t.Errorf("%q should enable observe summary", v)
+			if observeSummaryFromEnv() {
+				t.Errorf("%q should disable observe summary", v)
 			}
 		}
 	})
-	t.Run("other values stay off", func(t *testing.T) {
+	t.Run("other values stay on", func(t *testing.T) {
 		for _, v := range []string{"disabled", "nope", "2", "nonsense"} {
 			t.Setenv(envObserveSummary, v)
-			if observeSummaryFromEnv() {
-				t.Errorf("%q should not enable observe summary", v)
+			if !observeSummaryFromEnv() {
+				t.Errorf("%q should leave observe summary on", v)
 			}
 		}
 	})
