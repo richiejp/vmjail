@@ -3,6 +3,7 @@ package imagestore
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sync"
@@ -33,6 +34,20 @@ type Store struct {
 	// process. Cross-process safety relies on the lockfiles, not
 	// this mutex.
 	mu sync.Mutex
+
+	// hostedRT, when set, is the mTLS transport used to pull image refs
+	// hosted on the orchestrator's embedded registry (ociregistry.Host).
+	// Nil leaves every ref on the default keychain/transport. Wired by
+	// the sandbox-host serve path; see UseHostedRegistry.
+	hostedRT http.RoundTripper
+}
+
+// UseHostedRegistry wires the mTLS transport the Store uses to pull
+// image refs hosted on the orchestrator's embedded registry. Refs that
+// aren't orchestrator-hosted (ociregistry.IsHosted) stay on the default
+// keychain. Passing nil disables the hosted path.
+func (s *Store) UseHostedRegistry(rt http.RoundTripper) {
+	s.hostedRT = rt
 }
 
 // New returns a Store rooted at root. The root directory is created if

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,7 @@ func stubBuildDispatcher(t *testing.T) {
 	t.Helper()
 	saved := buildDispatcher
 	t.Cleanup(func() { buildDispatcher = saved })
-	buildDispatcher = func(w io.Writer, _ *sandboxgateway.Bridger, _ *sandboxgateway.AttachRegistry, _ *sandboxgateway.ObserverRegistry, _ *sandboxgateway.SummaryRegistry, _ string, _ sandboxexec.MountMaterializer, _ string) (*sandboxexec.Executor, error) {
+	buildDispatcher = func(w io.Writer, _ *sandboxgateway.Bridger, _ *sandboxgateway.AttachRegistry, _ *sandboxgateway.ObserverRegistry, _ *sandboxgateway.SummaryRegistry, _ string, _ sandboxexec.MountMaterializer, _ string, _ http.RoundTripper) (*sandboxexec.Executor, error) {
 		return sandboxexec.New(sandboxexec.Config{
 			Stdout: w,
 			Runner: func(context.Context, io.Writer, sandbox.Config) error { return nil },
@@ -176,7 +177,7 @@ func TestRunServePropagatesBuildDispatcherError(t *testing.T) {
 	saved := buildDispatcher
 	t.Cleanup(func() { buildDispatcher = saved })
 	want := errors.New("synthetic dispatcher build failure")
-	buildDispatcher = func(io.Writer, *sandboxgateway.Bridger, *sandboxgateway.AttachRegistry, *sandboxgateway.ObserverRegistry, *sandboxgateway.SummaryRegistry, string, sandboxexec.MountMaterializer, string) (*sandboxexec.Executor, error) {
+	buildDispatcher = func(io.Writer, *sandboxgateway.Bridger, *sandboxgateway.AttachRegistry, *sandboxgateway.ObserverRegistry, *sandboxgateway.SummaryRegistry, string, sandboxexec.MountMaterializer, string, http.RoundTripper) (*sandboxexec.Executor, error) {
 		return nil, want
 	}
 	savedRun := runRegisterAndServe
@@ -205,11 +206,11 @@ func TestBuildDispatcherProductionSeam(t *testing.T) {
 	ar := sandboxgateway.NewAttachRegistry()
 	or := sandboxgateway.NewObserverRegistry()
 	sr := sandboxgateway.NewSummaryRegistry()
-	if _, err := buildDispatcher(&noopWriter{}, br, ar, or, sr, t.TempDir(), nil, ""); err == nil {
+	if _, err := buildDispatcher(&noopWriter{}, br, ar, or, sr, t.TempDir(), nil, "", nil); err == nil {
 		t.Fatal("buildDispatcher with DAFT_INITRAMFS unset should fail")
 	}
 	t.Setenv("DAFT_INITRAMFS", "/dev/null")
-	d, err := buildDispatcher(&noopWriter{}, br, ar, or, sr, t.TempDir(), nil, "")
+	d, err := buildDispatcher(&noopWriter{}, br, ar, or, sr, t.TempDir(), nil, "", nil)
 	if err != nil {
 		t.Fatalf("buildDispatcher: %v", err)
 	}

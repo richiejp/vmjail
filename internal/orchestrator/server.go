@@ -12,11 +12,14 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"io"
+	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/go-containerregistry/pkg/registry"
 
 	"github.com/localai-org/darkaifactory/internal/component"
 	"github.com/localai-org/darkaifactory/internal/genpb/health/v1/healthv1connect"
@@ -32,6 +35,12 @@ import (
 	"github.com/localai-org/darkaifactory/internal/workspacebroker"
 	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
 )
+
+// OCIRegistryPathPrefix is the HTTP path the orchestrator's embedded
+// OCI registry is mounted at (the OCI distribution-spec root). Exported
+// so the sandbox-host puller can recognise orchestrator-hosted image
+// refs and pushers can target the right URL.
+const OCIRegistryPathPrefix = "/v2/"
 
 // Config holds everything the server needs to start up. Identity is
 // the orchestrator's own keypair + cert; Peers is the TOFU set used
@@ -348,6 +357,15 @@ func registerServices(
 		workspaceCtrl, interceptor,
 	)
 	mux.Handle(workspaceCtrlPath, workspaceCtrlConnectHandler)
+
+	// Embedded OCI registry (PLAN.md item 8): served on the same mTLS
+	// endpoint, so the existing peer gate is its access control — only
+	// approved sandbox-hosts and clients can push or pull. In-memory and
+	// ephemeral; the minimum needed to host workspace images without an
+	// external registry. The /v2/ prefix never collides with the Connect
+	// service paths (all /daft.*.v1.*/...). The registry's request log is
+	// discarded to keep it off the orchestrator's stdout.
+	mux.Handle(OCIRegistryPathPrefix, registry.New(registry.Logger(log.New(io.Discard, "", 0))))
 	return nil
 }
 

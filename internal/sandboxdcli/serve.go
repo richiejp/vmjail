@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	"github.com/localai-org/darkaifactory/internal/mitmproxy"
 	"github.com/localai-org/darkaifactory/internal/nodectrl"
 	"github.com/localai-org/darkaifactory/internal/nodectrlclient"
+	"github.com/localai-org/darkaifactory/internal/ociregistry"
 	"github.com/localai-org/darkaifactory/internal/sandbox"
 	"github.com/localai-org/darkaifactory/internal/sandboxboot"
 	"github.com/localai-org/darkaifactory/internal/sandboxexec"
@@ -118,8 +120,9 @@ func runServe(
 	observerRegistry := sandboxgateway.NewObserverRegistry()
 	summaryRegistry := sandboxgateway.NewSummaryRegistry()
 	mountBackingDir := filepath.Join(dir, "mounts")
+	hostedRT := hostedRegistryTransport(orchestratorURL, id, peers)
 	dispatcher, err := buildDispatcher(stdout, bridger, attachRegistry,
-		observerRegistry, summaryRegistry, vsockDir, sync.server, mountBackingDir)
+		observerRegistry, summaryRegistry, vsockDir, sync.server, mountBackingDir, hostedRT)
 	if err != nil {
 		return err
 	}
@@ -264,13 +267,14 @@ var buildDispatcher = func(
 	vsockDir string,
 	materializer sandboxexec.MountMaterializer,
 	mountBackingDir string,
+	hostedRT http.RoundTripper,
 ) (*sandboxexec.Executor, error) {
 	base, err := sandbox.ConfigFromEnv()
 	if err != nil {
 		return nil, err
 	}
 	assembler := sandboxexec.ProductionAssembler(sandboxboot.Deps{
-		OpenStore: openSandboxbootStore,
+		OpenStore: func() (sandboxboot.Store, error) { return openSandboxbootStore(hostedRT) },
 		CacheDir:  userCacheDir,
 		Extract:   extractWithEnvFallback(base),
 	})
@@ -452,9 +456,37 @@ func resolveVsockDir(override string) (string, error) {
 // openSandboxbootStore is the production OpenStore — it returns
 // the same imagestore handle the legacy `run` command uses, but
 // typed against sandboxboot.Store so the executor doesn't have
-// to import imagestore directly.
-func openSandboxbootStore() (sandboxboot.Store, error) {
-	return openStore()
+// to import imagestore directly. When hostedRT is non-nil it is the
+// mTLS transport for orchestrator-hosted image refs.
+func openSandboxbootStore(hostedRT http.RoundTripper) (sandboxboot.Store, error) {
+	st, err := openStore()
+	if err != nil {
+		return nil, err
+	}
+	if hostedRT != nil {
+		st.UseHostedRegistry(hostedRT)
+	}
+	return st, nil
+}
+
+// hostedRegistryTransport builds the mTLS transport the imagestore uses
+// to pull image refs hosted on the orchestrator's embedded registry: it
+// carries the sandbox-host client cert and redirects the dial to the
+// orchestrator's address (see internal/ociregistry). Returns nil — which
+// disables the hosted-pull path — on the (practically unreachable) errors
+// from parsing the already-validated orchestrator URL or building the
+// client TLS config; the same ClientTLSConfig is rebuilt immediately
+// after by nodectrlclient.New, which surfaces any real failure there.
+func hostedRegistryTransport(orchestratorURL string, id *identity.Identity, peers *identity.PeerStore) http.RoundTripper {
+	u, err := url.Parse(orchestratorURL)
+	if err != nil {
+		return nil
+	}
+	tlsCfg, err := identity.ClientTLSConfig(id, peers, "")
+	if err != nil {
+		return nil
+	}
+	return ociregistry.Transport(u.Host, tlsCfg)
 }
 
 // formatBytes is a small KiB/MiB/GiB renderer for the startup

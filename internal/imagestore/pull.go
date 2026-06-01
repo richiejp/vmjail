@@ -3,6 +3,7 @@ package imagestore
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -16,6 +17,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
+	"github.com/localai-org/darkaifactory/internal/ociregistry"
 	"github.com/localai-org/darkaifactory/internal/trace"
 )
 
@@ -50,21 +52,33 @@ type puller interface {
 	resolve(ctx context.Context, ref string) (v1.Image, name.Reference, error)
 }
 
-// remotePuller is the production puller. It resolves refs against the
-// configured registry (Docker Hub by default; the orchestrator-bundled
-// registry once that lands) using the calling user's keychain.
-type remotePuller struct{}
+// remotePuller is the production puller. It resolves refs with remote.Image
+// plus one auth option: the calling user's keychain for public registries
+// (Docker Hub etc.), or the orchestrator mTLS transport for refs hosted on
+// the embedded registry (the transport carries the sandbox-host's client
+// cert and redirects to the orchestrator address — see internal/ociregistry).
+// The zero value resolves with no auth option, which is enough to exercise
+// the parse-error branch in tests.
+type remotePuller struct{ auth remote.Option }
 
-func (remotePuller) resolve(ctx context.Context, ref string) (v1.Image, name.Reference, error) {
+func keychainPuller() remotePuller {
+	return remotePuller{auth: remote.WithAuthFromKeychain(remoteKeychain)}
+}
+
+func transportPuller(rt http.RoundTripper) remotePuller {
+	return remotePuller{auth: remote.WithTransport(rt)}
+}
+
+func (p remotePuller) resolve(ctx context.Context, ref string) (v1.Image, name.Reference, error) {
 	r, err := name.ParseReference(ref)
 	if err != nil {
 		return nil, nil, fmt.Errorf("imagestore: parse %q: %w", ref, err)
 	}
-	img, err := remote.Image(
-		r,
-		remote.WithContext(ctx),
-		remote.WithAuthFromKeychain(remoteKeychain),
-	)
+	opts := []remote.Option{remote.WithContext(ctx)}
+	if p.auth != nil {
+		opts = append(opts, p.auth)
+	}
+	img, err := remote.Image(r, opts...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("imagestore: fetch %q: %w", ref, err)
 	}
@@ -81,7 +95,10 @@ func (remotePuller) resolve(ctx context.Context, ref string) (v1.Image, name.Ref
 //   - ErrCannotFreeEnough    release locked bundles, then retry
 //   - anything else          network / registry / I/O failure
 func (s *Store) Pull(ctx context.Context, ref string) (*Image, error) {
-	return s.pullWith(ctx, ref, remotePuller{})
+	if s.hostedRT != nil && ociregistry.IsHosted(ref) {
+		return s.pullWith(ctx, ref, transportPuller(s.hostedRT))
+	}
+	return s.pullWith(ctx, ref, keychainPuller())
 }
 
 // pullWith is Pull parameterised on the puller; production calls Pull,

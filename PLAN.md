@@ -218,6 +218,20 @@ The GPU-bound VM survives idle for $TTL between workspaces.
    registry, and rewrites the workspace's `image` field. No
    host-side docker required.
 
+   - **Embedded registry — LANDED.** The orchestrator now serves a
+     go-containerregistry in-memory registry on its mTLS endpoint
+     under `/v2/` (`internal/orchestrator/server.go`). Clients push
+     with `daft image push <tar> --repo … --tag …`; sandbox-hosts
+     pull hosted refs over the same mutually-authenticated channel.
+     `internal/ociregistry` is the client glue: a sentinel host
+     (`daft-registry.internal`) so go-containerregistry chooses
+     https, a transport that redirects the dial to the orchestrator
+     and pins ALPN to http/1.1 (h2 deadlocks on large blob uploads),
+     and a tarball loader. `imagestore.Store.UseHostedRegistry`
+     routes `IsHosted` refs through that transport instead of the
+     default keychain. Still future: the buildkit-VM that *produces*
+     the image from a Dockerfile, and rewriting the `image` field.
+
 9. **Two-way sync is delegated, not built.** The workspace mount
    model is intentionally asymmetric (push, pull, or
    stream-on-miss; writes surface back only on explicit `daft
