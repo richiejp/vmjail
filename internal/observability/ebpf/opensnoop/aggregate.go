@@ -6,6 +6,8 @@ import (
 	"path"
 	"sort"
 	"sync"
+
+	"github.com/localai-org/darkaifactory/internal/observability/progress"
 )
 
 // Aggregation caps. A single `nix build` opens hundreds of thousands of
@@ -20,30 +22,7 @@ const (
 	defaultTopN  = 10
 )
 
-// CountedKey is one ranked entry — a key and its observed count. For paths
-// and dirs the count is a heavy-hitter estimate (an upper bound on the true
-// frequency); for the exact Total see Summary.Total.
-type CountedKey struct {
-	Key   string `json:"key"`
-	Count uint64 `json:"count"`
-}
-
-// Summary is a point-in-time aggregate of openat(2) activity, serialised
-// into the per-sandbox build-progress summary file. Total is exact and is
-// the primary liveness signal (a build that has stopped opening files has a
-// frozen Total); TopComms/TopPaths/TopDirs are bounded heavy-hitter
-// rankings that hint at *what* the build is churning on so a viewer can drill
-// down into the raw opensnoop.log. Time-derived signals — last-activity age
-// and per-window rates — are layered on by the summary writer (roadmap #6b),
-// which owns the wall-clock; this aggregate is clock-free and pure.
-type Summary struct {
-	Total    uint64       `json:"total"`
-	TopComms []CountedKey `json:"top_comms"`
-	TopPaths []CountedKey `json:"top_paths"`
-	TopDirs  []CountedKey `json:"top_dirs"`
-}
-
-// Aggregator rolls a stream of Events into a Summary. It is safe for one
+// Aggregator rolls a stream of Events into a progress.Opensnoop. It is safe for one
 // goroutine to Observe while another takes a Snapshot — the intended use is
 // the gadget drain loop feeding it while the summary writer polls it ~1 Hz.
 type Aggregator struct {
@@ -73,13 +52,15 @@ func (a *Aggregator) Observe(ev Event) {
 	a.dirs.add(dirOf(ev.Filename))
 }
 
-// Snapshot returns the current aggregate. The returned Summary is a copy and
-// does not alias the Aggregator's internal state, so the caller may serialise
-// it without holding any lock.
-func (a *Aggregator) Snapshot() Summary {
+// Snapshot returns the current aggregate as a progress.Opensnoop section.
+// The returned value is a copy and does not alias the Aggregator's internal
+// state, so the caller may serialise it without holding any lock. The
+// time-derived fields (OpenatRate, LastEventAgeMs) are left zero — this
+// aggregate is clock-free; the summary writer fills them in.
+func (a *Aggregator) Snapshot() progress.Opensnoop {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return Summary{
+	return progress.Opensnoop{
 		Total:    a.total,
 		TopComms: a.comms.top(defaultTopN),
 		TopPaths: a.paths.top(defaultTopN),
@@ -139,10 +120,10 @@ func (t *topK) add(key string) {
 
 // top returns the n highest-count keys, descending, with a lexicographic
 // tie-break so the ranking is deterministic for a stable summary file.
-func (t *topK) top(n int) []CountedKey {
-	out := make([]CountedKey, 0, len(t.counts))
+func (t *topK) top(n int) []progress.Counted {
+	out := make([]progress.Counted, 0, len(t.counts))
 	for k, c := range t.counts {
-		out = append(out, CountedKey{Key: k, Count: c})
+		out = append(out, progress.Counted{Key: k, Count: c})
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Count != out[j].Count {

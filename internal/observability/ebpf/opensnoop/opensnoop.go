@@ -140,10 +140,17 @@ type opener func() (rd recordReader, cleanup func() error, err error)
 // the entry point daft-agent calls in the guest. Cancelling ctx is the
 // normal stop and returns nil.
 func Run(ctx context.Context, w io.Writer) error {
-	return run(ctx, w, openSource)
+	return run(ctx, w, nil, openSource)
 }
 
-func run(ctx context.Context, w io.Writer, open opener) error {
+// RunAggregating is Run that additionally folds every decoded event into
+// agg, so the agent's summary writer can snapshot the live aggregate while
+// the same drain still writes the raw trace to w. A nil agg behaves like Run.
+func RunAggregating(ctx context.Context, w io.Writer, agg *Aggregator) error {
+	return run(ctx, w, agg, openSource)
+}
+
+func run(ctx context.Context, w io.Writer, agg *Aggregator, open opener) error {
 	rd, cleanup, err := open()
 	if err != nil {
 		return err
@@ -175,6 +182,9 @@ func run(ctx context.Context, w io.Writer, open opener) error {
 		ev, perr := parseEvent(rec.RawSample)
 		if perr != nil {
 			continue // a truncated sample is not worth failing the whole tail
+		}
+		if agg != nil {
+			agg.Observe(ev)
 		}
 		if _, err := io.WriteString(w, ev.String()+"\n"); err != nil {
 			return fmt.Errorf("opensnoop: write: %w", err)

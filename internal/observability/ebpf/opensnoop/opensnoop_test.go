@@ -160,7 +160,7 @@ func TestRunWritesEventsThenStopsOnCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
-	go func() { errc <- run(ctx, &out, fakeOpener(fr)) }()
+	go func() { errc <- run(ctx, &out, nil, fakeOpener(fr)) }()
 
 	// Wait for the one event to be drained and written.
 	deadline := time.Now().Add(2 * time.Second)
@@ -186,7 +186,7 @@ func TestRunSkipsShortRecord(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
-	go func() { errc <- run(ctx, &out, fakeOpener(fr)) }()
+	go func() { errc <- run(ctx, &out, nil, fakeOpener(fr)) }()
 	deadline := time.Now().Add(2 * time.Second)
 	for !strings.Contains(out.String(), "/ok") {
 		if time.Now().After(deadline) {
@@ -203,7 +203,7 @@ func TestRunSkipsShortRecord(t *testing.T) {
 func TestRunReturnsReadError(t *testing.T) {
 	fr := newFakeReader()
 	fr.readErr = errors.New("boom")
-	if err := run(context.Background(), io.Discard, fakeOpener(fr)); err == nil || !strings.Contains(err.Error(), "boom") {
+	if err := run(context.Background(), io.Discard, nil, fakeOpener(fr)); err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Fatalf("run = %v, want a wrapped read error", err)
 	}
 }
@@ -215,7 +215,7 @@ func (errWriter) Write([]byte) (int, error) { return 0, errors.New("disk full") 
 func TestRunReturnsWriteError(t *testing.T) {
 	rec := recordBytes(t, opensnoopEvent{Pid: 2, Comm: arr16("x"), Filename: arr255("/y")})
 	fr := newFakeReader(rec)
-	if err := run(context.Background(), errWriter{}, fakeOpener(fr)); err == nil || !strings.Contains(err.Error(), "disk full") {
+	if err := run(context.Background(), errWriter{}, nil, fakeOpener(fr)); err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("run = %v, want a wrapped write error", err)
 	}
 }
@@ -223,8 +223,40 @@ func TestRunReturnsWriteError(t *testing.T) {
 func TestRunReturnsOpenError(t *testing.T) {
 	want := errors.New("no caps")
 	open := func() (recordReader, func() error, error) { return nil, nil, want }
-	if err := run(context.Background(), io.Discard, open); !errors.Is(err, want) {
+	if err := run(context.Background(), io.Discard, nil, open); !errors.Is(err, want) {
 		t.Fatalf("run = %v, want %v", err, want)
+	}
+}
+
+// TestRunAggregatingFeedsAggregator proves RunAggregating folds each decoded
+// event into the aggregator while still writing the raw trace to w.
+func TestRunAggregatingFeedsAggregator(t *testing.T) {
+	rec := recordBytes(t, opensnoopEvent{Pid: 7, Comm: arr16("cc1"), Filename: arr255("/nix/store/abc/x.h")})
+	fr := newFakeReader(rec)
+	var out bytes.Buffer
+	agg := NewAggregator()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- run(ctx, &out, agg, fakeOpener(fr)) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for agg.Snapshot().Total == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("aggregator never observed the event")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	if err := <-errc; err != nil {
+		t.Fatalf("run = %v", err)
+	}
+	s := agg.Snapshot()
+	if s.Total == 0 || len(s.TopPaths) == 0 || s.TopPaths[0].Key != "/nix/store/abc/x.h" {
+		t.Fatalf("aggregator not fed correctly: %+v", s)
+	}
+	if !strings.Contains(out.String(), `path="/nix/store/abc/x.h"`) {
+		t.Fatalf("raw trace not written alongside aggregation: %q", out.String())
 	}
 }
 

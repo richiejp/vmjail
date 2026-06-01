@@ -484,6 +484,15 @@ In rough order:
      wall-clock enters here, so the **time-derived** signals
      (last-activity age, per-window rates) are computed at this layer,
      not in the clock-free aggregator.
+     - *6b-1 (landed)* — the `internal/observability/progress` wire
+       contract (`Summary`/`Opensnoop`/`Counted` + `WriteAtomic`), a
+       dependency-free leaf so the host CLI reads it without pulling in
+       the linux-only eBPF packages; the aggregator now produces
+       `progress.Opensnoop` directly, and `opensnoop.RunAggregating`
+       folds the live drain into it while still writing the raw trace.
+     - *6b-2* — the agent-side summary writer (atomic ~1 Hz rewrite +
+       time-derived age/rate), the `daft.observe.summary=` cmdline
+       token, `Config.ObserveSummaryPath`, and the in-VM e2e.
    - **6c — `daft sandbox observe` CLI + broker.** Mirror the
      `observer-tail` RPC chain to serve the latest snapshot (and
      `--follow`); render a human/agent-readable summary with drill-down
@@ -506,8 +515,11 @@ In rough order:
 - `internal/observability/` — the Tier 1 package.
 - `internal/observability/ebpf/opensnoop/` — the first Tier-2 CO-RE
   gadget (open-snoop). Regenerate its BPF object with `make gen-bpf`.
-  `aggregate.go` holds the roadmap-#6a `Aggregator`/`Summary` that rolls
-  the event stream into the build-progress summary.
+  `aggregate.go` holds the roadmap-#6a `Aggregator` that rolls the event
+  stream into a `progress.Opensnoop` section.
+- `internal/observability/progress/` — the dependency-free wire contract
+  (#6b-1) for the build-progress summary file, shared by the guest writer
+  and the host-side `daft sandbox observe` reader.
 - `internal/agent/opensnoop.go` — wires the gadget into daft-agent
   (`startOpensnoopFromCmdline` + the `opensnoopDeps` seam), driven by the
   `daft.observe.opensnoop=` cmdline token (`internal/agent/cmdline.go`).
