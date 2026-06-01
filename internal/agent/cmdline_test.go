@@ -104,6 +104,7 @@ const (
 	caseNameEmptyValue   = "empty value"
 )
 
+//nolint:dupl // same table-test harness as TestParseOpensnoopCmdline by design; the per-parser cases differ.
 func TestParseBundleCmdline(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -159,6 +160,61 @@ func TestParseBundleCmdline(t *testing.T) {
 				t.Fatalf("path = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+//nolint:dupl // same table-test harness as TestParseBundleCmdline by design; the per-parser cases differ.
+func TestParseOpensnoopCmdline(t *testing.T) {
+	tests := []struct {
+		name      string
+		cmdline   string
+		want      string
+		wantOK    bool
+		wantErr   bool
+		errSubstr string
+	}{
+		{name: testAbsent, cmdline: testCmdlineShareOnly, wantOK: false},
+		{
+			name:    testHappyPath,
+			cmdline: "console=hvc0 daft.observe.opensnoop=/share/opensnoop.log reboot=t",
+			want:    "/share/opensnoop.log",
+			wantOK:  true,
+		},
+		{name: caseNameEmptyValue, cmdline: "daft.observe.opensnoop= console=hvc0", wantErr: true, errSubstr: errSubEmptyValue},
+		{name: "relative path", cmdline: "daft.observe.opensnoop=rel/path", wantErr: true, errSubstr: errSubMustBeAbsolute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok, err := ParseOpensnoopCmdline(tt.cmdline)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseOpensnoopCmdline(%q) = nil err, want error containing %q", tt.cmdline, tt.errSubstr)
+				}
+				if !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Fatalf("err = %v, want substring %q", err, tt.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if ok && got != tt.want {
+				t.Fatalf("path = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatOpensnoopCmdlineRoundTrips(t *testing.T) {
+	for _, p := range []string{"/share/opensnoop.log", "/var/log/daft/openat"} {
+		s := FormatOpensnoopCmdline(p)
+		got, ok, err := ParseOpensnoopCmdline(s)
+		if err != nil || !ok || got != p {
+			t.Errorf("round-trip of %q via %q: got=%q ok=%v err=%v", p, s, got, ok, err)
+		}
 	}
 }
 

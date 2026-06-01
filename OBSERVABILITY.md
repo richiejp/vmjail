@@ -294,7 +294,7 @@ fragment so a future dependency change fails the gate loudly instead
 of silently dropping CO-RE attach support.
 
 The `cilium/ebpf` dependency + the first gadget landed in #5b; the
-wiring into daft-agent + the in-VM e2e proof are #5c.
+wiring into daft-agent + the in-VM e2e proof landed in #5c.
 
 ### Library choice
 
@@ -334,8 +334,10 @@ goroutine in the guest's privileged init userns — symmetric with
 Tier 1's in-sandboxd observer goroutine — writing its trace to a
 guest-side log. (A thin `cmd/` main per gadget for standalone host
 debugging is allowed but not required; the agent is the production
-caller.) The wiring into daft-agent + the in-VM e2e proof are
-roadmap #5c.
+caller.) The wiring lives in `internal/agent/opensnoop.go`
+(`startOpensnoopFromCmdline`, driven by the `daft.observe.opensnoop=`
+cmdline token the host emits from `sandbox.Config.OpensnoopLogPath`);
+landed in roadmap #5c.
 
 **Testability under the coverage gate.** Loading BPF needs CAP_BPF on
 a BPF-capable kernel, which `make check` doesn't have
@@ -424,9 +426,21 @@ In rough order:
      `*_bpfel.go` is excluded from the coverage gate; daft-lint now
      skips generated files (`ast.IsGenerated`). Not yet wired into the
      agent — the package is built + tested but has no caller.
-   - **5c** — wire `opensnoop.Run` into daft-agent (run in the guest's
-     init userns, trace to a guest-side log surfaced on failure) + an
-     in-VM e2e proof that a real openat shows up.
+   - **5c (landed)** — `opensnoop.Run` is wired into daft-agent: when
+     the host sets `sandbox.Config.OpensnoopLogPath`, the cmdline carries
+     `daft.observe.opensnoop=<guest-path>` and the agent
+     (`startOpensnoopFromCmdline`) mounts tracefs (the minimal u-root
+     guest mounts neither tracefs nor debugfs, which cilium/ebpf needs to
+     resolve the tracepoint id — `ensureTracefs`, symmetric with
+     `ensureCgroupV2`), opens that file, and spawns the gadget as a
+     lifetime goroutine in the guest's init userns, attaching the
+     tracepoint *before* the container so it catches the workload's
+     openat storm. The privileged load sits behind the same injected
+     `opensnoopDeps` seam (zero value disables it, so `make check`'s
+     CAP_BPF-less unit tests skip the BPF path). The in-VM e2e
+     (`TestHelloIntegrationOpensnoopCapturesOpenat`) points the trace at
+     a writable virtiofs share, boots a real container VM, and asserts a
+     decoded openat record made it back to the host file.
 6. **More gadgets** — `biolatency`, `tcpstat`, `runqlat`, `pktstat`,
    each motivated by a real recurring symptom.
 
@@ -435,6 +449,13 @@ In rough order:
 - `internal/observability/` — the Tier 1 package.
 - `internal/observability/ebpf/opensnoop/` — the first Tier-2 CO-RE
   gadget (open-snoop). Regenerate its BPF object with `make gen-bpf`.
+- `internal/agent/opensnoop.go` — wires the gadget into daft-agent
+  (`startOpensnoopFromCmdline` + the `opensnoopDeps` seam), driven by the
+  `daft.observe.opensnoop=` cmdline token (`internal/agent/cmdline.go`).
+- `internal/sandbox/sandbox.go` — `Config.OpensnoopLogPath` →
+  `buildKernelCmdline` emits the `daft.observe.opensnoop=` token;
+  `internal/sandbox/integration_test.go` holds the in-VM e2e
+  (`TestHelloIntegrationOpensnoopCapturesOpenat`).
 - `scripts/cover-check.sh` — excludes bpf2go-generated `*_bpfel.go`
   loaders from the coverage gate (`SKIP_PATHS`).
 - `internal/lint/analyzers/tagcatalog/` — skips generated files so
@@ -461,8 +482,11 @@ In rough order:
 - `internal/testdaemons/workspace_profiler_test.go` — the in-guest
   `attachWorkspaceProfiler` is **transitional**. Tier 1 is now wired
   through `testdaemons.Cluster` (roadmap #4), meeting the first half
-  of its retirement gate; it stays until Tier 2 gadgets cover the
-  guest-internal detail (PSI, per-process wchan, store-path counts)
-  the host-side sampler can't see.
+  of its retirement gate; roadmap #5c proved the Tier-2 mechanism
+  end-to-end (open-snoop loads/attaches/decodes in a real guest), but
+  the second half of the gate stays open until gadgets cover the
+  specific guest-internal detail (PSI, per-process wchan, store-path
+  counts) the host-side sampler can't see — open-snoop covers openat,
+  not those.
 - `CONTRIBUTING.md` "Slowness is a bug" — the policy this
   infrastructure exists to support.

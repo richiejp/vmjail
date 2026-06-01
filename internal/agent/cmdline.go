@@ -138,6 +138,38 @@ func ParseBundleCmdline(cmdline string) (path string, ok bool, err error) {
 	return val, true, nil
 }
 
+// OpensnoopCmdlineKey names the kernel cmdline parameter that asks the
+// agent to run the Tier-2 open-snoop eBPF gadget, writing its openat(2)
+// trace to the given absolute guest path. Format:
+// `daft.observe.opensnoop=<absolute-path>`. The path is usually on a
+// writable virtiofs share so the host can read the trace after the VM
+// exits. Absent ⇒ the gadget is not started.
+const OpensnoopCmdlineKey = "daft.observe.opensnoop"
+
+// FormatOpensnoopCmdline renders a guest log path to the wire form. Used
+// by the host to add `daft.observe.opensnoop=<path>` to the cmdline.
+func FormatOpensnoopCmdline(path string) string {
+	return fmt.Sprintf("%s=%s", OpensnoopCmdlineKey, path)
+}
+
+// ParseOpensnoopCmdline scans a kernel cmdline for
+// `daft.observe.opensnoop=<path>`. Returns (path, true, nil) on a
+// well-formed absolute path, (_, false, err) on a malformed
+// (empty/relative) value, and ("", false, nil) when the token is absent.
+// The absolute-path invariant matches the other path-valued keys so a
+// host-config typo surfaces here rather than as an obscure open() error
+// inside the agent.
+func ParseOpensnoopCmdline(cmdline string) (path string, ok bool, err error) {
+	val, ok := findCmdlineValue(cmdline, OpensnoopCmdlineKey)
+	if !ok {
+		return "", false, nil
+	}
+	if err := validateAbsoluteCmdlinePath(OpensnoopCmdlineKey, val); err != nil {
+		return "", false, err
+	}
+	return val, true, nil
+}
+
 // parseShareSpec validates a single `<tag>:<mountpoint>` value (the
 // part after `daft.share=`) and returns the parsed spec. Shared by
 // ParseShareCmdline (singular, first match) and ParseShareCmdlines

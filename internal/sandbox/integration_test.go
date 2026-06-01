@@ -196,6 +196,68 @@ func TestHelloIntegrationBootsVMWithContainer(t *testing.T) {
 	}
 }
 
+// TestHelloIntegrationOpensnoopCapturesOpenat is the e2e proof of the
+// Tier-2 open-snoop eBPF gadget: boot a container VM with
+// daft.observe.opensnoop pointed at a path on a writable virtiofs share,
+// let crun + the workload do their openat(2) storm, then read the trace
+// back from the host side of the share and assert the gadget loaded,
+// attached, and decoded real events.
+//
+// virtiofsd runs with its default cache mode (no writeback), so guest
+// writes reach the host file as they happen — no graceful guest flush is
+// needed, which matters because the host tears the VM down abruptly once
+// it sees the banner.
+func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
+	cfg := resolveArtifacts(t)
+	bundleSrc := resolveBundle(t)
+
+	shareDir := t.TempDir()
+	bundleInShare := filepath.Join(shareDir, "bundle")
+	if err := copyTree(bundleSrc, bundleInShare); err != nil {
+		t.Fatalf("copy bundle into share: %v", err)
+	}
+
+	cfg.Shares = []*ShareConfig{{
+		HostDir:    shareDir,
+		Tag:        testTagDaftshare,
+		Mountpoint: testMountpoint,
+	}}
+	cfg.Bundle = testBundlePath
+	// Guest path on the writable share; host reads it at <shareDir>/<base>.
+	const guestLogName = "opensnoop.log"
+	cfg.OpensnoopLogPath = testMountpoint + "/" + guestLogName
+	hostLog := filepath.Join(shareDir, guestLogName)
+
+	// Surface the captured trace on failure, alongside the Tier-1 dump.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		if data, err := os.ReadFile(hostLog); err == nil {
+			t.Logf("opensnoop trace (%s):\n%s", hostLog, data)
+		}
+	})
+
+	var buf bytes.Buffer
+	if err := Hello(traceCtx(t), &buf, cfg); err != nil {
+		t.Fatalf("Hello: %v\n--- console ---\n%s", err, buf.String())
+	}
+	if !strings.Contains(buf.String(), agent.OpensnoopReportPrefix) {
+		t.Fatalf("agent never reported starting the gadget; console:\n%s", buf.String())
+	}
+
+	data, err := os.ReadFile(hostLog)
+	if err != nil {
+		t.Fatalf("read opensnoop trace %s: %v\n--- console ---\n%s", hostLog, err, buf.String())
+	}
+	// Event.String() renders `... comm=%q ... path=%q`; both substrings
+	// present proves at least one openat record was decoded and written.
+	if !strings.Contains(string(data), "comm=") || !strings.Contains(string(data), "path=\"/") {
+		t.Fatalf("opensnoop trace has no decoded openat event (%d bytes)\n--- trace ---\n%s\n--- console ---\n%s",
+			len(data), data, buf.String())
+	}
+}
+
 // TestHelloIntegrationBootsVMWithImagestoreBundle proves the
 // `daft-sandboxd run`-style flow without touching the CLI: pull a
 // real image into a real on-disk imagestore, ask the store to

@@ -630,6 +630,23 @@ func TestBuildKernelCmdlineIncludesBundle(t *testing.T) {
 	}
 }
 
+func TestBuildKernelCmdlineIncludesOpensnoop(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.OpensnoopLogPath = "/share/opensnoop.log"
+	got := buildKernelCmdline(cfg)
+	if !strings.Contains(got, agent.OpensnoopCmdlineKey+"=/share/opensnoop.log") {
+		t.Errorf("cmdline %q missing opensnoop token", got)
+	}
+}
+
+func TestBuildKernelCmdlineOmitsOpensnoopWhenUnset(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	got := buildKernelCmdline(cfg)
+	if strings.Contains(got, agent.OpensnoopCmdlineKey) {
+		t.Errorf("cmdline %q should not contain opensnoop token when path empty", got)
+	}
+}
+
 func TestBuildKernelCmdlineIncludesWorkspaceOverlay(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	cfg.Shares = []*ShareConfig{{Tag: "ws", Mountpoint: testMountpoint, Overlay: true}}

@@ -134,6 +134,15 @@ type Config struct {
 	// uses observability.DefaultMaxBytes (50 MB); negative
 	// disables rotation. Ignored when ObserverLogPath is empty.
 	ObserverMaxBytes int64
+
+	// OpensnoopLogPath, when non-empty, is the *in-guest* absolute path
+	// the agent writes the Tier-2 open-snoop eBPF trace to (one line per
+	// openat(2): pid/uid/comm/dirfd/flags/path). Set it to a path on a
+	// writable virtiofs share so the host can read the trace after the
+	// VM exits — symmetric to ObserverLogPath but guest-side, since the
+	// gadget runs inside the VM under the guest's CAP_BPF. Empty (the
+	// default) leaves the gadget off. See OBSERVABILITY.md "Tier 2".
+	OpensnoopLogPath string
 }
 
 // PortForward declares one Slice C1 port-forward: traffic the
@@ -586,6 +595,9 @@ func buildKernelCmdline(cfg Config) string {
 		if s.Overlay {
 			parts = append(parts, agent.FormatWorkspaceOverlayCmdline(s.Mountpoint))
 		}
+	}
+	if cfg.OpensnoopLogPath != "" {
+		parts = append(parts, agent.FormatOpensnoopCmdline(cfg.OpensnoopLogPath))
 	}
 	return strings.Join(parts, " ")
 }

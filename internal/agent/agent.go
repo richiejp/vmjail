@@ -83,6 +83,7 @@ func Run(ctx context.Context, w io.Writer) error {
 		portForward: defaultPortForwardDeps(),
 		attach:      defaultAttachDeps(),
 		tap:         defaultTapDeps(),
+		opensnoop:   defaultOpensnoopDeps(),
 	})
 }
 
@@ -107,6 +108,11 @@ type runDeps struct {
 	// tap bridge: /dev/net/tun open + netlink configure. Zero value
 	// disables the tap path (slice-2a conn-only behaviour).
 	tap tapDeps
+	// opensnoop is the test-substitutable surface for the Tier-2
+	// open-snoop eBPF gadget: open the guest trace file + drain the
+	// gadget. Zero value (run == nil) disables it (the BPF load needs
+	// CAP_BPF, which make check lacks).
+	opensnoop opensnoopDeps
 }
 
 func runWith(ctx context.Context, w io.Writer, d runDeps) error {
@@ -136,6 +142,9 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	if bundle != "" {
 		ensureCgroupV2(w)
 	}
+	// Attach the open-snoop gadget before the container so its
+	// tracepoint is live for the workload's openat storm.
+	startOpensnoopFromCmdline(ctx, w, d, cmdline)
 	runContainerFromCmdline(ctx, w, d, cmdline)
 	bootSpan.End()
 
