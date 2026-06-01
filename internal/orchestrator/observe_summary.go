@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 
@@ -70,9 +72,39 @@ func (h *WorkspaceCatalogHandler) readObserveSummary(
 		return nil, mapCatalogErr(err)
 	}
 	defer func() { oops.Skip("orchestrator: close summary reader", reader.Close(), net.ErrClosed) }()
-	data, err := io.ReadAll(io.LimitReader(reader, maxObserveSummaryBytes))
+	data, err := drainObserveSummary(reader)
 	if err != nil {
 		return nil, mapCatalogErr(err)
 	}
 	return data, nil
+}
+
+// drainObserveSummary reads the whole one-shot summary snapshot from the
+// node bridge, treating a clean stream close as success — EOF (possibly
+// wrapped by connect when the bidi ObserverStream half-closes) or an
+// expected pump-exit — mirroring pumpObserverToClient. io.ReadAll can't
+// be used: it compares the terminal error against io.EOF by identity, so
+// the connect-wrapped EOF would escape as a spurious "unknown: EOF" RPC
+// error. The size cap is enforced inline (no io.LimitReader) so an
+// oversized snapshot fails closed rather than silently truncating.
+func drainObserveSummary(reader io.Reader) ([]byte, error) {
+	var buf bytes.Buffer
+	chunk := make([]byte, observerCopyBufSize)
+	//daft:lint:disable=forloopbound reason="exits when reader.Read returns err (clean EOF/expected-exit → data; otherwise the error)"
+	for {
+		n, err := reader.Read(chunk)
+		if n > 0 {
+			if buf.Len()+n > maxObserveSummaryBytes {
+				return nil, connect.NewError(connect.CodeResourceExhausted,
+					fmt.Errorf("orchestrator: ObserveSummary: snapshot exceeds %d bytes", maxObserveSummaryBytes))
+			}
+			buf.Write(chunk[:n])
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) || oops.IsExpectedPumpExit(err) {
+				return buf.Bytes(), nil
+			}
+			return nil, err
+		}
+	}
 }

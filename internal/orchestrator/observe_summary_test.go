@@ -1,8 +1,12 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"net"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -105,5 +109,59 @@ func TestReadObserveSummaryUnknownWorkspace(t *testing.T) {
 	h, _, owner := newObserverTestHandlerWithWorkspace(t, &fakeObserverBridger{})
 	if _, err := h.readObserveSummary(context.Background(), owner, summaryReq("no-such-uuid")); err == nil {
 		t.Fatal("expected an error resolving an unknown workspace")
+	}
+}
+
+// chunkReader yields data once, then returns endErr alongside zero bytes
+// on the next Read — modelling the node bridge handing back the snapshot
+// and then closing the ObserverStream.
+type chunkReader struct {
+	data   []byte
+	endErr error
+	done   bool
+}
+
+func (r *chunkReader) Read(p []byte) (int, error) {
+	if !r.done {
+		r.done = true
+		return copy(p, r.data), nil
+	}
+	return 0, r.endErr
+}
+
+// TestDrainObserveSummaryWrappedEOF is the regression test for the
+// "unknown: EOF" bug: the bidi ObserverStream returns a *wrapped* io.EOF
+// on half-close, which io.ReadAll (identity compare) would surface as an
+// error. drainObserveSummary must treat it — and expected pump-exits — as
+// a clean end and return the bytes.
+func TestDrainObserveSummaryWrappedEOF(t *testing.T) {
+	for _, end := range []error{
+		io.EOF,
+		fmt.Errorf("nodectrl: ObserverStream receive: %w", io.EOF), // connect-style wrap
+		fmt.Errorf("closed: %w", net.ErrClosed),
+	} {
+		got, err := drainObserveSummary(&chunkReader{data: []byte("{\"total\":3}"), endErr: end})
+		if err != nil {
+			t.Errorf("end=%v: drain returned error: %v", end, err)
+		}
+		if string(got) != "{\"total\":3}" {
+			t.Errorf("end=%v: data = %q, want the snapshot", end, got)
+		}
+	}
+}
+
+func TestDrainObserveSummaryRealError(t *testing.T) {
+	if _, err := drainObserveSummary(&chunkReader{data: []byte("partial"), endErr: errors.New("boom")}); err == nil {
+		t.Fatal("a non-EOF stream error must surface, not be swallowed")
+	}
+}
+
+func TestDrainObserveSummaryCap(t *testing.T) {
+	// bytes.Reader streams in chunk-sized Reads, so the running total
+	// crosses the cap mid-stream (chunkReader delivers only one chunk).
+	big := bytes.Repeat([]byte("x"), maxObserveSummaryBytes+1)
+	_, err := drainObserveSummary(bytes.NewReader(big))
+	if connect.CodeOf(err) != connect.CodeResourceExhausted {
+		t.Errorf("oversized snapshot err = %v, want ResourceExhausted", connect.CodeOf(err))
 	}
 }
