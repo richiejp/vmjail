@@ -1,4 +1,4 @@
-.PHONY: all check check-submodule-revs verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build proto clean help
+.PHONY: all check check-submodule-revs verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build proto gen-bpf clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -66,6 +66,7 @@ help:
 	@echo "  fuzz        - run every FuzzXxx target (FUZZ_TIME, default 30s, per target)"
 	@echo "  integration - build initramfs + bundle locally, run e2e tests (real VM boot)"
 	@echo "  proto       - regenerate Go code from proto/*.proto"
+	@echo "  gen-bpf     - regenerate Tier-2 eBPF gadget loaders (bpf2go)"
 	@echo "  hooks       - install git pre-commit (make verify) + pre-push (nix flake check) hooks into .git/hooks"
 	@echo "  build       - build daft, daft-agent, daft-sandboxd, daft-orchestrator into ./bin/ (dev only)"
 	@echo "  dev         - build everything in the dev shell: Go binaries + VM toolchain (kernel/CH/virtiofsd/crun/u-root) + initramfs + bundle"
@@ -382,6 +383,26 @@ build-daft-orchestrator:
 proto:
 	@command -v buf >/dev/null || { echo "buf not on PATH; enter the Nix dev shell"; exit 1; }
 	buf generate
+
+# gen-bpf: regenerate the Tier-2 eBPF gadget loaders (OBSERVABILITY.md
+# "Tier 2"). For each gadget under internal/observability/ebpf/, dump the
+# host kernel BTF to a transient vmlinux.h, run bpf2go (clang -> a
+# committed *_bpfel.o + *_bpfel.go loader), then drop vmlinux.h. The
+# committed objects mean a normal build / `make check` needs none of
+# clang, bpftool, or BTF. NIX_HARDENING_ENABLE is cleared for the compile
+# because the Nix cc-wrapper otherwise injects -fzero-call-used-regs /
+# -fstack-protector, which clang rejects for the bpf target.
+EBPF_DIR := internal/observability/ebpf
+gen-bpf:
+	@command -v bpftool >/dev/null || { echo "bpftool not on PATH; enter the Nix dev shell"; exit 1; }
+	@command -v clang   >/dev/null || { echo "clang not on PATH; enter the Nix dev shell"; exit 1; }
+	@test -r /sys/kernel/btf/vmlinux || { echo "/sys/kernel/btf/vmlinux absent; need a CONFIG_DEBUG_INFO_BTF host kernel"; exit 1; }
+	for d in $(EBPF_DIR)/*/; do \
+		[ -f "$$d"*_bpf.c ] || continue; \
+		bpftool btf dump file /sys/kernel/btf/vmlinux format c > "$$d/vmlinux.h"; \
+		NIX_HARDENING_ENABLE="" go generate ./"$$d"... ; \
+		rm -f "$$d/vmlinux.h"; \
+	done
 
 clean:
 	rm -rf $(BIN_DIR) $(COVER_OUT)

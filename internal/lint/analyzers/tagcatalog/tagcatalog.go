@@ -18,9 +18,16 @@
 // Suppression: `//daft:lint:disable=tagcatalog reason="…"`. Use
 // sparingly — the right answer to "I need a new tag" is usually
 // to update the catalog, not to suppress the gate.
+//
+// Generated files (those `ast.IsGenerated` recognises by the
+// `// Code generated … DO NOT EDIT.` marker) are exempt entirely:
+// bpf2go's eBPF loaders carry the full GOARCH tag set and we don't
+// author those constraints — the same exemption golangci-lint and the
+// coverage gate already give generated code.
 package tagcatalog
 
 import (
+	"go/ast"
 	"go/build/constraint"
 
 	"golang.org/x/tools/go/analysis"
@@ -56,6 +63,14 @@ var Analyzer = &analysis.Analyzer{
 func run(pass *analysis.Pass) (any, error) {
 	sup := suppress.New(pass)
 	for _, f := range pass.Files {
+		// Generated files are exempt: bpf2go's eBPF loaders carry the
+		// full GOARCH tag set (amd64, arm64, …) and other codegen may
+		// add its own constraints. We don't author those tags, so the
+		// catalog rule doesn't apply — same exemption golangci-lint and
+		// the coverage gate already give generated code.
+		if ast.IsGenerated(f) {
+			continue
+		}
 		// Build-constraint comments must appear in the leading
 		// comment group of the file (above the package decl).
 		// f.Comments includes every comment in the file; we

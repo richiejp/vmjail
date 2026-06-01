@@ -251,10 +251,13 @@ actually doing.
 | `runqlat`       | "is the scheduler delaying anything?"               | tracepoint:sched:sched_wakeup, sched_switch |
 | `pktstat`       | "which proc/cgroup is the network traffic?"         | TC ingress/egress |
 
-The first one to land is most likely **`open-snoop`** — the lint
-cache-miss bug that motivated this work was an `openat()` returning
-ENOENT on a path the test cared about; this gadget would have shown
-the failure as one line in a guest-side log.
+**`open-snoop` landed first** (roadmap #5b) — the lint cache-miss bug
+that motivated this work was an `openat()` returning ENOENT on a path
+the test cared about; this gadget shows the failure as one line in a
+guest-side log. It attaches to `tracepoint:syscalls:sys_enter_openat`
+and pushes one ring-buffer record per open (pid, uid, comm, dirfd,
+flags, path). The remaining gadgets follow as they're motivated by a
+real symptom.
 
 ### Kernel-side prerequisites for Tier 2 (landed — roadmap #5a)
 
@@ -290,8 +293,8 @@ BPF_EVENTS from `KPROBES`+`FTRACE`); they're re-asserted in the
 fragment so a future dependency change fails the gate loudly instead
 of silently dropping CO-RE attach support.
 
-The `cilium/ebpf` dependency and the first gadget land in the
-follow-up slices (roadmap #5b/#5c).
+The `cilium/ebpf` dependency + the first gadget landed in #5b; the
+wiring into daft-agent + the in-VM e2e proof are #5c.
 
 ### Library choice
 
@@ -301,25 +304,60 @@ compiled BPF objects via `//go:generate`, mature CO-RE support.
 + vendored libbpf at build time, no upside for this project's
 scale.
 
-### Library layout (planned)
+### Library layout
 
 ```
 internal/observability/
-  observer.go              ← Tier 1 (this commit)
+  observer.go              ← Tier 1
   sample_linux.go          ← Tier 1
-  ebpf/                    ← Tier 2 (follow-up)
-    open_snoop/
-      open_snoop.go        ← Go wrapper, ringbuf reader, CLI
-      open_snoop_bpf.c     ← BPF C source
-      open_snoop_bpfel.go  ← bpf2go-generated, committed
-      open_snoop_bpfel.o   ← compiled object, committed
+  ebpf/                    ← Tier 2
+    opensnoop/             ← first gadget (roadmap #5b, landed)
+      opensnoop.go         ← Event decode, openFlag render, Run drain
+                             loop + the privileged load seam (linux)
+      opensnoop_other.go   ← non-linux stub (Run → ErrUnsupported)
+      opensnoop_bpf.c      ← BPF C source (sys_enter_openat → ringbuf)
+      gen.go               ← package doc + //go:generate bpf2go
+      opensnoop_bpfel.go   ← bpf2go-generated loader, committed
+      opensnoop_bpfel.o    ← compiled BPF ELF, committed
+      opensnoop_test.go    ← decode/render/drain-loop unit tests
     biolatency/
       ...
 ```
 
-Each gadget is one subpackage, owning its own ringbuf reader and
-output format, with a documented `Why this was written` block at
-the top tying it to a specific recurring symptom.
+Each gadget is one subpackage, owning its own ring-buffer reader and
+output format, with a documented "why this was written" block at the
+top tying it to a specific recurring symptom.
+
+**Run model: in-process in daft-agent.** A gadget is a library, not a
+standalone binary. daft-agent imports it and calls `Run(ctx, w)` as a
+goroutine in the guest's privileged init userns — symmetric with
+Tier 1's in-sandboxd observer goroutine — writing its trace to a
+guest-side log. (A thin `cmd/` main per gadget for standalone host
+debugging is allowed but not required; the agent is the production
+caller.) The wiring into daft-agent + the in-VM e2e proof are
+roadmap #5c.
+
+**Testability under the coverage gate.** Loading BPF needs CAP_BPF on
+a BPF-capable kernel, which `make check` doesn't have
+(`unprivileged_bpf_disabled`). So each gadget keeps its logic — record
+decode, output rendering, the ring-buffer drain loop — pure and
+behind a small reader interface (`*ringbuf.Reader` satisfies it,
+tests fake it), and isolates the privileged load/attach behind an
+injected `bpfDeps` seam whose error paths the tests still exercise
+(the pattern `internal/agent/tap_linux.go` uses for `realTunSetIff`).
+The bpf2go-generated `*_bpfel.go` loader is excluded from the coverage
+gate (`scripts/cover-check.sh` `SKIP_PATHS`), like `internal/genpb`;
+the hand-written wiring is **not** excluded.
+
+### Regenerating a gadget's BPF object
+
+`make gen-bpf` (Nix dev shell only). For each gadget it dumps the host
+kernel BTF to a transient `vmlinux.h`, runs bpf2go (clang → a
+committed `*_bpfel.o` + `*_bpfel.go`), then removes `vmlinux.h`. The
+committed objects mean a normal build / `make check` needs no clang,
+bpftool, or BTF. `NIX_HARDENING_ENABLE` is cleared for the compile
+because the Nix cc-wrapper otherwise injects `-fzero-call-used-regs` /
+`-fstack-protector`, which clang rejects for the `bpf` target.
 
 ## Roadmap
 
@@ -377,18 +415,30 @@ In rough order:
      `UPROBES`/`BPF_EVENTS` were already transitively on and are
      re-asserted), gated by the existing `kconfig-verify` script.
      See "Kernel-side prerequisites for Tier 2".
-   - **5b** — `cilium/ebpf` dependency + `bpf2go` build scaffold
-     (`internal/observability/ebpf/`), with the generated loader
-     excluded from the coverage gate.
-   - **5c** — first gadget (`open-snoop`, attaching to
-     `tracepoint:syscalls:sys_enter_openat`) + guest wiring + e2e
-     proof inside a booted VM.
+   - **5b (landed)** — `cilium/ebpf` dependency + `bpf2go` toolchain
+     (dev-shell clang/llvm/bpftool/libbpf, `make gen-bpf`) + the first
+     gadget `internal/observability/ebpf/opensnoop` itself: BPF C for
+     `sys_enter_openat` → ring buffer, the committed generated loader,
+     and the Go decode/render/drain-loop with the privileged load
+     behind an injected seam (unit-tested to 96%). The generated
+     `*_bpfel.go` is excluded from the coverage gate; daft-lint now
+     skips generated files (`ast.IsGenerated`). Not yet wired into the
+     agent — the package is built + tested but has no caller.
+   - **5c** — wire `opensnoop.Run` into daft-agent (run in the guest's
+     init userns, trace to a guest-side log surfaced on failure) + an
+     in-VM e2e proof that a real openat shows up.
 6. **More gadgets** — `biolatency`, `tcpstat`, `runqlat`, `pktstat`,
    each motivated by a real recurring symptom.
 
 ## Related
 
 - `internal/observability/` — the Tier 1 package.
+- `internal/observability/ebpf/opensnoop/` — the first Tier-2 CO-RE
+  gadget (open-snoop). Regenerate its BPF object with `make gen-bpf`.
+- `scripts/cover-check.sh` — excludes bpf2go-generated `*_bpfel.go`
+  loaders from the coverage gate (`SKIP_PATHS`).
+- `internal/lint/analyzers/tagcatalog/` — skips generated files so
+  bpf2go's GOARCH build tags don't trip the tag-catalog rule.
 - `internal/sandbox/sandbox.go` — wiring (`cloudHypervisorRunner.run`).
 - `internal/sandboxdcli/state.go` — per-sandbox state-dir resolution
   (`$XDG_STATE_HOME/daft/sandboxes`, `DAFT_STATE_DIR` override) and the

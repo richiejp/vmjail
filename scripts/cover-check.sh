@@ -40,15 +40,18 @@ profile_in="$1"
 baseline="$2"
 
 # Filter generated code out of the profile. Auto-generated *.pb.go /
-# *.connect.go (via the proto/buf pipeline) is not authored by us and
-# would otherwise drag both the total and per-file gates with 0%-
-# covered code we don't intend to test. Match by path component so
-# the rule keeps applying as the gen tree grows.
+# *.connect.go (via the proto/buf pipeline) and bpf2go's *_bpfel.go /
+# *_bpfeb.go eBPF loaders (Tier-2 gadgets, see OBSERVABILITY.md) are not
+# authored by us and would otherwise drag both the total and per-file
+# gates with 0%-covered code we don't intend to test. Match by path
+# component / filename suffix so the rule keeps applying as each gen tree
+# grows. (The hand-written gadget wiring — opensnoop.go etc. — is NOT
+# excluded; its load path is unit-tested via an injected-deps seam.)
 #
-# The default exclusion list covers our generated code under
-# internal/genpb/. Override via SKIP_PATHS="pat1|pat2|..." (POSIX
+# The default exclusion list covers generated code under internal/genpb/
+# and the bpf2go loaders. Override via SKIP_PATHS="pat1|pat2|..." (POSIX
 # ERE; matched against the full file path with `grep -E`).
-SKIP_PATHS="${SKIP_PATHS:-internal/genpb/}"
+SKIP_PATHS="${SKIP_PATHS:-internal/genpb/|_bpf(el|eb)\.go}"
 profile=$(mktemp)
 trap 'rm -f "$profile"' EXIT
 grep -Ev "$SKIP_PATHS" "$profile_in" > "$profile" || true

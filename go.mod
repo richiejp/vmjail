@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	connectrpc.com/connect v1.19.2
+	github.com/cilium/ebpf v0.21.0
 	github.com/containers/gvisor-tap-vsock v0.8.9
 	github.com/google/go-containerregistry v0.21.5
 	github.com/hanwen/go-fuse/v2 v2.10.1
@@ -32,7 +33,7 @@ require (
 	github.com/google/gopacket v1.1.19 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/insomniacslk/dhcp v0.0.0-20240710054256-ddd8a41251c9 // indirect
-	github.com/mdlayher/socket v0.4.1 // indirect
+	github.com/mdlayher/socket v0.5.1 // indirect
 	github.com/miekg/dns v1.1.72 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
@@ -54,5 +55,6 @@ require (
 
 tool (
 	connectrpc.com/connect/cmd/protoc-gen-connect-go
+	github.com/cilium/ebpf/cmd/bpf2go
 	google.golang.org/protobuf/cmd/protoc-gen-go
 )

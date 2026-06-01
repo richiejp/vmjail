@@ -19,6 +19,12 @@
 # Coverage artefacts (transient — coverage.txt baseline IS committed)
 /coverage.out
 
+# Transient eBPF gadget generation input: `make gen-bpf` dumps the host
+# kernel BTF to a vmlinux.h next to each gadget, runs bpf2go, then removes
+# it. It's ~5 MB of machine-generated kernel type defs — never committed
+# (the compiled *_bpfel.o + *_bpfel.go loaders ARE committed).
+internal/observability/ebpf/**/vmlinux.h
+
 # Go module vendor directory. We deliberately do NOT vendor — the
 # Nix build uses buildGoModule with vendorHash, which fetches deps
 # independently. Local `go mod vendor` runs (e.g. after `go get`)

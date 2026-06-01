@@ -79,7 +79,7 @@
           pname = name;
           inherit version;
           src = goSrc;
-          vendorHash = "sha256-dxtYE59zlJS56XoPExikTezIQGesl5YWTNESBmPcy8M=";
+          vendorHash = "sha256-yXlUHB/eXEQ/CgDY5l4leW3V55/jq8ZVKe/GNn+hZWo=";
           env.CGO_ENABLED = if cgoEnabled then "1" else "0";
           ldflags = [
             "-s" "-w"
@@ -143,6 +143,21 @@
               # convention as the KVM-required integration tests).
               tmux
               dash
+
+              # Tier-2 CO-RE eBPF gadget generation (OBSERVABILITY.md
+              # "Tier 2"). `make gen-bpf` runs bpf2go (via `go run`,
+              # pinned in tools/tools.go) which shells out to clang to
+              # compile each gadget's BPF C to an ELF and llvm-strip to
+              # trim it; bpftool dumps the kernel BTF to vmlinux.h for
+              # CO-RE. Only needed to *re*generate the committed
+              # `*_bpfel.go` + `*.o` objects — the normal Go build and
+              # `make check` consume the committed output and need none
+              # of this. libbpf ships the `bpf/bpf_helpers.h` the C
+              # includes.
+              clang
+              llvm
+              bpftools
+              libbpf
             ];
 
             shellHook = ''
@@ -445,7 +460,7 @@
             pname = "daft-sandboxd";
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-dxtYE59zlJS56XoPExikTezIQGesl5YWTNESBmPcy8M=";
+            vendorHash = "sha256-yXlUHB/eXEQ/CgDY5l4leW3V55/jq8ZVKe/GNn+hZWo=";
             env.CGO_ENABLED = "0";
 
             # Stage the real artifacts into internal/bundled/assets/
