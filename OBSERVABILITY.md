@@ -441,14 +441,73 @@ In rough order:
      (`TestHelloIntegrationOpensnoopCapturesOpenat`) points the trace at
      a writable virtiofs share, boots a real container VM, and asserts a
      decoded openat record made it back to the host file.
-6. **More gadgets** — `biolatency`, `tcpstat`, `runqlat`, `pktstat`,
-   each motivated by a real recurring symptom.
+6. **Live build-progress summary + CLI** — the reason the gadgets exist.
+   When a long workload runs inside a sandbox (the canonical case: a
+   `nix build` / `make verify` self-build), the always-on gadgets must
+   roll their raw event streams up into a small, continuously-refreshed
+   **summary** — counts, top-N paths, ENOENT/cache-miss tallies,
+   per-process breakdown, per-window rates, and a per-gadget
+   *last-activity age* — folded together with the Tier-1 host sampler
+   into one "what is this build doing right now" view. A user or agent
+   prints it from the CLI on demand and re-polls to answer "is this
+   build making forward progress, stuck, or just pathologically slow,
+   and on what?". The raw `opensnoop.log` (roadmap #5c) becomes the
+   *drill-down* layer beneath the summary, not the primary surface.
+
+   Shape (confirmed): each gadget keeps an in-memory rolling aggregate;
+   the agent serializes all enabled gadgets' aggregates to a small JSON
+   summary file on a per-sandbox *observe* virtiofs share (mapped to the
+   state dir, so the node reads it host-side) and atomically rewrites it
+   ~1 Hz; a `daft sandbox observe <workspace>` CLI surfaces the latest
+   snapshot (and `--follow`) through the **same orchestrator→node broker
+   chain as `observer-tail`** (roadmap #3) — no new guest-side vsock
+   listener, and the continuously-rewritten file means the latest
+   snapshot is always on the host even across an abrupt VM teardown.
+   Stuck/slow detection lives in the summary itself (e.g. "⚠ no openat
+   activity for 47s while CPU idle"). This settles the guest→host
+   transport question the gadget review left open: a refreshed summary
+   file, not a raw firehose and not a bespoke per-gadget channel.
+
+   Slices:
+   - **6a — open-snoop aggregator** (*landed*). A pure, clock-free
+     `opensnoop.Aggregator` rolls the decoded `Event` stream into a
+     JSON-serialisable `Summary`: an **exact** `Total` (the primary
+     liveness signal — a stalled build has a frozen `Total`) plus
+     bounded approximate top-N rankings of processes, paths, and
+     directories. The rankings use a Space-Saving heavy-hitters counter
+     (`topK`, O(cap) memory) because a real `nix build` opens 100k+
+     distinct files and an exact map would grow without bound. See
+     `internal/observability/ebpf/opensnoop/aggregate.go`.
+   - **6b — summary writer + observe share.** The gadget drain loop
+     feeds the aggregator; the agent atomically rewrites the JSON
+     summary ~1 Hz onto the per-sandbox *observe* share. The
+     wall-clock enters here, so the **time-derived** signals
+     (last-activity age, per-window rates) are computed at this layer,
+     not in the clock-free aggregator.
+   - **6c — `daft sandbox observe` CLI + broker.** Mirror the
+     `observer-tail` RPC chain to serve the latest snapshot (and
+     `--follow`); render a human/agent-readable summary with drill-down
+     hints into the raw `opensnoop.log`.
+   - **6d — stuck/slow heuristics + in-sandbox build e2e.** Flag stalls
+     and pathological churn in the summary; an e2e runs a real build and
+     asserts the summary reflects forward progress and then a stall.
+
+   Deferred (needs a gadget enhancement, not in #6): ENOENT /
+   cache-miss tallies require hooking `sys_exit_openat` for the return
+   value — the current gadget only hooks `sys_enter_openat`, so the
+   decoded `Event` carries no errno.
+7. **More gadgets** — `biolatency`, `tcpstat`, `runqlat`, `pktstat`,
+   each motivated by a real recurring symptom. Gated behind #6: one
+   gadget (open-snoop) is enough to build and prove the summary pipeline;
+   the rest plug into it.
 
 ## Related
 
 - `internal/observability/` — the Tier 1 package.
 - `internal/observability/ebpf/opensnoop/` — the first Tier-2 CO-RE
   gadget (open-snoop). Regenerate its BPF object with `make gen-bpf`.
+  `aggregate.go` holds the roadmap-#6a `Aggregator`/`Summary` that rolls
+  the event stream into the build-progress summary.
 - `internal/agent/opensnoop.go` — wires the gadget into daft-agent
   (`startOpensnoopFromCmdline` + the `opensnoopDeps` seam), driven by the
   `daft.observe.opensnoop=` cmdline token (`internal/agent/cmdline.go`).
