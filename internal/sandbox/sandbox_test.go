@@ -647,6 +647,23 @@ func TestBuildKernelCmdlineOmitsOpensnoopWhenUnset(t *testing.T) {
 	}
 }
 
+func TestBuildKernelCmdlineIncludesObserveSummary(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.ObserveSummaryPath = "/share/progress.json"
+	got := buildKernelCmdline(cfg)
+	if !strings.Contains(got, agent.SummaryCmdlineKey+"=/share/progress.json") {
+		t.Errorf("cmdline %q missing observe-summary token", got)
+	}
+}
+
+func TestBuildKernelCmdlineOmitsObserveSummaryWhenUnset(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	got := buildKernelCmdline(cfg)
+	if strings.Contains(got, agent.SummaryCmdlineKey) {
+		t.Errorf("cmdline %q should not contain observe-summary token when path empty", got)
+	}
+}
+
 func TestBuildKernelCmdlineIncludesWorkspaceOverlay(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	cfg.Shares = []*ShareConfig{{Tag: "ws", Mountpoint: testMountpoint, Overlay: true}}

@@ -18,3 +18,9 @@ var ErrUnsupported = errors.New("opensnoop: eBPF gadgets are only supported on L
 func Run(_ context.Context, _ io.Writer) error {
 	return ErrUnsupported
 }
+
+// RunAggregating mirrors Run off Linux: there is no gadget to drain into the
+// aggregator, so it reports the same unsupported error.
+func RunAggregating(_ context.Context, _ io.Writer, _ *Aggregator) error {
+	return ErrUnsupported
+}

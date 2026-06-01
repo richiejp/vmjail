@@ -84,6 +84,7 @@ func Run(ctx context.Context, w io.Writer) error {
 		attach:      defaultAttachDeps(),
 		tap:         defaultTapDeps(),
 		opensnoop:   defaultOpensnoopDeps(),
+		summary:     defaultSummaryDeps(),
 	})
 }
 
@@ -113,6 +114,11 @@ type runDeps struct {
 	// gadget. Zero value (run == nil) disables it (the BPF load needs
 	// CAP_BPF, which make check lacks).
 	opensnoop opensnoopDeps
+	// summary is the test-substitutable surface for the build-progress
+	// summary writer (clock + tick interval + atomic file write). Zero
+	// value (write == nil) disables it. Fed by the open-snoop aggregator,
+	// so it only produces output when opensnoop is also enabled.
+	summary summaryDeps
 }
 
 func runWith(ctx context.Context, w io.Writer, d runDeps) error {

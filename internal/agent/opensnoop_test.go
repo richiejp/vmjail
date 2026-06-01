@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/localai-org/darkaifactory/internal/observability/ebpf/opensnoop"
 )
 
 // fakeLog is a fake trace file: its Close signals on a channel so a test
@@ -23,7 +25,7 @@ func (f *fakeLog) Close() error                { close(f.closed); return nil }
 
 // opensnoopTestDeps builds a runDeps wiring the gadget seam with a
 // no-op tracefs mount (the privileged mount is covered separately).
-func opensnoopTestDeps(openLog func(string) (io.WriteCloser, error), run func(context.Context, io.Writer) error) runDeps {
+func opensnoopTestDeps(openLog func(string) (io.WriteCloser, error), run func(context.Context, io.Writer, *opensnoop.Aggregator) error) runDeps {
 	return runDeps{opensnoop: opensnoopDeps{
 		mountTracefs: func() error { return nil },
 		openLog:      openLog,
@@ -54,7 +56,7 @@ func TestStartOpensnoopDisabledWhenRunNil(t *testing.T) {
 func TestStartOpensnoopAbsentToken(t *testing.T) {
 	called := false
 	openLog := func(string) (io.WriteCloser, error) { called = true; return newFakeLog(), nil }
-	run := func(context.Context, io.Writer) error { return nil }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator) error { return nil }
 	var console bytes.Buffer
 	startOpensnoopFromCmdline(context.Background(), &console,
 		opensnoopTestDeps(openLog, run), "console=hvc0 reboot=t")
@@ -71,7 +73,7 @@ func TestStartOpensnoopAbsentToken(t *testing.T) {
 func TestStartOpensnoopReportsCmdlineError(t *testing.T) {
 	called := false
 	openLog := func(string) (io.WriteCloser, error) { called = true; return newFakeLog(), nil }
-	run := func(context.Context, io.Writer) error { return nil }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator) error { return nil }
 	var console bytes.Buffer
 	startOpensnoopFromCmdline(context.Background(), &console,
 		opensnoopTestDeps(openLog, run), "daft.observe.opensnoop=rel/path")
@@ -89,7 +91,7 @@ func TestStartOpensnoopReportsCmdlineError(t *testing.T) {
 func TestStartOpensnoopReportsTracefsError(t *testing.T) {
 	opened := false
 	openLog := func(string) (io.WriteCloser, error) { opened = true; return newFakeLog(), nil }
-	run := func(context.Context, io.Writer) error { return nil }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator) error { return nil }
 	var console bytes.Buffer
 	d := runDeps{opensnoop: opensnoopDeps{
 		mountTracefs: func() error { return errors.New("boom-tracefs") },
@@ -110,7 +112,7 @@ func TestStartOpensnoopReportsTracefsError(t *testing.T) {
 func TestStartOpensnoopReportsOpenError(t *testing.T) {
 	openLog := func(string) (io.WriteCloser, error) { return nil, errors.New("boom-open") }
 	runCalled := false
-	run := func(context.Context, io.Writer) error { runCalled = true; return nil }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator) error { runCalled = true; return nil }
 	var console bytes.Buffer
 	startOpensnoopFromCmdline(context.Background(), &console,
 		opensnoopTestDeps(openLog, run), "daft.observe.opensnoop=/share/x.log")
@@ -133,7 +135,7 @@ func TestStartOpensnoopHappyPath(t *testing.T) {
 		return log, nil
 	}
 	started := make(chan io.Writer, 1)
-	run := func(ctx context.Context, w io.Writer) error {
+	run := func(ctx context.Context, w io.Writer, _ *opensnoop.Aggregator) error {
 		started <- w
 		<-ctx.Done()
 		return nil
@@ -164,7 +166,7 @@ func TestStartOpensnoopHappyPath(t *testing.T) {
 func TestStartOpensnoopReportsRunError(t *testing.T) {
 	log := newFakeLog()
 	openLog := func(string) (io.WriteCloser, error) { return log, nil }
-	run := func(context.Context, io.Writer) error { return errors.New("boom-run") }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator) error { return errors.New("boom-run") }
 	var console bytes.Buffer
 	startOpensnoopFromCmdline(context.Background(), &console,
 		opensnoopTestDeps(openLog, run), "daft.observe.opensnoop=/share/x.log")

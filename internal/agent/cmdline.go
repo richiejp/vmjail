@@ -170,6 +170,35 @@ func ParseOpensnoopCmdline(cmdline string) (path string, ok bool, err error) {
 	return val, true, nil
 }
 
+// SummaryCmdlineKey names the kernel cmdline parameter that asks the agent
+// to write the live build-progress summary (OBSERVABILITY.md #6) to the
+// given absolute guest path, rewritten atomically ~1 Hz. Format:
+// `daft.observe.summary=<absolute-path>`, usually a path on the writable
+// observe share so the host-side `daft sandbox observe` can read it while
+// the workload runs. Absent ⇒ no summary is written. The summary is fed by
+// the open-snoop gadget, so it only produces output when
+// `daft.observe.opensnoop` is also set.
+const SummaryCmdlineKey = "daft.observe.summary"
+
+// FormatSummaryCmdline renders a guest summary path to the wire form.
+func FormatSummaryCmdline(path string) string {
+	return fmt.Sprintf("%s=%s", SummaryCmdlineKey, path)
+}
+
+// ParseSummaryCmdline scans a kernel cmdline for
+// `daft.observe.summary=<path>`, with the same absolute-path contract as
+// ParseOpensnoopCmdline.
+func ParseSummaryCmdline(cmdline string) (path string, ok bool, err error) {
+	val, ok := findCmdlineValue(cmdline, SummaryCmdlineKey)
+	if !ok {
+		return "", false, nil
+	}
+	if err := validateAbsoluteCmdlinePath(SummaryCmdlineKey, val); err != nil {
+		return "", false, err
+	}
+	return val, true, nil
+}
+
 // parseShareSpec validates a single `<tag>:<mountpoint>` value (the
 // part after `daft.share=`) and returns the parsed spec. Shared by
 // ParseShareCmdline (singular, first match) and ParseShareCmdlines

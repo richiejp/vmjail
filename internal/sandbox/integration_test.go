@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/localai-org/darkaifactory/internal/agent"
+	"github.com/localai-org/darkaifactory/internal/observability/progress"
 )
 
 // testTagDaftshare is the virtio-fs tag the integration tests use
@@ -227,14 +228,21 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 	const guestLogName = "opensnoop.log"
 	cfg.OpensnoopLogPath = testMountpoint + "/" + guestLogName
 	hostLog := filepath.Join(shareDir, guestLogName)
+	// The build-progress summary (#6b) writes alongside the raw trace.
+	const guestSummaryName = "progress.json"
+	cfg.ObserveSummaryPath = testMountpoint + "/" + guestSummaryName
+	hostSummary := filepath.Join(shareDir, guestSummaryName)
 
-	// Surface the captured trace on failure, alongside the Tier-1 dump.
+	// Surface the captured trace + summary on failure, alongside the Tier-1 dump.
 	t.Cleanup(func() {
 		if !t.Failed() {
 			return
 		}
 		if data, err := os.ReadFile(hostLog); err == nil {
 			t.Logf("opensnoop trace (%s):\n%s", hostLog, data)
+		}
+		if data, err := os.ReadFile(hostSummary); err == nil {
+			t.Logf("build-progress summary (%s):\n%s", hostSummary, data)
 		}
 	})
 
@@ -256,6 +264,30 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 		t.Fatalf("opensnoop trace has no decoded openat event (%d bytes)\n--- trace ---\n%s\n--- console ---\n%s",
 			len(data), data, buf.String())
 	}
+
+	// The summary writer ran the whole guest→host pipeline: cmdline token →
+	// agent parse → writer → atomic rewrite onto the share. Assert the host
+	// reads back a valid, parseable summary with an open-snoop section. The
+	// exact Total depends on tick timing vs the abrupt VM teardown (the
+	// writer fed by the same aggregator is unit-tested), so we assert the
+	// wire contract held, not a specific count.
+	if !strings.Contains(buf.String(), agent.SummaryReportPrefix) {
+		t.Fatalf("agent never reported starting the summary writer; console:\n%s", buf.String())
+	}
+	sumData, err := os.ReadFile(hostSummary)
+	if err != nil {
+		t.Fatalf("read build-progress summary %s: %v\n--- console ---\n%s", hostSummary, err, buf.String())
+	}
+	summary, err := progress.Parse(sumData)
+	if err != nil {
+		t.Fatalf("parse build-progress summary: %v\n--- summary ---\n%s", err, sumData)
+	}
+	if summary.Opensnoop == nil || summary.TakenAtUnixMs <= 0 {
+		t.Fatalf("summary missing opensnoop section or timestamp: %+v\n--- summary ---\n%s", summary, sumData)
+	}
+	t.Logf("build-progress summary: total=%d rate=%.1f/s last-event-age=%dms top_dirs=%v",
+		summary.Opensnoop.Total, summary.Opensnoop.OpenatRate,
+		summary.Opensnoop.LastEventAgeMs, summary.Opensnoop.TopDirs)
 }
 
 // TestHelloIntegrationBootsVMWithImagestoreBundle proves the

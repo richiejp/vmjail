@@ -27,10 +27,11 @@ type opensnoopDeps struct {
 	mountTracefs func() error
 	// openLog creates/truncates the trace file at the guest path.
 	openLog func(path string) (io.WriteCloser, error)
-	// run drains the gadget into w until ctx is cancelled. Production
-	// wires opensnoop.Run; tests inject a fake so the file + goroutine
-	// wiring is covered without loading BPF.
-	run func(ctx context.Context, w io.Writer) error
+	// run drains the gadget into w until ctx is cancelled, folding each
+	// event into agg so the summary writer can snapshot the live aggregate.
+	// Production wires opensnoop.RunAggregating; tests inject a fake so the
+	// file + goroutine wiring is covered without loading BPF.
+	run func(ctx context.Context, w io.Writer, agg *opensnoop.Aggregator) error
 }
 
 // defaultOpensnoopDeps wires the real gadget. opensnoop.Run loads the
@@ -44,7 +45,7 @@ func defaultOpensnoopDeps() opensnoopDeps {
 			//nolint:gosec // G304: path is the host-operator-set daft.observe.opensnoop cmdline value — same trust boundary as daft.bundle; no untrusted input.
 			return os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		},
-		run: opensnoop.Run,
+		run: opensnoop.RunAggregating,
 	}
 }
 
@@ -80,14 +81,18 @@ func startOpensnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdl
 		writeReport(w, OpensnoopReportPrefix, err.Error())
 		return
 	}
+	agg := opensnoop.NewAggregator()
 	writeReport(w, OpensnoopReportPrefix, "tracing openat → "+path)
 	go func() {
 		defer func() { _ = f.Close() }()
 		// ctx cancel is the normal stop (Run returns nil); only a real
 		// mid-run failure is worth a console line, and only while the VM
 		// is still up to carry it.
-		if rerr := d.opensnoop.run(ctx, f); rerr != nil && ctx.Err() == nil {
+		if rerr := d.opensnoop.run(ctx, f, agg); rerr != nil && ctx.Err() == nil {
 			writeReport(w, OpensnoopReportPrefix, rerr.Error())
 		}
 	}()
+	// The summary is a live view over this gadget's aggregate, so it shares
+	// the gadget's lifetime and aggregator.
+	startSummaryWriter(ctx, w, d, cmdline, agg)
 }

@@ -102,6 +102,10 @@ const (
 	errSubMustBeAbsolute = "must be absolute"
 	errSubEmptyValue     = "value is empty"
 	caseNameEmptyValue   = "empty value"
+	caseNameRelativePath = "relative path"
+	// testSummaryPath is a sample guest summary path shared by the
+	// cmdline + summary-writer tests (goconst 3-occurrence threshold).
+	testSummaryPath = "/share/progress.json"
 )
 
 //nolint:dupl // same table-test harness as TestParseOpensnoopCmdline by design; the per-parser cases differ.
@@ -132,7 +136,7 @@ func TestParseBundleCmdline(t *testing.T) {
 			errSubstr: errSubEmptyValue,
 		},
 		{
-			name:      "relative path",
+			name:      caseNameRelativePath,
 			cmdline:   "daft.bundle=relative/path",
 			wantErr:   true,
 			errSubstr: errSubMustBeAbsolute,
@@ -181,7 +185,7 @@ func TestParseOpensnoopCmdline(t *testing.T) {
 			wantOK:  true,
 		},
 		{name: caseNameEmptyValue, cmdline: "daft.observe.opensnoop= console=hvc0", wantErr: true, errSubstr: errSubEmptyValue},
-		{name: "relative path", cmdline: "daft.observe.opensnoop=rel/path", wantErr: true, errSubstr: errSubMustBeAbsolute},
+		{name: caseNameRelativePath, cmdline: "daft.observe.opensnoop=rel/path", wantErr: true, errSubstr: errSubMustBeAbsolute},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -212,6 +216,61 @@ func TestFormatOpensnoopCmdlineRoundTrips(t *testing.T) {
 	for _, p := range []string{"/share/opensnoop.log", "/var/log/daft/openat"} {
 		s := FormatOpensnoopCmdline(p)
 		got, ok, err := ParseOpensnoopCmdline(s)
+		if err != nil || !ok || got != p {
+			t.Errorf("round-trip of %q via %q: got=%q ok=%v err=%v", p, s, got, ok, err)
+		}
+	}
+}
+
+//nolint:dupl // same table-test harness as TestParseOpensnoopCmdline by design; the per-parser cases differ.
+func TestParseSummaryCmdline(t *testing.T) {
+	tests := []struct {
+		name      string
+		cmdline   string
+		want      string
+		wantOK    bool
+		wantErr   bool
+		errSubstr string
+	}{
+		{name: testAbsent, cmdline: testCmdlineShareOnly, wantOK: false},
+		{
+			name:    testHappyPath,
+			cmdline: "console=hvc0 daft.observe.summary=" + testSummaryPath + " reboot=t",
+			want:    testSummaryPath,
+			wantOK:  true,
+		},
+		{name: caseNameEmptyValue, cmdline: "daft.observe.summary= console=hvc0", wantErr: true, errSubstr: errSubEmptyValue},
+		{name: caseNameRelativePath, cmdline: "daft.observe.summary=rel/path", wantErr: true, errSubstr: errSubMustBeAbsolute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok, err := ParseSummaryCmdline(tt.cmdline)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseSummaryCmdline(%q) = nil err, want error containing %q", tt.cmdline, tt.errSubstr)
+				}
+				if !strings.Contains(err.Error(), tt.errSubstr) {
+					t.Fatalf("err = %v, want substring %q", err, tt.errSubstr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if ok && got != tt.want {
+				t.Fatalf("path = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatSummaryCmdlineRoundTrips(t *testing.T) {
+	for _, p := range []string{"/share/progress.json", "/var/log/daft/summary.json"} {
+		s := FormatSummaryCmdline(p)
+		got, ok, err := ParseSummaryCmdline(s)
 		if err != nil || !ok || got != p {
 			t.Errorf("round-trip of %q via %q: got=%q ok=%v err=%v", p, s, got, ok, err)
 		}

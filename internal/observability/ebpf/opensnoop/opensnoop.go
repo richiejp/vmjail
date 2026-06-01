@@ -17,18 +17,6 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 )
 
-// Event is one decoded openat(2) observation: who called it, the dirfd
-// and flags, and the path. It is the public shape the agent renders into
-// the guest-side observer trace.
-type Event struct {
-	PID      uint32
-	UID      uint32
-	DFD      int32
-	Flags    int32
-	Comm     string
-	Filename string
-}
-
 // recordSize is the wire size of the BPF `struct event` from
 // opensnoop_bpf.c: pid+uid+dfd+flags (4×4) + comm[16] + filename[255],
 // padded to a 4-byte boundary. A drift guard in the tests asserts this

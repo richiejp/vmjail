@@ -143,6 +143,16 @@ type Config struct {
 	// gadget runs inside the VM under the guest's CAP_BPF. Empty (the
 	// default) leaves the gadget off. See OBSERVABILITY.md "Tier 2".
 	OpensnoopLogPath string
+
+	// ObserveSummaryPath, when non-empty, is the *in-guest* absolute path
+	// the agent atomically rewrites the live build-progress summary to
+	// (~1 Hz JSON: openat total/rate/last-activity-age + top processes,
+	// paths, and dirs). Set it to a path on a writable virtiofs share so
+	// the host-side `daft sandbox observe` can read it while the workload
+	// runs. The summary is fed by the open-snoop gadget, so it only
+	// produces output when OpensnoopLogPath is also set. Empty (the
+	// default) leaves it off. See OBSERVABILITY.md roadmap #6.
+	ObserveSummaryPath string
 }
 
 // PortForward declares one Slice C1 port-forward: traffic the
@@ -598,6 +608,9 @@ func buildKernelCmdline(cfg Config) string {
 	}
 	if cfg.OpensnoopLogPath != "" {
 		parts = append(parts, agent.FormatOpensnoopCmdline(cfg.OpensnoopLogPath))
+	}
+	if cfg.ObserveSummaryPath != "" {
+		parts = append(parts, agent.FormatSummaryCmdline(cfg.ObserveSummaryPath))
 	}
 	return strings.Join(parts, " ")
 }

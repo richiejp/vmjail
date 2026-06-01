@@ -244,12 +244,13 @@ func TestStartNetBridgeFromCmdlineWithTap(t *testing.T) {
 		t.Fatalf("tap got %q, want %q", got, frame)
 	}
 
-	// Cancel and confirm pumpFrames closes both halves.
+	// Cancel and confirm pumpFrames closes both halves. The close races
+	// this goroutine: SetReadDeadline may itself fail once the pipe is
+	// closed (io: read/write on closed pipe), which already proves closure;
+	// otherwise the deadline bounds the Read so it returns a (non-nil)
+	// error rather than blocking. Either way the Read below must error.
 	cancel()
-	deadline := time.Now().Add(2 * time.Second)
-	if err := connHost.SetReadDeadline(deadline); err != nil {
-		t.Fatalf("set deadline conn: %v", err)
-	}
+	_ = connHost.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := connHost.Read(make([]byte, 1)); err == nil {
 		t.Fatal("expected conn close after cancel")
 	}

@@ -478,21 +478,27 @@ In rough order:
      (`topK`, O(cap) memory) because a real `nix build` opens 100k+
      distinct files and an exact map would grow without bound. See
      `internal/observability/ebpf/opensnoop/aggregate.go`.
-   - **6b — summary writer + observe share.** The gadget drain loop
-     feeds the aggregator; the agent atomically rewrites the JSON
-     summary ~1 Hz onto the per-sandbox *observe* share. The
+   - **6b — summary writer + observe share** (*landed*). The gadget
+     drain loop feeds the aggregator; the agent atomically rewrites the
+     JSON summary ~1 Hz onto the per-sandbox *observe* share. The
      wall-clock enters here, so the **time-derived** signals
      (last-activity age, per-window rates) are computed at this layer,
      not in the clock-free aggregator.
-     - *6b-1 (landed)* — the `internal/observability/progress` wire
-       contract (`Summary`/`Opensnoop`/`Counted` + `WriteAtomic`), a
+     - *6b-1* — the `internal/observability/progress` wire contract
+       (`Summary`/`Opensnoop`/`Counted` + `WriteAtomic`), a
        dependency-free leaf so the host CLI reads it without pulling in
        the linux-only eBPF packages; the aggregator now produces
        `progress.Opensnoop` directly, and `opensnoop.RunAggregating`
        folds the live drain into it while still writing the raw trace.
-     - *6b-2* — the agent-side summary writer (atomic ~1 Hz rewrite +
-       time-derived age/rate), the `daft.observe.summary=` cmdline
-       token, `Config.ObserveSummaryPath`, and the in-VM e2e.
+     - *6b-2* — the agent-side summary writer
+       (`internal/agent/observe_summary.go`): a `progressTracker` turns
+       the clock-free aggregate into age/rate, and `runSummaryLoop`
+       rewrites the file immediately then every ~1 Hz until ctx cancel.
+       Driven by the `daft.observe.summary=` cmdline token →
+       `Config.ObserveSummaryPath`; the in-VM e2e asserts the host reads
+       back a valid summary. The pure `Event`/`Aggregator` moved to
+       build-constraint-free files so this wiring names them
+       cross-platform without pulling in cilium/ebpf.
    - **6c — `daft sandbox observe` CLI + broker.** Mirror the
      `observer-tail` RPC chain to serve the latest snapshot (and
      `--follow`); render a human/agent-readable summary with drill-down
@@ -520,6 +526,10 @@ In rough order:
 - `internal/observability/progress/` — the dependency-free wire contract
   (#6b-1) for the build-progress summary file, shared by the guest writer
   and the host-side `daft sandbox observe` reader.
+- `internal/agent/observe_summary.go` — the #6b-2 summary writer
+  (`startSummaryWriter` + `progressTracker` + `runSummaryLoop`), driven by
+  the `daft.observe.summary=` cmdline token and fed by the open-snoop
+  aggregator. `Config.ObserveSummaryPath` emits the token.
 - `internal/agent/opensnoop.go` — wires the gadget into daft-agent
   (`startOpensnoopFromCmdline` + the `opensnoopDeps` seam), driven by the
   `daft.observe.opensnoop=` cmdline token (`internal/agent/cmdline.go`).
