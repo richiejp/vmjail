@@ -41,6 +41,64 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ObserverSource selects which host-side per-sandbox file an
+// ObserverRequest streams. Both ride the same ObserverStream byte
+// channel and rendezvous; only the Node's resolver (which registry the
+// sandbox_uid is looked up in) differs.
+type ObserverSource int32
+
+const (
+	// Unset ⇒ the observer log, for back-compat with observer-tail
+	// clients minted before this field existed.
+	ObserverSource_OBSERVER_SOURCE_UNSPECIFIED ObserverSource = 0
+	// The newline-delimited JSON Tier-1 observer log (ObserverRegistry).
+	ObserverSource_OBSERVER_SOURCE_LOG ObserverSource = 1
+	// The guest-written build-progress summary snapshot
+	// (progress.Summary JSON), resolved via the Node's SummaryRegistry.
+	ObserverSource_OBSERVER_SOURCE_SUMMARY ObserverSource = 2
+)
+
+// Enum value maps for ObserverSource.
+var (
+	ObserverSource_name = map[int32]string{
+		0: "OBSERVER_SOURCE_UNSPECIFIED",
+		1: "OBSERVER_SOURCE_LOG",
+		2: "OBSERVER_SOURCE_SUMMARY",
+	}
+	ObserverSource_value = map[string]int32{
+		"OBSERVER_SOURCE_UNSPECIFIED": 0,
+		"OBSERVER_SOURCE_LOG":         1,
+		"OBSERVER_SOURCE_SUMMARY":     2,
+	}
+)
+
+func (x ObserverSource) Enum() *ObserverSource {
+	p := new(ObserverSource)
+	*p = x
+	return p
+}
+
+func (x ObserverSource) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ObserverSource) Descriptor() protoreflect.EnumDescriptor {
+	return file_nodectrl_v1_nodectrl_proto_enumTypes[0].Descriptor()
+}
+
+func (ObserverSource) Type() protoreflect.EnumType {
+	return &file_nodectrl_v1_nodectrl_proto_enumTypes[0]
+}
+
+func (x ObserverSource) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ObserverSource.Descriptor instead.
+func (ObserverSource) EnumDescriptor() ([]byte, []int) {
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{0}
+}
+
 // ProtocolVersion is the wire-protocol version exchanged at
 // RegisterNode time. The major component is the wire-compat
 // boundary: a peer with a different major MUST be refused. Minor
@@ -876,11 +934,15 @@ type ObserverRequest struct {
 	SessionId string `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
 	// Sandbox.metadata.uid of the live sandbox whose observer log to
 	// tail. The Node uses this as the routing key into its local
-	// sandboxgateway ObserverRegistry.
+	// sandboxgateway ObserverRegistry (or SummaryRegistry; see source).
 	SandboxUid string `protobuf:"bytes,2,opt,name=sandbox_uid,json=sandboxUid,proto3" json:"sandbox_uid,omitempty"`
 	// Keep streaming appended lines (tail -f) rather than sending the
 	// current file once and closing.
-	Follow        bool `protobuf:"varint,3,opt,name=follow,proto3" json:"follow,omitempty"`
+	Follow bool `protobuf:"varint,3,opt,name=follow,proto3" json:"follow,omitempty"`
+	// Which host-side file to stream. Unspecified/LOG ⇒ the observer
+	// log; SUMMARY ⇒ the build-progress summary (one-shot, follow
+	// ignored). See ObserverSource.
+	Source        ObserverSource `protobuf:"varint,4,opt,name=source,proto3,enum=daft.nodectrl.v1.ObserverSource" json:"source,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -934,6 +996,13 @@ func (x *ObserverRequest) GetFollow() bool {
 		return x.Follow
 	}
 	return false
+}
+
+func (x *ObserverRequest) GetSource() ObserverSource {
+	if x != nil {
+		return x.Source
+	}
+	return ObserverSource_OBSERVER_SOURCE_UNSPECIFIED
 }
 
 // ObserverStreamMessage is the ObserverStream frame. First message
@@ -1593,13 +1662,14 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\"<\n" +
 	"\x12AttachStreamResize\x12\x12\n" +
 	"\x04cols\x18\x01 \x01(\rR\x04cols\x12\x12\n" +
-	"\x04rows\x18\x02 \x01(\rR\x04rows\"i\n" +
+	"\x04rows\x18\x02 \x01(\rR\x04rows\"\xa3\x01\n" +
 	"\x0fObserverRequest\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
 	"\vsandbox_uid\x18\x02 \x01(\tR\n" +
 	"sandboxUid\x12\x16\n" +
-	"\x06follow\x18\x03 \x01(\bR\x06follow\"t\n" +
+	"\x06follow\x18\x03 \x01(\bR\x06follow\x128\n" +
+	"\x06source\x18\x04 \x01(\x0e2 .daft.nodectrl.v1.ObserverSourceR\x06source\"t\n" +
 	"\x15ObserverStreamMessage\x12=\n" +
 	"\x05hello\x18\x01 \x01(\v2%.daft.nodectrl.v1.ObserverStreamHelloH\x00R\x05hello\x12\x14\n" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04dataB\x06\n" +
@@ -1632,7 +1702,11 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\flast_seen_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"lastSeenAt\"A\n" +
 	"\x11ListNodesResponse\x12,\n" +
-	"\x05nodes\x18\x01 \x03(\v2\x16.daft.nodectrl.v1.NodeR\x05nodes2\xcc\x04\n" +
+	"\x05nodes\x18\x01 \x03(\v2\x16.daft.nodectrl.v1.NodeR\x05nodes*g\n" +
+	"\x0eObserverSource\x12\x1f\n" +
+	"\x1bOBSERVER_SOURCE_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13OBSERVER_SOURCE_LOG\x10\x01\x12\x1b\n" +
+	"\x17OBSERVER_SOURCE_SUMMARY\x10\x022\xcc\x04\n" +
 	"\x12NodeControlService\x12V\n" +
 	"\fRegisterNode\x12%.daft.nodectrl.v1.RegisterNodeRequest\x1a\x1b.daft.nodectrl.v1.NodeEvent\"\x000\x01\x12V\n" +
 	"\tHeartbeat\x12\".daft.nodectrl.v1.HeartbeatRequest\x1a#.daft.nodectrl.v1.HeartbeatResponse\"\x00\x12V\n" +
@@ -1653,74 +1727,77 @@ func file_nodectrl_v1_nodectrl_proto_rawDescGZIP() []byte {
 	return file_nodectrl_v1_nodectrl_proto_rawDescData
 }
 
+var file_nodectrl_v1_nodectrl_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_nodectrl_v1_nodectrl_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_nodectrl_v1_nodectrl_proto_goTypes = []any{
-	(*ProtocolVersion)(nil),       // 0: daft.nodectrl.v1.ProtocolVersion
-	(*HostResources)(nil),         // 1: daft.nodectrl.v1.HostResources
-	(*RegisterNodeRequest)(nil),   // 2: daft.nodectrl.v1.RegisterNodeRequest
-	(*NodeEvent)(nil),             // 3: daft.nodectrl.v1.NodeEvent
-	(*OpenPortRequest)(nil),       // 4: daft.nodectrl.v1.OpenPortRequest
-	(*PortStreamMessage)(nil),     // 5: daft.nodectrl.v1.PortStreamMessage
-	(*PortStreamHello)(nil),       // 6: daft.nodectrl.v1.PortStreamHello
-	(*AttachRequest)(nil),         // 7: daft.nodectrl.v1.AttachRequest
-	(*AttachStreamMessage)(nil),   // 8: daft.nodectrl.v1.AttachStreamMessage
-	(*AttachStreamHello)(nil),     // 9: daft.nodectrl.v1.AttachStreamHello
-	(*AttachStreamResize)(nil),    // 10: daft.nodectrl.v1.AttachStreamResize
-	(*ObserverRequest)(nil),       // 11: daft.nodectrl.v1.ObserverRequest
-	(*ObserverStreamMessage)(nil), // 12: daft.nodectrl.v1.ObserverStreamMessage
-	(*ObserverStreamHello)(nil),   // 13: daft.nodectrl.v1.ObserverStreamHello
-	(*SandboxWatchEvent)(nil),     // 14: daft.nodectrl.v1.SandboxWatchEvent
-	(*SubscriptionReady)(nil),     // 15: daft.nodectrl.v1.SubscriptionReady
-	(*HeartbeatRequest)(nil),      // 16: daft.nodectrl.v1.HeartbeatRequest
-	(*LiveSandbox)(nil),           // 17: daft.nodectrl.v1.LiveSandbox
-	(*HeartbeatResponse)(nil),     // 18: daft.nodectrl.v1.HeartbeatResponse
-	(*ListNodesRequest)(nil),      // 19: daft.nodectrl.v1.ListNodesRequest
-	(*Node)(nil),                  // 20: daft.nodectrl.v1.Node
-	(*ListNodesResponse)(nil),     // 21: daft.nodectrl.v1.ListNodesResponse
-	(v1.EventType)(0),             // 22: daft.sandbox.v1.EventType
-	(*v1.Sandbox)(nil),            // 23: daft.sandbox.v1.Sandbox
-	(*timestamppb.Timestamp)(nil), // 24: google.protobuf.Timestamp
+	(ObserverSource)(0),           // 0: daft.nodectrl.v1.ObserverSource
+	(*ProtocolVersion)(nil),       // 1: daft.nodectrl.v1.ProtocolVersion
+	(*HostResources)(nil),         // 2: daft.nodectrl.v1.HostResources
+	(*RegisterNodeRequest)(nil),   // 3: daft.nodectrl.v1.RegisterNodeRequest
+	(*NodeEvent)(nil),             // 4: daft.nodectrl.v1.NodeEvent
+	(*OpenPortRequest)(nil),       // 5: daft.nodectrl.v1.OpenPortRequest
+	(*PortStreamMessage)(nil),     // 6: daft.nodectrl.v1.PortStreamMessage
+	(*PortStreamHello)(nil),       // 7: daft.nodectrl.v1.PortStreamHello
+	(*AttachRequest)(nil),         // 8: daft.nodectrl.v1.AttachRequest
+	(*AttachStreamMessage)(nil),   // 9: daft.nodectrl.v1.AttachStreamMessage
+	(*AttachStreamHello)(nil),     // 10: daft.nodectrl.v1.AttachStreamHello
+	(*AttachStreamResize)(nil),    // 11: daft.nodectrl.v1.AttachStreamResize
+	(*ObserverRequest)(nil),       // 12: daft.nodectrl.v1.ObserverRequest
+	(*ObserverStreamMessage)(nil), // 13: daft.nodectrl.v1.ObserverStreamMessage
+	(*ObserverStreamHello)(nil),   // 14: daft.nodectrl.v1.ObserverStreamHello
+	(*SandboxWatchEvent)(nil),     // 15: daft.nodectrl.v1.SandboxWatchEvent
+	(*SubscriptionReady)(nil),     // 16: daft.nodectrl.v1.SubscriptionReady
+	(*HeartbeatRequest)(nil),      // 17: daft.nodectrl.v1.HeartbeatRequest
+	(*LiveSandbox)(nil),           // 18: daft.nodectrl.v1.LiveSandbox
+	(*HeartbeatResponse)(nil),     // 19: daft.nodectrl.v1.HeartbeatResponse
+	(*ListNodesRequest)(nil),      // 20: daft.nodectrl.v1.ListNodesRequest
+	(*Node)(nil),                  // 21: daft.nodectrl.v1.Node
+	(*ListNodesResponse)(nil),     // 22: daft.nodectrl.v1.ListNodesResponse
+	(v1.EventType)(0),             // 23: daft.sandbox.v1.EventType
+	(*v1.Sandbox)(nil),            // 24: daft.sandbox.v1.Sandbox
+	(*timestamppb.Timestamp)(nil), // 25: google.protobuf.Timestamp
 }
 var file_nodectrl_v1_nodectrl_proto_depIdxs = []int32{
-	1,  // 0: daft.nodectrl.v1.RegisterNodeRequest.resources:type_name -> daft.nodectrl.v1.HostResources
-	0,  // 1: daft.nodectrl.v1.RegisterNodeRequest.protocol_version:type_name -> daft.nodectrl.v1.ProtocolVersion
-	15, // 2: daft.nodectrl.v1.NodeEvent.ready:type_name -> daft.nodectrl.v1.SubscriptionReady
-	14, // 3: daft.nodectrl.v1.NodeEvent.sandbox:type_name -> daft.nodectrl.v1.SandboxWatchEvent
-	4,  // 4: daft.nodectrl.v1.NodeEvent.open_port:type_name -> daft.nodectrl.v1.OpenPortRequest
-	7,  // 5: daft.nodectrl.v1.NodeEvent.attach:type_name -> daft.nodectrl.v1.AttachRequest
-	11, // 6: daft.nodectrl.v1.NodeEvent.observer:type_name -> daft.nodectrl.v1.ObserverRequest
-	6,  // 7: daft.nodectrl.v1.PortStreamMessage.hello:type_name -> daft.nodectrl.v1.PortStreamHello
-	9,  // 8: daft.nodectrl.v1.AttachStreamMessage.hello:type_name -> daft.nodectrl.v1.AttachStreamHello
-	10, // 9: daft.nodectrl.v1.AttachStreamMessage.resize:type_name -> daft.nodectrl.v1.AttachStreamResize
-	13, // 10: daft.nodectrl.v1.ObserverStreamMessage.hello:type_name -> daft.nodectrl.v1.ObserverStreamHello
-	22, // 11: daft.nodectrl.v1.SandboxWatchEvent.type:type_name -> daft.sandbox.v1.EventType
-	23, // 12: daft.nodectrl.v1.SandboxWatchEvent.sandbox:type_name -> daft.sandbox.v1.Sandbox
-	24, // 13: daft.nodectrl.v1.SubscriptionReady.accepted_at:type_name -> google.protobuf.Timestamp
-	0,  // 14: daft.nodectrl.v1.SubscriptionReady.protocol_version:type_name -> daft.nodectrl.v1.ProtocolVersion
-	1,  // 15: daft.nodectrl.v1.HeartbeatRequest.current:type_name -> daft.nodectrl.v1.HostResources
-	17, // 16: daft.nodectrl.v1.HeartbeatRequest.live_sandboxes:type_name -> daft.nodectrl.v1.LiveSandbox
-	24, // 17: daft.nodectrl.v1.HeartbeatResponse.seen_at:type_name -> google.protobuf.Timestamp
-	1,  // 18: daft.nodectrl.v1.Node.resources:type_name -> daft.nodectrl.v1.HostResources
-	24, // 19: daft.nodectrl.v1.Node.registered_at:type_name -> google.protobuf.Timestamp
-	24, // 20: daft.nodectrl.v1.Node.last_seen_at:type_name -> google.protobuf.Timestamp
-	20, // 21: daft.nodectrl.v1.ListNodesResponse.nodes:type_name -> daft.nodectrl.v1.Node
-	2,  // 22: daft.nodectrl.v1.NodeControlService.RegisterNode:input_type -> daft.nodectrl.v1.RegisterNodeRequest
-	16, // 23: daft.nodectrl.v1.NodeControlService.Heartbeat:input_type -> daft.nodectrl.v1.HeartbeatRequest
-	19, // 24: daft.nodectrl.v1.NodeControlService.ListNodes:input_type -> daft.nodectrl.v1.ListNodesRequest
-	5,  // 25: daft.nodectrl.v1.NodeControlService.OpenPortStream:input_type -> daft.nodectrl.v1.PortStreamMessage
-	8,  // 26: daft.nodectrl.v1.NodeControlService.AttachStream:input_type -> daft.nodectrl.v1.AttachStreamMessage
-	12, // 27: daft.nodectrl.v1.NodeControlService.ObserverStream:input_type -> daft.nodectrl.v1.ObserverStreamMessage
-	3,  // 28: daft.nodectrl.v1.NodeControlService.RegisterNode:output_type -> daft.nodectrl.v1.NodeEvent
-	18, // 29: daft.nodectrl.v1.NodeControlService.Heartbeat:output_type -> daft.nodectrl.v1.HeartbeatResponse
-	21, // 30: daft.nodectrl.v1.NodeControlService.ListNodes:output_type -> daft.nodectrl.v1.ListNodesResponse
-	5,  // 31: daft.nodectrl.v1.NodeControlService.OpenPortStream:output_type -> daft.nodectrl.v1.PortStreamMessage
-	8,  // 32: daft.nodectrl.v1.NodeControlService.AttachStream:output_type -> daft.nodectrl.v1.AttachStreamMessage
-	12, // 33: daft.nodectrl.v1.NodeControlService.ObserverStream:output_type -> daft.nodectrl.v1.ObserverStreamMessage
-	28, // [28:34] is the sub-list for method output_type
-	22, // [22:28] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	2,  // 0: daft.nodectrl.v1.RegisterNodeRequest.resources:type_name -> daft.nodectrl.v1.HostResources
+	1,  // 1: daft.nodectrl.v1.RegisterNodeRequest.protocol_version:type_name -> daft.nodectrl.v1.ProtocolVersion
+	16, // 2: daft.nodectrl.v1.NodeEvent.ready:type_name -> daft.nodectrl.v1.SubscriptionReady
+	15, // 3: daft.nodectrl.v1.NodeEvent.sandbox:type_name -> daft.nodectrl.v1.SandboxWatchEvent
+	5,  // 4: daft.nodectrl.v1.NodeEvent.open_port:type_name -> daft.nodectrl.v1.OpenPortRequest
+	8,  // 5: daft.nodectrl.v1.NodeEvent.attach:type_name -> daft.nodectrl.v1.AttachRequest
+	12, // 6: daft.nodectrl.v1.NodeEvent.observer:type_name -> daft.nodectrl.v1.ObserverRequest
+	7,  // 7: daft.nodectrl.v1.PortStreamMessage.hello:type_name -> daft.nodectrl.v1.PortStreamHello
+	10, // 8: daft.nodectrl.v1.AttachStreamMessage.hello:type_name -> daft.nodectrl.v1.AttachStreamHello
+	11, // 9: daft.nodectrl.v1.AttachStreamMessage.resize:type_name -> daft.nodectrl.v1.AttachStreamResize
+	0,  // 10: daft.nodectrl.v1.ObserverRequest.source:type_name -> daft.nodectrl.v1.ObserverSource
+	14, // 11: daft.nodectrl.v1.ObserverStreamMessage.hello:type_name -> daft.nodectrl.v1.ObserverStreamHello
+	23, // 12: daft.nodectrl.v1.SandboxWatchEvent.type:type_name -> daft.sandbox.v1.EventType
+	24, // 13: daft.nodectrl.v1.SandboxWatchEvent.sandbox:type_name -> daft.sandbox.v1.Sandbox
+	25, // 14: daft.nodectrl.v1.SubscriptionReady.accepted_at:type_name -> google.protobuf.Timestamp
+	1,  // 15: daft.nodectrl.v1.SubscriptionReady.protocol_version:type_name -> daft.nodectrl.v1.ProtocolVersion
+	2,  // 16: daft.nodectrl.v1.HeartbeatRequest.current:type_name -> daft.nodectrl.v1.HostResources
+	18, // 17: daft.nodectrl.v1.HeartbeatRequest.live_sandboxes:type_name -> daft.nodectrl.v1.LiveSandbox
+	25, // 18: daft.nodectrl.v1.HeartbeatResponse.seen_at:type_name -> google.protobuf.Timestamp
+	2,  // 19: daft.nodectrl.v1.Node.resources:type_name -> daft.nodectrl.v1.HostResources
+	25, // 20: daft.nodectrl.v1.Node.registered_at:type_name -> google.protobuf.Timestamp
+	25, // 21: daft.nodectrl.v1.Node.last_seen_at:type_name -> google.protobuf.Timestamp
+	21, // 22: daft.nodectrl.v1.ListNodesResponse.nodes:type_name -> daft.nodectrl.v1.Node
+	3,  // 23: daft.nodectrl.v1.NodeControlService.RegisterNode:input_type -> daft.nodectrl.v1.RegisterNodeRequest
+	17, // 24: daft.nodectrl.v1.NodeControlService.Heartbeat:input_type -> daft.nodectrl.v1.HeartbeatRequest
+	20, // 25: daft.nodectrl.v1.NodeControlService.ListNodes:input_type -> daft.nodectrl.v1.ListNodesRequest
+	6,  // 26: daft.nodectrl.v1.NodeControlService.OpenPortStream:input_type -> daft.nodectrl.v1.PortStreamMessage
+	9,  // 27: daft.nodectrl.v1.NodeControlService.AttachStream:input_type -> daft.nodectrl.v1.AttachStreamMessage
+	13, // 28: daft.nodectrl.v1.NodeControlService.ObserverStream:input_type -> daft.nodectrl.v1.ObserverStreamMessage
+	4,  // 29: daft.nodectrl.v1.NodeControlService.RegisterNode:output_type -> daft.nodectrl.v1.NodeEvent
+	19, // 30: daft.nodectrl.v1.NodeControlService.Heartbeat:output_type -> daft.nodectrl.v1.HeartbeatResponse
+	22, // 31: daft.nodectrl.v1.NodeControlService.ListNodes:output_type -> daft.nodectrl.v1.ListNodesResponse
+	6,  // 32: daft.nodectrl.v1.NodeControlService.OpenPortStream:output_type -> daft.nodectrl.v1.PortStreamMessage
+	9,  // 33: daft.nodectrl.v1.NodeControlService.AttachStream:output_type -> daft.nodectrl.v1.AttachStreamMessage
+	13, // 34: daft.nodectrl.v1.NodeControlService.ObserverStream:output_type -> daft.nodectrl.v1.ObserverStreamMessage
+	29, // [29:35] is the sub-list for method output_type
+	23, // [23:29] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_nodectrl_v1_nodectrl_proto_init() }
@@ -1753,13 +1830,14 @@ func file_nodectrl_v1_nodectrl_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nodectrl_v1_nodectrl_proto_rawDesc), len(file_nodectrl_v1_nodectrl_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_nodectrl_v1_nodectrl_proto_goTypes,
 		DependencyIndexes: file_nodectrl_v1_nodectrl_proto_depIdxs,
+		EnumInfos:         file_nodectrl_v1_nodectrl_proto_enumTypes,
 		MessageInfos:      file_nodectrl_v1_nodectrl_proto_msgTypes,
 	}.Build()
 	File_nodectrl_v1_nodectrl_proto = out.File

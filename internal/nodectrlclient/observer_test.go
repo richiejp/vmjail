@@ -207,10 +207,49 @@ func TestRunObserverTailError(t *testing.T) {
 	}
 }
 
-// TestHandleObserverNilResolver pins the misconfiguration guard.
+// TestHandleObserverNilResolver pins the misconfiguration guard (the
+// default LOG source with no ObserverResolver wired).
 func TestHandleObserverNilResolver(t *testing.T) {
 	c := &Client{cfg: Config{}}
 	if err := c.handleObserver(context.Background(), &nodectrlv1.ObserverRequest{}); err == nil {
 		t.Fatal("expected error when ObserverResolver is unset")
+	}
+}
+
+// TestObserverResolverFor pins the source → resolver routing: LOG (and
+// unspecified, for back-compat) select ObserverResolver; SUMMARY selects
+// SummaryResolver. Distinct resolver paths make the selection observable.
+func TestObserverResolverFor(t *testing.T) {
+	const obsPath, sumPath = "/obs-route", "/sum-route"
+	c := &Client{cfg: Config{
+		ObserverResolver: fakeResolver{path: obsPath},
+		SummaryResolver:  fakeResolver{path: sumPath},
+	}}
+	cases := []struct {
+		source nodectrlv1.ObserverSource
+		want   string
+	}{
+		{nodectrlv1.ObserverSource_OBSERVER_SOURCE_UNSPECIFIED, obsPath},
+		{nodectrlv1.ObserverSource_OBSERVER_SOURCE_LOG, obsPath},
+		{nodectrlv1.ObserverSource_OBSERVER_SOURCE_SUMMARY, sumPath},
+	}
+	for _, tc := range cases {
+		r, err := c.observerResolverFor(tc.source)
+		if err != nil {
+			t.Fatalf("source=%v: %v", tc.source, err)
+		}
+		if got, _ := r.Resolve("uid"); got != tc.want {
+			t.Errorf("source=%v resolver path = %q, want %q", tc.source, got, tc.want)
+		}
+	}
+}
+
+// TestObserverResolverForMissingSummary pins the SUMMARY misconfiguration
+// guard: a summary request with no SummaryResolver wired errors rather
+// than silently falling through to the observer log.
+func TestObserverResolverForMissingSummary(t *testing.T) {
+	c := &Client{cfg: Config{ObserverResolver: fakeResolver{path: "/obs-only"}}}
+	if _, err := c.observerResolverFor(nodectrlv1.ObserverSource_OBSERVER_SOURCE_SUMMARY); err == nil {
+		t.Fatal("expected error when SummaryResolver is unset for source=SUMMARY")
 	}
 }

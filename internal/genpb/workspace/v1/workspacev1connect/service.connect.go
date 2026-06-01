@@ -121,6 +121,9 @@ const (
 	// WorkspaceCatalogServiceObserverTailProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's ObserverTail RPC.
 	WorkspaceCatalogServiceObserverTailProcedure = "/daft.workspace.v1.WorkspaceCatalogService/ObserverTail"
+	// WorkspaceCatalogServiceObserveSummaryProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's ObserveSummary RPC.
+	WorkspaceCatalogServiceObserveSummaryProcedure = "/daft.workspace.v1.WorkspaceCatalogService/ObserveSummary"
 )
 
 // WorkspaceCatalogServiceClient is a client for the daft.workspace.v1.WorkspaceCatalogService
@@ -261,6 +264,20 @@ type WorkspaceCatalogServiceClient interface {
 	// FailedPrecondition when the workspace isn't RUNNING (no
 	// current_sandbox); Unavailable when the Node is offline.
 	ObserverTail(context.Context, *connect.Request[v1.ObserverTailRequest]) (*connect.ServerStreamForClient[v1.ObserverChunk], error)
+	// ObserveSummary returns the current build-progress summary snapshot
+	// for a running workspace's sandbox — the guest-written
+	// progress.Summary JSON, surfaced to `daft sandbox observe`. One-shot
+	// and unary: the orchestrator resolves the workspace to its
+	// current_sandbox, reads the summary file once over the node broker
+	// (the same rendezvous as ObserverTail, with the summary source
+	// selector), and returns the bytes verbatim. The CLI polls this on an
+	// interval for --follow, which is well-defined because the summary
+	// file is rewritten atomically.
+	//
+	// Errors: NotFound when the handle doesn't resolve;
+	// FailedPrecondition when the workspace isn't RUNNING (no
+	// current_sandbox); Unavailable when the Node is offline.
+	ObserveSummary(context.Context, *connect.Request[v1.ObserveSummaryRequest]) (*connect.Response[v1.ObserveSummaryResponse], error)
 }
 
 // NewWorkspaceCatalogServiceClient constructs a client for the
@@ -394,31 +411,38 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("ObserverTail")),
 			connect.WithClientOptions(opts...),
 		),
+		observeSummary: connect.NewClient[v1.ObserveSummaryRequest, v1.ObserveSummaryResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceObserveSummaryProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("ObserveSummary")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // workspaceCatalogServiceClient implements WorkspaceCatalogServiceClient.
 type workspaceCatalogServiceClient struct {
-	create        *connect.Client[v1.CreateWorkspaceRequest, v1.WorkspaceResponse]
-	get           *connect.Client[v1.GetWorkspaceRequest, v1.WorkspaceResponse]
-	list          *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
-	setImage      *connect.Client[v1.SetImageRequest, v1.WorkspaceResponse]
-	setTarget     *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
-	setResources  *connect.Client[v1.SetResourcesRequest, v1.WorkspaceResponse]
-	addMount      *connect.Client[v1.AddMountRequest, v1.WorkspaceResponse]
-	addEnv        *connect.Client[v1.AddEnvRequest, v1.WorkspaceResponse]
-	addPort       *connect.Client[v1.AddPortRequest, v1.WorkspaceResponse]
-	removeMount   *connect.Client[v1.RemoveMountRequest, v1.WorkspaceResponse]
-	removeEnv     *connect.Client[v1.RemoveEnvRequest, v1.WorkspaceResponse]
-	removePort    *connect.Client[v1.RemovePortRequest, v1.WorkspaceResponse]
-	validate      *connect.Client[v1.ValidateRequest, v1.WorkspaceResponse]
-	launch        *connect.Client[v1.LaunchRequest, v1.WorkspaceResponse]
-	stop          *connect.Client[v1.StopRequest, v1.WorkspaceResponse]
-	acquire       *connect.Client[v1.AcquireRequest, v1.WorkspaceResponse]
-	release       *connect.Client[v1.ReleaseRequest, v1.WorkspaceResponse]
-	forwardPort   *connect.Client[v1.ForwardFrame, v1.ForwardFrame]
-	attachSandbox *connect.Client[v1.AttachFrame, v1.AttachFrame]
-	observerTail  *connect.Client[v1.ObserverTailRequest, v1.ObserverChunk]
+	create         *connect.Client[v1.CreateWorkspaceRequest, v1.WorkspaceResponse]
+	get            *connect.Client[v1.GetWorkspaceRequest, v1.WorkspaceResponse]
+	list           *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
+	setImage       *connect.Client[v1.SetImageRequest, v1.WorkspaceResponse]
+	setTarget      *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
+	setResources   *connect.Client[v1.SetResourcesRequest, v1.WorkspaceResponse]
+	addMount       *connect.Client[v1.AddMountRequest, v1.WorkspaceResponse]
+	addEnv         *connect.Client[v1.AddEnvRequest, v1.WorkspaceResponse]
+	addPort        *connect.Client[v1.AddPortRequest, v1.WorkspaceResponse]
+	removeMount    *connect.Client[v1.RemoveMountRequest, v1.WorkspaceResponse]
+	removeEnv      *connect.Client[v1.RemoveEnvRequest, v1.WorkspaceResponse]
+	removePort     *connect.Client[v1.RemovePortRequest, v1.WorkspaceResponse]
+	validate       *connect.Client[v1.ValidateRequest, v1.WorkspaceResponse]
+	launch         *connect.Client[v1.LaunchRequest, v1.WorkspaceResponse]
+	stop           *connect.Client[v1.StopRequest, v1.WorkspaceResponse]
+	acquire        *connect.Client[v1.AcquireRequest, v1.WorkspaceResponse]
+	release        *connect.Client[v1.ReleaseRequest, v1.WorkspaceResponse]
+	forwardPort    *connect.Client[v1.ForwardFrame, v1.ForwardFrame]
+	attachSandbox  *connect.Client[v1.AttachFrame, v1.AttachFrame]
+	observerTail   *connect.Client[v1.ObserverTailRequest, v1.ObserverChunk]
+	observeSummary *connect.Client[v1.ObserveSummaryRequest, v1.ObserveSummaryResponse]
 }
 
 // Create calls daft.workspace.v1.WorkspaceCatalogService.Create.
@@ -519,6 +543,11 @@ func (c *workspaceCatalogServiceClient) AttachSandbox(ctx context.Context) *conn
 // ObserverTail calls daft.workspace.v1.WorkspaceCatalogService.ObserverTail.
 func (c *workspaceCatalogServiceClient) ObserverTail(ctx context.Context, req *connect.Request[v1.ObserverTailRequest]) (*connect.ServerStreamForClient[v1.ObserverChunk], error) {
 	return c.observerTail.CallServerStream(ctx, req)
+}
+
+// ObserveSummary calls daft.workspace.v1.WorkspaceCatalogService.ObserveSummary.
+func (c *workspaceCatalogServiceClient) ObserveSummary(ctx context.Context, req *connect.Request[v1.ObserveSummaryRequest]) (*connect.Response[v1.ObserveSummaryResponse], error) {
+	return c.observeSummary.CallUnary(ctx, req)
 }
 
 // WorkspaceCatalogServiceHandler is an implementation of the
@@ -659,6 +688,20 @@ type WorkspaceCatalogServiceHandler interface {
 	// FailedPrecondition when the workspace isn't RUNNING (no
 	// current_sandbox); Unavailable when the Node is offline.
 	ObserverTail(context.Context, *connect.Request[v1.ObserverTailRequest], *connect.ServerStream[v1.ObserverChunk]) error
+	// ObserveSummary returns the current build-progress summary snapshot
+	// for a running workspace's sandbox — the guest-written
+	// progress.Summary JSON, surfaced to `daft sandbox observe`. One-shot
+	// and unary: the orchestrator resolves the workspace to its
+	// current_sandbox, reads the summary file once over the node broker
+	// (the same rendezvous as ObserverTail, with the summary source
+	// selector), and returns the bytes verbatim. The CLI polls this on an
+	// interval for --follow, which is well-defined because the summary
+	// file is rewritten atomically.
+	//
+	// Errors: NotFound when the handle doesn't resolve;
+	// FailedPrecondition when the workspace isn't RUNNING (no
+	// current_sandbox); Unavailable when the Node is offline.
+	ObserveSummary(context.Context, *connect.Request[v1.ObserveSummaryRequest]) (*connect.Response[v1.ObserveSummaryResponse], error)
 }
 
 // NewWorkspaceCatalogServiceHandler builds an HTTP handler from the service implementation. It
@@ -788,6 +831,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("ObserverTail")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceObserveSummaryHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceObserveSummaryProcedure,
+		svc.ObserveSummary,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("ObserveSummary")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.workspace.v1.WorkspaceCatalogService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkspaceCatalogServiceCreateProcedure:
@@ -830,6 +879,8 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceAttachSandboxHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceObserverTailProcedure:
 			workspaceCatalogServiceObserverTailHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceObserveSummaryProcedure:
+			workspaceCatalogServiceObserveSummaryHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -917,4 +968,8 @@ func (UnimplementedWorkspaceCatalogServiceHandler) AttachSandbox(context.Context
 
 func (UnimplementedWorkspaceCatalogServiceHandler) ObserverTail(context.Context, *connect.Request[v1.ObserverTailRequest], *connect.ServerStream[v1.ObserverChunk]) error {
 	return connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.ObserverTail is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) ObserveSummary(context.Context, *connect.Request[v1.ObserveSummaryRequest]) (*connect.Response[v1.ObserveSummaryResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.ObserveSummary is not implemented"))
 }

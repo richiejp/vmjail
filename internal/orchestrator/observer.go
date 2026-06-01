@@ -48,7 +48,7 @@ var (
 // (its OpenObserverBridge method); tests inject fakes returning a
 // canned io.ReadCloser.
 type WorkspaceObserverBridger interface {
-	OpenObserverBridge(ctx context.Context, fp identity.Fingerprint, sandboxUID string, follow bool) (io.ReadCloser, error)
+	OpenObserverBridge(ctx context.Context, fp identity.Fingerprint, sandboxUID string, source nodectrlv1.ObserverSource, follow bool) (io.ReadCloser, error)
 }
 
 // SetObserverBridger wires the WorkspaceObserverBridger ObserverTail
@@ -94,25 +94,42 @@ func (h *WorkspaceCatalogHandler) runObserverTail(
 		return connect.NewError(connect.CodeUnimplemented,
 			errors.New("orchestrator: ObserverTail: no ObserverBridger configured"))
 	}
-	handle := req.GetWorkspace()
-	if handle == nil {
+	if req.GetWorkspace() == nil {
 		return connect.NewError(connect.CodeInvalidArgument, ErrObserverHandleMissing)
 	}
-	ws, err := h.resolveHandle(callerFP, handle)
+	uid, nodeFP, err := h.resolveRunningSandbox(callerFP, req.GetWorkspace())
 	if err != nil {
 		return err
 	}
-	if ws.Status.CurrentSandbox == nil || ws.Status.CurrentSandbox.UID == "" {
-		return connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("%w: workspace=%s", ErrObserverWorkspaceNotRunning, ws.Metadata.UUID))
-	}
-	reader, err := h.observerBridger.OpenObserverBridge(ctx,
-		ws.Status.CurrentSandbox.NodeFingerprint, ws.Status.CurrentSandbox.UID, req.GetFollow())
+	reader, err := h.observerBridger.OpenObserverBridge(ctx, nodeFP, uid,
+		nodectrlv1.ObserverSource_OBSERVER_SOURCE_LOG, req.GetFollow())
 	if err != nil {
 		return mapCatalogErr(err)
 	}
 	defer func() { oops.Skip("orchestrator: close observer reader", reader.Close(), net.ErrClosed) }()
 	return pumpObserverToClient(reader, sink)
+}
+
+// resolveRunningSandbox resolves a workspace handle for the caller and
+// returns its current sandbox's UID + node fingerprint, or a connect
+// error: NotFound when the handle doesn't resolve, FailedPrecondition
+// when the workspace isn't RUNNING (no current_sandbox). Shared by
+// ObserverTail and ObserveSummary, which both target the live sandbox
+// behind a workspace. Callers reject a nil handle first (the
+// InvalidArgument sentinel is per-RPC).
+func (h *WorkspaceCatalogHandler) resolveRunningSandbox(
+	callerFP identity.Fingerprint,
+	handle *workspacev1.WorkspaceHandle,
+) (sandboxUID string, nodeFP identity.Fingerprint, err error) {
+	ws, err := h.resolveHandle(callerFP, handle)
+	if err != nil {
+		return "", identity.Fingerprint{}, err
+	}
+	if ws.Status.CurrentSandbox == nil || ws.Status.CurrentSandbox.UID == "" {
+		return "", identity.Fingerprint{}, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("%w: workspace=%s", ErrObserverWorkspaceNotRunning, ws.Metadata.UUID))
+	}
+	return ws.Status.CurrentSandbox.UID, ws.Status.CurrentSandbox.NodeFingerprint, nil
 }
 
 // pumpObserverToClient reads observer-log bytes from the node-side
@@ -168,6 +185,7 @@ func (h *NodeControlHandler) OpenObserverBridge(
 	ctx context.Context,
 	fp identity.Fingerprint,
 	sandboxUID string,
+	source nodectrlv1.ObserverSource,
 	follow bool,
 ) (io.ReadCloser, error) {
 	if sandboxUID == "" {
@@ -190,7 +208,7 @@ func (h *NodeControlHandler) OpenObserverBridge(
 		}
 	}()
 
-	if err := h.pushObserverRequest(fp, sessionID, sandboxUID, follow); err != nil {
+	if err := h.pushObserverRequest(fp, sessionID, sandboxUID, source, follow); err != nil {
 		return nil, err
 	}
 
@@ -211,6 +229,7 @@ func (h *NodeControlHandler) OpenObserverBridge(
 func (h *NodeControlHandler) pushObserverRequest(
 	fp identity.Fingerprint,
 	sessionID, sandboxUID string,
+	source nodectrlv1.ObserverSource,
 	follow bool,
 ) error {
 	h.mu.Lock()
@@ -225,6 +244,7 @@ func (h *NodeControlHandler) pushObserverRequest(
 				SessionId:  sessionID,
 				SandboxUid: sandboxUID,
 				Follow:     follow,
+				Source:     source,
 			},
 		},
 	}

@@ -34,10 +34,29 @@ type observerTailFunc func(ctx context.Context, path string, follow bool, w io.W
 //  4. Streams the log (dump, or tail -f when follow) as data frames
 //     until the file ends or the orchestrator closes its side.
 func (c *Client) handleObserver(ctx context.Context, req *nodectrlv1.ObserverRequest) error {
-	if c.cfg.ObserverResolver == nil {
-		return errors.New("nodectrlclient: ObserverRequest received without an ObserverResolver wired in Config")
+	resolver, err := c.observerResolverFor(req.GetSource())
+	if err != nil {
+		return err
 	}
-	return runObserver(ctx, req, c.ctrl.ObserverStream(ctx), c.cfg.ObserverResolver, observertail.Stream)
+	return runObserver(ctx, req, c.ctrl.ObserverStream(ctx), resolver, observertail.Stream)
+}
+
+// observerResolverFor selects the path resolver for an ObserverRequest's
+// source: the build-progress summary (SummaryResolver) when source is
+// SUMMARY, otherwise the observer log (ObserverResolver, the default for
+// LOG / unspecified). Errors when the source's resolver isn't wired —
+// the request then surfaces on Stderr rather than tailing the wrong file.
+func (c *Client) observerResolverFor(source nodectrlv1.ObserverSource) (ObserverResolver, error) {
+	if source == nodectrlv1.ObserverSource_OBSERVER_SOURCE_SUMMARY {
+		if c.cfg.SummaryResolver == nil {
+			return nil, errors.New("nodectrlclient: ObserverRequest{source=SUMMARY} received without a SummaryResolver wired in Config")
+		}
+		return c.cfg.SummaryResolver, nil
+	}
+	if c.cfg.ObserverResolver == nil {
+		return nil, errors.New("nodectrlclient: ObserverRequest received without an ObserverResolver wired in Config")
+	}
+	return c.cfg.ObserverResolver, nil
 }
 
 // runObserver is the pure-logic core split out for testability.

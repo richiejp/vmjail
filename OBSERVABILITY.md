@@ -514,8 +514,16 @@ In rough order:
        `DAFT_OBSERVE_SUMMARY` (`0`/`false`/`no`/`off`). Also fixed a latent gap — the production
        executor never received the `ObserverRegistry`, so observer-tail
        routes were never registered; both registries are now wired.
-     - *6c-2* — the dedicated `ObserveSummary` RPC chain (proto +
-       orchestrator + node one-shot read over the rendezvous broker).
+     - *6c-2 (landed)* — the dedicated `ObserveSummary` RPC chain. A new
+       unary `WorkspaceCatalogService.ObserveSummary(workspace) →
+       (summary bytes)` resolves the workspace's current_sandbox and
+       does a one-shot read over the **same** node rendezvous as
+       observer-tail: the internal `nodectrl.ObserverRequest` gained an
+       `ObserverSource` selector (LOG vs SUMMARY), so the node routes a
+       SUMMARY request through its `SummaryRegistry` instead of the
+       observer log. The orchestrator reads the (size-capped) snapshot
+       once and returns it verbatim; the public/CLI boundary stays a
+       dedicated RPC while the broker internals are reused.
      - *6c-3* — the `daft sandbox observe <workspace>` CLI: render the
        summary, `--follow` polls ~1 s; cluster e2e exercises the summary
      (on by default).
@@ -553,6 +561,12 @@ In rough order:
 - `internal/sandboxgateway/observer.go` — `SummaryRegistry` (and the
   `ObserverRegistry` it shares a generic table with): per-sandbox
   `uid → host file path` routing the node-side handlers resolve through.
+- `internal/orchestrator/observe_summary.go` — the #6c-2 orchestrator
+  handler (`ObserveSummary` + `readObserveSummary`): one-shot, size-capped
+  read over the observer-tail rendezvous with `ObserverSource_SUMMARY`.
+  `internal/nodectrlclient/observer.go` (`observerResolverFor`) routes a
+  SUMMARY request to the node's `SummaryResolver`; the end-to-end loop is
+  pinned by `TestObserveSummaryEndToEnd`.
 - `internal/agent/opensnoop.go` — wires the gadget into daft-agent
   (`startOpensnoopFromCmdline` + the `opensnoopDeps` seam), driven by the
   `daft.observe.opensnoop=` cmdline token (`internal/agent/cmdline.go`).

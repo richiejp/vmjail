@@ -216,6 +216,21 @@ message AttachStreamResize {
   uint32 rows = 2;
 }
 
+// ObserverSource selects which host-side per-sandbox file an
+// ObserverRequest streams. Both ride the same ObserverStream byte
+// channel and rendezvous; only the Node's resolver (which registry the
+// sandbox_uid is looked up in) differs.
+enum ObserverSource {
+  // Unset ⇒ the observer log, for back-compat with observer-tail
+  // clients minted before this field existed.
+  OBSERVER_SOURCE_UNSPECIFIED = 0;
+  // The newline-delimited JSON Tier-1 observer log (ObserverRegistry).
+  OBSERVER_SOURCE_LOG = 1;
+  // The guest-written build-progress summary snapshot
+  // (progress.Summary JSON), resolved via the Node's SummaryRegistry.
+  OBSERVER_SOURCE_SUMMARY = 2;
+}
+
 // ObserverRequest asks the Node to dial ObserverStream for one
 // observer-log tail. The Node identifies the live sandbox by
 // sandbox_uid (matching Sandbox.metadata.uid), opens that sandbox's
@@ -226,11 +241,15 @@ message ObserverRequest {
   string session_id = 1;
   // Sandbox.metadata.uid of the live sandbox whose observer log to
   // tail. The Node uses this as the routing key into its local
-  // sandboxgateway ObserverRegistry.
+  // sandboxgateway ObserverRegistry (or SummaryRegistry; see source).
   string sandbox_uid = 2;
   // Keep streaming appended lines (tail -f) rather than sending the
   // current file once and closing.
   bool follow = 3;
+  // Which host-side file to stream. Unspecified/LOG ⇒ the observer
+  // log; SUMMARY ⇒ the build-progress summary (one-shot, follow
+  // ignored). See ObserverSource.
+  ObserverSource source = 4;
 }
 
 // ObserverStreamMessage is the ObserverStream frame. First message

@@ -135,6 +135,7 @@ func runServe(
 		Bridger:           bridger,
 		AttachBridger:     attachRegistry,
 		ObserverResolver:  observerRegistry,
+		SummaryResolver:   summaryRegistry,
 		Stderr:            stdout,
 	})
 	if err != nil {

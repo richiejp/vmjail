@@ -115,6 +115,13 @@ type Config struct {
 	// with the sandboxexec Executor so the routes the executor
 	// registers are the same table this transport reads from.
 	ObserverResolver ObserverResolver
+	// SummaryResolver resolves a sandbox_uid to its host-side
+	// build-progress summary path when the orchestrator pushes an
+	// ObserverRequest with source=SUMMARY (`daft sandbox observe`).
+	// Nil ⇒ such requests surface as errors on Stderr. Production wiring
+	// (`daft-sandboxd serve`) shares one sandboxgateway.SummaryRegistry
+	// with the sandboxexec Executor, alongside the ObserverRegistry.
+	SummaryResolver ObserverResolver
 	// Stderr is where per-bridge errors are logged. Defaults to
 	// os.Stderr when nil.
 	Stderr io.Writer

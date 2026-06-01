@@ -190,6 +190,35 @@ service WorkspaceCatalogService {
   // FailedPrecondition when the workspace isn't RUNNING (no
   // current_sandbox); Unavailable when the Node is offline.
   rpc ObserverTail(ObserverTailRequest) returns (stream ObserverChunk) {}
+
+  // ObserveSummary returns the current build-progress summary snapshot
+  // for a running workspace's sandbox — the guest-written
+  // progress.Summary JSON, surfaced to `daft sandbox observe`. One-shot
+  // and unary: the orchestrator resolves the workspace to its
+  // current_sandbox, reads the summary file once over the node broker
+  // (the same rendezvous as ObserverTail, with the summary source
+  // selector), and returns the bytes verbatim. The CLI polls this on an
+  // interval for --follow, which is well-defined because the summary
+  // file is rewritten atomically.
+  //
+  // Errors: NotFound when the handle doesn't resolve;
+  // FailedPrecondition when the workspace isn't RUNNING (no
+  // current_sandbox); Unavailable when the Node is offline.
+  rpc ObserveSummary(ObserveSummaryRequest) returns (ObserveSummaryResponse) {}
+}
+
+// ObserveSummaryRequest names the workspace whose current sandbox's
+// build-progress summary to read. Name resolution is scoped to the
+// calling identity's mTLS fingerprint, matching the rest of the catalog.
+message ObserveSummaryRequest {
+  WorkspaceHandle workspace = 1;
+}
+
+// ObserveSummaryResponse carries the progress.Summary JSON document
+// verbatim. Empty when the sandbox has not written a summary yet (the
+// gadget is still starting, or Tier-2 observe is opted out on the node).
+message ObserveSummaryResponse {
+  bytes summary = 1;
 }
 
 // ObserverTailRequest names the workspace whose current sandbox's

@@ -27,11 +27,13 @@ type fakeObserverBridger struct {
 	err        error
 	lastUID    string
 	lastFollow bool
+	lastSource nodectrlv1.ObserverSource
 }
 
-func (b *fakeObserverBridger) OpenObserverBridge(_ context.Context, _ identity.Fingerprint, uid string, follow bool) (io.ReadCloser, error) {
+func (b *fakeObserverBridger) OpenObserverBridge(_ context.Context, _ identity.Fingerprint, uid string, source nodectrlv1.ObserverSource, follow bool) (io.ReadCloser, error) {
 	b.lastUID = uid
 	b.lastFollow = follow
+	b.lastSource = source
 	if b.err != nil {
 		return nil, b.err
 	}
@@ -270,7 +272,8 @@ func TestOpenObserverBridgePushesEventThenStreams(t *testing.T) {
 	}
 	out := make(chan res, 1)
 	go func() {
-		rc, err := h.OpenObserverBridge(ctx, fp, testObserverSandboxUID, true)
+		rc, err := h.OpenObserverBridge(ctx, fp, testObserverSandboxUID,
+			nodectrlv1.ObserverSource_OBSERVER_SOURCE_LOG, true)
 		out <- res{rc, err}
 	}()
 
@@ -326,7 +329,8 @@ func TestOpenObserverBridgePushesEventThenStreams(t *testing.T) {
 
 func TestOpenObserverBridgeRejectsEmptySandbox(t *testing.T) {
 	h, fp, _ := newObserverTestHandler(t)
-	if _, err := h.OpenObserverBridge(context.Background(), fp, "", false); err == nil {
+	if _, err := h.OpenObserverBridge(context.Background(), fp, "",
+		nodectrlv1.ObserverSource_OBSERVER_SOURCE_LOG, false); err == nil {
 		t.Error("expected error for empty sandboxUID")
 	}
 }
@@ -334,7 +338,8 @@ func TestOpenObserverBridgeRejectsEmptySandbox(t *testing.T) {
 func TestOpenObserverBridgeNodeNotConnected(t *testing.T) {
 	reg := nodectrl.NewRegistry(time.Now)
 	h, _ := NewNodeControlHandler(reg)
-	_, err := h.OpenObserverBridge(context.Background(), identity.Fingerprint{0xff}, "sb", false)
+	_, err := h.OpenObserverBridge(context.Background(), identity.Fingerprint{0xff}, "sb",
+		nodectrlv1.ObserverSource_OBSERVER_SOURCE_LOG, false)
 	if !errors.Is(err, ErrNodeNotConnected) {
 		t.Errorf("err = %v, want ErrNodeNotConnected", err)
 	}
@@ -345,7 +350,8 @@ func TestOpenObserverBridgeTimesOut(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	// No node dials ObserverStream, so the bridge times out on ctx.
-	if _, err := h.OpenObserverBridge(ctx, fp, "sb", false); err == nil {
+	if _, err := h.OpenObserverBridge(ctx, fp, "sb",
+		nodectrlv1.ObserverSource_OBSERVER_SOURCE_LOG, false); err == nil {
 		t.Error("expected timeout error")
 	}
 }
@@ -400,7 +406,8 @@ func TestOpenObserverBridgeBacklog(t *testing.T) {
 	for range cap(events) {
 		events <- &nodectrlv1.NodeEvent{}
 	}
-	_, err := h.OpenObserverBridge(context.Background(), fp, "sb", false)
+	_, err := h.OpenObserverBridge(context.Background(), fp, "sb",
+		nodectrlv1.ObserverSource_OBSERVER_SOURCE_LOG, false)
 	if !errors.Is(err, ErrSandboxEventBacklog) {
 		t.Errorf("err = %v, want ErrSandboxEventBacklog", err)
 	}
