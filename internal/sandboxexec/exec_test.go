@@ -557,6 +557,80 @@ func TestHandleSandboxEventRegistersObserverRoute(t *testing.T) {
 	}
 }
 
+// TestHandleSandboxEventRegistersSummaryRoute pins the Tier-2 observe-share
+// wiring: with ObserveSummary opted in, a dispatch exports the observe
+// share, points the gadget + summary guest paths into it, and registers the
+// host summary path — torn down when the dispatch exits.
+func TestHandleSandboxEventRegistersSummaryRoute(t *testing.T) {
+	reg := sandboxgateway.NewSummaryRegistry()
+	observerDir := t.TempDir()
+	var routeDuringRun string
+	var resolveErr error
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		routeDuringRun, resolveErr = reg.Resolve("sb-sum")
+		seen = cfg
+		return nil
+	}
+	e, err := New(Config{
+		Stdout: io.Discard, Runner: runner,
+		ObserverDir: observerDir, SummaryRegistry: reg, ObserveSummary: true,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-sum", &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	wantHost := filepath.Join(observerDir, "sb-sum", "observe", "progress.json")
+	if resolveErr != nil || routeDuringRun != wantHost {
+		t.Errorf("summary route during run = %q (err %v), want %q", routeDuringRun, resolveErr, wantHost)
+	}
+	// The guest paths point into the observe share, and the share is exported.
+	if seen.ObserveSummaryPath != "/run/daft/observe/progress.json" {
+		t.Errorf("guest summary path = %q", seen.ObserveSummaryPath)
+	}
+	if seen.OpensnoopLogPath != "/run/daft/observe/opensnoop.log" {
+		t.Errorf("guest opensnoop path = %q", seen.OpensnoopLogPath)
+	}
+	var haveObserveShare bool
+	for _, s := range seen.Shares {
+		if s.Tag == "daftobserve" && s.Mountpoint == "/run/daft/observe" {
+			haveObserveShare = true
+		}
+	}
+	if !haveObserveShare {
+		t.Errorf("observe share not exported: %+v", seen.Shares)
+	}
+	if _, err := reg.Resolve("sb-sum"); err == nil {
+		t.Error("summary route should be unregistered after the dispatch exits")
+	}
+}
+
+// TestHandleSandboxEventNoSummaryRouteWhenOptedOut pins the default: without
+// ObserveSummary, no observe share and no summary route.
+func TestHandleSandboxEventNoSummaryRouteWhenOptedOut(t *testing.T) {
+	reg := sandboxgateway.NewSummaryRegistry()
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error { seen = cfg; return nil }
+	e, err := New(Config{
+		Stdout: io.Discard, Runner: runner,
+		ObserverDir: t.TempDir(), SummaryRegistry: reg, // ObserveSummary defaults false
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-y", &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if seen.ObserveSummaryPath != "" {
+		t.Errorf("summary path set despite opt-out: %q", seen.ObserveSummaryPath)
+	}
+	if _, err := reg.Resolve("sb-y"); err == nil {
+		t.Error("no summary route should be registered when opted out")
+	}
+}
+
 // TestHandleSandboxEventNoObserverRouteWithoutDir pins that an
 // ObserverRegistry without an ObserverDir (so no ObserverLogPath)
 // registers nothing.

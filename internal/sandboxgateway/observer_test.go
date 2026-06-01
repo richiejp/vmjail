@@ -61,3 +61,38 @@ func TestObserverRegistryUnregisterIdempotent(t *testing.T) {
 		t.Errorf("re-Register after Unregister: %v", err)
 	}
 }
+
+// TestSummaryRegistry covers the build-progress-summary registry: it shares
+// the generic table logic but carries its own distinct route errors.
+func TestSummaryRegistry(t *testing.T) {
+	r := NewSummaryRegistry()
+	if err := r.Register("sb-1", "/state/sb-1/observe/progress.json"); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	got, err := r.Resolve("sb-1")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if got != "/state/sb-1/observe/progress.json" {
+		t.Errorf("path = %q, want the registered path", got)
+	}
+	if err := r.Register("sb-1", "/other"); !errors.Is(err, ErrSummaryRouteExists) {
+		t.Errorf("dup Register = %v, want ErrSummaryRouteExists", err)
+	}
+	if _, err := r.Resolve("ghost"); !errors.Is(err, ErrSummaryNoRoute) {
+		t.Errorf("Resolve miss = %v, want ErrSummaryNoRoute", err)
+	}
+}
+
+// TestObserverAndSummaryRegistriesAreIndependent: a uid registered in one
+// registry is invisible to the other (they are separate per-sandbox tables).
+func TestObserverAndSummaryRegistriesAreIndependent(t *testing.T) {
+	obs := NewObserverRegistry()
+	sum := NewSummaryRegistry()
+	if err := obs.Register("sb", "/observer.jsonl"); err != nil {
+		t.Fatalf("observer Register: %v", err)
+	}
+	if _, err := sum.Resolve("sb"); !errors.Is(err, ErrSummaryNoRoute) {
+		t.Errorf("summary Resolve of observer-only uid = %v, want ErrSummaryNoRoute", err)
+	}
+}

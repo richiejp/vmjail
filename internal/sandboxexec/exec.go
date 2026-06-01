@@ -120,6 +120,19 @@ type Executor struct {
 	// ObserverStream handler resolves a uid to a path to tail. Only
 	// dispatches whose ObserverLogPath is set register a route.
 	observerRegistry *sandboxgateway.ObserverRegistry
+	// summaryRegistry, when non-nil, is the per-sandbox build-progress
+	// summary table the executor populates on dispatch (sandbox_uid → the
+	// host path of the summary JSON the guest writes onto the observe
+	// share). The ObserveSummary handler resolves a uid to a path to read.
+	// Only dispatches that set up the observe share register a route.
+	summaryRegistry *sandboxgateway.SummaryRegistry
+	// observeSummary opts every image-backed dispatch into the Tier-2
+	// observe share: the open-snoop eBPF gadget + the ~1 Hz build-progress
+	// summary, written onto a small writable virtiofs share the host reads.
+	// Off by default because it adds a gadget load + a virtiofs device to
+	// each VM's boot; the operator turns it on when build observability is
+	// worth that cost. Requires observerDir (the share's host backing dir).
+	observeSummary bool
 	// netEnabled toggles the sandboxnet listener wiring on every
 	// dispatched VM (Slice D6c.2 step 3). When true, resolveBootConfig
 	// allocates a Vsock device if one isn't already there and sets
@@ -190,6 +203,19 @@ type Config struct {
 	// tail a running sandbox's log. Leave nil for tests/baselines that
 	// don't exercise observer-tail.
 	ObserverRegistry *sandboxgateway.ObserverRegistry
+	// SummaryRegistry, when non-nil, is the per-sandbox build-progress
+	// summary table the executor populates on every dispatch that sets up
+	// the observe share (sandbox_uid → host summary path). The
+	// ObserveSummary handler resolves through it to read a running
+	// sandbox's summary. Requires ObserverDir (the observe share's host
+	// backing dir lives under it). Leave nil to disable the summary route.
+	SummaryRegistry *sandboxgateway.SummaryRegistry
+	// ObserveSummary opts every image-backed dispatch into the Tier-2
+	// observe share (open-snoop gadget + build-progress summary). Off by
+	// default because it costs a gadget load + a virtiofs device per VM;
+	// `daft-sandboxd serve` flips it on from DAFT_OBSERVE_SUMMARY. Requires
+	// ObserverDir and SummaryRegistry to be useful.
+	ObserveSummary bool
 	// VsockDir is the absolute parent directory where per-Sandbox
 	// hybrid-vsock UDS files live (one per running VM, named after
 	// the Sandbox uid). Required when Bridger or AttachRegistry is
@@ -291,6 +317,8 @@ func New(cfg Config) (*Executor, error) {
 		bridger:           cfg.Bridger,
 		attachRegistry:    cfg.AttachRegistry,
 		observerRegistry:  cfg.ObserverRegistry,
+		summaryRegistry:   cfg.SummaryRegistry,
+		observeSummary:    cfg.ObserveSummary,
 		vsockDir:          cfg.VsockDir,
 		netEnabled:        cfg.NetEnabled,
 		egressProxy:       cfg.EgressProxy,
@@ -438,6 +466,8 @@ func (e *Executor) HandleSandboxEvent(
 	defer unregisterAttach()
 	unregisterObserver := e.registerObserverRoute(cfg, uid)
 	defer unregisterObserver()
+	unregisterSummary := e.registerSummaryRoute(cfg, uid)
+	defer unregisterSummary()
 
 	if err := e.run(ctx, e.stdout, cfg); err != nil {
 		e.markPhase(uid, phaseKilled, 0)
@@ -574,6 +604,7 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 		}
 	}
 	e.applyObserverLog(&cfg, uid)
+	e.applyObserveSummary(&cfg, uid)
 	return cfg, unlock, nil
 }
 
@@ -593,6 +624,67 @@ func (e *Executor) applyObserverLog(cfg *sandbox.Config, uid string) {
 		return
 	}
 	cfg.ObserverLogPath = path
+}
+
+// Observe share layout. The Tier-2 gadgets (open-snoop) and their
+// build-progress summary are guest-written, so the executor exports a
+// small writable virtiofs share — host-backed by <observerDir>/<uid>/observe
+// — and points the guest paths into its mountpoint. The host reads the
+// summary back from the same backing dir; it is kept separate from the
+// host-written observer.jsonl so the guest can only touch its own files.
+const (
+	observeShareTag      = "daftobserve"
+	observeMount         = "/run/daft/observe"
+	observeSubdir        = "observe"
+	observeOpensnoopName = "opensnoop.log"
+	observeSummaryName   = "progress.json"
+)
+
+// observeHostDir is the host backing dir of a dispatch's observe share.
+func (e *Executor) observeHostDir(uid string) string {
+	return filepath.Join(e.observerDir, uid, observeSubdir)
+}
+
+// applyObserveSummary wires the Tier-2 observe share: it mkdir's the host
+// backing dir, exports it as a writable virtiofs share, and points the
+// guest's open-snoop trace + build-progress summary into the mountpoint so
+// the gadget runs and the summary lands somewhere the host can read. Gated
+// on the same observerDir opt-in as the observer log and equally
+// best-effort: an unset observerDir, already-set paths, an empty uid, or a
+// mkdir failure all leave the config untouched and the dispatch proceeds.
+func (e *Executor) applyObserveSummary(cfg *sandbox.Config, uid string) {
+	if !e.observeSummary || e.observerDir == "" || cfg.ObserveSummaryPath != "" || uid == "" {
+		return
+	}
+	hostDir := e.observeHostDir(uid)
+	if err := os.MkdirAll(hostDir, 0o700); err != nil {
+		_, _ = fmt.Fprintf(e.stdout, "sandboxexec: observe summary disabled for %s: %v\n", uid, err)
+		return
+	}
+	// Clone before appending: cfg may alias e.base (the no-image baseline
+	// path returns a copy whose Shares slice shares e.base's backing array),
+	// and appending in place could corrupt the baseline across dispatches.
+	observe := &sandbox.ShareConfig{HostDir: hostDir, Tag: observeShareTag, Mountpoint: observeMount}
+	cfg.Shares = append(append([]*sandbox.ShareConfig(nil), cfg.Shares...), observe)
+	cfg.OpensnoopLogPath = filepath.Join(observeMount, observeOpensnoopName)
+	cfg.ObserveSummaryPath = filepath.Join(observeMount, observeSummaryName)
+}
+
+// registerSummaryRoute adds one SummaryRegistry entry mapping this
+// dispatch's uid to the host path of its build-progress summary so the
+// orchestrator-driven ObserveSummary handler can read it. Returns an
+// unregister func the caller defers. No-op when no SummaryRegistry is
+// configured or the observe share wasn't set up (ObserveSummaryPath unset).
+func (e *Executor) registerSummaryRoute(cfg sandbox.Config, uid string) func() {
+	if e.summaryRegistry == nil || cfg.ObserveSummaryPath == "" || uid == "" {
+		return func() {}
+	}
+	hostPath := filepath.Join(e.observeHostDir(uid), observeSummaryName)
+	if err := e.summaryRegistry.Register(uid, hostPath); err != nil {
+		_, _ = fmt.Fprintf(e.stdout, "sandboxexec: register summary route: %v\n", err)
+		return func() {}
+	}
+	return func() { e.summaryRegistry.Unregister(uid) }
 }
 
 // assignVsock mints a per-Sandbox hybrid-vsock device: a fresh

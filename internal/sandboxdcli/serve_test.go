@@ -28,7 +28,7 @@ func stubBuildDispatcher(t *testing.T) {
 	t.Helper()
 	saved := buildDispatcher
 	t.Cleanup(func() { buildDispatcher = saved })
-	buildDispatcher = func(w io.Writer, _ *sandboxgateway.Bridger, _ *sandboxgateway.AttachRegistry, _ *sandboxgateway.ObserverRegistry, _ string, _ sandboxexec.MountMaterializer, _ string) (*sandboxexec.Executor, error) {
+	buildDispatcher = func(w io.Writer, _ *sandboxgateway.Bridger, _ *sandboxgateway.AttachRegistry, _ *sandboxgateway.ObserverRegistry, _ *sandboxgateway.SummaryRegistry, _ string, _ sandboxexec.MountMaterializer, _ string) (*sandboxexec.Executor, error) {
 		return sandboxexec.New(sandboxexec.Config{
 			Stdout: w,
 			Runner: func(context.Context, io.Writer, sandbox.Config) error { return nil },
@@ -176,7 +176,7 @@ func TestRunServePropagatesBuildDispatcherError(t *testing.T) {
 	saved := buildDispatcher
 	t.Cleanup(func() { buildDispatcher = saved })
 	want := errors.New("synthetic dispatcher build failure")
-	buildDispatcher = func(io.Writer, *sandboxgateway.Bridger, *sandboxgateway.AttachRegistry, *sandboxgateway.ObserverRegistry, string, sandboxexec.MountMaterializer, string) (*sandboxexec.Executor, error) {
+	buildDispatcher = func(io.Writer, *sandboxgateway.Bridger, *sandboxgateway.AttachRegistry, *sandboxgateway.ObserverRegistry, *sandboxgateway.SummaryRegistry, string, sandboxexec.MountMaterializer, string) (*sandboxexec.Executor, error) {
 		return nil, want
 	}
 	savedRun := runRegisterAndServe
@@ -204,11 +204,12 @@ func TestBuildDispatcherProductionSeam(t *testing.T) {
 	br := sandboxgateway.New()
 	ar := sandboxgateway.NewAttachRegistry()
 	or := sandboxgateway.NewObserverRegistry()
-	if _, err := buildDispatcher(&noopWriter{}, br, ar, or, t.TempDir(), nil, ""); err == nil {
+	sr := sandboxgateway.NewSummaryRegistry()
+	if _, err := buildDispatcher(&noopWriter{}, br, ar, or, sr, t.TempDir(), nil, ""); err == nil {
 		t.Fatal("buildDispatcher with DAFT_INITRAMFS unset should fail")
 	}
 	t.Setenv("DAFT_INITRAMFS", "/dev/null")
-	d, err := buildDispatcher(&noopWriter{}, br, ar, or, t.TempDir(), nil, "")
+	d, err := buildDispatcher(&noopWriter{}, br, ar, or, sr, t.TempDir(), nil, "")
 	if err != nil {
 		t.Fatalf("buildDispatcher: %v", err)
 	}
@@ -444,6 +445,33 @@ func TestExtractWithEnvFallbackReturnsErrNotBundledWhenBaseEmpty(t *testing.T) {
 	if !errors.Is(err, bundled.ErrNotBundled) {
 		t.Errorf("err = %v, want ErrNotBundled", err)
 	}
+}
+
+func TestObserveSummaryFromEnv(t *testing.T) {
+	t.Run("unset disables by default", func(t *testing.T) {
+		t.Setenv(envObserveSummary, "")
+		if observeSummaryFromEnv() {
+			t.Error("observe summary should be off by default")
+		}
+	})
+	t.Run("truthy enables", func(t *testing.T) {
+		// Synonyms map to one switch branch; values chosen to also exercise
+		// trim + lower-casing without colliding with the egress test literals.
+		for _, v := range []string{"yes", "on", "ON", " yes "} {
+			t.Setenv(envObserveSummary, v)
+			if !observeSummaryFromEnv() {
+				t.Errorf("%q should enable observe summary", v)
+			}
+		}
+	})
+	t.Run("other values stay off", func(t *testing.T) {
+		for _, v := range []string{"disabled", "nope", "2", "nonsense"} {
+			t.Setenv(envObserveSummary, v)
+			if observeSummaryFromEnv() {
+				t.Errorf("%q should not enable observe summary", v)
+			}
+		}
+	})
 }
 
 func TestEgressProxyFromEnv(t *testing.T) {

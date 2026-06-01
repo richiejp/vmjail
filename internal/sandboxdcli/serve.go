@@ -116,9 +116,10 @@ func runServe(
 	bridger := sandboxgateway.New()
 	attachRegistry := sandboxgateway.NewAttachRegistry()
 	observerRegistry := sandboxgateway.NewObserverRegistry()
+	summaryRegistry := sandboxgateway.NewSummaryRegistry()
 	mountBackingDir := filepath.Join(dir, "mounts")
 	dispatcher, err := buildDispatcher(stdout, bridger, attachRegistry,
-		observerRegistry, vsockDir, sync.server, mountBackingDir)
+		observerRegistry, summaryRegistry, vsockDir, sync.server, mountBackingDir)
 	if err != nil {
 		return err
 	}
@@ -258,6 +259,7 @@ var buildDispatcher = func(
 	bridger *sandboxgateway.Bridger,
 	attachRegistry *sandboxgateway.AttachRegistry,
 	observerRegistry *sandboxgateway.ObserverRegistry,
+	summaryRegistry *sandboxgateway.SummaryRegistry,
 	vsockDir string,
 	materializer sandboxexec.MountMaterializer,
 	mountBackingDir string,
@@ -292,6 +294,9 @@ var buildDispatcher = func(
 		Assembler:         assembler,
 		Bridger:           bridger,
 		AttachRegistry:    attachRegistry,
+		ObserverRegistry:  observerRegistry,
+		SummaryRegistry:   summaryRegistry,
+		ObserveSummary:    observeSummaryFromEnv(),
 		VsockDir:          vsockDir,
 		NetEnabled:        true,
 		EgressProxy:       egress,
@@ -299,6 +304,22 @@ var buildDispatcher = func(
 		MountBackingDir:   mountBackingDir,
 		ObserverDir:       observerDir,
 	})
+}
+
+// envObserveSummary opts a node into the Tier-2 observe share (open-snoop
+// gadget + build-progress summary) on every image-backed dispatch. Off by
+// default — the gadget load + extra virtiofs device per VM is a cost the
+// operator chooses — so observeSummaryFromEnv enables it only on a truthy
+// value ("1"/"true"/"yes"/"on").
+const envObserveSummary = "DAFT_OBSERVE_SUMMARY"
+
+func observeSummaryFromEnv() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(envObserveSummary))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // Env vars that configure the in-stack egress proxy (Phase J6). Set by

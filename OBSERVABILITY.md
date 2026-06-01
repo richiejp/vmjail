@@ -499,10 +499,24 @@ In rough order:
        back a valid summary. The pure `Event`/`Aggregator` moved to
        build-constraint-free files so this wiring names them
        cross-platform without pulling in cilium/ebpf.
-   - **6c — `daft sandbox observe` CLI + broker.** Mirror the
-     `observer-tail` RPC chain to serve the latest snapshot (and
-     `--follow`); render a human/agent-readable summary with drill-down
-     hints into the raw `opensnoop.log`.
+   - **6c — `daft sandbox observe` CLI + broker.** Serve the latest
+     snapshot (and `--follow`) over the orchestrator→node broker via a
+     dedicated `ObserveSummary` RPC; render a human/agent-readable
+     summary with drill-down hints into the raw `opensnoop.log`.
+     - *6c-1 (landed)* — the dispatch-side plumbing. The executor exports
+       a small writable **observe** virtiofs share (host-backed by
+       `<observerDir>/<uid>/observe/`), points the open-snoop trace +
+       build-progress summary guest paths into it, and registers the host
+       summary path in a `sandboxgateway.SummaryRegistry` so the node can
+       resolve it. **Opt-in, off by default** (`DAFT_OBSERVE_SUMMARY`
+       truthy): the gadget load + extra virtiofs device per VM is a cost
+       the operator chooses. Also fixed a latent gap — the production
+       executor never received the `ObserverRegistry`, so observer-tail
+       routes were never registered; both registries are now wired.
+     - *6c-2* — the dedicated `ObserveSummary` RPC chain (proto +
+       orchestrator + node one-shot read over the rendezvous broker).
+     - *6c-3* — the `daft sandbox observe <workspace>` CLI: render the
+       summary, `--follow` polls ~1 s; cluster e2e with the opt-in on.
    - **6d — stuck/slow heuristics + in-sandbox build e2e.** Flag stalls
      and pathological churn in the summary; an e2e runs a real build and
      asserts the summary reflects forward progress and then a stall.
@@ -530,6 +544,13 @@ In rough order:
   (`startSummaryWriter` + `progressTracker` + `runSummaryLoop`), driven by
   the `daft.observe.summary=` cmdline token and fed by the open-snoop
   aggregator. `Config.ObserveSummaryPath` emits the token.
+- `internal/sandboxexec/exec.go` — the #6c-1 dispatch plumbing
+  (`applyObserveSummary` + `registerSummaryRoute`): exports the observe
+  share and registers the host summary path. Gated by `DAFT_OBSERVE_SUMMARY`
+  (`internal/sandboxdcli/serve.go`, off by default).
+- `internal/sandboxgateway/observer.go` — `SummaryRegistry` (and the
+  `ObserverRegistry` it shares a generic table with): per-sandbox
+  `uid → host file path` routing the node-side handlers resolve through.
 - `internal/agent/opensnoop.go` — wires the gadget into daft-agent
   (`startOpensnoopFromCmdline` + the `opensnoopDeps` seam), driven by the
   `daft.observe.opensnoop=` cmdline token (`internal/agent/cmdline.go`).
