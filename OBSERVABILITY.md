@@ -256,32 +256,42 @@ cache-miss bug that motivated this work was an `openat()` returning
 ENOENT on a path the test cared about; this gadget would have shown
 the failure as one line in a guest-side log.
 
-### Kernel-side prerequisites for Tier 2
+### Kernel-side prerequisites for Tier 2 (landed — roadmap #5a)
 
-Currently set in the microVM kernel
-(`third_party/kernel-config/daft.config`):
+Set in the microVM kernel (`third_party/kernel-config/daft.config`)
+and enforced by the `kconfig-verify` gate — a silent `olddefconfig`
+demotion fails the kernel build rather than shipping a kernel CO-RE
+can't load against.
 
-- `CONFIG_BPF=y`
-- `CONFIG_BPF_SYSCALL=y`
-- `CONFIG_BPF_JIT=y`
-- `CONFIG_PERF_EVENTS=y`
-- `CONFIG_FTRACE=y`
-- `CONFIG_KPROBES=y`
+Already present from the BPF-LSM work:
+
+- `CONFIG_BPF=y`, `CONFIG_BPF_SYSCALL=y`, `CONFIG_BPF_JIT=y`
+- `CONFIG_PERF_EVENTS=y`, `CONFIG_FTRACE=y`, `CONFIG_KPROBES=y`
 - `CONFIG_BPF_LSM=y`
 
-Still needed before CO-RE eBPF can land:
+The CO-RE set added for Tier 2:
 
-- `CONFIG_DEBUG_INFO_BTF=y` — required for CO-RE; adds a few MB
-  to the kernel image.
-- `CONFIG_UPROBES=y` — userspace probes (for virtiofsd, guest
-  binaries).
-- `CONFIG_KALLSYMS_ALL=y` — symbol resolution for kprobes.
-- `CONFIG_FTRACE_SYSCALLS=y` — `sys_enter/sys_exit` tracepoints.
-- `CONFIG_BPF_EVENTS=y` — BPF on tracepoints.
+- `CONFIG_DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT=y` — flips the "Debug
+  information" choice off its `DEBUG_INFO_NONE` default so the
+  choice's `select DEBUG_INFO` fires (BTF needs debug info); lets
+  clang pick its own DWARF version.
+- `CONFIG_DEBUG_INFO_BTF=y` — the CO-RE prerequisite. `pahole`
+  (already in the kernel derivation's `nativeBuildInputs`) renders
+  the debug info into the BTF blob embedded in the image. Adds a
+  few MB. `RANDSTRUCT_NONE=y` satisfies BTF's
+  `!GCC_PLUGIN_RANDSTRUCT` dependency.
+- `CONFIG_KALLSYMS_ALL=y` — full symbol table for kprobe attach.
+- `CONFIG_FTRACE_SYSCALLS=y` — `sys_enter/sys_exit` tracepoints
+  (open-snoop's `openat` probe).
 
-These get added in the same commit that adds the `cilium/ebpf`
-dependency and the first gadget, gated by the existing
-`kconfig-verify` script.
+`CONFIG_UPROBES=y` and `CONFIG_BPF_EVENTS=y` were already
+`def_bool y` transitively (UPROBES from `ARCH_SUPPORTS_UPROBES`+MMU,
+BPF_EVENTS from `KPROBES`+`FTRACE`); they're re-asserted in the
+fragment so a future dependency change fails the gate loudly instead
+of silently dropping CO-RE attach support.
+
+The `cilium/ebpf` dependency and the first gadget land in the
+follow-up slices (roadmap #5b/#5c).
 
 ### Library choice
 
@@ -360,9 +370,19 @@ In rough order:
    *both* this wiring **and** Tier 2 gadgets covering the guest-internal
    detail (PSI, per-process wchan, store-path counts) the host-side
    sampler can't see — so only the first half of that gate is met.
-5. **Tier 2 kickoff** — kconfig commit (BTF/UPROBES/KALLSYMS_ALL/
-   FTRACE_SYSCALLS/BPF_EVENTS) + `cilium/ebpf` dependency + first
-   gadget (`open-snoop`).
+5. **Tier 2 kickoff** — sliced:
+   - **5a (landed)** — kernel-side kconfig prerequisites in
+     `daft.config` (`DEBUG_INFO_DWARF_TOOLCHAIN_DEFAULT` +
+     `DEBUG_INFO_BTF`, `KALLSYMS_ALL`, `FTRACE_SYSCALLS`;
+     `UPROBES`/`BPF_EVENTS` were already transitively on and are
+     re-asserted), gated by the existing `kconfig-verify` script.
+     See "Kernel-side prerequisites for Tier 2".
+   - **5b** — `cilium/ebpf` dependency + `bpf2go` build scaffold
+     (`internal/observability/ebpf/`), with the generated loader
+     excluded from the coverage gate.
+   - **5c** — first gadget (`open-snoop`, attaching to
+     `tracepoint:syscalls:sys_enter_openat`) + guest wiring + e2e
+     proof inside a booted VM.
 6. **More gadgets** — `biolatency`, `tcpstat`, `runqlat`, `pktstat`,
    each motivated by a real recurring symptom.
 
