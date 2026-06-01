@@ -109,6 +109,7 @@ func newSandboxCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newSandboxHelloCmd())
 	cmd.AddCommand(newSandboxObserverTailCmd())
+	cmd.AddCommand(newSandboxObserveCmd())
 	return cmd
 }
 

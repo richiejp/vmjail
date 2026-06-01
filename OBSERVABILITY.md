@@ -524,9 +524,18 @@ In rough order:
        observer log. The orchestrator reads the (size-capped) snapshot
        once and returns it verbatim; the public/CLI boundary stays a
        dedicated RPC while the broker internals are reused.
-     - *6c-3* — the `daft sandbox observe <workspace>` CLI: render the
-       summary, `--follow` polls ~1 s; cluster e2e exercises the summary
-     (on by default).
+     - *6c-3 (landed)* — the `daft sandbox observe [workspace]` CLI
+       (`internal/cli/sandbox_observe.go`). Calls `ObserveSummary`, parses
+       `progress.Summary`, and renders a human/agent-readable report: the
+       open-snoop liveness headline (total / rate / last-open age), a
+       coarse status (starting / active / ⚠ possibly stalled), the bounded
+       top processes/dirs/files rankings, and a drill-down pointer to
+       `daft sandbox observer-tail`. Prints once by default; `--follow`
+       re-renders on `--interval` (default 1 s), well-defined against the
+       atomically-rewritten file. The workspace may be omitted from a
+       workspace dir (reuses `resolveWorkspaceNameDefault`). An empty
+       payload (gadget starting, or observe opted out) renders as a clear
+       "none yet" note. Coarse stuck/slow heuristics here; #6d refines.
    - **6d — stuck/slow heuristics + in-sandbox build e2e.** Flag stalls
      and pathological churn in the summary; an e2e runs a real build and
      asserts the summary reflects forward progress and then a stall.
