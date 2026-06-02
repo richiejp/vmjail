@@ -593,6 +593,9 @@ func TestHandleSandboxEventRegistersSummaryRoute(t *testing.T) {
 	if seen.OpensnoopLogPath != "/run/daft/observe/opensnoop.log" {
 		t.Errorf("guest opensnoop path = %q", seen.OpensnoopLogPath)
 	}
+	if seen.ExecsnoopLogPath != "/run/daft/observe/execsnoop.log" {
+		t.Errorf("guest execsnoop path = %q", seen.ExecsnoopLogPath)
+	}
 	var haveObserveShare bool
 	for _, s := range seen.Shares {
 		if s.Tag == "daftobserve" && s.Mountpoint == "/run/daft/observe" {

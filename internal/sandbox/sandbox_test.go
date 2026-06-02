@@ -647,6 +647,23 @@ func TestBuildKernelCmdlineOmitsOpensnoopWhenUnset(t *testing.T) {
 	}
 }
 
+func TestBuildKernelCmdlineIncludesExecsnoop(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.ExecsnoopLogPath = "/share/execsnoop.log"
+	got := buildKernelCmdline(cfg)
+	if !strings.Contains(got, agent.ExecsnoopCmdlineKey+"=/share/execsnoop.log") {
+		t.Errorf("cmdline %q missing execsnoop token", got)
+	}
+}
+
+func TestBuildKernelCmdlineOmitsExecsnoopWhenUnset(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	got := buildKernelCmdline(cfg)
+	if strings.Contains(got, agent.ExecsnoopCmdlineKey) {
+		t.Errorf("cmdline %q should not contain execsnoop token when path empty", got)
+	}
+}
+
 func TestBuildKernelCmdlineIncludesObserveSummary(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	cfg.ObserveSummaryPath = "/share/progress.json"

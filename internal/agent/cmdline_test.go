@@ -222,6 +222,21 @@ func TestFormatOpensnoopCmdlineRoundTrips(t *testing.T) {
 	}
 }
 
+// TestExecsnoopCmdline covers the round-trip plus the absent and
+// relative-path branches of the parser (same contract as open-snoop).
+func TestExecsnoopCmdline(t *testing.T) {
+	s := FormatExecsnoopCmdline("/share/execsnoop.log")
+	if got, ok, err := ParseExecsnoopCmdline(s); err != nil || !ok || got != "/share/execsnoop.log" {
+		t.Errorf("round-trip via %q: got=%q ok=%v err=%v", s, got, ok, err)
+	}
+	if _, ok, err := ParseExecsnoopCmdline(testCmdlineShareOnly); ok || err != nil {
+		t.Errorf("absent token: ok=%v err=%v, want false/nil", ok, err)
+	}
+	if _, _, err := ParseExecsnoopCmdline("daft.observe.execsnoop=rel/path"); err == nil {
+		t.Error("relative path should error")
+	}
+}
+
 //nolint:dupl // same table-test harness as TestParseOpensnoopCmdline by design; the per-parser cases differ.
 func TestParseSummaryCmdline(t *testing.T) {
 	tests := []struct {

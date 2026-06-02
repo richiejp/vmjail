@@ -144,6 +144,12 @@ type Config struct {
 	// default) leaves the gadget off. See OBSERVABILITY.md "Tier 2".
 	OpensnoopLogPath string
 
+	// ExecsnoopLogPath, when non-empty, is the *in-guest* absolute path the
+	// agent writes the Tier-2 exec-snoop eBPF trace to (one line per
+	// execve(2): pid/ppid/uid/comm/argv/ret). Same contract as
+	// OpensnoopLogPath. Empty (the default) leaves the gadget off.
+	ExecsnoopLogPath string
+
 	// ObserveSummaryPath, when non-empty, is the *in-guest* absolute path
 	// the agent atomically rewrites the live build-progress summary to
 	// (~1 Hz JSON: openat total/rate/last-activity-age + top processes,
@@ -608,6 +614,9 @@ func buildKernelCmdline(cfg Config) string {
 	}
 	if cfg.OpensnoopLogPath != "" {
 		parts = append(parts, agent.FormatOpensnoopCmdline(cfg.OpensnoopLogPath))
+	}
+	if cfg.ExecsnoopLogPath != "" {
+		parts = append(parts, agent.FormatExecsnoopCmdline(cfg.ExecsnoopLogPath))
 	}
 	if cfg.ObserveSummaryPath != "" {
 		parts = append(parts, agent.FormatSummaryCmdline(cfg.ObserveSummaryPath))

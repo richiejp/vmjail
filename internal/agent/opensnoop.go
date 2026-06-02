@@ -58,52 +58,60 @@ func defaultOpensnoopDeps() opensnoopDeps {
 	}
 }
 
+// resolveSelfPIDNS resolves the agent's own PID-namespace inode for a
+// gadget's container-workload filter, shared by open-snoop and exec-snoop. A
+// failure (or a nil dep) leaves selfPidns 0 — the gadget reads that as "trace
+// everything", a degraded but non-empty fallback so the build summary
+// survives a host that can't read the namespace — and is reported on w. The
+// returned scope ("container" / "all") labels the gadget's status line.
+func resolveSelfPIDNS(w io.Writer, prefix string, fn func() (uint32, error)) (selfPidns uint32, scope string) {
+	scope = "all"
+	if fn != nil {
+		if ns, err := fn(); err != nil {
+			writeReport(w, prefix, "pidns: "+err.Error()+" (tracing all processes)")
+		} else {
+			selfPidns, scope = ns, "container"
+		}
+	}
+	return selfPidns, scope
+}
+
 // startOpensnoopFromCmdline parses daft.observe.opensnoop and, when set,
 // opens the guest-side trace file and spawns the gadget's drain loop for
-// the agent's lifetime (ctx cancel stops it and closes the file). Like
+// the agent's lifetime (ctx cancel stops it and closes the file). It returns
+// the live aggregator so the caller can fold it into the build-progress
+// summary, or nil when the gadget was not requested / could not start. Like
 // the other start*FromCmdline helpers it reports one OpensnoopReportPrefix
-// line per outcome and never fails the boot — observability is a
-// debugging surface, not a correctness invariant. A nil d.opensnoop.run
-// (unit tests / non-wired callers) is the "gadget not requested" path.
+// line per outcome and never fails the boot — observability is a debugging
+// surface, not a correctness invariant.
 //
 // Called before the container so the tracepoint is attaching before the
 // workload's openat storm; the ring buffer absorbs events emitted while
 // the drain goroutine is still being scheduled.
-func startOpensnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdline string) {
+//
+//nolint:dupl // deliberately parallel to startExecsnoopFromCmdline; the two gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
+func startOpensnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdline string) *opensnoop.Aggregator {
 	if d.opensnoop.run == nil {
-		return
+		return nil
 	}
 	path, ok, err := ParseOpensnoopCmdline(cmdline)
 	switch {
 	case err != nil:
 		writeReport(w, OpensnoopReportPrefix, "cmdline: "+err.Error())
-		return
+		return nil
 	case !ok:
-		return
+		return nil
 	}
 	if err := d.opensnoop.mountTracefs(); err != nil {
 		writeReport(w, OpensnoopReportPrefix, err.Error())
-		return
+		return nil
 	}
 	f, err := d.opensnoop.openLog(path)
 	if err != nil {
 		writeReport(w, OpensnoopReportPrefix, err.Error())
-		return
+		return nil
 	}
-	// Resolve the agent's own PID namespace so the gadget filters to the
-	// container workload. A failure (or no dep) leaves selfPidns 0, which
-	// the gadget reads as "trace everything" — the unfiltered firehose is
-	// a degraded but non-empty fallback, so the build summary survives a
-	// host that can't read the namespace.
-	var selfPidns uint32
-	scope := "all"
-	if d.opensnoop.selfPIDNS != nil {
-		if ns, perr := d.opensnoop.selfPIDNS(); perr != nil {
-			writeReport(w, OpensnoopReportPrefix, "pidns: "+perr.Error()+" (tracing all processes)")
-		} else {
-			selfPidns, scope = ns, "container"
-		}
-	}
+	selfPidns, scope := resolveSelfPIDNS(w, OpensnoopReportPrefix, d.opensnoop.selfPIDNS)
 	agg := opensnoop.NewAggregator()
 	writeReport(w, OpensnoopReportPrefix, "tracing "+scope+" openat → "+path)
 	go func() {
@@ -115,7 +123,5 @@ func startOpensnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdl
 			writeReport(w, OpensnoopReportPrefix, rerr.Error())
 		}
 	}()
-	// The summary is a live view over this gadget's aggregate, so it shares
-	// the gadget's lifetime and aggregator.
-	startSummaryWriter(ctx, w, d, cmdline, agg)
+	return agg
 }

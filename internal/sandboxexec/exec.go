@@ -637,6 +637,7 @@ const (
 	observeMount         = "/run/daft/observe"
 	observeSubdir        = "observe"
 	observeOpensnoopName = "opensnoop.log"
+	observeExecsnoopName = "execsnoop.log"
 	observeSummaryName   = "progress.json"
 )
 
@@ -647,8 +648,9 @@ func (e *Executor) observeHostDir(uid string) string {
 
 // applyObserveSummary wires the Tier-2 observe share: it mkdir's the host
 // backing dir, exports it as a writable virtiofs share, and points the
-// guest's open-snoop trace + build-progress summary into the mountpoint so
-// the gadget runs and the summary lands somewhere the host can read. Gated
+// guest's open-snoop + exec-snoop traces and the build-progress summary into
+// the mountpoint so the gadgets run and the output lands somewhere the host
+// can read. Gated
 // on the same observerDir opt-in as the observer log and equally
 // best-effort: an unset observerDir, already-set paths, an empty uid, or a
 // mkdir failure all leave the config untouched and the dispatch proceeds.
@@ -667,6 +669,7 @@ func (e *Executor) applyObserveSummary(cfg *sandbox.Config, uid string) {
 	observe := &sandbox.ShareConfig{HostDir: hostDir, Tag: observeShareTag, Mountpoint: observeMount}
 	cfg.Shares = append(append([]*sandbox.ShareConfig(nil), cfg.Shares...), observe)
 	cfg.OpensnoopLogPath = filepath.Join(observeMount, observeOpensnoopName)
+	cfg.ExecsnoopLogPath = filepath.Join(observeMount, observeExecsnoopName)
 	cfg.ObserveSummaryPath = filepath.Join(observeMount, observeSummaryName)
 }
 

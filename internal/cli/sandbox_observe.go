@@ -178,14 +178,34 @@ func renderObserveSummary(now time.Time, workspace string, raw []byte) (string, 
 	}
 	fmt.Fprintf(&b, "snapshot:  %s ago%s\n", fmtDuration(snapAge), staleNote)
 
-	if s.Opensnoop == nil {
-		b.WriteString("\nopen-snoop: not running\n")
+	if s.Opensnoop == nil && s.ExecSnoop == nil {
+		b.WriteString("\nno gadgets running\n")
 		return b.String(), nil
 	}
-	writeOpensnoop(&b, *s.Opensnoop)
+	if s.Opensnoop != nil {
+		writeOpensnoop(&b, *s.Opensnoop)
+	}
+	if s.ExecSnoop != nil {
+		writeExecsnoop(&b, *s.ExecSnoop)
+	}
 	b.WriteString("\ndrill down: daft sandbox observer-tail " + workspace +
 		"   (raw Tier-1 per-event trace)\n")
 	return b.String(), nil
+}
+
+// writeExecsnoop renders the exec-snoop section: the liveness headline
+// (total / failed / rate / last-exec age + a coarse status) then the
+// command rankings, with failed execs surfaced separately since a failing
+// exec (command not found) is usually the actionable signal.
+func writeExecsnoop(b *strings.Builder, ex progress.ExecSnoop) {
+	b.WriteString("\nexec-snoop (process launches)\n")
+	fmt.Fprintf(b, "  execs total : %d\n", ex.Total)
+	fmt.Fprintf(b, "  failed execs: %d\n", ex.Failed)
+	fmt.Fprintf(b, "  exec rate   : %.1f/s\n", ex.ExecRate)
+	fmt.Fprintf(b, "  last exec   : %s\n", lastOpenAge(ex.LastEventAgeMs))
+
+	writeTopN(b, "top commands", ex.TopCommands)
+	writeTopN(b, "top failed (could not exec)", ex.TopFailed)
 }
 
 // writeOpensnoop renders the open-snoop section: the liveness headline

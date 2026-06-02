@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	"github.com/localai-org/darkaifactory/internal/observability/ebpf/execsnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/opensnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/progress"
 )
@@ -37,17 +38,17 @@ func defaultSummaryDeps() summaryDeps {
 }
 
 // startSummaryWriter parses daft.observe.summary and, when set, spawns a
-// goroutine that rewrites the summary file from agg every d.summary.interval
-// until ctx is cancelled (a final write captures the end state). Like the
-// gadget start it reports one line and never fails the boot. agg is the live
-// aggregator the open-snoop drain feeds; a nil d.summary.write (unit tests /
-// non-wired callers) is the "summary not requested" path.
+// goroutine that rewrites the summary file every d.summary.interval until ctx
+// is cancelled (a final write captures the end state). Like the gadget start
+// it reports one line and never fails the boot. osAgg/exAgg are the live
+// gadget aggregators the summary folds together; either may be nil (that
+// gadget not running). A nil d.summary.write (unit tests / non-wired callers)
+// or both aggregators nil is the "summary not requested" path.
 //
-// Called from startOpensnoopFromCmdline with that gadget's aggregator: the
-// summary is a view over the gadget, so it shares its lifetime and is only
-// reachable when the gadget itself is running.
-func startSummaryWriter(ctx context.Context, w io.Writer, d runDeps, cmdline string, agg *opensnoop.Aggregator) {
-	if d.summary.write == nil {
+// Called from run() after the gadgets start, so the summary is a view over
+// whichever gadgets came up rather than coupled to any single one.
+func startSummaryWriter(ctx context.Context, w io.Writer, d runDeps, cmdline string, osAgg *opensnoop.Aggregator, exAgg *execsnoop.Aggregator) {
+	if d.summary.write == nil || (osAgg == nil && exAgg == nil) {
 		return
 	}
 	path, ok, err := ParseSummaryCmdline(cmdline)
@@ -59,63 +60,82 @@ func startSummaryWriter(ctx context.Context, w io.Writer, d runDeps, cmdline str
 		return
 	}
 	writeReport(w, SummaryReportPrefix, "writing → "+path)
-	go runSummaryLoop(ctx, d.summary, path, agg)
+	go runSummaryLoop(ctx, d.summary, path, osAgg, exAgg)
 }
 
-// progressTracker turns the clock-free aggregate into the time-derived
-// fields the summary carries: the openat rate over the last write window and
-// how long ago openat activity last advanced (the stuck signal).
-type progressTracker struct {
-	now       func() time.Time
-	lastTotal uint64    // Total at the last advance
-	lastAt    time.Time // when Total last advanced; zero ⇒ no events yet
-	prevTotal uint64    // Total at the previous sample (rate numerator base)
+// rateTracker turns a gadget's clock-free cumulative total into the
+// time-derived summary fields: the per-window event rate and how long ago the
+// total last advanced (the stuck signal). One tracker per gadget section, so
+// each gadget's activity age is independent.
+type rateTracker struct {
+	lastTotal uint64    // total at the last advance
+	lastAt    time.Time // when total last advanced; zero ⇒ no events yet
+	prevTotal uint64    // total at the previous sample (rate numerator base)
 	prevAt    time.Time // time of the previous sample (rate denominator base)
 }
 
-func newProgressTracker(now func() time.Time) *progressTracker {
-	return &progressTracker{now: now, prevAt: now()}
+func newRateTracker(start time.Time) *rateTracker {
+	return &rateTracker{prevAt: start}
 }
 
-// sample folds the latest aggregate into a full progress.Summary and
-// advances the tracker's rolling state. op arrives with its time-derived
-// fields zero (the aggregator is clock-free); this fills them in.
-func (p *progressTracker) sample(op progress.Opensnoop) progress.Summary {
-	now := p.now()
-	if op.Total > p.lastTotal {
-		p.lastTotal, p.lastAt = op.Total, now
+// observe folds the cumulative total at time now and returns the rate
+// (events/sec over the last write window) and the age in ms since the total
+// last advanced (-1 if it never has).
+func (r *rateTracker) observe(total uint64, now time.Time) (rate float64, lastAgeMs int64) {
+	if total > r.lastTotal {
+		r.lastTotal, r.lastAt = total, now
 	}
-	op.LastEventAgeMs = -1 // sentinel: no openat observed yet
-	if !p.lastAt.IsZero() {
-		op.LastEventAgeMs = now.Sub(p.lastAt).Milliseconds()
+	lastAgeMs = -1 // sentinel: no event observed yet
+	if !r.lastAt.IsZero() {
+		lastAgeMs = now.Sub(r.lastAt).Milliseconds()
 	}
-	if dt := now.Sub(p.prevAt).Seconds(); dt > 0 {
-		op.OpenatRate = float64(op.Total-p.prevTotal) / dt
+	if dt := now.Sub(r.prevAt).Seconds(); dt > 0 {
+		rate = float64(total-r.prevTotal) / dt
 	}
-	p.prevTotal, p.prevAt = op.Total, now
-	return progress.Summary{TakenAtUnixMs: now.UnixMilli(), Opensnoop: &op}
+	r.prevTotal, r.prevAt = total, now
+	return rate, lastAgeMs
 }
 
 // runSummaryLoop rewrites the summary every d.interval until ctx is
 // cancelled, then writes one final snapshot so the on-disk file reflects the
 // end state. Write errors are dropped: the summary is a best-effort
 // debugging surface and the host reader tolerates a momentarily stale file.
-func runSummaryLoop(ctx context.Context, d summaryDeps, path string, agg *opensnoop.Aggregator) {
-	tracker := newProgressTracker(d.now)
+func runSummaryLoop(ctx context.Context, d summaryDeps, path string, osAgg *opensnoop.Aggregator, exAgg *execsnoop.Aggregator) {
+	start := d.now()
+	osRate := newRateTracker(start)
+	exRate := newRateTracker(start)
+	// build folds each present gadget's clock-free snapshot into one summary,
+	// filling its time-derived fields from a single clock read so the
+	// sections and the file timestamp share one instant.
+	build := func() progress.Summary {
+		now := d.now()
+		s := progress.Summary{TakenAtUnixMs: now.UnixMilli()}
+		if osAgg != nil {
+			op := osAgg.Snapshot()
+			op.OpenatRate, op.LastEventAgeMs = osRate.observe(op.Total, now)
+			s.Opensnoop = &op
+		}
+		if exAgg != nil {
+			ex := exAgg.Snapshot()
+			ex.ExecRate, ex.LastEventAgeMs = exRate.observe(ex.Total, now)
+			s.ExecSnoop = &ex
+		}
+		return s
+	}
 	// Write once immediately so the file exists for an early poller (and so
 	// the host sees a valid summary even if the VM is torn down before the
 	// first tick fires) rather than file-not-found.
-	_ = d.write(path, tracker.sample(agg.Snapshot()))
+	_ = d.write(path, build())
 	t := time.NewTicker(d.interval)
 	defer t.Stop()
 	//daft:lint:disable=forloopbound reason="rewrites the summary once per tick for the agent's lifetime; ctx cancel is the termination signal (writes a final snapshot and returns)"
 	for {
 		select {
 		case <-ctx.Done():
-			_ = d.write(path, tracker.sample(agg.Snapshot()))
+			_ = d.write(path, build())
 			return
 		case <-t.C:
-			_ = d.write(path, tracker.sample(agg.Snapshot()))
+			_ = d.write(path, build())
 		}
 	}
 }

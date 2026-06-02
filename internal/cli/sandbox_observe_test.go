@@ -46,6 +46,11 @@ func TestRenderObserveSummaryActive(t *testing.T) {
 			TopPaths:   []progress.Counted{{Key: "/nix/store/x/stdio.h", Count: 12}},
 			TopMissing: []progress.Counted{{Key: "/nix/store/x/missing.h", Count: 9}},
 		},
+		ExecSnoop: &progress.ExecSnoop{
+			Total: 88, Failed: 3, ExecRate: 12.5, LastEventAgeMs: 200,
+			TopCommands: []progress.Counted{{Key: "/bin/cc", Count: 40}},
+			TopFailed:   []progress.Counted{{Key: "/usr/bin/missing-tool", Count: 3}},
+		},
 	})
 	out, err := renderObserveSummary(observeFixedNow, "myapp", raw)
 	if err != nil {
@@ -62,6 +67,14 @@ func TestRenderObserveSummaryActive(t *testing.T) {
 		"/nix/store/x/stdio.h (12)",
 		"top missing (ENOENT)",
 		"/nix/store/x/missing.h (9)",
+		"exec-snoop (process launches)",
+		"execs total : 88",
+		"failed execs: 3",
+		"exec rate   : 12.5/s",
+		"top commands",
+		"/bin/cc (40)",
+		"top failed (could not exec)",
+		"/usr/bin/missing-tool (3)",
 		"drill down: daft sandbox observer-tail myapp",
 	} {
 		if !strings.Contains(out, want) {
@@ -98,14 +111,30 @@ func TestRenderObserveSummaryStarting(t *testing.T) {
 	}
 }
 
-func TestRenderObserveSummaryNoOpensnoop(t *testing.T) {
+func TestRenderObserveSummaryNoGadgets(t *testing.T) {
 	raw := mustMarshalSummary(t, progress.Summary{TakenAtUnixMs: observeFixedNow.UnixMilli()})
 	out, err := renderObserveSummary(observeFixedNow, "ws", raw)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
-	if !strings.Contains(out, "open-snoop: not running") {
-		t.Errorf("expected not-running note, got %q", out)
+	if !strings.Contains(out, "no gadgets running") {
+		t.Errorf("expected no-gadgets note, got %q", out)
+	}
+}
+
+// TestRenderObserveSummaryExecsnoopOnly: a summary with only the exec-snoop
+// section renders that section (open-snoop absent is not an error).
+func TestRenderObserveSummaryExecsnoopOnly(t *testing.T) {
+	raw := mustMarshalSummary(t, progress.Summary{
+		TakenAtUnixMs: observeFixedNow.UnixMilli(),
+		ExecSnoop:     &progress.ExecSnoop{Total: 5, TopCommands: []progress.Counted{{Key: "/bin/sh", Count: 5}}},
+	})
+	out, err := renderObserveSummary(observeFixedNow, "ws", raw)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(out, "exec-snoop (process launches)") || !strings.Contains(out, "/bin/sh (5)") {
+		t.Errorf("expected exec-snoop section, got %q", out)
 	}
 }
 

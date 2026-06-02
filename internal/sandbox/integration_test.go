@@ -228,18 +228,25 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 	const guestLogName = "opensnoop.log"
 	cfg.OpensnoopLogPath = testMountpoint + "/" + guestLogName
 	hostLog := filepath.Join(shareDir, guestLogName)
+	// The exec-snoop gadget (#7a) writes its execve trace alongside.
+	const guestExecLogName = "execsnoop.log"
+	cfg.ExecsnoopLogPath = testMountpoint + "/" + guestExecLogName
+	hostExecLog := filepath.Join(shareDir, guestExecLogName)
 	// The build-progress summary (#6b) writes alongside the raw trace.
 	const guestSummaryName = "progress.json"
 	cfg.ObserveSummaryPath = testMountpoint + "/" + guestSummaryName
 	hostSummary := filepath.Join(shareDir, guestSummaryName)
 
-	// Surface the captured trace + summary on failure, alongside the Tier-1 dump.
+	// Surface the captured traces + summary on failure, alongside the Tier-1 dump.
 	t.Cleanup(func() {
 		if !t.Failed() {
 			return
 		}
 		if data, err := os.ReadFile(hostLog); err == nil {
 			t.Logf("opensnoop trace (%s):\n%s", hostLog, data)
+		}
+		if data, err := os.ReadFile(hostExecLog); err == nil {
+			t.Logf("execsnoop trace (%s):\n%s", hostExecLog, data)
 		}
 		if data, err := os.ReadFile(hostSummary); err == nil {
 			t.Logf("build-progress summary (%s):\n%s", hostSummary, data)
@@ -290,6 +297,27 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 			data)
 	}
 
+	// The agent started the container-scoped exec gadget (deterministic
+	// console line). The container execs /hello exactly once, very early, so
+	// whether that single record flushes to the host before the abrupt
+	// teardown is racy — unlike open-snoop's continuous openat storm. So the
+	// trace content is asserted only when it did flush (catching an argv /
+	// errno decode regression without flaking on the race); the BPF
+	// load/attach/argv-decode is otherwise covered by the unit tests and a
+	// privileged bpftool load. When present it must be the workload's exec
+	// (argv=[/hello] ret=ok) — the agent's own crun exec runs in the root PID
+	// namespace and is filtered out.
+	if !strings.Contains(buf.String(), agent.ExecsnoopReportPrefix+"tracing container execve") {
+		t.Fatalf("agent did not report the container-scoped exec filter; console:\n%s", buf.String())
+	}
+	if execData, err := os.ReadFile(hostExecLog); err == nil && len(execData) > 0 {
+		if !strings.Contains(string(execData), "argv=[/hello") || !strings.Contains(string(execData), "ret=ok") {
+			t.Errorf("execsnoop trace flushed but is not the workload's successful exec\n--- trace ---\n%s", execData)
+		} else {
+			t.Logf("execsnoop captured: %s", bytes.TrimSpace(execData))
+		}
+	}
+
 	// The summary writer ran the whole guest→host pipeline: cmdline token →
 	// agent parse → writer → atomic rewrite onto the share. Assert the host
 	// reads back a valid, parseable summary with an open-snoop section. The
@@ -310,9 +338,19 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 	if summary.Opensnoop == nil || summary.TakenAtUnixMs <= 0 {
 		t.Fatalf("summary missing opensnoop section or timestamp: %+v\n--- summary ---\n%s", summary, sumData)
 	}
-	t.Logf("build-progress summary: total=%d rate=%.1f/s last-event-age=%dms top_dirs=%v",
+	// Both gadgets fold into the one summary, so the exec-snoop section must
+	// be present. Like the open-snoop section above we assert presence, not a
+	// specific Total: the workload execs /hello exactly once, very early, so
+	// whether that single event lands in the summary snapshot that reaches
+	// the host before the abrupt teardown is timing-dependent — the raw exec
+	// trace (asserted above) is the deterministic proof the gadget captured
+	// it.
+	if summary.ExecSnoop == nil {
+		t.Fatalf("summary missing exec-snoop section: %+v\n--- summary ---\n%s", summary, sumData)
+	}
+	t.Logf("build-progress summary: opens total=%d rate=%.1f/s | execs total=%d top_commands=%v",
 		summary.Opensnoop.Total, summary.Opensnoop.OpenatRate,
-		summary.Opensnoop.LastEventAgeMs, summary.Opensnoop.TopDirs)
+		summary.ExecSnoop.Total, summary.ExecSnoop.TopCommands)
 }
 
 // TestHelloIntegrationBootsVMWithImagestoreBundle proves the

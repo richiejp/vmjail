@@ -194,6 +194,8 @@ func TestStartOpensnoopFiltersToContainer(t *testing.T) {
 // TestStartOpensnoopReportsPIDNSError: a namespace read failure is reported
 // and the gadget still starts unfiltered (selfPidns 0) rather than not at
 // all — a degraded but non-empty trace beats a silent gap.
+//
+//nolint:dupl // parallel to the exec-snoop pidns-error test by design.
 func TestStartOpensnoopReportsPIDNSError(t *testing.T) {
 	log := newFakeLog()
 	gotNS := make(chan uint32, 1)

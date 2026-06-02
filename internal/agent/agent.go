@@ -84,6 +84,7 @@ func Run(ctx context.Context, w io.Writer) error {
 		attach:      defaultAttachDeps(),
 		tap:         defaultTapDeps(),
 		opensnoop:   defaultOpensnoopDeps(),
+		execsnoop:   defaultExecsnoopDeps(),
 		summary:     defaultSummaryDeps(),
 	})
 }
@@ -114,10 +115,13 @@ type runDeps struct {
 	// gadget. Zero value (run == nil) disables it (the BPF load needs
 	// CAP_BPF, which make check lacks).
 	opensnoop opensnoopDeps
+	// execsnoop is the test-substitutable surface for the Tier-2 exec-snoop
+	// eBPF gadget, parallel to opensnoop. Zero value disables it.
+	execsnoop execsnoopDeps
 	// summary is the test-substitutable surface for the build-progress
 	// summary writer (clock + tick interval + atomic file write). Zero
-	// value (write == nil) disables it. Fed by the open-snoop aggregator,
-	// so it only produces output when opensnoop is also enabled.
+	// value (write == nil) disables it. Fed by the open-snoop and exec-snoop
+	// aggregators, so it only produces output when at least one is enabled.
 	summary summaryDeps
 }
 
@@ -148,9 +152,13 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	if bundle != "" {
 		ensureCgroupV2(w)
 	}
-	// Attach the open-snoop gadget before the container so its
-	// tracepoint is live for the workload's openat storm.
-	startOpensnoopFromCmdline(ctx, w, d, cmdline)
+	// Attach the open-snoop + exec-snoop gadgets before the container so
+	// their tracepoints are live for the workload's first syscalls, then
+	// start the build-progress summary as a live view over whichever
+	// gadgets came up.
+	osAgg := startOpensnoopFromCmdline(ctx, w, d, cmdline)
+	exAgg := startExecsnoopFromCmdline(ctx, w, d, cmdline)
+	startSummaryWriter(ctx, w, d, cmdline, osAgg, exAgg)
 	runContainerFromCmdline(ctx, w, d, cmdline)
 	bootSpan.End()
 

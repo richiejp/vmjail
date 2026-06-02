@@ -254,7 +254,7 @@ deprioritised; build them only if a specific symptom demands it.
 | Gadget       | Question                                                    | Probe | Status |
 | ------------ | ----------------------------------------------------------- | ----- | ------ |
 | `open-snoop` | "what files is the workload opening, and which are missing?" | sys_enter_openat + sys_exit_openat | landed |
-| `exec-snoop` | "what is the build running, with what args, and what failed to exec?" | sys_enter_execve + sys_exit_execve | gadget landed (wiring next) |
+| `exec-snoop` | "what is the build running, with what args, and what failed to exec?" | sys_enter_execve + sys_exit_execve | landed |
 | `sleep-snoop`| "is a process spin-polling instead of waiting?"             | sys_enter_nanosleep + clock_nanosleep | planned |
 | `io-snoop`   | "what I/O hits which files/sockets, by PID, with what errno?" | read/write/connect/accept/sendto/recvfrom | planned |
 
@@ -590,13 +590,18 @@ In rough order:
 7. **More gadgets — strace-style, not systems-perf.** The pipeline is
    proven, so the rest plug into it. Direction (see "The gadgets"): trace
    syscalls with the detail that reveals dumb userland behaviour.
-   - **7a — exec-snoop** (gadget *landed*; wiring next) —
+   - **7a — exec-snoop** (*landed, end to end*) —
      `internal/observability/ebpf/execsnoop`: execve enter+exit, capturing
      argv + the return value (failed execs → ENOENT on a readable path).
      Aggregates to `progress.ExecSnoop` (total / failed / top commands /
-     top failed). Not yet wired into daft-agent (no caller), exactly as
-     open-snoop's #5b was. Shares the new `ebpf/topk` heavy-hitter counter
-     with open-snoop.
+     top failed). Wired into daft-agent (`daft.observe.execsnoop=` cmdline
+     token → `startExecsnoopFromCmdline`, parallel to open-snoop), folded
+     into the same build-progress summary (the writer now folds *both*
+     gadgets via a per-section `rateTracker`), exported on the observe share
+     by the executor, and rendered by `daft sandbox observe` (an "exec-snoop
+     (process launches)" section). The in-VM e2e asserts the workload's
+     `argv=[/hello] ret=ok` is captured. Shares the `ebpf/topk` heavy-hitter
+     counter with open-snoop.
    - **7b — sleep-snoop** — nanosleep/clock_nanosleep counts per PID/comm,
      to catch poll-with-sleep retry loops (the canonical "tests are slow
      because we never waited for the process to start" symptom).
@@ -615,7 +620,12 @@ In rough order:
   aggregator.
 - `internal/observability/ebpf/execsnoop/` — the second Tier-2 gadget
   (exec-snoop: execve + argv + errno → `progress.ExecSnoop`). Regenerate
-  its BPF object with `make gen-bpf`. Gadget landed; agent wiring is #7a.
+  its BPF object with `make gen-bpf`. Wired into daft-agent via
+  `internal/agent/execsnoop.go` (`startExecsnoopFromCmdline`, the
+  `daft.observe.execsnoop=` cmdline token), folded into the build-progress
+  summary by `internal/agent/observe_summary.go` (the multi-gadget
+  `runSummaryLoop` + per-section `rateTracker`), and rendered by
+  `internal/cli/sandbox_observe.go` (`writeExecsnoop`).
 - `internal/observability/ebpf/opensnoop/` — the first Tier-2 CO-RE
   gadget (open-snoop). Regenerate its BPF object with `make gen-bpf`.
   `aggregate.go` holds the roadmap-#6a `Aggregator` that rolls the event
