@@ -99,6 +99,40 @@ type SleepSnoop struct {
 	TopSleepers []Counted `json:"top_sleepers"`
 }
 
+// IOSnoop is the io-snoop gadget's section of the summary: the bytes the
+// workload moved through file descriptors (read/write families, socket
+// send/recv, and the zero-copy fd→fd family). Total/Failed/ReadBytes/
+// WriteBytes and the rankings come from the (clock-free) aggregator; IORate and
+// LastEventAgeMs are time-derived and filled in by the agent's summary writer.
+// It is the "what is this build shovelling data through" signal — a big
+// artifact write or a chatty package socket — complementing open-snoop's
+// "which paths" with "how much".
+type IOSnoop struct {
+	// Total is the exact number of fd-I/O syscalls observed (all traced
+	// families), from the monotonic per-CPU global — the liveness signal.
+	Total uint64 `json:"total"`
+	// Failed is the exact number that returned an error (negative return) —
+	// e.g. a socket whose peer went away, climbing against a flat Total.
+	Failed uint64 `json:"failed"`
+	// ReadBytes / WriteBytes are cumulative bytes charged to the read and write
+	// sides. A zero-copy splice counts its bytes on both sides (read off the
+	// source fd, written to the dest fd), so the two are not mutually exclusive.
+	ReadBytes  uint64 `json:"read_bytes"`
+	WriteBytes uint64 `json:"write_bytes"`
+	// IORate is fd-I/O syscalls per second over the last write window.
+	IORate float64 `json:"io_rate_per_sec"`
+	// LastEventAgeMs is how long ago (ms) Total last advanced — the stuck
+	// signal. -1 means no fd I/O has been observed yet.
+	LastEventAgeMs int64 `json:"last_event_age_ms"`
+	// TopReaders / TopWriters rank targets by bytes read / written
+	// (Counted.Count is bytes here, not a call count) — the biggest data sinks
+	// and sources. TopBusiest ranks targets by I/O call count — the chatty
+	// many-small-ops fds (the I/O analogue of a poll loop).
+	TopReaders []Counted `json:"top_readers"`
+	TopWriters []Counted `json:"top_writers"`
+	TopBusiest []Counted `json:"top_busiest"`
+}
+
 // Summary is the whole build-progress snapshot: a timestamp plus one section
 // per enabled gadget. A nil section means that gadget was not running.
 type Summary struct {
@@ -109,6 +143,7 @@ type Summary struct {
 	Opensnoop     *Opensnoop  `json:"opensnoop,omitempty"`
 	ExecSnoop     *ExecSnoop  `json:"execsnoop,omitempty"`
 	SleepSnoop    *SleepSnoop `json:"sleepsnoop,omitempty"`
+	IOSnoop       *IOSnoop    `json:"iosnoop,omitempty"`
 }
 
 // Marshal renders a Summary as indented JSON with a trailing newline — the
