@@ -48,15 +48,37 @@ type Opensnoop struct {
 	TopMissing []Counted `json:"top_missing"`
 }
 
+// ExecSnoop is the exec-snoop gadget's section of the summary: process
+// launches (execve) the workload made. Total and the rankings come straight
+// from the (clock-free) aggregator; ExecRate and LastEventAgeMs are
+// time-derived and filled in by the agent's summary writer.
+type ExecSnoop struct {
+	// Total is the exact number of execve(2) calls observed.
+	Total uint64 `json:"total"`
+	// Failed is the exact number that returned an error (e.g. ENOENT —
+	// command not found). A build re-running a failing exec shows here.
+	Failed uint64 `json:"failed"`
+	// ExecRate is execve(2) calls per second over the last write window.
+	ExecRate float64 `json:"exec_rate_per_sec"`
+	// LastEventAgeMs is how long ago (ms) Total last advanced. -1 means no
+	// exec has been observed yet.
+	LastEventAgeMs int64 `json:"last_event_age_ms"`
+	// TopCommands ranks the program paths (argv[0]) the build exec'd most.
+	TopCommands []Counted `json:"top_commands"`
+	// TopFailed ranks the program paths whose exec failed — the
+	// command-not-found / wrong-path signal.
+	TopFailed []Counted `json:"top_failed"`
+}
+
 // Summary is the whole build-progress snapshot: a timestamp plus one section
-// per enabled gadget (only open-snoop today). A nil section means that gadget
-// was not running.
+// per enabled gadget. A nil section means that gadget was not running.
 type Summary struct {
 	// TakenAtUnixMs is the guest wall-clock at which the snapshot was taken,
 	// so a reader can tell whether the writer itself has stalled (a stale
 	// file) independently of the gadget's own activity age.
 	TakenAtUnixMs int64      `json:"taken_at_unix_ms"`
 	Opensnoop     *Opensnoop `json:"opensnoop,omitempty"`
+	ExecSnoop     *ExecSnoop `json:"execsnoop,omitempty"`
 }
 
 // Marshal renders a Summary as indented JSON with a trailing newline — the

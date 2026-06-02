@@ -2,9 +2,9 @@ package opensnoop
 
 import (
 	"path"
-	"sort"
 	"sync"
 
+	"github.com/localai-org/darkaifactory/internal/observability/ebpf/topk"
 	"github.com/localai-org/darkaifactory/internal/observability/progress"
 )
 
@@ -32,19 +32,19 @@ type Aggregator struct {
 	mu      sync.Mutex
 	total   uint64
 	errors  uint64
-	comms   *topK
-	paths   *topK
-	dirs    *topK
-	missing *topK
+	comms   *topk.Counter
+	paths   *topk.Counter
+	dirs    *topk.Counter
+	missing *topk.Counter
 }
 
 // NewAggregator returns an empty Aggregator sized for a build-scale stream.
 func NewAggregator() *Aggregator {
 	return &Aggregator{
-		comms:   newTopK(commTrackCap),
-		paths:   newTopK(pathTrackCap),
-		dirs:    newTopK(pathTrackCap),
-		missing: newTopK(pathTrackCap),
+		comms:   topk.New(commTrackCap),
+		paths:   topk.New(pathTrackCap),
+		dirs:    topk.New(pathTrackCap),
+		missing: topk.New(pathTrackCap),
 	}
 }
 
@@ -55,13 +55,13 @@ func (a *Aggregator) Observe(ev Event) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.total++
-	a.comms.add(ev.Comm)
-	a.paths.add(ev.Filename)
-	a.dirs.add(dirOf(ev.Filename))
+	a.comms.Add(ev.Comm)
+	a.paths.Add(ev.Filename)
+	a.dirs.Add(dirOf(ev.Filename))
 	if ev.Ret < 0 {
 		a.errors++
 		if ev.Ret == -enoent {
-			a.missing.add(ev.Filename)
+			a.missing.Add(ev.Filename)
 		}
 	}
 }
@@ -77,10 +77,10 @@ func (a *Aggregator) Snapshot() progress.Opensnoop {
 	return progress.Opensnoop{
 		Total:      a.total,
 		Errors:     a.errors,
-		TopComms:   a.comms.top(defaultTopN),
-		TopPaths:   a.paths.top(defaultTopN),
-		TopDirs:    a.dirs.top(defaultTopN),
-		TopMissing: a.missing.top(defaultTopN),
+		TopComms:   a.comms.Top(defaultTopN),
+		TopPaths:   a.paths.Top(defaultTopN),
+		TopDirs:    a.dirs.Top(defaultTopN),
+		TopMissing: a.missing.Top(defaultTopN),
 	}
 }
 
@@ -93,62 +93,4 @@ func dirOf(filename string) string {
 		return "."
 	}
 	return path.Dir(filename)
-}
-
-// topK is a bounded approximate heavy-hitters counter (Space-Saving): it
-// tracks at most cap keys. While under cap it counts exactly; once full, a
-// new key evicts the current minimum and inherits its count+1, so a key that
-// turns hot climbs out of the noise floor instead of being evicted at 1 on
-// every appearance. Memory is O(cap) regardless of stream cardinality, and
-// the true heavy hitters — the only keys we surface — stay accurate.
-type topK struct {
-	cap    int
-	counts map[string]uint64
-}
-
-func newTopK(capacity int) *topK {
-	return &topK{cap: capacity, counts: make(map[string]uint64, capacity)}
-}
-
-func (t *topK) add(key string) {
-	if c, ok := t.counts[key]; ok {
-		t.counts[key] = c + 1
-		return
-	}
-	if len(t.counts) < t.cap {
-		t.counts[key] = 1
-		return
-	}
-	// Full: evict the current minimum; the newcomer inherits its count+1.
-	// Map iteration order is random, but the minimum it finds — and thus the
-	// resulting state — is deterministic regardless of visitation order.
-	var minKey string
-	var minCount uint64
-	first := true
-	for k, c := range t.counts {
-		if first || c < minCount {
-			minKey, minCount, first = k, c, false
-		}
-	}
-	delete(t.counts, minKey)
-	t.counts[key] = minCount + 1
-}
-
-// top returns the n highest-count keys, descending, with a lexicographic
-// tie-break so the ranking is deterministic for a stable summary file.
-func (t *topK) top(n int) []progress.Counted {
-	out := make([]progress.Counted, 0, len(t.counts))
-	for k, c := range t.counts {
-		out = append(out, progress.Counted{Key: k, Count: c})
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Count != out[j].Count {
-			return out[i].Count > out[j].Count
-		}
-		return out[i].Key < out[j].Key
-	})
-	if n < len(out) {
-		out = out[:n]
-	}
-	return out
 }

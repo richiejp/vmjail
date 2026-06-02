@@ -1,7 +1,6 @@
 package opensnoop
 
 import (
-	"strconv"
 	"sync"
 	"testing"
 )
@@ -93,47 +92,8 @@ func TestSnapshotEmpty(t *testing.T) {
 	}
 }
 
-// TestTopKBoundedEviction drives the Space-Saving path: feed more distinct
-// keys than the cap and confirm the tracker never exceeds the cap while a
-// genuinely hot key — opened far more than the churn — stays tracked with an
-// accurate count.
-func TestTopKBoundedEviction(t *testing.T) {
-	const limit = 4
-	tk := newTopK(limit)
-	// hot is opened 20×; interleaved with 20 unique cold keys that thrash
-	// the rest of the table.
-	for i := range 20 {
-		tk.add("hot")
-		tk.add("cold-" + strconv.Itoa(i))
-	}
-	if len(tk.counts) > limit {
-		t.Fatalf("tracker holds %d keys, want ≤ %d", len(tk.counts), limit)
-	}
-	top := tk.top(limit)
-	if top[0].Key != "hot" {
-		t.Fatalf("hottest key = %q, want hot", top[0].Key)
-	}
-	if top[0].Count < 20 {
-		t.Fatalf("hot count = %d, want ≥ 20 (heavy hitter must not be evicted)", top[0].Count)
-	}
-}
-
-// TestTopKTieBreakAndTruncate covers the descending sort, the lexicographic
-// tie-break, and the n-truncation in top().
-func TestTopKTieBreakAndTruncate(t *testing.T) {
-	tk := newTopK(8)
-	tk.add("b")
-	tk.add("a") // a and b tie at 1 → a sorts first (lexicographic)
-	tk.add("c")
-	tk.add("c") // c is hottest at 2
-	top := tk.top(2)
-	if len(top) != 2 {
-		t.Fatalf("len = %d, want 2 (truncated)", len(top))
-	}
-	if top[0].Key != "c" || top[1].Key != "a" {
-		t.Fatalf("ranking = %+v, want c then a", top)
-	}
-}
+// The Space-Saving eviction, tie-break, and truncation behaviour now lives
+// in internal/observability/ebpf/topk and is tested there.
 
 // TestDirOf covers the path-to-directory bucketing, including the empty /
 // relative dirfd-relative case that collapses to ".".

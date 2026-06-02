@@ -241,15 +241,22 @@ sees the VM as one cloud-hypervisor process; host-side eBPF (KVM
 tracepoints) would only see vcpu transitions, not what the guest is
 actually doing.
 
-### Likely first gadgets
+### The gadgets
 
-| Gadget          | Question                                            | Probe         |
-| --------------- | --------------------------------------------------- | ------------- |
-| `open-snoop`    | "what files is the workload trying to open, and which are missing?" | tracepoint:syscalls:sys_enter_openat + sys_exit_openat |
-| `biolatency`    | "where is virtio-blk latency coming from?"          | tracepoint:block:block_rq_issue/complete |
-| `tcpstat`       | "what TCP connections is the guest making?"         | kprobe:tcp_connect, tcp_sendmsg, tcp_recvmsg |
-| `runqlat`       | "is the scheduler delaying anything?"               | tracepoint:sched:sched_wakeup, sched_switch |
-| `pktstat`       | "which proc/cgroup is the network traffic?"         | TC ingress/egress |
+The library is deliberately **strace-style**, not systems-performance: the
+recurring pain in this project is a userland process doing something dumb (a
+poll-with-sleep retry loop, a command that fails to exec, hammering a missing
+file), not block-device latency. So the gadgets trace syscalls with the
+detail that reveals *what userland is doing* — argv, errno, the PID — rather
+than kernel-subsystem histograms. `biolatency`/`runqlat`/`tcpstat` are
+deprioritised; build them only if a specific symptom demands it.
+
+| Gadget       | Question                                                    | Probe | Status |
+| ------------ | ----------------------------------------------------------- | ----- | ------ |
+| `open-snoop` | "what files is the workload opening, and which are missing?" | sys_enter_openat + sys_exit_openat | landed |
+| `exec-snoop` | "what is the build running, with what args, and what failed to exec?" | sys_enter_execve + sys_exit_execve | gadget landed (wiring next) |
+| `sleep-snoop`| "is a process spin-polling instead of waiting?"             | sys_enter_nanosleep + clock_nanosleep | planned |
+| `io-snoop`   | "what I/O hits which files/sockets, by PID, with what errno?" | read/write/connect/accept/sendto/recvfrom | planned |
 
 **`open-snoop` landed first** (roadmap #5b) — the lint cache-miss bug
 that motivated this work was an `openat()` returning ENOENT on a path
@@ -335,18 +342,28 @@ internal/observability/
   observer.go              ← Tier 1
   sample_linux.go          ← Tier 1
   ebpf/                    ← Tier 2
+    topk/                  ← shared Space-Saving heavy-hitter counter
+                             (bounded top-N rankings; used by every gadget
+                             aggregator so the algorithm lives once)
     opensnoop/             ← first gadget (roadmap #5b, landed)
       opensnoop.go         ← Event decode, openFlag render, Run drain
                              loop + the privileged load seam (linux)
       opensnoop_other.go   ← non-linux stub (Run → ErrUnsupported)
-      opensnoop_bpf.c      ← BPF C source (sys_enter_openat → ringbuf)
+      opensnoop_bpf.c      ← BPF C source (enter+exit openat → ringbuf)
       gen.go               ← package doc + //go:generate bpf2go
       opensnoop_bpfel.go   ← bpf2go-generated loader, committed
       opensnoop_bpfel.o    ← compiled BPF ELF, committed
       opensnoop_test.go    ← decode/render/drain-loop unit tests
-    biolatency/
-      ...
+    execsnoop/             ← second gadget (exec + argv + errno)
+      execsnoop_bpf.c      ← enter stashes argv, exit completes with ret
+      ...                  ← same shape as opensnoop/
 ```
+
+Each gadget keeps the same shape (BPF C + committed loader/ELF, a pure
+decode/aggregate path, the privileged load behind an injected seam) so a
+new one is mostly a copy with a different probe and event. Shared logic
+(the `topk` heavy-hitter counter) is factored out; per-gadget render
+helpers (errno names, flag decode) stay local since they differ.
 
 Each gadget is one subpackage, owning its own ring-buffer reader and
 output format, with a documented "why this was written" block at the
@@ -570,14 +587,35 @@ In rough order:
    `progress.Opensnoop` summary carries an exact `Errors` count plus a
    `TopMissing` ENOENT ranking, surfaced by `daft sandbox observe`. This
    is the cache-miss signal the whole gadget exists for.
-7. **More gadgets** — `biolatency`, `tcpstat`, `runqlat`, `pktstat`,
-   each motivated by a real recurring symptom. Gated behind #6: one
-   gadget (open-snoop) is enough to build and prove the summary pipeline;
-   the rest plug into it.
+7. **More gadgets — strace-style, not systems-perf.** The pipeline is
+   proven, so the rest plug into it. Direction (see "The gadgets"): trace
+   syscalls with the detail that reveals dumb userland behaviour.
+   - **7a — exec-snoop** (gadget *landed*; wiring next) —
+     `internal/observability/ebpf/execsnoop`: execve enter+exit, capturing
+     argv + the return value (failed execs → ENOENT on a readable path).
+     Aggregates to `progress.ExecSnoop` (total / failed / top commands /
+     top failed). Not yet wired into daft-agent (no caller), exactly as
+     open-snoop's #5b was. Shares the new `ebpf/topk` heavy-hitter counter
+     with open-snoop.
+   - **7b — sleep-snoop** — nanosleep/clock_nanosleep counts per PID/comm,
+     to catch poll-with-sleep retry loops (the canonical "tests are slow
+     because we never waited for the process to start" symptom).
+   - **7c — io-snoop** — read/write/connect/accept/sendto/recvfrom with the
+     fd → file/socket target, PID, and errno (reuses open-snoop's fd→path
+     resolution). The broadest signal; largest build.
+   - Deferred: `biolatency`, `runqlat`, `tcpstat` — systems-performance
+     gadgets, built only if a specific symptom points at the kernel
+     subsystem rather than userland.
 
 ## Related
 
 - `internal/observability/` — the Tier 1 package.
+- `internal/observability/ebpf/topk/` — the shared Space-Saving
+  heavy-hitter counter (bounded top-N rankings) used by every gadget
+  aggregator.
+- `internal/observability/ebpf/execsnoop/` — the second Tier-2 gadget
+  (exec-snoop: execve + argv + errno → `progress.ExecSnoop`). Regenerate
+  its BPF object with `make gen-bpf`. Gadget landed; agent wiring is #7a.
 - `internal/observability/ebpf/opensnoop/` — the first Tier-2 CO-RE
   gadget (open-snoop). Regenerate its BPF object with `make gen-bpf`.
   `aggregate.go` holds the roadmap-#6a `Aggregator` that rolls the event
