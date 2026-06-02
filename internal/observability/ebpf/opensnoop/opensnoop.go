@@ -18,19 +18,20 @@ import (
 )
 
 // recordSize is the wire size of the BPF `struct event` from
-// opensnoop_bpf.c: pid+uid+dfd+flags (4×4) + comm[16] + filename[255],
+// opensnoop_bpf.c: pid+uid+dfd+flags+ret (5×4) + comm[16] + filename[255],
 // padded to a 4-byte boundary. A drift guard in the tests asserts this
 // matches binary.Size(opensnoopEvent{}) so a change to the C struct that
 // regenerates the loader can't silently desync the decoder.
-const recordSize = 16 + 16 + 255 + 1
+const recordSize = 20 + 16 + 255 + 1
 
 // Field offsets within a record.
 const (
 	offUID      = 4
 	offDFD      = 8
 	offFlags    = 12
-	offComm     = 16
-	offFilename = 32
+	offRet      = 16
+	offComm     = 20
+	offFilename = 36
 	endFilename = offFilename + 255
 )
 
@@ -46,8 +47,9 @@ func parseEvent(raw []byte) (Event, error) {
 	return Event{
 		PID:      binary.LittleEndian.Uint32(raw[0:offUID]),
 		UID:      binary.LittleEndian.Uint32(raw[offUID:offDFD]),
-		DFD:      int32(binary.LittleEndian.Uint32(raw[offDFD:offFlags])),  //nolint:gosec // G115: reinterpret the wire's 32-bit word as the signed dfd the kernel wrote; the bit pattern is intentional.
-		Flags:    int32(binary.LittleEndian.Uint32(raw[offFlags:offComm])), //nolint:gosec // G115: reinterpret the wire's 32-bit word as the signed flags the kernel wrote; the bit pattern is intentional.
+		DFD:      int32(binary.LittleEndian.Uint32(raw[offDFD:offFlags])), //nolint:gosec // G115: reinterpret the wire's 32-bit word as the signed dfd the kernel wrote; the bit pattern is intentional.
+		Flags:    int32(binary.LittleEndian.Uint32(raw[offFlags:offRet])), //nolint:gosec // G115: reinterpret the wire's 32-bit word as the signed flags the kernel wrote; the bit pattern is intentional.
+		Ret:      int32(binary.LittleEndian.Uint32(raw[offRet:offComm])),  //nolint:gosec // G115: reinterpret the wire's 32-bit word as the signed return value (fd or -errno) the kernel wrote; the bit pattern is intentional.
 		Comm:     cString(raw[offComm:offFilename]),
 		Filename: cString(raw[offFilename:endFilename]),
 	}, nil
@@ -104,10 +106,55 @@ func openFlag(flags int32) string {
 
 // String renders one trace line. The raw Flags value is kept alongside
 // the symbolic rendering so an unusual bit we don't name is still
-// visible in post-mortem.
+// visible in post-mortem; ret is rendered as a fd or an errno name so a
+// cache miss reads at a glance.
 func (e Event) String() string {
-	return fmt.Sprintf("pid=%d uid=%d comm=%q dfd=%d flags=%s(%#x) path=%q",
-		e.PID, e.UID, e.Comm, e.DFD, openFlag(e.Flags), e.Flags, e.Filename)
+	return fmt.Sprintf("pid=%d uid=%d comm=%q dfd=%d flags=%s(%#x) ret=%s path=%q",
+		e.PID, e.UID, e.Comm, e.DFD, openFlag(e.Flags), e.Flags, retString(e.Ret), e.Filename)
+}
+
+// retString renders the openat(2) result: a non-negative fd as "fd N", a
+// negative errno by name (ENOENT, EACCES, …) so the cache-miss case is
+// obvious, falling back to the raw number for anything unnamed.
+func retString(ret int32) string {
+	if ret >= 0 {
+		return fmt.Sprintf("fd %d", ret)
+	}
+	if name := errnoName(-ret); name != "" {
+		return name
+	}
+	return fmt.Sprintf("errno %d", -ret)
+}
+
+// errnoName maps the errnos open(2)/openat(2) actually return to their
+// symbolic names. A switch (not a package-global table) keeps it
+// allocation-free and avoids gochecknoglobals. Unnamed errnos return ""
+// so retString falls back to the number.
+func errnoName(errno int32) string {
+	switch errno {
+	case 1:
+		return "EPERM"
+	case 2:
+		return "ENOENT"
+	case 9:
+		return "EBADF"
+	case 13:
+		return "EACCES"
+	case 20:
+		return "ENOTDIR"
+	case 21:
+		return "EISDIR"
+	case 23:
+		return "ENFILE"
+	case 24:
+		return "EMFILE"
+	case 36:
+		return "ENAMETOOLONG"
+	case 40:
+		return "ELOOP"
+	default:
+		return ""
+	}
 }
 
 // recordReader is the read side of the BPF ring buffer. *ringbuf.Reader
@@ -186,12 +233,14 @@ func run(ctx context.Context, w io.Writer, agg *Aggregator, open opener) error {
 }
 
 // bpfDeps are the privileged BPF primitives openSourceWith composes:
-// bump memlock, load the embedded objects, attach the tracepoint, open
-// the ring buffer. The real implementations need CAP_BPF on a
-// BPF-capable kernel; tests inject fakes to cover the load/attach/cleanup
-// wiring without loading BPF, mirroring internal/agent/tap_linux.go's
-// dependency seam. attach returns a plain closer rather than a link.Link
-// so the success path is fakeable (link.Link has an unexported method and
+// bump memlock, load the embedded objects, attach the enter+exit
+// tracepoints, open the ring buffer. The real implementations need CAP_BPF
+// on a BPF-capable kernel; tests inject fakes to cover the
+// load/attach/cleanup wiring without loading BPF, mirroring
+// internal/agent/tap_linux.go's dependency seam. attach takes the
+// tracepoint name (so the same seam serves both sys_enter_openat and
+// sys_exit_openat) and returns a plain closer rather than a link.Link so
+// the success path is fakeable (link.Link has an unexported method and
 // can't be implemented outside cilium/ebpf).
 type bpfDeps struct {
 	memlock func() error
@@ -199,7 +248,7 @@ type bpfDeps struct {
 	// into the program's .rodata container-workload filter (a no-op when
 	// the .rodata variable is absent or selfPidns is 0).
 	load      func(o *opensnoopObjects, selfPidns uint32) error
-	attach    func(prog *ebpf.Program) (detach func() error, err error)
+	attach    func(name string, prog *ebpf.Program) (detach func() error, err error)
 	newReader func(*ebpf.Map) (recordReader, error)
 }
 
@@ -225,8 +274,8 @@ func defaultBPFDeps() bpfDeps {
 			}
 			return spec.LoadAndAssign(o, nil)
 		},
-		attach: func(prog *ebpf.Program) (func() error, error) {
-			l, err := link.Tracepoint("syscalls", "sys_enter_openat", prog, nil)
+		attach: func(name string, prog *ebpf.Program) (func() error, error) {
+			l, err := link.Tracepoint("syscalls", name, prog, nil)
 			if err != nil {
 				return nil, err
 			}
@@ -260,20 +309,31 @@ func openSourceWith(d bpfDeps, selfPidns uint32) (recordReader, func() error, er
 	if err := d.load(&objs, selfPidns); err != nil {
 		return nil, nil, fmt.Errorf("opensnoop: load objects: %w", err)
 	}
-	detach, err := d.attach(objs.HandleOpenat)
+	// The gadget needs both halves: enter stashes the path/flags, exit
+	// completes the record with the return value. Unwind in reverse on any
+	// later failure.
+	detachEnter, err := d.attach("sys_enter_openat", objs.HandleOpenatEnter)
 	if err != nil {
 		_ = objs.Close()
-		return nil, nil, fmt.Errorf("opensnoop: attach tracepoint: %w", err)
+		return nil, nil, fmt.Errorf("opensnoop: attach enter tracepoint: %w", err)
+	}
+	detachExit, err := d.attach("sys_exit_openat", objs.HandleOpenatExit)
+	if err != nil {
+		_ = detachEnter()
+		_ = objs.Close()
+		return nil, nil, fmt.Errorf("opensnoop: attach exit tracepoint: %w", err)
 	}
 	rd, err := d.newReader(objs.Events)
 	if err != nil {
-		_ = detach()
+		_ = detachExit()
+		_ = detachEnter()
 		_ = objs.Close()
 		return nil, nil, fmt.Errorf("opensnoop: open ring buffer: %w", err)
 	}
 	cleanup := func() error {
 		cerr := rd.Close()
-		_ = detach()
+		_ = detachExit()
+		_ = detachEnter()
 		_ = objs.Close()
 		return cerr
 	}

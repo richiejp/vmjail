@@ -40,14 +40,14 @@ func recordBytes(t *testing.T, e opensnoopEvent) []byte {
 func TestParseEvent(t *testing.T) {
 	t.Run("decodes a full record", func(t *testing.T) {
 		raw := recordBytes(t, opensnoopEvent{
-			Pid: 4321, Uid: 1000, Dfd: -100, Flags: 0x241,
+			Pid: 4321, Uid: 1000, Dfd: -100, Flags: 0x241, Ret: -2,
 			Comm: arr16("nix"), Filename: arr255("/nix/store/x"),
 		})
 		ev, err := parseEvent(raw)
 		if err != nil {
 			t.Fatalf("parseEvent: %v", err)
 		}
-		want := Event{PID: 4321, UID: 1000, DFD: -100, Flags: 0x241, Comm: "nix", Filename: "/nix/store/x"}
+		want := Event{PID: 4321, UID: 1000, DFD: -100, Flags: 0x241, Ret: -2, Comm: "nix", Filename: "/nix/store/x"}
 		if ev != want {
 			t.Errorf("parseEvent = %+v, want %+v", ev, want)
 		}
@@ -102,11 +102,43 @@ func TestOpenFlag(t *testing.T) {
 }
 
 func TestEventString(t *testing.T) {
-	e := Event{PID: 7, UID: 0, DFD: -100, Flags: 0x41, Comm: "crun", Filename: "/etc/hosts"}
+	e := Event{PID: 7, UID: 0, DFD: -100, Flags: 0x41, Ret: 5, Comm: "crun", Filename: "/etc/hosts"}
 	got := e.String()
-	for _, sub := range []string{"pid=7", "uid=0", `comm="crun"`, "dfd=-100", "O_WRONLY|O_CREAT", "0x41", `path="/etc/hosts"`} {
+	for _, sub := range []string{"pid=7", "uid=0", `comm="crun"`, "dfd=-100", "O_WRONLY|O_CREAT", "0x41", "ret=fd 5", `path="/etc/hosts"`} {
 		if !strings.Contains(got, sub) {
 			t.Errorf("String()=%q missing %q", got, sub)
+		}
+	}
+	// A failed open renders the errno by name — the cache-miss line.
+	miss := Event{PID: 7, Ret: -2, Comm: "cc1", Filename: "/missing.h"}.String()
+	if !strings.Contains(miss, "ret=ENOENT") {
+		t.Errorf("failed-open String()=%q missing ret=ENOENT", miss)
+	}
+}
+
+func TestRetString(t *testing.T) {
+	cases := []struct {
+		ret  int32
+		want string
+	}{
+		{0, "fd 0"},
+		{7, "fd 7"},
+		// Every named errno, so the whole errnoName switch is exercised.
+		{-1, "EPERM"},
+		{-2, "ENOENT"},
+		{-9, "EBADF"},
+		{-13, "EACCES"},
+		{-20, "ENOTDIR"},
+		{-21, "EISDIR"},
+		{-23, "ENFILE"},
+		{-24, "EMFILE"},
+		{-36, "ENAMETOOLONG"},
+		{-40, "ELOOP"},
+		{-9999, "errno 9999"}, // unnamed errno falls back to the number
+	}
+	for _, c := range cases {
+		if got := retString(c.ret); got != c.want {
+			t.Errorf("retString(%d) = %q, want %q", c.ret, got, c.want)
 		}
 	}
 }
@@ -264,7 +296,7 @@ func baseDeps() bpfDeps {
 	return bpfDeps{
 		memlock:   func() error { return nil },
 		load:      func(*opensnoopObjects, uint32) error { return nil },
-		attach:    func(*ebpf.Program) (func() error, error) { return func() error { return nil }, nil },
+		attach:    func(string, *ebpf.Program) (func() error, error) { return func() error { return nil }, nil },
 		newReader: func(*ebpf.Map) (recordReader, error) { return newFakeReader(), nil },
 	}
 }
@@ -299,29 +331,6 @@ func TestOpenSourceWith(t *testing.T) {
 		}
 	})
 
-	t.Run("attach failure", func(t *testing.T) {
-		d := baseDeps()
-		d.attach = func(*ebpf.Program) (func() error, error) { return nil, errors.New("no tracepoint") }
-		if _, _, err := openSourceWith(d, 0); err == nil || !strings.Contains(err.Error(), "no tracepoint") {
-			t.Fatalf("err = %v, want an attach failure", err)
-		}
-	})
-
-	t.Run("ringbuf failure detaches", func(t *testing.T) {
-		detached := false
-		d := baseDeps()
-		d.attach = func(*ebpf.Program) (func() error, error) {
-			return func() error { detached = true; return nil }, nil
-		}
-		d.newReader = func(*ebpf.Map) (recordReader, error) { return nil, errors.New("ringbuf gone") }
-		if _, _, err := openSourceWith(d, 0); err == nil || !strings.Contains(err.Error(), "ringbuf gone") {
-			t.Fatalf("err = %v, want a ringbuf failure", err)
-		}
-		if !detached {
-			t.Error("tracepoint not detached after a ring-buffer open failure")
-		}
-	})
-
 	t.Run("threads selfPidns into load", func(t *testing.T) {
 		var got uint32
 		d := baseDeps()
@@ -333,6 +342,52 @@ func TestOpenSourceWith(t *testing.T) {
 		_ = cleanup()
 		if got != 4026531836 {
 			t.Errorf("selfPidns threaded to load = %d, want 4026531836", got)
+		}
+	})
+}
+
+// TestOpenSourceWithUnwind covers the attach/ring-buffer failure ladder:
+// each step that fails must unwind the steps already taken (both
+// tracepoints detach, objects close), so a partial load never leaks.
+func TestOpenSourceWithUnwind(t *testing.T) {
+	t.Run("enter attach failure", func(t *testing.T) {
+		d := baseDeps()
+		d.attach = func(string, *ebpf.Program) (func() error, error) { return nil, errors.New("no tracepoint") }
+		if _, _, err := openSourceWith(d, 0); err == nil || !strings.Contains(err.Error(), "no tracepoint") {
+			t.Fatalf("err = %v, want an attach failure", err)
+		}
+	})
+
+	t.Run("exit attach failure detaches enter", func(t *testing.T) {
+		enterDetached := false
+		d := baseDeps()
+		// First call (enter) succeeds with a detach hook; second (exit) fails.
+		d.attach = func(name string, _ *ebpf.Program) (func() error, error) {
+			if name == "sys_exit_openat" {
+				return nil, errors.New("no exit tracepoint")
+			}
+			return func() error { enterDetached = true; return nil }, nil
+		}
+		if _, _, err := openSourceWith(d, 0); err == nil || !strings.Contains(err.Error(), "no exit tracepoint") {
+			t.Fatalf("err = %v, want an exit-attach failure", err)
+		}
+		if !enterDetached {
+			t.Error("enter tracepoint not detached after the exit attach failed")
+		}
+	})
+
+	t.Run("ringbuf failure detaches both", func(t *testing.T) {
+		detaches := 0
+		d := baseDeps()
+		d.attach = func(string, *ebpf.Program) (func() error, error) {
+			return func() error { detaches++; return nil }, nil
+		}
+		d.newReader = func(*ebpf.Map) (recordReader, error) { return nil, errors.New("ringbuf gone") }
+		if _, _, err := openSourceWith(d, 0); err == nil || !strings.Contains(err.Error(), "ringbuf gone") {
+			t.Fatalf("err = %v, want a ringbuf failure", err)
+		}
+		if detaches != 2 {
+			t.Errorf("detaches = %d, want both tracepoints detached after a ring-buffer open failure", detaches)
 		}
 	})
 }
@@ -363,7 +418,7 @@ func TestDefaultBPFDeps(t *testing.T) {
 	if err := d.load(&opensnoopObjects{}, 4026531836); err == nil {
 		t.Skip("BPF load unexpectedly succeeded; attach/read paths are covered by the VM e2e test")
 	}
-	if _, err := d.attach(nil); err == nil {
+	if _, err := d.attach("sys_enter_openat", nil); err == nil {
 		t.Error("attach with a nil program should fail")
 	}
 }

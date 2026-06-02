@@ -40,10 +40,11 @@ func TestRenderObserveSummaryActive(t *testing.T) {
 	raw := mustMarshalSummary(t, progress.Summary{
 		TakenAtUnixMs: observeFixedNow.UnixMilli(),
 		Opensnoop: &progress.Opensnoop{
-			Total: 12345, OpenatRate: 842.0, LastEventAgeMs: 100,
-			TopComms: []progress.Counted{{Key: "cc1plus", Count: 4201}},
-			TopDirs:  []progress.Counted{{Key: "/nix/store/x/include", Count: 3100}},
-			TopPaths: []progress.Counted{{Key: "/nix/store/x/stdio.h", Count: 12}},
+			Total: 12345, Errors: 37, OpenatRate: 842.0, LastEventAgeMs: 100,
+			TopComms:   []progress.Counted{{Key: "cc1plus", Count: 4201}},
+			TopDirs:    []progress.Counted{{Key: "/nix/store/x/include", Count: 3100}},
+			TopPaths:   []progress.Counted{{Key: "/nix/store/x/stdio.h", Count: 12}},
+			TopMissing: []progress.Counted{{Key: "/nix/store/x/missing.h", Count: 9}},
 		},
 	})
 	out, err := renderObserveSummary(observeFixedNow, "myapp", raw)
@@ -52,12 +53,15 @@ func TestRenderObserveSummaryActive(t *testing.T) {
 	}
 	for _, want := range []string{
 		"opens total : 12345",
+		"failed opens: 37",
 		"open rate   : 842.0/s",
 		"last open   : 0.1s ago",
 		"status      : active",
 		"cc1plus (4201)",
 		"/nix/store/x/include (3100)",
 		"/nix/store/x/stdio.h (12)",
+		"top missing (ENOENT)",
+		"/nix/store/x/missing.h (9)",
 		"drill down: daft sandbox observer-tail myapp",
 	} {
 		if !strings.Contains(out, want) {

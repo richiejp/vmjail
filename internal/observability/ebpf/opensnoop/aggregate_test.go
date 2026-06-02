@@ -7,9 +7,46 @@ import (
 )
 
 // ev is a terse Event constructor for the aggregator tests — only the
-// fields the aggregator reads (Comm, Filename) matter here.
+// fields the aggregator reads (Comm, Filename) matter here. Ret defaults to
+// 0 (a successful open); evRet sets it for the error-path tests.
 func ev(comm, filename string) Event {
 	return Event{Comm: comm, Filename: filename}
+}
+
+func evRet(comm, filename string, ret int32) Event {
+	return Event{Comm: comm, Filename: filename, Ret: ret}
+}
+
+// TestAggregatorErrorsAndMissing covers the exit-hook payoff: a negative
+// return bumps Errors, and an ENOENT additionally ranks the missing path,
+// while a non-ENOENT failure counts as an error but is not a "missing" path.
+func TestAggregatorErrorsAndMissing(t *testing.T) {
+	a := NewAggregator()
+	a.Observe(evRet("cc1", "/usr/include/zlib.h", 5))  // success (fd)
+	a.Observe(evRet("cc1", "/nix/store/miss/a.h", -2)) // ENOENT
+	a.Observe(evRet("cc1", "/nix/store/miss/a.h", -2)) // ENOENT again
+	a.Observe(evRet("cc1", "/nix/store/miss/b.h", -2)) // ENOENT
+	a.Observe(evRet("sh", "/root/secret", -13))        // EACCES — error, not missing
+
+	s := a.Snapshot()
+	if s.Total != 5 {
+		t.Fatalf("Total = %d, want 5", s.Total)
+	}
+	if s.Errors != 4 {
+		t.Fatalf("Errors = %d, want 4 (3 ENOENT + 1 EACCES)", s.Errors)
+	}
+	// a.h missed twice → hottest missing path; the EACCES path is absent.
+	if len(s.TopMissing) != 2 {
+		t.Fatalf("TopMissing = %+v, want 2 distinct ENOENT paths", s.TopMissing)
+	}
+	if s.TopMissing[0].Key != "/nix/store/miss/a.h" || s.TopMissing[0].Count != 2 {
+		t.Fatalf("TopMissing[0] = %+v, want a.h=2", s.TopMissing[0])
+	}
+	for _, m := range s.TopMissing {
+		if m.Key == "/root/secret" {
+			t.Errorf("EACCES path leaked into TopMissing: %+v", s.TopMissing)
+		}
+	}
 }
 
 // TestAggregatorCountsAndTopN exercises the exact total alongside the
@@ -45,13 +82,13 @@ func TestAggregatorCountsAndTopN(t *testing.T) {
 // rankings, so the summary serialises to empty arrays not null.
 func TestSnapshotEmpty(t *testing.T) {
 	s := NewAggregator().Snapshot()
-	if s.Total != 0 {
-		t.Fatalf("Total = %d, want 0", s.Total)
+	if s.Total != 0 || s.Errors != 0 {
+		t.Fatalf("Total/Errors = %d/%d, want 0/0", s.Total, s.Errors)
 	}
-	if s.TopComms == nil || s.TopPaths == nil || s.TopDirs == nil {
+	if s.TopComms == nil || s.TopPaths == nil || s.TopDirs == nil || s.TopMissing == nil {
 		t.Fatalf("rankings should be empty non-nil slices: %+v", s)
 	}
-	if len(s.TopComms) != 0 || len(s.TopPaths) != 0 || len(s.TopDirs) != 0 {
+	if len(s.TopComms) != 0 || len(s.TopPaths) != 0 || len(s.TopDirs) != 0 || len(s.TopMissing) != 0 {
 		t.Fatalf("rankings should be empty: %+v", s)
 	}
 }

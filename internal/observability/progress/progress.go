@@ -28,6 +28,10 @@ type Opensnoop struct {
 	// Total is the exact number of openat(2) calls observed — the primary
 	// liveness signal. A build that has stalled has a frozen Total.
 	Total uint64 `json:"total"`
+	// Errors is the exact number of observed openat(2) calls that failed
+	// (negative return). Climbing Errors against a flat Total often means a
+	// workload spinning on a path it can't open.
+	Errors uint64 `json:"errors"`
 	// OpenatRate is openat(2) calls per second over the last write window.
 	OpenatRate float64 `json:"openat_rate_per_sec"`
 	// LastEventAgeMs is how long ago (ms) Total last advanced — the stuck
@@ -38,6 +42,10 @@ type Opensnoop struct {
 	TopComms []Counted `json:"top_comms"`
 	TopPaths []Counted `json:"top_paths"`
 	TopDirs  []Counted `json:"top_dirs"`
+	// TopMissing ranks the paths that most often returned ENOENT — the
+	// cache-miss / missing-dependency signal that motivated the gadget
+	// (an openat returning ENOENT on a path the build cared about).
+	TopMissing []Counted `json:"top_missing"`
 }
 
 // Summary is the whole build-progress snapshot: a timestamp plus one section

@@ -19,6 +19,7 @@ type opensnoopEvent struct {
 	Uid      uint32
 	Dfd      int32
 	Flags    int32
+	Ret      int32
 	Comm     [16]uint8
 	Filename [255]uint8
 	_        [1]byte
@@ -66,14 +67,16 @@ type opensnoopSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type opensnoopProgramSpecs struct {
-	HandleOpenat *ebpf.ProgramSpec `ebpf:"handle_openat"`
+	HandleOpenatEnter *ebpf.ProgramSpec `ebpf:"handle_openat_enter"`
+	HandleOpenatExit  *ebpf.ProgramSpec `ebpf:"handle_openat_exit"`
 }
 
 // opensnoopMapSpecs contains maps before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type opensnoopMapSpecs struct {
-	Events *ebpf.MapSpec `ebpf:"events"`
+	Events   *ebpf.MapSpec `ebpf:"events"`
+	Inflight *ebpf.MapSpec `ebpf:"inflight"`
 }
 
 // opensnoopVariableSpecs contains global variables before they are loaded into the kernel.
@@ -104,12 +107,14 @@ func (o *opensnoopObjects) Close() error {
 //
 // It can be passed to loadOpensnoopObjects or ebpf.CollectionSpec.LoadAndAssign.
 type opensnoopMaps struct {
-	Events *ebpf.Map `ebpf:"events"`
+	Events   *ebpf.Map `ebpf:"events"`
+	Inflight *ebpf.Map `ebpf:"inflight"`
 }
 
 func (m *opensnoopMaps) Close() error {
 	return _OpensnoopClose(
 		m.Events,
+		m.Inflight,
 	)
 }
 
@@ -125,12 +130,14 @@ type opensnoopVariables struct {
 //
 // It can be passed to loadOpensnoopObjects or ebpf.CollectionSpec.LoadAndAssign.
 type opensnoopPrograms struct {
-	HandleOpenat *ebpf.Program `ebpf:"handle_openat"`
+	HandleOpenatEnter *ebpf.Program `ebpf:"handle_openat_enter"`
+	HandleOpenatExit  *ebpf.Program `ebpf:"handle_openat_exit"`
 }
 
 func (p *opensnoopPrograms) Close() error {
 	return _OpensnoopClose(
-		p.HandleOpenat,
+		p.HandleOpenatEnter,
+		p.HandleOpenatExit,
 	)
 }
 

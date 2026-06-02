@@ -245,7 +245,7 @@ actually doing.
 
 | Gadget          | Question                                            | Probe         |
 | --------------- | --------------------------------------------------- | ------------- |
-| `open-snoop`    | "what files is the workload trying to open?"        | tracepoint:syscalls:sys_enter_openat |
+| `open-snoop`    | "what files is the workload trying to open, and which are missing?" | tracepoint:syscalls:sys_enter_openat + sys_exit_openat |
 | `biolatency`    | "where is virtio-blk latency coming from?"          | tracepoint:block:block_rq_issue/complete |
 | `tcpstat`       | "what TCP connections is the guest making?"         | kprobe:tcp_connect, tcp_sendmsg, tcp_recvmsg |
 | `runqlat`       | "is the scheduler delaying anything?"               | tracepoint:sched:sched_wakeup, sched_switch |
@@ -254,10 +254,16 @@ actually doing.
 **`open-snoop` landed first** (roadmap #5b) — the lint cache-miss bug
 that motivated this work was an `openat()` returning ENOENT on a path
 the test cared about; this gadget shows the failure as one line in a
-guest-side log. It attaches to `tracepoint:syscalls:sys_enter_openat`
-and pushes one ring-buffer record per open (pid, uid, comm, dirfd,
-flags, path). The remaining gadgets follow as they're motivated by a
-real symptom.
+guest-side log. It attaches to both `sys_enter_openat` (which carries
+the path + flags) and `sys_exit_openat` (which carries the return
+value): the enter hook stashes the partial record in a per-thread hash
+map keyed by `pid_tgid`, and the exit hook completes it with the result
+and emits one ring-buffer record per open — pid, uid, comm, dirfd,
+flags, path, **and ret** (a fd, or a negative errno). So the trace
+line for the motivating bug reads `… path="…" ret=ENOENT` directly,
+and the aggregate carries an exact `Errors` count plus a `TopMissing`
+ranking of the paths that returned ENOENT. The remaining gadgets
+follow as they're motivated by a real symptom.
 
 **Container-workload filter (PID namespace).** Unfiltered, the openat
 stream is dominated by the agent, the guest init, and `crun` — the
@@ -558,10 +564,12 @@ In rough order:
      and pathological churn in the summary; an e2e runs a real build and
      asserts the summary reflects forward progress and then a stall.
 
-   Deferred (needs a gadget enhancement, not in #6): ENOENT /
-   cache-miss tallies require hooking `sys_exit_openat` for the return
-   value — the current gadget only hooks `sys_enter_openat`, so the
-   decoded `Event` carries no errno.
+   ENOENT / cache-miss tallies (landed) — the gadget now also hooks
+   `sys_exit_openat` for the return value (enter→exit correlation via a
+   per-thread hash map), so the decoded `Event` carries `Ret` and the
+   `progress.Opensnoop` summary carries an exact `Errors` count plus a
+   `TopMissing` ENOENT ranking, surfaced by `daft sandbox observe`. This
+   is the cache-miss signal the whole gadget exists for.
 7. **More gadgets** — `biolatency`, `tcpstat`, `runqlat`, `pktstat`,
    each motivated by a real recurring symptom. Gated behind #6: one
    gadget (open-snoop) is enough to build and prove the summary pipeline;

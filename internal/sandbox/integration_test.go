@@ -281,6 +281,14 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 	if !strings.Contains(buf.String(), agent.OpensnoopReportPrefix+"tracing container openat") {
 		t.Fatalf("agent did not report the container-scoped filter; console:\n%s", buf.String())
 	}
+	// The sys_exit hook captured the return value: the workload probes
+	// /workspace/in.txt (absent in this e2e — no /workspace share), so that
+	// openat returns ENOENT, which the gadget renders as ret=ENOENT. This
+	// proves enter→exit correlation and errno decode end to end.
+	if !strings.Contains(string(data), "ret=ENOENT") {
+		t.Fatalf("opensnoop trace has no ENOENT return value; the sys_exit hook or errno decode is broken\n--- trace ---\n%s",
+			data)
+	}
 
 	// The summary writer ran the whole guest→host pipeline: cmdline token →
 	// agent parse → writer → atomic rewrite onto the share. Assert the host

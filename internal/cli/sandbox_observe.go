@@ -194,6 +194,7 @@ func renderObserveSummary(now time.Time, workspace string, raw []byte) (string, 
 func writeOpensnoop(b *strings.Builder, op progress.Opensnoop) {
 	b.WriteString("\nopen-snoop (file opens)\n")
 	fmt.Fprintf(b, "  opens total : %d\n", op.Total)
+	fmt.Fprintf(b, "  failed opens: %d\n", op.Errors)
 	fmt.Fprintf(b, "  open rate   : %.1f/s\n", op.OpenatRate)
 	fmt.Fprintf(b, "  last open   : %s\n", lastOpenAge(op.LastEventAgeMs))
 	fmt.Fprintf(b, "  status      : %s\n", opensnoopStatus(op))
@@ -201,6 +202,7 @@ func writeOpensnoop(b *strings.Builder, op progress.Opensnoop) {
 	writeTopN(b, "top processes", op.TopComms)
 	writeTopN(b, "top directories", op.TopDirs)
 	writeTopN(b, "top files", op.TopPaths)
+	writeTopN(b, "top missing (ENOENT)", op.TopMissing)
 }
 
 // opensnoopStatus is the coarse build-health verdict (6d will refine):

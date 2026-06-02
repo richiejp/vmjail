@@ -18,29 +18,39 @@ const (
 	pathTrackCap = 256
 	commTrackCap = 128
 	defaultTopN  = 10
+	// enoent is the errno openat(2) returns for a missing path. Negated in
+	// the wire record (ev.Ret == -enoent), it is the cache-miss / missing-
+	// dependency signal the exit hook exists to surface. ENOENT is 2 on
+	// every Linux architecture.
+	enoent = 2
 )
 
 // Aggregator rolls a stream of Events into a progress.Opensnoop. It is safe for one
 // goroutine to Observe while another takes a Snapshot — the intended use is
 // the gadget drain loop feeding it while the summary writer polls it ~1 Hz.
 type Aggregator struct {
-	mu    sync.Mutex
-	total uint64
-	comms *topK
-	paths *topK
-	dirs  *topK
+	mu      sync.Mutex
+	total   uint64
+	errors  uint64
+	comms   *topK
+	paths   *topK
+	dirs    *topK
+	missing *topK
 }
 
 // NewAggregator returns an empty Aggregator sized for a build-scale stream.
 func NewAggregator() *Aggregator {
 	return &Aggregator{
-		comms: newTopK(commTrackCap),
-		paths: newTopK(pathTrackCap),
-		dirs:  newTopK(pathTrackCap),
+		comms:   newTopK(commTrackCap),
+		paths:   newTopK(pathTrackCap),
+		dirs:    newTopK(pathTrackCap),
+		missing: newTopK(pathTrackCap),
 	}
 }
 
-// Observe folds one openat observation into the running aggregate.
+// Observe folds one openat observation into the running aggregate. A
+// failed open (negative ret) bumps the error count; an ENOENT additionally
+// ranks the missing path so the summary surfaces what the build can't find.
 func (a *Aggregator) Observe(ev Event) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -48,6 +58,12 @@ func (a *Aggregator) Observe(ev Event) {
 	a.comms.add(ev.Comm)
 	a.paths.add(ev.Filename)
 	a.dirs.add(dirOf(ev.Filename))
+	if ev.Ret < 0 {
+		a.errors++
+		if ev.Ret == -enoent {
+			a.missing.add(ev.Filename)
+		}
+	}
 }
 
 // Snapshot returns the current aggregate as a progress.Opensnoop section.
@@ -59,10 +75,12 @@ func (a *Aggregator) Snapshot() progress.Opensnoop {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return progress.Opensnoop{
-		Total:    a.total,
-		TopComms: a.comms.top(defaultTopN),
-		TopPaths: a.paths.top(defaultTopN),
-		TopDirs:  a.dirs.top(defaultTopN),
+		Total:      a.total,
+		Errors:     a.errors,
+		TopComms:   a.comms.top(defaultTopN),
+		TopPaths:   a.paths.top(defaultTopN),
+		TopDirs:    a.dirs.top(defaultTopN),
+		TopMissing: a.missing.top(defaultTopN),
 	}
 }
 

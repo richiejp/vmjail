@@ -9,10 +9,14 @@ package opensnoop
 // cross-platform, and so the agent's cross-platform gadget wiring can name
 // the type without pulling in cilium/ebpf.
 type Event struct {
-	PID      uint32
-	UID      uint32
-	DFD      int32
-	Flags    int32
+	PID   uint32
+	UID   uint32
+	DFD   int32
+	Flags int32
+	// Ret is the openat(2) return value captured at sys_exit: a
+	// non-negative file descriptor on success, or a negative errno (e.g.
+	// -2 = -ENOENT) on failure — the cache-miss / missing-file signal.
+	Ret      int32
 	Comm     string
 	Filename string
 }
