@@ -1,3 +1,4 @@
+//nolint:dupl // deliberately parallel to sleepsnoop_test.go / opensnoop_test.go: the per-gadget agent-wiring tests differ only by gadget type. Kept side-by-side for review.
 package agent
 
 import (

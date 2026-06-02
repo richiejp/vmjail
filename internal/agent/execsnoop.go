@@ -1,3 +1,4 @@
+//nolint:dupl // deliberately parallel to sleepsnoop.go / opensnoop.go: the three gadget wirings differ only by gadget type; the shared logic (resolveSelfPIDNS) is already factored out and a generic abstraction would obscure the per-gadget types. Kept side-by-side for review.
 package agent
 
 import (

@@ -51,6 +51,11 @@ func TestRenderObserveSummaryActive(t *testing.T) {
 			TopCommands: []progress.Counted{{Key: "/bin/cc", Count: 40}},
 			TopFailed:   []progress.Counted{{Key: "/usr/bin/missing-tool", Count: 3}},
 		},
+		SleepSnoop: &progress.SleepSnoop{
+			Total: 240, TotalSleepMs: 12_000, SleepRate: 8.0, LastEventAgeMs: 50,
+			TopCallers:  []progress.Counted{{Key: "poller", Count: 200}},
+			TopSleepers: []progress.Counted{{Key: "waiter", Count: 9000}}, // 9000 ms → 9s
+		},
 	})
 	out, err := renderObserveSummary(observeFixedNow, "myapp", raw)
 	if err != nil {
@@ -75,6 +80,14 @@ func TestRenderObserveSummaryActive(t *testing.T) {
 		"/bin/cc (40)",
 		"top failed (could not exec)",
 		"/usr/bin/missing-tool (3)",
+		"sleep-snoop (voluntary sleeps)",
+		"sleep calls : 240",
+		"total sleep : 12.0s",
+		"sleep rate  : 8.0/s",
+		"top callers (by sleep count)",
+		"poller (200)",
+		"top sleepers (by total sleep)",
+		"waiter (9.0s)",
 		"drill down: daft sandbox observer-tail myapp",
 	} {
 		if !strings.Contains(out, want) {
@@ -135,6 +148,35 @@ func TestRenderObserveSummaryExecsnoopOnly(t *testing.T) {
 	}
 	if !strings.Contains(out, "exec-snoop (process launches)") || !strings.Contains(out, "/bin/sh (5)") {
 		t.Errorf("expected exec-snoop section, got %q", out)
+	}
+}
+
+// TestRenderObserveSummarySleepsnoopOnly: a summary with only the sleep-snoop
+// section renders it, with the sleeper ranking shown as a duration (its counts
+// are milliseconds) rather than a raw number.
+func TestRenderObserveSummarySleepsnoopOnly(t *testing.T) {
+	raw := mustMarshalSummary(t, progress.Summary{
+		TakenAtUnixMs: observeFixedNow.UnixMilli(),
+		SleepSnoop: &progress.SleepSnoop{
+			Total: 3, TotalSleepMs: 1500, LastEventAgeMs: -1,
+			TopCallers:  []progress.Counted{{Key: "sh", Count: 3}},
+			TopSleepers: []progress.Counted{{Key: "sh", Count: 1500}}, // 1500 ms → 1.5s
+		},
+	})
+	out, err := renderObserveSummary(observeFixedNow, "ws", raw)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{
+		"sleep-snoop (voluntary sleeps)",
+		"sleep calls : 3",
+		"last sleep  : never",
+		"top sleepers (by total sleep)",
+		"sh (1.5s)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("render missing %q\n--- got ---\n%s", want, out)
+		}
 	}
 }
 

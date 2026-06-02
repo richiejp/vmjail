@@ -85,6 +85,7 @@ func Run(ctx context.Context, w io.Writer) error {
 		tap:         defaultTapDeps(),
 		opensnoop:   defaultOpensnoopDeps(),
 		execsnoop:   defaultExecsnoopDeps(),
+		sleepsnoop:  defaultSleepsnoopDeps(),
 		summary:     defaultSummaryDeps(),
 	})
 }
@@ -118,10 +119,14 @@ type runDeps struct {
 	// execsnoop is the test-substitutable surface for the Tier-2 exec-snoop
 	// eBPF gadget, parallel to opensnoop. Zero value disables it.
 	execsnoop execsnoopDeps
+	// sleepsnoop is the test-substitutable surface for the Tier-2 sleep-snoop
+	// eBPF gadget, parallel to opensnoop. Zero value disables it.
+	sleepsnoop sleepsnoopDeps
 	// summary is the test-substitutable surface for the build-progress
 	// summary writer (clock + tick interval + atomic file write). Zero
-	// value (write == nil) disables it. Fed by the open-snoop and exec-snoop
-	// aggregators, so it only produces output when at least one is enabled.
+	// value (write == nil) disables it. Fed by the open-snoop, exec-snoop, and
+	// sleep-snoop aggregators, so it only produces output when at least one is
+	// enabled.
 	summary summaryDeps
 }
 
@@ -152,13 +157,14 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	if bundle != "" {
 		ensureCgroupV2(w)
 	}
-	// Attach the open-snoop + exec-snoop gadgets before the container so
-	// their tracepoints are live for the workload's first syscalls, then
-	// start the build-progress summary as a live view over whichever
-	// gadgets came up.
+	// Attach the open-snoop + exec-snoop + sleep-snoop gadgets before the
+	// container so their tracepoints are live for the workload's first
+	// syscalls, then start the build-progress summary as a live view over
+	// whichever gadgets came up.
 	osAgg := startOpensnoopFromCmdline(ctx, w, d, cmdline)
 	exAgg := startExecsnoopFromCmdline(ctx, w, d, cmdline)
-	startSummaryWriter(ctx, w, d, cmdline, osAgg, exAgg)
+	slAgg := startSleepsnoopFromCmdline(ctx, w, d, cmdline)
+	startSummaryWriter(ctx, w, d, cmdline, osAgg, exAgg, slAgg)
 	runContainerFromCmdline(ctx, w, d, cmdline)
 	bootSpan.End()
 

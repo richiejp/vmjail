@@ -178,7 +178,7 @@ func renderObserveSummary(now time.Time, workspace string, raw []byte) (string, 
 	}
 	fmt.Fprintf(&b, "snapshot:  %s ago%s\n", fmtDuration(snapAge), staleNote)
 
-	if s.Opensnoop == nil && s.ExecSnoop == nil {
+	if s.Opensnoop == nil && s.ExecSnoop == nil && s.SleepSnoop == nil {
 		b.WriteString("\nno gadgets running\n")
 		return b.String(), nil
 	}
@@ -187,6 +187,9 @@ func renderObserveSummary(now time.Time, workspace string, raw []byte) (string, 
 	}
 	if s.ExecSnoop != nil {
 		writeExecsnoop(&b, *s.ExecSnoop)
+	}
+	if s.SleepSnoop != nil {
+		writeSleepsnoop(&b, *s.SleepSnoop)
 	}
 	b.WriteString("\ndrill down: daft sandbox observer-tail " + workspace +
 		"   (raw Tier-1 per-event trace)\n")
@@ -206,6 +209,37 @@ func writeExecsnoop(b *strings.Builder, ex progress.ExecSnoop) {
 
 	writeTopN(b, "top commands", ex.TopCommands)
 	writeTopN(b, "top failed (could not exec)", ex.TopFailed)
+}
+
+// writeSleepsnoop renders the sleep-snoop section: the liveness headline
+// (call count / cumulative requested sleep / rate / last-sleep age) then the
+// two rankings — who calls sleep most (tight poll loops) and who has slept the
+// most wall-clock in aggregate (the build-blocking long waits). The sleeper
+// ranking's counts are milliseconds, so they render as durations.
+func writeSleepsnoop(b *strings.Builder, sl progress.SleepSnoop) {
+	b.WriteString("\nsleep-snoop (voluntary sleeps)\n")
+	fmt.Fprintf(b, "  sleep calls : %d\n", sl.Total)
+	//nolint:gosec // G115: a cumulative-sleep ms total; never exceeds the int64 duration range in practice.
+	fmt.Fprintf(b, "  total sleep : %s\n", fmtDuration(time.Duration(sl.TotalSleepMs)*time.Millisecond))
+	fmt.Fprintf(b, "  sleep rate  : %.1f/s\n", sl.SleepRate)
+	fmt.Fprintf(b, "  last sleep  : %s\n", lastOpenAge(sl.LastEventAgeMs))
+
+	writeTopN(b, "top callers (by sleep count)", sl.TopCallers)
+	writeTopMillis(b, "top sleepers (by total sleep)", sl.TopSleepers)
+}
+
+// writeTopMillis renders a ranking whose Counted.Count is a millisecond total
+// (the sleep-snoop duration ranking) as human-readable durations rather than a
+// raw number.
+func writeTopMillis(b *strings.Builder, title string, items []progress.Counted) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "  %s:\n", title)
+	for _, c := range items {
+		//nolint:gosec // G115: a cumulative-sleep ms count; never exceeds the int64 duration range in practice.
+		fmt.Fprintf(b, "    %s (%s)\n", c.Key, fmtDuration(time.Duration(c.Count)*time.Millisecond))
+	}
 }
 
 // writeOpensnoop renders the open-snoop section: the liveness headline

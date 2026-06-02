@@ -232,6 +232,10 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 	const guestExecLogName = "execsnoop.log"
 	cfg.ExecsnoopLogPath = testMountpoint + "/" + guestExecLogName
 	hostExecLog := filepath.Join(shareDir, guestExecLogName)
+	// The sleep-snoop gadget (#7b) writes its nanosleep trace alongside.
+	const guestSleepLogName = "sleepsnoop.log"
+	cfg.SleepsnoopLogPath = testMountpoint + "/" + guestSleepLogName
+	hostSleepLog := filepath.Join(shareDir, guestSleepLogName)
 	// The build-progress summary (#6b) writes alongside the raw trace.
 	const guestSummaryName = "progress.json"
 	cfg.ObserveSummaryPath = testMountpoint + "/" + guestSummaryName
@@ -247,6 +251,9 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 		}
 		if data, err := os.ReadFile(hostExecLog); err == nil {
 			t.Logf("execsnoop trace (%s):\n%s", hostExecLog, data)
+		}
+		if data, err := os.ReadFile(hostSleepLog); err == nil {
+			t.Logf("sleepsnoop trace (%s):\n%s", hostSleepLog, data)
 		}
 		if data, err := os.ReadFile(hostSummary); err == nil {
 			t.Logf("build-progress summary (%s):\n%s", hostSummary, data)
@@ -318,6 +325,22 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 		}
 	}
 
+	// The agent started the container-scoped sleep gadget (deterministic
+	// console line). Whether the trivial /hello workload calls nanosleep at all
+	// is workload-dependent, so the raw trace may legitimately be empty — only
+	// the console report and the summary section (below) are asserted
+	// deterministically. Any flushed line must be a well-formed sleep record.
+	if !strings.Contains(buf.String(), agent.SleepsnoopReportPrefix+"tracing container nanosleep") {
+		t.Fatalf("agent did not report the container-scoped sleep filter; console:\n%s", buf.String())
+	}
+	if sleepData, err := os.ReadFile(hostSleepLog); err == nil && len(sleepData) > 0 {
+		if !strings.Contains(string(sleepData), "comm=") || !strings.Contains(string(sleepData), "dur=") {
+			t.Errorf("sleepsnoop trace flushed but is not a well-formed sleep record\n--- trace ---\n%s", sleepData)
+		} else {
+			t.Logf("sleepsnoop captured: %s", bytes.TrimSpace(sleepData))
+		}
+	}
+
 	// The summary writer ran the whole guest→host pipeline: cmdline token →
 	// agent parse → writer → atomic rewrite onto the share. Assert the host
 	// reads back a valid, parseable summary with an open-snoop section. The
@@ -348,9 +371,16 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 	if summary.ExecSnoop == nil {
 		t.Fatalf("summary missing exec-snoop section: %+v\n--- summary ---\n%s", summary, sumData)
 	}
-	t.Logf("build-progress summary: opens total=%d rate=%.1f/s | execs total=%d top_commands=%v",
+	// All three gadgets fold into the one summary, so the sleep-snoop section
+	// must be present too — its Total is timing/workload-dependent (asserted as
+	// presence, like exec-snoop).
+	if summary.SleepSnoop == nil {
+		t.Fatalf("summary missing sleep-snoop section: %+v\n--- summary ---\n%s", summary, sumData)
+	}
+	t.Logf("build-progress summary: opens total=%d rate=%.1f/s | execs total=%d top_commands=%v | sleeps total=%d total_sleep_ms=%d",
 		summary.Opensnoop.Total, summary.Opensnoop.OpenatRate,
-		summary.ExecSnoop.Total, summary.ExecSnoop.TopCommands)
+		summary.ExecSnoop.Total, summary.ExecSnoop.TopCommands,
+		summary.SleepSnoop.Total, summary.SleepSnoop.TotalSleepMs)
 }
 
 // TestHelloIntegrationBootsVMWithImagestoreBundle proves the

@@ -150,6 +150,12 @@ type Config struct {
 	// OpensnoopLogPath. Empty (the default) leaves the gadget off.
 	ExecsnoopLogPath string
 
+	// SleepsnoopLogPath, when non-empty, is the *in-guest* absolute path the
+	// agent writes the Tier-2 sleep-snoop eBPF trace to (one line per
+	// nanosleep(2) / clock_nanosleep(2): pid/comm/requested-duration). Same
+	// contract as OpensnoopLogPath. Empty (the default) leaves the gadget off.
+	SleepsnoopLogPath string
+
 	// ObserveSummaryPath, when non-empty, is the *in-guest* absolute path
 	// the agent atomically rewrites the live build-progress summary to
 	// (~1 Hz JSON: openat total/rate/last-activity-age + top processes,
@@ -617,6 +623,9 @@ func buildKernelCmdline(cfg Config) string {
 	}
 	if cfg.ExecsnoopLogPath != "" {
 		parts = append(parts, agent.FormatExecsnoopCmdline(cfg.ExecsnoopLogPath))
+	}
+	if cfg.SleepsnoopLogPath != "" {
+		parts = append(parts, agent.FormatSleepsnoopCmdline(cfg.SleepsnoopLogPath))
 	}
 	if cfg.ObserveSummaryPath != "" {
 		parts = append(parts, agent.FormatSummaryCmdline(cfg.ObserveSummaryPath))

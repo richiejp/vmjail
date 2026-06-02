@@ -255,7 +255,7 @@ deprioritised; build them only if a specific symptom demands it.
 | ------------ | ----------------------------------------------------------- | ----- | ------ |
 | `open-snoop` | "what files is the workload opening, and which are missing?" | sys_enter_openat + sys_exit_openat | landed |
 | `exec-snoop` | "what is the build running, with what args, and what failed to exec?" | sys_enter_execve + sys_exit_execve | landed |
-| `sleep-snoop`| "is a process spin-polling instead of waiting?"             | sys_enter_nanosleep + clock_nanosleep | planned |
+| `sleep-snoop`| "is a process spin-polling instead of waiting?"             | sys_enter_nanosleep + sys_enter_clock_nanosleep | landed |
 | `io-snoop`   | "what I/O hits which files/sockets, by PID, with what errno?" | read/write/connect/accept/sendto/recvfrom | planned |
 
 **`open-snoop` landed first** (roadmap #5b) — the lint cache-miss bug
@@ -357,13 +357,20 @@ internal/observability/
     execsnoop/             ← second gadget (exec + argv + errno)
       execsnoop_bpf.c      ← enter stashes argv, exit completes with ret
       ...                  ← same shape as opensnoop/
+    sleepsnoop/            ← third gadget (nanosleep + clock_nanosleep)
+      sleepsnoop_bpf.c     ← enter-only; emits pid+comm+requested duration
+      ...                  ← same shape as opensnoop/
 ```
 
 Each gadget keeps the same shape (BPF C + committed loader/ELF, a pure
 decode/aggregate path, the privileged load behind an injected seam) so a
 new one is mostly a copy with a different probe and event. Shared logic
-(the `topk` heavy-hitter counter) is factored out; per-gadget render
-helpers (errno names, flag decode) stay local since they differ.
+(the `topk` heavy-hitter counter, which gained a weighted `AddN` so
+sleep-snoop can rank comms by cumulative requested-sleep ms, not just call
+count) is factored out; per-gadget render helpers (errno names, flag/duration
+render) stay local since they differ. sleep-snoop is *enter-only* — the
+requested duration is known at entry and an interrupted sleep is still a
+sleep, so unlike open/exec-snoop there is no exit hook or inflight map.
 
 Each gadget is one subpackage, owning its own ring-buffer reader and
 output format, with a documented "why this was written" block at the
@@ -602,9 +609,22 @@ In rough order:
      (process launches)" section). The in-VM e2e asserts the workload's
      `argv=[/hello] ret=ok` is captured. Shares the `ebpf/topk` heavy-hitter
      counter with open-snoop.
-   - **7b — sleep-snoop** — nanosleep/clock_nanosleep counts per PID/comm,
-     to catch poll-with-sleep retry loops (the canonical "tests are slow
-     because we never waited for the process to start" symptom).
+   - **7b — sleep-snoop** (*landed, end to end*) —
+     `internal/observability/ebpf/sleepsnoop`: nanosleep + clock_nanosleep,
+     *enter-only* (the requested duration is known at entry; an interrupted
+     sleep is still a sleep, so no exit hook). Aggregates to
+     `progress.SleepSnoop` ranking comms two ways — by call count
+     (`TopCallers`, the tight poll loops) and weighted by cumulative
+     requested-sleep ms (`TopSleepers`, who blocks the build on long waits;
+     the duration ranking needed a weighted `topk.AddN`). A
+     clock_nanosleep(TIMER_ABSTIME) records duration 0 (its req is an absolute
+     deadline). Wired into daft-agent (`daft.observe.sleepsnoop=` →
+     `startSleepsnoopFromCmdline`, parallel to the other two), folded into the
+     same build-progress summary, exported on the observe share, and rendered
+     by `daft sandbox observe` (a "sleep-snoop (voluntary sleeps)" section,
+     with the sleeper ranking shown as durations). This is the canonical
+     "tests are slow because we never waited for the process to start"
+     symptom.
    - **7c — io-snoop** — read/write/connect/accept/sendto/recvfrom with the
      fd → file/socket target, PID, and errno (reuses open-snoop's fd→path
      resolution). The broadest signal; largest build.
@@ -626,6 +646,13 @@ In rough order:
   summary by `internal/agent/observe_summary.go` (the multi-gadget
   `runSummaryLoop` + per-section `rateTracker`), and rendered by
   `internal/cli/sandbox_observe.go` (`writeExecsnoop`).
+- `internal/observability/ebpf/sleepsnoop/` — the third Tier-2 gadget
+  (sleep-snoop: nanosleep + clock_nanosleep → `progress.SleepSnoop`,
+  enter-only). Regenerate its BPF object with `make gen-bpf`. Wired into
+  daft-agent via `internal/agent/sleepsnoop.go` (`startSleepsnoopFromCmdline`,
+  the `daft.observe.sleepsnoop=` cmdline token), folded into the same summary,
+  and rendered by `internal/cli/sandbox_observe.go` (`writeSleepsnoop`, with
+  the millisecond sleeper ranking rendered as durations via `writeTopMillis`).
 - `internal/observability/ebpf/opensnoop/` — the first Tier-2 CO-RE
   gadget (open-snoop). Regenerate its BPF object with `make gen-bpf`.
   `aggregate.go` holds the roadmap-#6a `Aggregator` that rolls the event

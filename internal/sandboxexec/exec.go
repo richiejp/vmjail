@@ -633,12 +633,13 @@ func (e *Executor) applyObserverLog(cfg *sandbox.Config, uid string) {
 // summary back from the same backing dir; it is kept separate from the
 // host-written observer.jsonl so the guest can only touch its own files.
 const (
-	observeShareTag      = "daftobserve"
-	observeMount         = "/run/daft/observe"
-	observeSubdir        = "observe"
-	observeOpensnoopName = "opensnoop.log"
-	observeExecsnoopName = "execsnoop.log"
-	observeSummaryName   = "progress.json"
+	observeShareTag       = "daftobserve"
+	observeMount          = "/run/daft/observe"
+	observeSubdir         = "observe"
+	observeOpensnoopName  = "opensnoop.log"
+	observeExecsnoopName  = "execsnoop.log"
+	observeSleepsnoopName = "sleepsnoop.log"
+	observeSummaryName    = "progress.json"
 )
 
 // observeHostDir is the host backing dir of a dispatch's observe share.
@@ -648,9 +649,9 @@ func (e *Executor) observeHostDir(uid string) string {
 
 // applyObserveSummary wires the Tier-2 observe share: it mkdir's the host
 // backing dir, exports it as a writable virtiofs share, and points the
-// guest's open-snoop + exec-snoop traces and the build-progress summary into
-// the mountpoint so the gadgets run and the output lands somewhere the host
-// can read. Gated
+// guest's open-snoop + exec-snoop + sleep-snoop traces and the build-progress
+// summary into the mountpoint so the gadgets run and the output lands
+// somewhere the host can read. Gated
 // on the same observerDir opt-in as the observer log and equally
 // best-effort: an unset observerDir, already-set paths, an empty uid, or a
 // mkdir failure all leave the config untouched and the dispatch proceeds.
@@ -670,6 +671,7 @@ func (e *Executor) applyObserveSummary(cfg *sandbox.Config, uid string) {
 	cfg.Shares = append(append([]*sandbox.ShareConfig(nil), cfg.Shares...), observe)
 	cfg.OpensnoopLogPath = filepath.Join(observeMount, observeOpensnoopName)
 	cfg.ExecsnoopLogPath = filepath.Join(observeMount, observeExecsnoopName)
+	cfg.SleepsnoopLogPath = filepath.Join(observeMount, observeSleepsnoopName)
 	cfg.ObserveSummaryPath = filepath.Join(observeMount, observeSummaryName)
 }
 
