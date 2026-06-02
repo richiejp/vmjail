@@ -67,6 +67,13 @@ service WorkspaceCatalogService {
   // default). Projected onto the SandboxSpec at Launch.
   rpc SetResources(SetResourcesRequest) returns (WorkspaceResponse) {}
 
+  // SetNestedVirtualization toggles whether the workload may run
+  // its own (L2) VMs — when enabled the executor binds /dev/kvm
+  // into the container and adds the cgroup device-allow. Off by
+  // default (a privilege/attack-surface bump). Projected onto the
+  // SandboxSpec at Launch.
+  rpc SetNestedVirtualization(SetNestedVirtualizationRequest) returns (WorkspaceResponse) {}
+
   // AddMount appends a Mount to the workspace. Mount.target must
   // be absolute; the orchestrator rejects empty or relative targets
   // and refuses a duplicate target in the existing mount set.
@@ -354,6 +361,12 @@ message SetResourcesRequest {
   uint64 memory_bytes = 2;
   // Guest vCPU count. Zero clears it (executor default).
   uint32 cpu_cores = 3;
+}
+
+message SetNestedVirtualizationRequest {
+  WorkspaceHandle handle = 1;
+  // true grants the workload nested-virt access; false revokes it.
+  bool enable = 2;
 }
 
 message AddMountRequest {

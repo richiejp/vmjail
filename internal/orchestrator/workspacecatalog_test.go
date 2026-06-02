@@ -733,6 +733,37 @@ func TestSetResourcesRoundTripsAndClears(t *testing.T) {
 	}
 }
 
+// TestSetNestedVirtualizationRoundTripsAndClears proves the grant
+// toggles on then back off through the wire spec — the field the
+// Launch projection reads onto SandboxSpec.nested_virtualization.
+func TestSetNestedVirtualizationRoundTripsAndClears(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "nv"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
+
+	set, err := rig.client.SetNestedVirtualization(t.Context(), connect.NewRequest(
+		&workspacev1.SetNestedVirtualizationRequest{Handle: handle, Enable: true},
+	))
+	if err != nil {
+		t.Fatalf("SetNestedVirtualization: %v", err)
+	}
+	if !set.Msg.GetWorkspace().GetSpec().GetNestedVirtualization().GetEnable() {
+		t.Error("after enable, spec nested_virtualization.enable = false, want true")
+	}
+
+	cleared, err := rig.client.SetNestedVirtualization(t.Context(), connect.NewRequest(
+		&workspacev1.SetNestedVirtualizationRequest{Handle: handle, Enable: false},
+	))
+	if err != nil {
+		t.Fatalf("SetNestedVirtualization clear: %v", err)
+	}
+	if cleared.Msg.GetWorkspace().GetSpec().GetNestedVirtualization().GetEnable() {
+		t.Error("after disable, spec nested_virtualization.enable = true, want false")
+	}
+}
+
 // TestRemoveMountDropsTheTargetAndReReinstatesMissing pins the
 // symmetric "AddMount → RemoveMount" cycle: after AddMount removes
 // "mount" from Missing[], RemoveMount must put it back when the
@@ -1096,6 +1127,11 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	)); err != nil {
 		t.Fatalf("AddEnv: %v", err)
 	}
+	if _, err := rig.client.SetNestedVirtualization(t.Context(), connect.NewRequest(
+		&workspacev1.SetNestedVirtualizationRequest{Handle: uuidHandle(uuid), Enable: true},
+	)); err != nil {
+		t.Fatalf("SetNestedVirtualization: %v", err)
+	}
 	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(
 		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
 	)); err != nil {
@@ -1135,6 +1171,9 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	}
 	if len(call.sandbox.GetSpec().GetEnv()) != 1 || call.sandbox.GetSpec().GetEnv()[0].GetName() != "K" {
 		t.Errorf("spec.env = %v, want [K=v]", call.sandbox.GetSpec().GetEnv())
+	}
+	if !call.sandbox.GetSpec().GetNestedVirtualization().GetEnable() {
+		t.Error("spec.nested_virtualization.enable = false, want true (projected from workspace)")
 	}
 }
 

@@ -85,6 +85,13 @@ func TestClusterNestedKVMProbe(t *testing.T) {
 			"%s workspace mount add /workspace --source %s --name %s %s",
 			prefix, mountSrc, wsName, orch,
 		)},
+		// Nested virt is opt-in: without this the executor leaves
+		// /dev/kvm unbound and the probe's KVM_CREATE_VM EPERMs. This
+		// is the gate that makes the privilege grant per-workspace.
+		{Label: "nested", Cmd: fmt.Sprintf(
+			"%s workspace nested --enable --name %s %s",
+			prefix, wsName, orch,
+		)},
 		{Label: "target", Cmd: fmt.Sprintf(
 			"%s workspace target %s --name %s %s", prefix, c.SandboxdFP, wsName, orch,
 		)},

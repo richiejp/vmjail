@@ -190,6 +190,45 @@ func TestHandleSandboxEventProjectsEnv(t *testing.T) {
 	}
 }
 
+// TestHandleSandboxEventProjectsNestedVirt proves the spec's
+// nested_virtualization.enable reaches the assembler's
+// BootOptions.Nested — the wire that flips the /dev/kvm bind — and
+// that an unset section leaves it false (the unprivileged default).
+func TestHandleSandboxEventProjectsNestedVirt(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		nv   *sandboxv1.NestedVirtualization
+		want bool
+	}{
+		{"unset", nil, false},
+		{"disabled", &sandboxv1.NestedVirtualization{Enable: false}, false},
+		{"enabled", &sandboxv1.NestedVirtualization{Enable: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var seen bool
+			asm := func(_ context.Context, _ string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+				seen = opts.Nested
+				return sandbox.Config{Bundle: "/b"}, func() {}, nil
+			}
+			runner := func(context.Context, io.Writer, sandbox.Config) error { return nil }
+			e, err := New(Config{Stdout: io.Discard, Runner: runner, Assembler: asm})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			evt := addedEvent("sb-nv", &sandboxv1.SandboxSpec{
+				ImageRef:             testImageRef,
+				NestedVirtualization: tc.nv,
+			})
+			if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+				t.Fatalf("HandleSandboxEvent: %v", err)
+			}
+			if seen != tc.want {
+				t.Fatalf("assembler BootOptions.Nested = %v, want %v", seen, tc.want)
+			}
+		})
+	}
+}
+
 // TestEgressActive pins the single predicate that gates BOTH proxy
 // injection and the DenyEgress decision: an EgressProxy with a nil
 // Handler must not count as active, or deny would turn on with no

@@ -728,6 +728,7 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 	opts := sandboxboot.BootOptions{
 		Mounts: mounts,
 		Env:    envFromSpec(spec.GetEnv()),
+		Nested: spec.GetNestedVirtualization().GetEnable(),
 	}
 	// Layer the egress-proxy env after the workspace's own env so the
 	// proxy vars win on a key clash (a workload can't unset the proxy

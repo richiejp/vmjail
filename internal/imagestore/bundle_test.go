@@ -269,6 +269,96 @@ func TestDefaultRuntimeMountsIncludesDevPts(t *testing.T) {
 	}
 }
 
+// TestDefaultRuntimeOmitsKVM pins that a plain (non-nested) workload
+// gets neither the /dev/kvm bind nor the 10:232 device-allow — the
+// privilege grant is opt-in, so the unprivileged default must carry
+// no hypervisor hole.
+func TestDefaultRuntimeOmitsKVM(t *testing.T) {
+	for _, m := range defaultRuntimeMounts() {
+		if m.Destination == devKVMPath {
+			t.Errorf("default mounts unexpectedly bind /dev/kvm: %+v", m)
+		}
+	}
+	if r := defaultRuntimeLinuxConfig().Resources; r != nil {
+		t.Errorf("default linux config has Resources (device-allow) set: %+v", r)
+	}
+}
+
+// TestApplyNestedVirtAddsKVM pins the opt-in path: applyNestedVirt
+// appends the /dev/kvm bind and the 10:232 cgroup device-allow that
+// must travel together — the bind without the allow EPERMs, the
+// allow without the bind has nothing to open.
+func TestApplyNestedVirtAddsKVM(t *testing.T) {
+	mounts, linux := applyNestedVirt(defaultRuntimeMounts(), defaultRuntimeLinuxConfig())
+
+	var kvm *runtimeMount
+	for i := range mounts {
+		if mounts[i].Destination == devKVMPath {
+			kvm = &mounts[i]
+		}
+	}
+	if kvm == nil {
+		t.Fatal("nested mounts missing /dev/kvm bind")
+	}
+	if kvm.Type != mountTypeBind || kvm.Source != devKVMPath {
+		t.Errorf("/dev/kvm mount = %+v, want bind of /dev/kvm", *kvm)
+	}
+
+	if linux.Resources == nil {
+		t.Fatal("nested linux config missing Resources device-allow")
+	}
+	var allowed bool
+	for _, d := range linux.Resources.Devices {
+		if d.Allow && d.Type == "c" &&
+			d.Major != nil && *d.Major == 10 &&
+			d.Minor != nil && *d.Minor == 232 {
+			allowed = true
+		}
+	}
+	if !allowed {
+		t.Errorf("device-allow 10:232 missing from %+v", linux.Resources.Devices)
+	}
+}
+
+// TestBundleNestedVirtGatesKVM proves the BundleOptions.Nested flag
+// is what flips the /dev/kvm bind in the emitted config.json: off by
+// default, present when set.
+func TestBundleNestedVirtGatesKVM(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/nestedvirt:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{Entrypoint: []string{testEntrypoint}})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+
+	for _, tc := range []struct {
+		name   string
+		nested bool
+		want   bool
+	}{
+		{"default omits kvm", false, false},
+		{"nested binds kvm", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle, err := store.Bundle(context.Background(), pulled.Digest,
+				BundleOptions{Nested: tc.nested})
+			if err != nil {
+				t.Fatalf("Bundle: %v", err)
+			}
+			cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+			got := strings.Contains(string(cfg), `"/dev/kvm"`)
+			if got != tc.want {
+				t.Errorf("config.json contains /dev/kvm = %v, want %v:\n%s", got, tc.want, cfg)
+			}
+		})
+	}
+}
+
 // TestBuildRuntimeConfigRootfsWritable pins the rootfs Readonly
 // flag — load-bearing for nix-CLI workflows (see runtimespec.go
 // comment for the chain of constraints).

@@ -212,6 +212,21 @@ func (h *WorkspaceCatalogHandler) SetResources(
 		})
 }
 
+// SetNestedVirtualization toggles the workspace's nested-virt grant.
+// Enabling binds /dev/kvm into the workload container at Launch;
+// disabling reverts to the unprivileged default.
+func (h *WorkspaceCatalogHandler) SetNestedVirtualization(
+	_ context.Context,
+	req *connect.Request[workspacev1.SetNestedVirtualizationRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	enable := req.Msg.GetEnable()
+	return h.mutate(req.Header(), req.Msg.GetHandle(),
+		func(w *workspacecatalog.Workspace) error {
+			w.Spec.NestedVirt = enable
+			return nil
+		})
+}
+
 // mutate is the shared auth → resolve → Update → project plumbing
 // behind every per-field setter. Defaults to MutateSpec (bumps
 // generation + recomputes Missing/Ready). Add* handlers don't use
@@ -774,6 +789,9 @@ func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Finge
 		Ports:         portsToProto(ws.Spec.Ports),
 		MemoryBytes:   ws.Spec.MemoryBytes,
 		CpuCores:      ws.Spec.CPUCores,
+		NestedVirtualization: &sandboxv1.NestedVirtualization{
+			Enable: ws.Spec.NestedVirt,
+		},
 	}
 }
 
@@ -914,6 +932,9 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 			Isolation:                sandboxv1.Isolation(ws.Spec.Isolation),
 			MemoryBytes:              ws.Spec.MemoryBytes,
 			CpuCores:                 ws.Spec.CPUCores,
+			NestedVirtualization: &sandboxv1.NestedVirtualization{
+				Enable: ws.Spec.NestedVirt,
+			},
 		},
 		Status: &workspacev1.WorkspaceStatus{
 			ObservedGeneration: ws.Status.ObservedGeneration,

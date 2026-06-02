@@ -588,6 +588,35 @@ func TestWorkspaceResourcesRejectsBadMemory(t *testing.T) {
 	}
 }
 
+// TestWorkspaceNestedEnable drives the nested subcommand end-to-end:
+// --enable calls SetNestedVirtualization and the rendered summary
+// surfaces the grant.
+func TestWorkspaceNestedEnable(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	out := h.run(append([]string{nestedSubName, "--enable"}, h.commonArgs...)...)
+	if !strings.Contains(out, "Nested-virt:") {
+		t.Errorf("nested --enable summary missing Nested-virt row:\n%s", out)
+	}
+}
+
+// TestWorkspaceNestedRequiresExactlyOneFlag pins the client-side
+// guard: neither flag (or both) is a usage error that never reaches
+// the wire, so the grant is never toggled by accident.
+func TestWorkspaceNestedRequiresExactlyOneFlag(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	for _, flags := range [][]string{
+		{},                        // neither
+		{"--enable", "--disable"}, // both
+	} {
+		args := append(append([]string{nestedSubName}, flags...), h.commonArgs...)
+		if _, err := h.runErr(args...); err == nil {
+			t.Errorf("nested %v: expected error, got nil", flags)
+		}
+	}
+}
+
 func TestParseMemoryBytes(t *testing.T) {
 	cases := map[string]uint64{
 		"":     0,

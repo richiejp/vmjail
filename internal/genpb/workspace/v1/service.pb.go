@@ -1117,6 +1117,59 @@ func (x *SetResourcesRequest) GetCpuCores() uint32 {
 	return 0
 }
 
+type SetNestedVirtualizationRequest struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Handle *WorkspaceHandle       `protobuf:"bytes,1,opt,name=handle,proto3" json:"handle,omitempty"`
+	// true grants the workload nested-virt access; false revokes it.
+	Enable        bool `protobuf:"varint,2,opt,name=enable,proto3" json:"enable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetNestedVirtualizationRequest) Reset() {
+	*x = SetNestedVirtualizationRequest{}
+	mi := &file_workspace_v1_service_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetNestedVirtualizationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetNestedVirtualizationRequest) ProtoMessage() {}
+
+func (x *SetNestedVirtualizationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_service_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetNestedVirtualizationRequest.ProtoReflect.Descriptor instead.
+func (*SetNestedVirtualizationRequest) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *SetNestedVirtualizationRequest) GetHandle() *WorkspaceHandle {
+	if x != nil {
+		return x.Handle
+	}
+	return nil
+}
+
+func (x *SetNestedVirtualizationRequest) GetEnable() bool {
+	if x != nil {
+		return x.Enable
+	}
+	return false
+}
+
 type AddMountRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Handle        *WorkspaceHandle       `protobuf:"bytes,1,opt,name=handle,proto3" json:"handle,omitempty"`
@@ -1127,7 +1180,7 @@ type AddMountRequest struct {
 
 func (x *AddMountRequest) Reset() {
 	*x = AddMountRequest{}
-	mi := &file_workspace_v1_service_proto_msgTypes[18]
+	mi := &file_workspace_v1_service_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1139,7 +1192,7 @@ func (x *AddMountRequest) String() string {
 func (*AddMountRequest) ProtoMessage() {}
 
 func (x *AddMountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_service_proto_msgTypes[18]
+	mi := &file_workspace_v1_service_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1152,7 +1205,7 @@ func (x *AddMountRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddMountRequest.ProtoReflect.Descriptor instead.
 func (*AddMountRequest) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_service_proto_rawDescGZIP(), []int{18}
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *AddMountRequest) GetHandle() *WorkspaceHandle {
@@ -1179,7 +1232,7 @@ type AddEnvRequest struct {
 
 func (x *AddEnvRequest) Reset() {
 	*x = AddEnvRequest{}
-	mi := &file_workspace_v1_service_proto_msgTypes[19]
+	mi := &file_workspace_v1_service_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1191,7 +1244,7 @@ func (x *AddEnvRequest) String() string {
 func (*AddEnvRequest) ProtoMessage() {}
 
 func (x *AddEnvRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_service_proto_msgTypes[19]
+	mi := &file_workspace_v1_service_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1204,7 +1257,7 @@ func (x *AddEnvRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddEnvRequest.ProtoReflect.Descriptor instead.
 func (*AddEnvRequest) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_service_proto_rawDescGZIP(), []int{19}
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *AddEnvRequest) GetHandle() *WorkspaceHandle {
@@ -1231,7 +1284,7 @@ type AddPortRequest struct {
 
 func (x *AddPortRequest) Reset() {
 	*x = AddPortRequest{}
-	mi := &file_workspace_v1_service_proto_msgTypes[20]
+	mi := &file_workspace_v1_service_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1243,7 +1296,7 @@ func (x *AddPortRequest) String() string {
 func (*AddPortRequest) ProtoMessage() {}
 
 func (x *AddPortRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_service_proto_msgTypes[20]
+	mi := &file_workspace_v1_service_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1256,7 +1309,7 @@ func (x *AddPortRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddPortRequest.ProtoReflect.Descriptor instead.
 func (*AddPortRequest) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_service_proto_rawDescGZIP(), []int{20}
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *AddPortRequest) GetHandle() *WorkspaceHandle {
@@ -1284,7 +1337,7 @@ type RemoveMountRequest struct {
 
 func (x *RemoveMountRequest) Reset() {
 	*x = RemoveMountRequest{}
-	mi := &file_workspace_v1_service_proto_msgTypes[21]
+	mi := &file_workspace_v1_service_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1296,7 +1349,7 @@ func (x *RemoveMountRequest) String() string {
 func (*RemoveMountRequest) ProtoMessage() {}
 
 func (x *RemoveMountRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_service_proto_msgTypes[21]
+	mi := &file_workspace_v1_service_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1309,7 +1362,7 @@ func (x *RemoveMountRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveMountRequest.ProtoReflect.Descriptor instead.
 func (*RemoveMountRequest) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_service_proto_rawDescGZIP(), []int{21}
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *RemoveMountRequest) GetHandle() *WorkspaceHandle {
@@ -1337,7 +1390,7 @@ type RemoveEnvRequest struct {
 
 func (x *RemoveEnvRequest) Reset() {
 	*x = RemoveEnvRequest{}
-	mi := &file_workspace_v1_service_proto_msgTypes[22]
+	mi := &file_workspace_v1_service_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1349,7 +1402,7 @@ func (x *RemoveEnvRequest) String() string {
 func (*RemoveEnvRequest) ProtoMessage() {}
 
 func (x *RemoveEnvRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_service_proto_msgTypes[22]
+	mi := &file_workspace_v1_service_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1362,7 +1415,7 @@ func (x *RemoveEnvRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveEnvRequest.ProtoReflect.Descriptor instead.
 func (*RemoveEnvRequest) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_service_proto_rawDescGZIP(), []int{22}
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *RemoveEnvRequest) GetHandle() *WorkspaceHandle {
@@ -1393,7 +1446,7 @@ type RemovePortRequest struct {
 
 func (x *RemovePortRequest) Reset() {
 	*x = RemovePortRequest{}
-	mi := &file_workspace_v1_service_proto_msgTypes[23]
+	mi := &file_workspace_v1_service_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1405,7 +1458,7 @@ func (x *RemovePortRequest) String() string {
 func (*RemovePortRequest) ProtoMessage() {}
 
 func (x *RemovePortRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_service_proto_msgTypes[23]
+	mi := &file_workspace_v1_service_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1418,7 +1471,7 @@ func (x *RemovePortRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePortRequest.ProtoReflect.Descriptor instead.
 func (*RemovePortRequest) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_service_proto_rawDescGZIP(), []int{23}
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RemovePortRequest) GetHandle() *WorkspaceHandle {
@@ -1451,7 +1504,7 @@ type ValidateRequest struct {
 
 func (x *ValidateRequest) Reset() {
 	*x = ValidateRequest{}
-	mi := &file_workspace_v1_service_proto_msgTypes[24]
+	mi := &file_workspace_v1_service_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1463,7 +1516,7 @@ func (x *ValidateRequest) String() string {
 func (*ValidateRequest) ProtoMessage() {}
 
 func (x *ValidateRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_service_proto_msgTypes[24]
+	mi := &file_workspace_v1_service_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1476,7 +1529,7 @@ func (x *ValidateRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ValidateRequest.ProtoReflect.Descriptor instead.
 func (*ValidateRequest) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_service_proto_rawDescGZIP(), []int{24}
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ValidateRequest) GetHandle() *WorkspaceHandle {
@@ -1495,7 +1548,7 @@ type LaunchRequest struct {
 
 func (x *LaunchRequest) Reset() {
 	*x = LaunchRequest{}
-	mi := &file_workspace_v1_service_proto_msgTypes[25]
+	mi := &file_workspace_v1_service_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1507,7 +1560,7 @@ func (x *LaunchRequest) String() string {
 func (*LaunchRequest) ProtoMessage() {}
 
 func (x *LaunchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_service_proto_msgTypes[25]
+	mi := &file_workspace_v1_service_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1520,7 +1573,7 @@ func (x *LaunchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LaunchRequest.ProtoReflect.Descriptor instead.
 func (*LaunchRequest) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_service_proto_rawDescGZIP(), []int{25}
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *LaunchRequest) GetHandle() *WorkspaceHandle {
@@ -1539,7 +1592,7 @@ type StopRequest struct {
 
 func (x *StopRequest) Reset() {
 	*x = StopRequest{}
-	mi := &file_workspace_v1_service_proto_msgTypes[26]
+	mi := &file_workspace_v1_service_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1551,7 +1604,7 @@ func (x *StopRequest) String() string {
 func (*StopRequest) ProtoMessage() {}
 
 func (x *StopRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_service_proto_msgTypes[26]
+	mi := &file_workspace_v1_service_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1564,7 +1617,7 @@ func (x *StopRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StopRequest.ProtoReflect.Descriptor instead.
 func (*StopRequest) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_service_proto_rawDescGZIP(), []int{26}
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *StopRequest) GetHandle() *WorkspaceHandle {
@@ -1588,7 +1641,7 @@ type AcquireRequest struct {
 
 func (x *AcquireRequest) Reset() {
 	*x = AcquireRequest{}
-	mi := &file_workspace_v1_service_proto_msgTypes[27]
+	mi := &file_workspace_v1_service_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1600,7 +1653,7 @@ func (x *AcquireRequest) String() string {
 func (*AcquireRequest) ProtoMessage() {}
 
 func (x *AcquireRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_service_proto_msgTypes[27]
+	mi := &file_workspace_v1_service_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1613,7 +1666,7 @@ func (x *AcquireRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcquireRequest.ProtoReflect.Descriptor instead.
 func (*AcquireRequest) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_service_proto_rawDescGZIP(), []int{27}
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *AcquireRequest) GetHandle() *WorkspaceHandle {
@@ -1639,7 +1692,7 @@ type ReleaseRequest struct {
 
 func (x *ReleaseRequest) Reset() {
 	*x = ReleaseRequest{}
-	mi := &file_workspace_v1_service_proto_msgTypes[28]
+	mi := &file_workspace_v1_service_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1651,7 +1704,7 @@ func (x *ReleaseRequest) String() string {
 func (*ReleaseRequest) ProtoMessage() {}
 
 func (x *ReleaseRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_service_proto_msgTypes[28]
+	mi := &file_workspace_v1_service_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1664,7 +1717,7 @@ func (x *ReleaseRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReleaseRequest.ProtoReflect.Descriptor instead.
 func (*ReleaseRequest) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_service_proto_rawDescGZIP(), []int{28}
+	return file_workspace_v1_service_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ReleaseRequest) GetHandle() *WorkspaceHandle {
@@ -1734,7 +1787,10 @@ const file_workspace_v1_service_proto_rawDesc = "" +
 	"\x13SetResourcesRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12!\n" +
 	"\fmemory_bytes\x18\x02 \x01(\x04R\vmemoryBytes\x12\x1b\n" +
-	"\tcpu_cores\x18\x03 \x01(\rR\bcpuCores\"{\n" +
+	"\tcpu_cores\x18\x03 \x01(\rR\bcpuCores\"t\n" +
+	"\x1eSetNestedVirtualizationRequest\x12:\n" +
+	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12\x16\n" +
+	"\x06enable\x18\x02 \x01(\bR\x06enable\"{\n" +
 	"\x0fAddMountRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12,\n" +
 	"\x05mount\x18\x02 \x01(\v2\x16.daft.sandbox.v1.MountR\x05mount\"v\n" +
@@ -1764,14 +1820,15 @@ const file_workspace_v1_service_proto_rawDesc = "" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12+\n" +
 	"\x03ttl\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\x03ttl\"L\n" +
 	"\x0eReleaseRequest\x12:\n" +
-	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle2\xf1\x0e\n" +
+	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle2\xe7\x0f\n" +
 	"\x17WorkspaceCatalogService\x12[\n" +
 	"\x06Create\x12).daft.workspace.v1.CreateWorkspaceRequest\x1a$.daft.workspace.v1.WorkspaceResponse\"\x00\x12U\n" +
 	"\x03Get\x12&.daft.workspace.v1.GetWorkspaceRequest\x1a$.daft.workspace.v1.WorkspaceResponse\"\x00\x12]\n" +
 	"\x04List\x12(.daft.workspace.v1.ListWorkspacesRequest\x1a).daft.workspace.v1.ListWorkspacesResponse\"\x00\x12V\n" +
 	"\bSetImage\x12\".daft.workspace.v1.SetImageRequest\x1a$.daft.workspace.v1.WorkspaceResponse\"\x00\x12X\n" +
 	"\tSetTarget\x12#.daft.workspace.v1.SetTargetRequest\x1a$.daft.workspace.v1.WorkspaceResponse\"\x00\x12^\n" +
-	"\fSetResources\x12&.daft.workspace.v1.SetResourcesRequest\x1a$.daft.workspace.v1.WorkspaceResponse\"\x00\x12V\n" +
+	"\fSetResources\x12&.daft.workspace.v1.SetResourcesRequest\x1a$.daft.workspace.v1.WorkspaceResponse\"\x00\x12t\n" +
+	"\x17SetNestedVirtualization\x121.daft.workspace.v1.SetNestedVirtualizationRequest\x1a$.daft.workspace.v1.WorkspaceResponse\"\x00\x12V\n" +
 	"\bAddMount\x12\".daft.workspace.v1.AddMountRequest\x1a$.daft.workspace.v1.WorkspaceResponse\"\x00\x12R\n" +
 	"\x06AddEnv\x12 .daft.workspace.v1.AddEnvRequest\x1a$.daft.workspace.v1.WorkspaceResponse\"\x00\x12T\n" +
 	"\aAddPort\x12!.daft.workspace.v1.AddPortRequest\x1a$.daft.workspace.v1.WorkspaceResponse\"\x00\x12\\\n" +
@@ -1801,43 +1858,44 @@ func file_workspace_v1_service_proto_rawDescGZIP() []byte {
 	return file_workspace_v1_service_proto_rawDescData
 }
 
-var file_workspace_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 29)
+var file_workspace_v1_service_proto_msgTypes = make([]protoimpl.MessageInfo, 30)
 var file_workspace_v1_service_proto_goTypes = []any{
-	(*ObserveSummaryRequest)(nil),  // 0: daft.workspace.v1.ObserveSummaryRequest
-	(*ObserveSummaryResponse)(nil), // 1: daft.workspace.v1.ObserveSummaryResponse
-	(*ObserverTailRequest)(nil),    // 2: daft.workspace.v1.ObserverTailRequest
-	(*ObserverChunk)(nil),          // 3: daft.workspace.v1.ObserverChunk
-	(*ForwardFrame)(nil),           // 4: daft.workspace.v1.ForwardFrame
-	(*ForwardHello)(nil),           // 5: daft.workspace.v1.ForwardHello
-	(*AttachFrame)(nil),            // 6: daft.workspace.v1.AttachFrame
-	(*AttachHello)(nil),            // 7: daft.workspace.v1.AttachHello
-	(*AttachResize)(nil),           // 8: daft.workspace.v1.AttachResize
-	(*WorkspaceHandle)(nil),        // 9: daft.workspace.v1.WorkspaceHandle
-	(*CreateWorkspaceRequest)(nil), // 10: daft.workspace.v1.CreateWorkspaceRequest
-	(*WorkspaceResponse)(nil),      // 11: daft.workspace.v1.WorkspaceResponse
-	(*GetWorkspaceRequest)(nil),    // 12: daft.workspace.v1.GetWorkspaceRequest
-	(*ListWorkspacesRequest)(nil),  // 13: daft.workspace.v1.ListWorkspacesRequest
-	(*ListWorkspacesResponse)(nil), // 14: daft.workspace.v1.ListWorkspacesResponse
-	(*SetImageRequest)(nil),        // 15: daft.workspace.v1.SetImageRequest
-	(*SetTargetRequest)(nil),       // 16: daft.workspace.v1.SetTargetRequest
-	(*SetResourcesRequest)(nil),    // 17: daft.workspace.v1.SetResourcesRequest
-	(*AddMountRequest)(nil),        // 18: daft.workspace.v1.AddMountRequest
-	(*AddEnvRequest)(nil),          // 19: daft.workspace.v1.AddEnvRequest
-	(*AddPortRequest)(nil),         // 20: daft.workspace.v1.AddPortRequest
-	(*RemoveMountRequest)(nil),     // 21: daft.workspace.v1.RemoveMountRequest
-	(*RemoveEnvRequest)(nil),       // 22: daft.workspace.v1.RemoveEnvRequest
-	(*RemovePortRequest)(nil),      // 23: daft.workspace.v1.RemovePortRequest
-	(*ValidateRequest)(nil),        // 24: daft.workspace.v1.ValidateRequest
-	(*LaunchRequest)(nil),          // 25: daft.workspace.v1.LaunchRequest
-	(*StopRequest)(nil),            // 26: daft.workspace.v1.StopRequest
-	(*AcquireRequest)(nil),         // 27: daft.workspace.v1.AcquireRequest
-	(*ReleaseRequest)(nil),         // 28: daft.workspace.v1.ReleaseRequest
-	(*Workspace)(nil),              // 29: daft.workspace.v1.Workspace
-	(*v1.Mount)(nil),               // 30: daft.sandbox.v1.Mount
-	(*v1.EnvVar)(nil),              // 31: daft.sandbox.v1.EnvVar
-	(*v1.PortMapping)(nil),         // 32: daft.sandbox.v1.PortMapping
-	(v1.Protocol)(0),               // 33: daft.sandbox.v1.Protocol
-	(*durationpb.Duration)(nil),    // 34: google.protobuf.Duration
+	(*ObserveSummaryRequest)(nil),          // 0: daft.workspace.v1.ObserveSummaryRequest
+	(*ObserveSummaryResponse)(nil),         // 1: daft.workspace.v1.ObserveSummaryResponse
+	(*ObserverTailRequest)(nil),            // 2: daft.workspace.v1.ObserverTailRequest
+	(*ObserverChunk)(nil),                  // 3: daft.workspace.v1.ObserverChunk
+	(*ForwardFrame)(nil),                   // 4: daft.workspace.v1.ForwardFrame
+	(*ForwardHello)(nil),                   // 5: daft.workspace.v1.ForwardHello
+	(*AttachFrame)(nil),                    // 6: daft.workspace.v1.AttachFrame
+	(*AttachHello)(nil),                    // 7: daft.workspace.v1.AttachHello
+	(*AttachResize)(nil),                   // 8: daft.workspace.v1.AttachResize
+	(*WorkspaceHandle)(nil),                // 9: daft.workspace.v1.WorkspaceHandle
+	(*CreateWorkspaceRequest)(nil),         // 10: daft.workspace.v1.CreateWorkspaceRequest
+	(*WorkspaceResponse)(nil),              // 11: daft.workspace.v1.WorkspaceResponse
+	(*GetWorkspaceRequest)(nil),            // 12: daft.workspace.v1.GetWorkspaceRequest
+	(*ListWorkspacesRequest)(nil),          // 13: daft.workspace.v1.ListWorkspacesRequest
+	(*ListWorkspacesResponse)(nil),         // 14: daft.workspace.v1.ListWorkspacesResponse
+	(*SetImageRequest)(nil),                // 15: daft.workspace.v1.SetImageRequest
+	(*SetTargetRequest)(nil),               // 16: daft.workspace.v1.SetTargetRequest
+	(*SetResourcesRequest)(nil),            // 17: daft.workspace.v1.SetResourcesRequest
+	(*SetNestedVirtualizationRequest)(nil), // 18: daft.workspace.v1.SetNestedVirtualizationRequest
+	(*AddMountRequest)(nil),                // 19: daft.workspace.v1.AddMountRequest
+	(*AddEnvRequest)(nil),                  // 20: daft.workspace.v1.AddEnvRequest
+	(*AddPortRequest)(nil),                 // 21: daft.workspace.v1.AddPortRequest
+	(*RemoveMountRequest)(nil),             // 22: daft.workspace.v1.RemoveMountRequest
+	(*RemoveEnvRequest)(nil),               // 23: daft.workspace.v1.RemoveEnvRequest
+	(*RemovePortRequest)(nil),              // 24: daft.workspace.v1.RemovePortRequest
+	(*ValidateRequest)(nil),                // 25: daft.workspace.v1.ValidateRequest
+	(*LaunchRequest)(nil),                  // 26: daft.workspace.v1.LaunchRequest
+	(*StopRequest)(nil),                    // 27: daft.workspace.v1.StopRequest
+	(*AcquireRequest)(nil),                 // 28: daft.workspace.v1.AcquireRequest
+	(*ReleaseRequest)(nil),                 // 29: daft.workspace.v1.ReleaseRequest
+	(*Workspace)(nil),                      // 30: daft.workspace.v1.Workspace
+	(*v1.Mount)(nil),                       // 31: daft.sandbox.v1.Mount
+	(*v1.EnvVar)(nil),                      // 32: daft.sandbox.v1.EnvVar
+	(*v1.PortMapping)(nil),                 // 33: daft.sandbox.v1.PortMapping
+	(v1.Protocol)(0),                       // 34: daft.sandbox.v1.Protocol
+	(*durationpb.Duration)(nil),            // 35: google.protobuf.Duration
 }
 var file_workspace_v1_service_proto_depIdxs = []int32{
 	9,  // 0: daft.workspace.v1.ObserveSummaryRequest.workspace:type_name -> daft.workspace.v1.WorkspaceHandle
@@ -1847,75 +1905,78 @@ var file_workspace_v1_service_proto_depIdxs = []int32{
 	7,  // 4: daft.workspace.v1.AttachFrame.hello:type_name -> daft.workspace.v1.AttachHello
 	8,  // 5: daft.workspace.v1.AttachFrame.resize:type_name -> daft.workspace.v1.AttachResize
 	9,  // 6: daft.workspace.v1.AttachHello.workspace:type_name -> daft.workspace.v1.WorkspaceHandle
-	29, // 7: daft.workspace.v1.WorkspaceResponse.workspace:type_name -> daft.workspace.v1.Workspace
+	30, // 7: daft.workspace.v1.WorkspaceResponse.workspace:type_name -> daft.workspace.v1.Workspace
 	9,  // 8: daft.workspace.v1.GetWorkspaceRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	29, // 9: daft.workspace.v1.ListWorkspacesResponse.workspaces:type_name -> daft.workspace.v1.Workspace
+	30, // 9: daft.workspace.v1.ListWorkspacesResponse.workspaces:type_name -> daft.workspace.v1.Workspace
 	9,  // 10: daft.workspace.v1.SetImageRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
 	9,  // 11: daft.workspace.v1.SetTargetRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
 	9,  // 12: daft.workspace.v1.SetResourcesRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	9,  // 13: daft.workspace.v1.AddMountRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	30, // 14: daft.workspace.v1.AddMountRequest.mount:type_name -> daft.sandbox.v1.Mount
-	9,  // 15: daft.workspace.v1.AddEnvRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	31, // 16: daft.workspace.v1.AddEnvRequest.env:type_name -> daft.sandbox.v1.EnvVar
-	9,  // 17: daft.workspace.v1.AddPortRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	32, // 18: daft.workspace.v1.AddPortRequest.port:type_name -> daft.sandbox.v1.PortMapping
-	9,  // 19: daft.workspace.v1.RemoveMountRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	9,  // 20: daft.workspace.v1.RemoveEnvRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	9,  // 21: daft.workspace.v1.RemovePortRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	33, // 22: daft.workspace.v1.RemovePortRequest.protocol:type_name -> daft.sandbox.v1.Protocol
-	9,  // 23: daft.workspace.v1.ValidateRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	9,  // 24: daft.workspace.v1.LaunchRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	9,  // 25: daft.workspace.v1.StopRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	9,  // 26: daft.workspace.v1.AcquireRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	34, // 27: daft.workspace.v1.AcquireRequest.ttl:type_name -> google.protobuf.Duration
-	9,  // 28: daft.workspace.v1.ReleaseRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
-	10, // 29: daft.workspace.v1.WorkspaceCatalogService.Create:input_type -> daft.workspace.v1.CreateWorkspaceRequest
-	12, // 30: daft.workspace.v1.WorkspaceCatalogService.Get:input_type -> daft.workspace.v1.GetWorkspaceRequest
-	13, // 31: daft.workspace.v1.WorkspaceCatalogService.List:input_type -> daft.workspace.v1.ListWorkspacesRequest
-	15, // 32: daft.workspace.v1.WorkspaceCatalogService.SetImage:input_type -> daft.workspace.v1.SetImageRequest
-	16, // 33: daft.workspace.v1.WorkspaceCatalogService.SetTarget:input_type -> daft.workspace.v1.SetTargetRequest
-	17, // 34: daft.workspace.v1.WorkspaceCatalogService.SetResources:input_type -> daft.workspace.v1.SetResourcesRequest
-	18, // 35: daft.workspace.v1.WorkspaceCatalogService.AddMount:input_type -> daft.workspace.v1.AddMountRequest
-	19, // 36: daft.workspace.v1.WorkspaceCatalogService.AddEnv:input_type -> daft.workspace.v1.AddEnvRequest
-	20, // 37: daft.workspace.v1.WorkspaceCatalogService.AddPort:input_type -> daft.workspace.v1.AddPortRequest
-	21, // 38: daft.workspace.v1.WorkspaceCatalogService.RemoveMount:input_type -> daft.workspace.v1.RemoveMountRequest
-	22, // 39: daft.workspace.v1.WorkspaceCatalogService.RemoveEnv:input_type -> daft.workspace.v1.RemoveEnvRequest
-	23, // 40: daft.workspace.v1.WorkspaceCatalogService.RemovePort:input_type -> daft.workspace.v1.RemovePortRequest
-	24, // 41: daft.workspace.v1.WorkspaceCatalogService.Validate:input_type -> daft.workspace.v1.ValidateRequest
-	25, // 42: daft.workspace.v1.WorkspaceCatalogService.Launch:input_type -> daft.workspace.v1.LaunchRequest
-	26, // 43: daft.workspace.v1.WorkspaceCatalogService.Stop:input_type -> daft.workspace.v1.StopRequest
-	27, // 44: daft.workspace.v1.WorkspaceCatalogService.Acquire:input_type -> daft.workspace.v1.AcquireRequest
-	28, // 45: daft.workspace.v1.WorkspaceCatalogService.Release:input_type -> daft.workspace.v1.ReleaseRequest
-	4,  // 46: daft.workspace.v1.WorkspaceCatalogService.ForwardPort:input_type -> daft.workspace.v1.ForwardFrame
-	6,  // 47: daft.workspace.v1.WorkspaceCatalogService.AttachSandbox:input_type -> daft.workspace.v1.AttachFrame
-	2,  // 48: daft.workspace.v1.WorkspaceCatalogService.ObserverTail:input_type -> daft.workspace.v1.ObserverTailRequest
-	0,  // 49: daft.workspace.v1.WorkspaceCatalogService.ObserveSummary:input_type -> daft.workspace.v1.ObserveSummaryRequest
-	11, // 50: daft.workspace.v1.WorkspaceCatalogService.Create:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 51: daft.workspace.v1.WorkspaceCatalogService.Get:output_type -> daft.workspace.v1.WorkspaceResponse
-	14, // 52: daft.workspace.v1.WorkspaceCatalogService.List:output_type -> daft.workspace.v1.ListWorkspacesResponse
-	11, // 53: daft.workspace.v1.WorkspaceCatalogService.SetImage:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 54: daft.workspace.v1.WorkspaceCatalogService.SetTarget:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 55: daft.workspace.v1.WorkspaceCatalogService.SetResources:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 56: daft.workspace.v1.WorkspaceCatalogService.AddMount:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 57: daft.workspace.v1.WorkspaceCatalogService.AddEnv:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 58: daft.workspace.v1.WorkspaceCatalogService.AddPort:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 59: daft.workspace.v1.WorkspaceCatalogService.RemoveMount:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 60: daft.workspace.v1.WorkspaceCatalogService.RemoveEnv:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 61: daft.workspace.v1.WorkspaceCatalogService.RemovePort:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 62: daft.workspace.v1.WorkspaceCatalogService.Validate:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 63: daft.workspace.v1.WorkspaceCatalogService.Launch:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 64: daft.workspace.v1.WorkspaceCatalogService.Stop:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 65: daft.workspace.v1.WorkspaceCatalogService.Acquire:output_type -> daft.workspace.v1.WorkspaceResponse
-	11, // 66: daft.workspace.v1.WorkspaceCatalogService.Release:output_type -> daft.workspace.v1.WorkspaceResponse
-	4,  // 67: daft.workspace.v1.WorkspaceCatalogService.ForwardPort:output_type -> daft.workspace.v1.ForwardFrame
-	6,  // 68: daft.workspace.v1.WorkspaceCatalogService.AttachSandbox:output_type -> daft.workspace.v1.AttachFrame
-	3,  // 69: daft.workspace.v1.WorkspaceCatalogService.ObserverTail:output_type -> daft.workspace.v1.ObserverChunk
-	1,  // 70: daft.workspace.v1.WorkspaceCatalogService.ObserveSummary:output_type -> daft.workspace.v1.ObserveSummaryResponse
-	50, // [50:71] is the sub-list for method output_type
-	29, // [29:50] is the sub-list for method input_type
-	29, // [29:29] is the sub-list for extension type_name
-	29, // [29:29] is the sub-list for extension extendee
-	0,  // [0:29] is the sub-list for field type_name
+	9,  // 13: daft.workspace.v1.SetNestedVirtualizationRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	9,  // 14: daft.workspace.v1.AddMountRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	31, // 15: daft.workspace.v1.AddMountRequest.mount:type_name -> daft.sandbox.v1.Mount
+	9,  // 16: daft.workspace.v1.AddEnvRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	32, // 17: daft.workspace.v1.AddEnvRequest.env:type_name -> daft.sandbox.v1.EnvVar
+	9,  // 18: daft.workspace.v1.AddPortRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	33, // 19: daft.workspace.v1.AddPortRequest.port:type_name -> daft.sandbox.v1.PortMapping
+	9,  // 20: daft.workspace.v1.RemoveMountRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	9,  // 21: daft.workspace.v1.RemoveEnvRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	9,  // 22: daft.workspace.v1.RemovePortRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	34, // 23: daft.workspace.v1.RemovePortRequest.protocol:type_name -> daft.sandbox.v1.Protocol
+	9,  // 24: daft.workspace.v1.ValidateRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	9,  // 25: daft.workspace.v1.LaunchRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	9,  // 26: daft.workspace.v1.StopRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	9,  // 27: daft.workspace.v1.AcquireRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	35, // 28: daft.workspace.v1.AcquireRequest.ttl:type_name -> google.protobuf.Duration
+	9,  // 29: daft.workspace.v1.ReleaseRequest.handle:type_name -> daft.workspace.v1.WorkspaceHandle
+	10, // 30: daft.workspace.v1.WorkspaceCatalogService.Create:input_type -> daft.workspace.v1.CreateWorkspaceRequest
+	12, // 31: daft.workspace.v1.WorkspaceCatalogService.Get:input_type -> daft.workspace.v1.GetWorkspaceRequest
+	13, // 32: daft.workspace.v1.WorkspaceCatalogService.List:input_type -> daft.workspace.v1.ListWorkspacesRequest
+	15, // 33: daft.workspace.v1.WorkspaceCatalogService.SetImage:input_type -> daft.workspace.v1.SetImageRequest
+	16, // 34: daft.workspace.v1.WorkspaceCatalogService.SetTarget:input_type -> daft.workspace.v1.SetTargetRequest
+	17, // 35: daft.workspace.v1.WorkspaceCatalogService.SetResources:input_type -> daft.workspace.v1.SetResourcesRequest
+	18, // 36: daft.workspace.v1.WorkspaceCatalogService.SetNestedVirtualization:input_type -> daft.workspace.v1.SetNestedVirtualizationRequest
+	19, // 37: daft.workspace.v1.WorkspaceCatalogService.AddMount:input_type -> daft.workspace.v1.AddMountRequest
+	20, // 38: daft.workspace.v1.WorkspaceCatalogService.AddEnv:input_type -> daft.workspace.v1.AddEnvRequest
+	21, // 39: daft.workspace.v1.WorkspaceCatalogService.AddPort:input_type -> daft.workspace.v1.AddPortRequest
+	22, // 40: daft.workspace.v1.WorkspaceCatalogService.RemoveMount:input_type -> daft.workspace.v1.RemoveMountRequest
+	23, // 41: daft.workspace.v1.WorkspaceCatalogService.RemoveEnv:input_type -> daft.workspace.v1.RemoveEnvRequest
+	24, // 42: daft.workspace.v1.WorkspaceCatalogService.RemovePort:input_type -> daft.workspace.v1.RemovePortRequest
+	25, // 43: daft.workspace.v1.WorkspaceCatalogService.Validate:input_type -> daft.workspace.v1.ValidateRequest
+	26, // 44: daft.workspace.v1.WorkspaceCatalogService.Launch:input_type -> daft.workspace.v1.LaunchRequest
+	27, // 45: daft.workspace.v1.WorkspaceCatalogService.Stop:input_type -> daft.workspace.v1.StopRequest
+	28, // 46: daft.workspace.v1.WorkspaceCatalogService.Acquire:input_type -> daft.workspace.v1.AcquireRequest
+	29, // 47: daft.workspace.v1.WorkspaceCatalogService.Release:input_type -> daft.workspace.v1.ReleaseRequest
+	4,  // 48: daft.workspace.v1.WorkspaceCatalogService.ForwardPort:input_type -> daft.workspace.v1.ForwardFrame
+	6,  // 49: daft.workspace.v1.WorkspaceCatalogService.AttachSandbox:input_type -> daft.workspace.v1.AttachFrame
+	2,  // 50: daft.workspace.v1.WorkspaceCatalogService.ObserverTail:input_type -> daft.workspace.v1.ObserverTailRequest
+	0,  // 51: daft.workspace.v1.WorkspaceCatalogService.ObserveSummary:input_type -> daft.workspace.v1.ObserveSummaryRequest
+	11, // 52: daft.workspace.v1.WorkspaceCatalogService.Create:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 53: daft.workspace.v1.WorkspaceCatalogService.Get:output_type -> daft.workspace.v1.WorkspaceResponse
+	14, // 54: daft.workspace.v1.WorkspaceCatalogService.List:output_type -> daft.workspace.v1.ListWorkspacesResponse
+	11, // 55: daft.workspace.v1.WorkspaceCatalogService.SetImage:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 56: daft.workspace.v1.WorkspaceCatalogService.SetTarget:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 57: daft.workspace.v1.WorkspaceCatalogService.SetResources:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 58: daft.workspace.v1.WorkspaceCatalogService.SetNestedVirtualization:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 59: daft.workspace.v1.WorkspaceCatalogService.AddMount:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 60: daft.workspace.v1.WorkspaceCatalogService.AddEnv:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 61: daft.workspace.v1.WorkspaceCatalogService.AddPort:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 62: daft.workspace.v1.WorkspaceCatalogService.RemoveMount:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 63: daft.workspace.v1.WorkspaceCatalogService.RemoveEnv:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 64: daft.workspace.v1.WorkspaceCatalogService.RemovePort:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 65: daft.workspace.v1.WorkspaceCatalogService.Validate:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 66: daft.workspace.v1.WorkspaceCatalogService.Launch:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 67: daft.workspace.v1.WorkspaceCatalogService.Stop:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 68: daft.workspace.v1.WorkspaceCatalogService.Acquire:output_type -> daft.workspace.v1.WorkspaceResponse
+	11, // 69: daft.workspace.v1.WorkspaceCatalogService.Release:output_type -> daft.workspace.v1.WorkspaceResponse
+	4,  // 70: daft.workspace.v1.WorkspaceCatalogService.ForwardPort:output_type -> daft.workspace.v1.ForwardFrame
+	6,  // 71: daft.workspace.v1.WorkspaceCatalogService.AttachSandbox:output_type -> daft.workspace.v1.AttachFrame
+	3,  // 72: daft.workspace.v1.WorkspaceCatalogService.ObserverTail:output_type -> daft.workspace.v1.ObserverChunk
+	1,  // 73: daft.workspace.v1.WorkspaceCatalogService.ObserveSummary:output_type -> daft.workspace.v1.ObserveSummaryResponse
+	52, // [52:74] is the sub-list for method output_type
+	30, // [30:52] is the sub-list for method input_type
+	30, // [30:30] is the sub-list for extension type_name
+	30, // [30:30] is the sub-list for extension extendee
+	0,  // [0:30] is the sub-list for field type_name
 }
 
 func init() { file_workspace_v1_service_proto_init() }
@@ -1943,7 +2004,7 @@ func file_workspace_v1_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_workspace_v1_service_proto_rawDesc), len(file_workspace_v1_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   29,
+			NumMessages:   30,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

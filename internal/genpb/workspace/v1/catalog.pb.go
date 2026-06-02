@@ -237,9 +237,12 @@ type WorkspaceSpec struct {
 	// Projected directly onto SandboxSpec.memory_bytes at Launch.
 	MemoryBytes uint64 `protobuf:"varint,9,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
 	// Guest vCPU count. Zero ⇒ executor default (half host cores).
-	CpuCores      uint32 `protobuf:"varint,10,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	CpuCores uint32 `protobuf:"varint,10,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
+	// Nested-virtualisation grant. Unset ⇒ disabled. Projected
+	// directly onto SandboxSpec.nested_virtualization at Launch.
+	NestedVirtualization *v1.NestedVirtualization `protobuf:"bytes,11,opt,name=nested_virtualization,json=nestedVirtualization,proto3" json:"nested_virtualization,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *WorkspaceSpec) Reset() {
@@ -340,6 +343,13 @@ func (x *WorkspaceSpec) GetCpuCores() uint32 {
 		return x.CpuCores
 	}
 	return 0
+}
+
+func (x *WorkspaceSpec) GetNestedVirtualization() *v1.NestedVirtualization {
+	if x != nil {
+		return x.NestedVirtualization
+	}
+	return nil
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.
@@ -521,7 +531,7 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xdb\x03\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xb7\x04\n" +
 	"\rWorkspaceSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12(\n" +
 	"\x10pending_build_id\x18\x02 \x01(\tR\x0ependingBuildId\x12.\n" +
@@ -534,7 +544,8 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\tisolation\x18\b \x01(\x0e2\x1a.daft.sandbox.v1.IsolationR\tisolation\x12!\n" +
 	"\fmemory_bytes\x18\t \x01(\x04R\vmemoryBytes\x12\x1b\n" +
 	"\tcpu_cores\x18\n" +
-	" \x01(\rR\bcpuCores\"\x8b\x02\n" +
+	" \x01(\rR\bcpuCores\x12Z\n" +
+	"\x15nested_virtualization\x18\v \x01(\v2%.daft.sandbox.v1.NestedVirtualizationR\x14nestedVirtualization\"\x8b\x02\n" +
 	"\x0fWorkspaceStatus\x12/\n" +
 	"\x13observed_generation\x18\x01 \x01(\x04R\x12observedGeneration\x12:\n" +
 	"\n" +
@@ -562,19 +573,20 @@ func file_workspace_v1_catalog_proto_rawDescGZIP() []byte {
 
 var file_workspace_v1_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_workspace_v1_catalog_proto_goTypes = []any{
-	(*Workspace)(nil),             // 0: daft.workspace.v1.Workspace
-	(*WorkspaceMetadata)(nil),     // 1: daft.workspace.v1.WorkspaceMetadata
-	(*WorkspaceSpec)(nil),         // 2: daft.workspace.v1.WorkspaceSpec
-	(*WorkspaceStatus)(nil),       // 3: daft.workspace.v1.WorkspaceStatus
-	(*Lock)(nil),                  // 4: daft.workspace.v1.Lock
-	(*timestamppb.Timestamp)(nil), // 5: google.protobuf.Timestamp
-	(*v1.Mount)(nil),              // 6: daft.sandbox.v1.Mount
-	(*v1.EnvVar)(nil),             // 7: daft.sandbox.v1.EnvVar
-	(*v1.PortMapping)(nil),        // 8: daft.sandbox.v1.PortMapping
-	(*v1.GpuRequest)(nil),         // 9: daft.sandbox.v1.GpuRequest
-	(v1.Isolation)(0),             // 10: daft.sandbox.v1.Isolation
-	(*v1.Condition)(nil),          // 11: daft.sandbox.v1.Condition
-	(*v1.SandboxRef)(nil),         // 12: daft.sandbox.v1.SandboxRef
+	(*Workspace)(nil),               // 0: daft.workspace.v1.Workspace
+	(*WorkspaceMetadata)(nil),       // 1: daft.workspace.v1.WorkspaceMetadata
+	(*WorkspaceSpec)(nil),           // 2: daft.workspace.v1.WorkspaceSpec
+	(*WorkspaceStatus)(nil),         // 3: daft.workspace.v1.WorkspaceStatus
+	(*Lock)(nil),                    // 4: daft.workspace.v1.Lock
+	(*timestamppb.Timestamp)(nil),   // 5: google.protobuf.Timestamp
+	(*v1.Mount)(nil),                // 6: daft.sandbox.v1.Mount
+	(*v1.EnvVar)(nil),               // 7: daft.sandbox.v1.EnvVar
+	(*v1.PortMapping)(nil),          // 8: daft.sandbox.v1.PortMapping
+	(*v1.GpuRequest)(nil),           // 9: daft.sandbox.v1.GpuRequest
+	(v1.Isolation)(0),               // 10: daft.sandbox.v1.Isolation
+	(*v1.NestedVirtualization)(nil), // 11: daft.sandbox.v1.NestedVirtualization
+	(*v1.Condition)(nil),            // 12: daft.sandbox.v1.Condition
+	(*v1.SandboxRef)(nil),           // 13: daft.sandbox.v1.SandboxRef
 }
 var file_workspace_v1_catalog_proto_depIdxs = []int32{
 	1,  // 0: daft.workspace.v1.Workspace.metadata:type_name -> daft.workspace.v1.WorkspaceMetadata
@@ -587,15 +599,16 @@ var file_workspace_v1_catalog_proto_depIdxs = []int32{
 	8,  // 7: daft.workspace.v1.WorkspaceSpec.ports:type_name -> daft.sandbox.v1.PortMapping
 	9,  // 8: daft.workspace.v1.WorkspaceSpec.gpu_request:type_name -> daft.sandbox.v1.GpuRequest
 	10, // 9: daft.workspace.v1.WorkspaceSpec.isolation:type_name -> daft.sandbox.v1.Isolation
-	11, // 10: daft.workspace.v1.WorkspaceStatus.conditions:type_name -> daft.sandbox.v1.Condition
-	12, // 11: daft.workspace.v1.WorkspaceStatus.current_sandbox:type_name -> daft.sandbox.v1.SandboxRef
-	4,  // 12: daft.workspace.v1.WorkspaceStatus.lock:type_name -> daft.workspace.v1.Lock
-	5,  // 13: daft.workspace.v1.Lock.expires_at:type_name -> google.protobuf.Timestamp
-	14, // [14:14] is the sub-list for method output_type
-	14, // [14:14] is the sub-list for method input_type
-	14, // [14:14] is the sub-list for extension type_name
-	14, // [14:14] is the sub-list for extension extendee
-	0,  // [0:14] is the sub-list for field type_name
+	11, // 10: daft.workspace.v1.WorkspaceSpec.nested_virtualization:type_name -> daft.sandbox.v1.NestedVirtualization
+	12, // 11: daft.workspace.v1.WorkspaceStatus.conditions:type_name -> daft.sandbox.v1.Condition
+	13, // 12: daft.workspace.v1.WorkspaceStatus.current_sandbox:type_name -> daft.sandbox.v1.SandboxRef
+	4,  // 13: daft.workspace.v1.WorkspaceStatus.lock:type_name -> daft.workspace.v1.Lock
+	5,  // 14: daft.workspace.v1.Lock.expires_at:type_name -> google.protobuf.Timestamp
+	15, // [15:15] is the sub-list for method output_type
+	15, // [15:15] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_workspace_v1_catalog_proto_init() }

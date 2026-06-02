@@ -71,6 +71,11 @@ type BootOptions struct {
 	// proxy's MITM leaf certs.
 	CACert          []byte
 	CACertGuestPath string
+	// Nested grants the workload container nested-virtualisation
+	// access (/dev/kvm bind + cgroup device-allow). Off by default;
+	// set from SandboxSpec.nested_virtualization.enable by the
+	// executor. See imagestore.BundleOptions.Nested.
+	Nested bool
 }
 
 // Store is the imagestore surface BuildBundleConfig needs. Kept as
@@ -140,6 +145,7 @@ func BuildBundleConfig(
 	bundle, err := store.Bundle(ctx, img.Digest, imagestore.BundleOptions{
 		ExtraMounts: bundleMountsFromSpec(opts.Mounts),
 		Env:         opts.Env,
+		Nested:      opts.Nested,
 	})
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: bundle %s: %w", img.Digest, err)

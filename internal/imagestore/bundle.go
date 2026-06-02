@@ -56,6 +56,13 @@ type BundleOptions struct {
 	// container rootfs (or for ensuring crun's mount call creates
 	// it via `nodev,nosuid,…` options when using bind mounts).
 	ExtraMounts []BundleMount
+	// Nested grants the container the ability to run its own (L2)
+	// VMs: the runtime spec binds the host's /dev/kvm into the
+	// container and adds the 10:232 cgroup device-allow so crun's
+	// device filter permits the open. Off by default — a real
+	// privilege/attack-surface bump, emitted only when the workspace
+	// opts in (SandboxSpec.nested_virtualization.enable).
+	Nested bool
 }
 
 // BundleMount mirrors the subset of the OCI runtime-spec mount type

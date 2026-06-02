@@ -53,6 +53,7 @@ const (
 	addSubName       = "add"
 	rmSubName        = "rm"
 	resourcesSubName = "resources"
+	nestedSubName    = "nested"
 )
 
 // workspaceClientOpts is the shared flag set every catalog
@@ -227,6 +228,7 @@ func newWorkspaceCatalogSubcommands() []*cobra.Command {
 		newWorkspaceImageCmd(),
 		newWorkspaceTargetCmd(),
 		newWorkspaceResourcesCmd(),
+		newWorkspaceNestedCmd(),
 		newWorkspaceMountCmd(),
 		newWorkspacePushCmd(),
 		newWorkspacePullCatalogCmd(),
@@ -429,6 +431,49 @@ func newWorkspaceResourcesCmd() *cobra.Command {
 		"guest RAM, e.g. 4G / 512M (empty clears, reverts to default)")
 	cmd.Flags().Uint32Var(&cpus, "cpus", 0,
 		"guest vCPU count (0 clears, reverts to default)")
+	bindWorkspaceClientFlags(cmd, &opts)
+	return cmd
+}
+
+// newWorkspaceNestedCmd toggles the workspace's nested-virt grant.
+// `--enable` binds /dev/kvm into the workload container at Launch so
+// it can run its own (L2) VMs; `--disable` reverts to the
+// unprivileged default. Exactly one of the two flags is required so
+// the grant is never changed by accident.
+func newWorkspaceNestedCmd() *cobra.Command {
+	var (
+		opts    workspaceClientOpts
+		enable  bool
+		disable bool
+	)
+	cmd := &cobra.Command{
+		Use:           nestedSubName,
+		Short:         "Enable/disable nested virtualisation (--enable binds /dev/kvm into the container)",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if enable == disable {
+				return fmt.Errorf("specify exactly one of --enable / --disable")
+			}
+			return runCatalogCmd(cmd, opts, nestedSubName,
+				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
+					resp, err := c.SetNestedVirtualization(ctx, connect.NewRequest(
+						&workspacev1.SetNestedVirtualizationRequest{
+							Handle: h,
+							Enable: enable,
+						},
+					))
+					if err != nil {
+						return err
+					}
+					return writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace())
+				})
+		},
+	}
+	cmd.Flags().BoolVar(&enable, "enable", false,
+		"grant nested virtualisation (bind /dev/kvm into the workload container)")
+	cmd.Flags().BoolVar(&disable, "disable", false,
+		"revoke nested virtualisation (the default)")
 	bindWorkspaceClientFlags(cmd, &opts)
 	return cmd
 }
@@ -964,6 +1009,9 @@ func writeWorkspaceSummary(w io.Writer, ws *workspacev1.Workspace) error {
 		[2]string{"Env", joinEnv(spec.GetEnv())},
 		[2]string{"Ports", joinPorts(spec.GetPorts())},
 	)
+	if spec.GetNestedVirtualization().GetEnable() {
+		rows = append(rows, [2]string{"Nested-virt", "enabled"})
+	}
 	for _, row := range rows {
 		if _, err := fmt.Fprintf(tw, "%s:\t%s\n", row[0], row[1]); err != nil {
 			return err

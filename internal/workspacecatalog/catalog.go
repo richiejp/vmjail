@@ -190,6 +190,10 @@ type Spec struct {
 	// SandboxSpec at Launch, same as the GPU fields above.
 	MemoryBytes uint64
 	CPUCores    uint32
+	// NestedVirt grants the workload nested-virtualisation access
+	// (/dev/kvm bind + cgroup device-allow). False ⇒ disabled.
+	// Projected onto SandboxSpec.nested_virtualization at Launch.
+	NestedVirt bool
 }
 
 // Status is the controller-observed workspace state.

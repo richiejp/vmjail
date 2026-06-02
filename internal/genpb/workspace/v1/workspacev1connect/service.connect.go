@@ -79,6 +79,9 @@ const (
 	// WorkspaceCatalogServiceSetResourcesProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's SetResources RPC.
 	WorkspaceCatalogServiceSetResourcesProcedure = "/daft.workspace.v1.WorkspaceCatalogService/SetResources"
+	// WorkspaceCatalogServiceSetNestedVirtualizationProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's SetNestedVirtualization RPC.
+	WorkspaceCatalogServiceSetNestedVirtualizationProcedure = "/daft.workspace.v1.WorkspaceCatalogService/SetNestedVirtualization"
 	// WorkspaceCatalogServiceAddMountProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's AddMount RPC.
 	WorkspaceCatalogServiceAddMountProcedure = "/daft.workspace.v1.WorkspaceCatalogService/AddMount"
@@ -154,6 +157,12 @@ type WorkspaceCatalogServiceClient interface {
 	// Zero in either field clears it (reverts to the executor's
 	// default). Projected onto the SandboxSpec at Launch.
 	SetResources(context.Context, *connect.Request[v1.SetResourcesRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// SetNestedVirtualization toggles whether the workload may run
+	// its own (L2) VMs — when enabled the executor binds /dev/kvm
+	// into the container and adds the cgroup device-allow. Off by
+	// default (a privilege/attack-surface bump). Projected onto the
+	// SandboxSpec at Launch.
+	SetNestedVirtualization(context.Context, *connect.Request[v1.SetNestedVirtualizationRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 	// AddMount appends a Mount to the workspace. Mount.target must
 	// be absolute; the orchestrator rejects empty or relative targets
 	// and refuses a duplicate target in the existing mount set.
@@ -327,6 +336,12 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetResources")),
 			connect.WithClientOptions(opts...),
 		),
+		setNestedVirtualization: connect.NewClient[v1.SetNestedVirtualizationRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceSetNestedVirtualizationProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetNestedVirtualization")),
+			connect.WithClientOptions(opts...),
+		),
 		addMount: connect.NewClient[v1.AddMountRequest, v1.WorkspaceResponse](
 			httpClient,
 			baseURL+WorkspaceCatalogServiceAddMountProcedure,
@@ -422,27 +437,28 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 
 // workspaceCatalogServiceClient implements WorkspaceCatalogServiceClient.
 type workspaceCatalogServiceClient struct {
-	create         *connect.Client[v1.CreateWorkspaceRequest, v1.WorkspaceResponse]
-	get            *connect.Client[v1.GetWorkspaceRequest, v1.WorkspaceResponse]
-	list           *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
-	setImage       *connect.Client[v1.SetImageRequest, v1.WorkspaceResponse]
-	setTarget      *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
-	setResources   *connect.Client[v1.SetResourcesRequest, v1.WorkspaceResponse]
-	addMount       *connect.Client[v1.AddMountRequest, v1.WorkspaceResponse]
-	addEnv         *connect.Client[v1.AddEnvRequest, v1.WorkspaceResponse]
-	addPort        *connect.Client[v1.AddPortRequest, v1.WorkspaceResponse]
-	removeMount    *connect.Client[v1.RemoveMountRequest, v1.WorkspaceResponse]
-	removeEnv      *connect.Client[v1.RemoveEnvRequest, v1.WorkspaceResponse]
-	removePort     *connect.Client[v1.RemovePortRequest, v1.WorkspaceResponse]
-	validate       *connect.Client[v1.ValidateRequest, v1.WorkspaceResponse]
-	launch         *connect.Client[v1.LaunchRequest, v1.WorkspaceResponse]
-	stop           *connect.Client[v1.StopRequest, v1.WorkspaceResponse]
-	acquire        *connect.Client[v1.AcquireRequest, v1.WorkspaceResponse]
-	release        *connect.Client[v1.ReleaseRequest, v1.WorkspaceResponse]
-	forwardPort    *connect.Client[v1.ForwardFrame, v1.ForwardFrame]
-	attachSandbox  *connect.Client[v1.AttachFrame, v1.AttachFrame]
-	observerTail   *connect.Client[v1.ObserverTailRequest, v1.ObserverChunk]
-	observeSummary *connect.Client[v1.ObserveSummaryRequest, v1.ObserveSummaryResponse]
+	create                  *connect.Client[v1.CreateWorkspaceRequest, v1.WorkspaceResponse]
+	get                     *connect.Client[v1.GetWorkspaceRequest, v1.WorkspaceResponse]
+	list                    *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
+	setImage                *connect.Client[v1.SetImageRequest, v1.WorkspaceResponse]
+	setTarget               *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
+	setResources            *connect.Client[v1.SetResourcesRequest, v1.WorkspaceResponse]
+	setNestedVirtualization *connect.Client[v1.SetNestedVirtualizationRequest, v1.WorkspaceResponse]
+	addMount                *connect.Client[v1.AddMountRequest, v1.WorkspaceResponse]
+	addEnv                  *connect.Client[v1.AddEnvRequest, v1.WorkspaceResponse]
+	addPort                 *connect.Client[v1.AddPortRequest, v1.WorkspaceResponse]
+	removeMount             *connect.Client[v1.RemoveMountRequest, v1.WorkspaceResponse]
+	removeEnv               *connect.Client[v1.RemoveEnvRequest, v1.WorkspaceResponse]
+	removePort              *connect.Client[v1.RemovePortRequest, v1.WorkspaceResponse]
+	validate                *connect.Client[v1.ValidateRequest, v1.WorkspaceResponse]
+	launch                  *connect.Client[v1.LaunchRequest, v1.WorkspaceResponse]
+	stop                    *connect.Client[v1.StopRequest, v1.WorkspaceResponse]
+	acquire                 *connect.Client[v1.AcquireRequest, v1.WorkspaceResponse]
+	release                 *connect.Client[v1.ReleaseRequest, v1.WorkspaceResponse]
+	forwardPort             *connect.Client[v1.ForwardFrame, v1.ForwardFrame]
+	attachSandbox           *connect.Client[v1.AttachFrame, v1.AttachFrame]
+	observerTail            *connect.Client[v1.ObserverTailRequest, v1.ObserverChunk]
+	observeSummary          *connect.Client[v1.ObserveSummaryRequest, v1.ObserveSummaryResponse]
 }
 
 // Create calls daft.workspace.v1.WorkspaceCatalogService.Create.
@@ -473,6 +489,11 @@ func (c *workspaceCatalogServiceClient) SetTarget(ctx context.Context, req *conn
 // SetResources calls daft.workspace.v1.WorkspaceCatalogService.SetResources.
 func (c *workspaceCatalogServiceClient) SetResources(ctx context.Context, req *connect.Request[v1.SetResourcesRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return c.setResources.CallUnary(ctx, req)
+}
+
+// SetNestedVirtualization calls daft.workspace.v1.WorkspaceCatalogService.SetNestedVirtualization.
+func (c *workspaceCatalogServiceClient) SetNestedVirtualization(ctx context.Context, req *connect.Request[v1.SetNestedVirtualizationRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.setNestedVirtualization.CallUnary(ctx, req)
 }
 
 // AddMount calls daft.workspace.v1.WorkspaceCatalogService.AddMount.
@@ -578,6 +599,12 @@ type WorkspaceCatalogServiceHandler interface {
 	// Zero in either field clears it (reverts to the executor's
 	// default). Projected onto the SandboxSpec at Launch.
 	SetResources(context.Context, *connect.Request[v1.SetResourcesRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// SetNestedVirtualization toggles whether the workload may run
+	// its own (L2) VMs — when enabled the executor binds /dev/kvm
+	// into the container and adds the cgroup device-allow. Off by
+	// default (a privilege/attack-surface bump). Projected onto the
+	// SandboxSpec at Launch.
+	SetNestedVirtualization(context.Context, *connect.Request[v1.SetNestedVirtualizationRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 	// AddMount appends a Mount to the workspace. Mount.target must
 	// be absolute; the orchestrator rejects empty or relative targets
 	// and refuses a duplicate target in the existing mount set.
@@ -747,6 +774,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetResources")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceSetNestedVirtualizationHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceSetNestedVirtualizationProcedure,
+		svc.SetNestedVirtualization,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetNestedVirtualization")),
+		connect.WithHandlerOptions(opts...),
+	)
 	workspaceCatalogServiceAddMountHandler := connect.NewUnaryHandler(
 		WorkspaceCatalogServiceAddMountProcedure,
 		svc.AddMount,
@@ -851,6 +884,8 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceSetTargetHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceSetResourcesProcedure:
 			workspaceCatalogServiceSetResourcesHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceSetNestedVirtualizationProcedure:
+			workspaceCatalogServiceSetNestedVirtualizationHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceAddMountProcedure:
 			workspaceCatalogServiceAddMountHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceAddEnvProcedure:
@@ -912,6 +947,10 @@ func (UnimplementedWorkspaceCatalogServiceHandler) SetTarget(context.Context, *c
 
 func (UnimplementedWorkspaceCatalogServiceHandler) SetResources(context.Context, *connect.Request[v1.SetResourcesRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.SetResources is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) SetNestedVirtualization(context.Context, *connect.Request[v1.SetNestedVirtualizationRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.SetNestedVirtualization is not implemented"))
 }
 
 func (UnimplementedWorkspaceCatalogServiceHandler) AddMount(context.Context, *connect.Request[v1.AddMountRequest]) (*connect.Response[v1.WorkspaceResponse], error) {

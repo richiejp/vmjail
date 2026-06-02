@@ -120,6 +120,9 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 	// No nested OCI userns: the container shares sandboxd's userns
 	// (D7 slice 1). See PLAN.md "D7 — rootless storage translation".
 	linux := defaultRuntimeLinuxConfig()
+	if opts.Nested {
+		mounts, linux = applyNestedVirt(mounts, linux)
+	}
 	return runtimeSpec{
 		OCIVersion: "1.0.2",
 		Process: runtimeProcess{
@@ -143,6 +146,28 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 		Mounts:   mounts,
 		Linux:    linux,
 	}, nil
+}
+
+// applyNestedVirt grants the container nested-virtualisation access:
+// it binds the VM's /dev/kvm into the container and adds the 10:232
+// cgroup device-allow so crun's default eBPF device filter permits
+// the open. devtmpfs in the VM exposes /dev/kvm once the guest kernel
+// has CONFIG_KVM built in; the container's /dev is a fresh tmpfs, so
+// without the bind the node is absent. The two must travel together —
+// the bind without the allow EPERMs, the allow without the bind has
+// nothing to open. Returns fresh slices so the unconditional defaults
+// stay unprivileged for every non-nested workload.
+func applyNestedVirt(mounts []runtimeMount, linux runtimeLinuxConfig) ([]runtimeMount, runtimeLinuxConfig) {
+	mounts = append(mounts, runtimeMount{
+		Destination: devKVMPath, Type: mountTypeBind, Source: devKVMPath,
+		Options: []string{mountOptBind, "rw"},
+	})
+	if linux.Resources == nil {
+		linux.Resources = &runtimeResources{}
+	}
+	linux.Resources.Devices = append(linux.Resources.Devices,
+		runtimeDeviceCgroup{Allow: true, Type: "c", Major: int64Ptr(10), Minor: int64Ptr(232), Access: "rwm"})
+	return mounts, linux
 }
 
 // mergeArgs returns override unchanged when non-nil, otherwise
@@ -255,14 +280,9 @@ func defaultRuntimeLinuxConfig() runtimeLinuxConfig {
 			{Type: "mount"},
 			{Type: "cgroup"},
 		},
-		// Nested virt: allow char device 10:232 (/dev/kvm) so the
-		// container may open the bind-mounted node. Without an explicit
-		// allow, crun's default cgroup-v2 device filter EPERMs the open.
-		Resources: &runtimeResources{
-			Devices: []runtimeDeviceCgroup{
-				{Allow: true, Type: "c", Major: int64Ptr(10), Minor: int64Ptr(232), Access: "rwm"},
-			},
-		},
+		// Resources (the /dev/kvm 10:232 device-allow) are added only
+		// for nested-virt workspaces — see applyNestedVirt. A plain
+		// workload gets crun's default device filter with no extra holes.
 		MaskedPaths: []string{
 			"/proc/kcore", "/proc/keys", "/proc/latency_stats",
 			"/proc/timer_list", "/proc/sched_debug",
@@ -282,6 +302,9 @@ const (
 	mountTypeDevpts = "devpts"
 	mountTypeBind   = "bind"
 	mountOptBind    = "bind"
+	// devKVMPath is the host hypervisor device bound into a
+	// nested-virt workload container (see applyNestedVirt).
+	devKVMPath = "/dev/kvm"
 )
 
 // defaultRuntimeMounts mirrors contrib/hello-bundle/config.json. Kept
@@ -314,15 +337,6 @@ func defaultRuntimeMounts() []runtimeMount {
 		{
 			Destination: "/dev/pts", Type: mountTypeDevpts, Source: mountTypeDevpts,
 			Options: []string{mountOptNosuid, "noexec", "newinstance", "ptmxmode=0666", "mode=0620"},
-		},
-		// Nested virt: bind the VM's /dev/kvm into the container.
-		// devtmpfs in the VM exposes /dev/kvm once the guest kernel has
-		// CONFIG_KVM built in; the container's /dev is a fresh tmpfs, so
-		// without this bind the node is absent. Paired with the 10:232
-		// cgroup device-allow in defaultRuntimeLinuxConfig.
-		{
-			Destination: "/dev/kvm", Type: mountTypeBind, Source: "/dev/kvm",
-			Options: []string{mountOptBind, "rw"},
 		},
 		{
 			Destination: "/sys", Type: "sysfs", Source: "sysfs",

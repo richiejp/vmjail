@@ -1561,12 +1561,18 @@ the user-host or in CI today.
        source closure on top of slice 1. Larger memory envelope
        (kernel link peaks 1.5–2 GB), longer warm path.
     3. `make integration` (e2e: boots real VMs against
-       /dev/kvm via the nested-virt path). Requires the
-       /dev/kvm bind to be conditional on a workspace profile
-       (the code-review follow-up from the sandbox-vm batch:
-       PLAN.md "Nested virtualisation" → currently
-       unconditional). `make integration` is the canonical
-       profile that opts in.
+       /dev/kvm via the nested-virt path). The prerequisite —
+       making the `/dev/kvm` bind conditional on a per-workspace
+       opt-in rather than unconditional — **landed**: the
+       `NestedVirtualization` config section gates the bind +
+       device-allow (see PLAN.md "Nested virtualisation"). A
+       dogfood workspace that runs `make integration` inside sets
+       `daft workspace nested --enable`; an ordinary workspace
+       gets no hypervisor device. Still open for this slice: the
+       VM-toolchain closure (clang/lld/llvm + kernel source from
+       slice 2) must be present inside the sandbox, and the inner
+       VM-in-VM memory envelope sits on top of slice 2's already
+       large footprint.
 
 - D7: **Rootless storage translation** — bridge the
   CAP_CHOWN gap between the sandbox-host process and the
@@ -3488,11 +3494,21 @@ filter EPERMs the open otherwise). Cloud Hypervisor already passes the VMX
 CPUID bit through (`--cpus nested` defaults on). Verified by
 `TestClusterNestedKVMProbe` (`KVM_CREATE_VM` succeeds inside a container).
 
-Currently **unconditional** — every container gets `/dev/kvm` + the
-device-allow. That is a real privilege/attack-surface bump; gating it behind
-an opt-in "nested"/"privileged" workspace profile is the obvious follow-up
-(the kernel always building KVM in is fine, but the per-container bind +
-device rule should be conditional).
+**Now opt-in per workspace (landed).** The `/dev/kvm` bind + 10:232
+device-allow are no longer unconditional: they are emitted only when the
+workspace enables the `NestedVirtualization` config section (Nix-module
+idiom — `nested_virtualization.enable`, a section per capability rather than
+a bare flag, so future privileged knobs attach there). The flag threads
+`WorkspaceSpec.nested_virtualization` → `SandboxSpec.nested_virtualization`
+→ `sandboxboot.BootOptions.Nested` → `imagestore.BundleOptions.Nested` →
+`runtimespec.applyNestedVirt` (which appends the bind + device-allow; the
+two must travel together). Surface: `SetNestedVirtualization` RPC + `daft
+workspace nested --enable/--disable`; `daft workspace status` renders
+`Nested-virt: enabled` when set. A plain CPU/GPU workspace gets crun's
+default device filter with no hypervisor hole. The kernel still always
+builds KVM in (cheap, harmless). `TestClusterNestedKVMProbe` enables the
+grant before launch; the `make integration` dogfood profile (D6c.4 slice 3)
+is the canonical opt-in.
 
 ## Build & test tooling (2026-05-27)
 

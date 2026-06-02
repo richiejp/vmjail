@@ -93,6 +93,9 @@ message WorkspaceSpec {
   uint64 memory_bytes = 9;
   // Guest vCPU count. Zero ⇒ executor default (half host cores).
   uint32 cpu_cores = 10;
+  // Nested-virtualisation grant. Unset ⇒ disabled. Projected
+  // directly onto SandboxSpec.nested_virtualization at Launch.
+  daft.sandbox.v1.NestedVirtualization nested_virtualization = 11;
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.

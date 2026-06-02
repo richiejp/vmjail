@@ -80,6 +80,11 @@ message SandboxSpec {
   // host's logical cores, min 1 — the VM shares cores with the
   // host rather than owning them exclusively).
   uint32 cpu_cores = 10;
+  // Nested-virtualisation grant. Unset ⇒ disabled. See the
+  // NestedVirtualization message — a config section, not a bare
+  // flag, so the grant grows its own options without polluting the
+  // spec's top level.
+  NestedVirtualization nested_virtualization = 11;
 }
 
 // SandboxStatus is the orchestrator's observed runtime state.
@@ -154,6 +159,26 @@ message GpuRequest {
   uint32 count = 1;
   // Minimum VRAM per GPU, in bytes. Zero ⇒ no minimum.
   uint64 min_vram_bytes = 2;
+}
+
+// NestedVirtualization opts a workload into running its own (L2)
+// VMs. When enabled, the executor binds the host's /dev/kvm into the
+// workload container and adds the 10:232 cgroup device-allow so
+// crun's default eBPF device filter permits the open; the guest
+// kernel already builds CONFIG_KVM in and Cloud Hypervisor passes the
+// vendor VMX/SVM CPUID bit through by default. Off by default — it's
+// a real privilege and attack-surface bump, granted only to
+// workspaces that explicitly ask (the daft-dogfood profile that
+// `make integration` inside a sandbox selects).
+//
+// Modelled as a config section (Nix-module idiom: one section per
+// capability, each with `enable`) rather than a bare bool so future
+// knobs attach here instead of accreting as loose top-level fields,
+// e.g.:
+//   bool expose_host_cpu_features = 2;  // pass vendor CPUID through
+//   string kvm_device = 3;              // override /dev/kvm path
+message NestedVirtualization {
+  bool enable = 1;
 }
 
 // Isolation is the per-Sandbox sharing policy.
