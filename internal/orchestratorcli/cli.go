@@ -1,6 +1,7 @@
 // Package orchestratorcli is the cobra command tree for the
-// daft-orchestrator binary. Single subcommand for now (`serve`);
-// `auth approve` and registry endpoints will join it.
+// daft-orchestrator binary: `serve` (the long-running listener) and
+// `auth` (show / list / approve / remove over the TOFU peer store, for
+// bootstrapping trust out-of-band before serve starts).
 package orchestratorcli
 
 import (
@@ -55,6 +56,7 @@ func New(stdout, stderr io.Writer) *cobra.Command {
 
 	root.AddCommand(versionCommand())
 	root.AddCommand(serveCommand())
+	root.AddCommand(newAuthCmd())
 	return root
 }
 
