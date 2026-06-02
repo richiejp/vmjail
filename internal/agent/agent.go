@@ -86,6 +86,7 @@ func Run(ctx context.Context, w io.Writer) error {
 		opensnoop:   defaultOpensnoopDeps(),
 		execsnoop:   defaultExecsnoopDeps(),
 		sleepsnoop:  defaultSleepsnoopDeps(),
+		iosnoop:     defaultIosnoopDeps(),
 		syscalls:    defaultSyscallDumpDeps(),
 		summary:     defaultSummaryDeps(),
 	})
@@ -123,6 +124,9 @@ type runDeps struct {
 	// sleepsnoop is the test-substitutable surface for the Tier-2 sleep-snoop
 	// eBPF gadget, parallel to opensnoop. Zero value disables it.
 	sleepsnoop sleepsnoopDeps
+	// iosnoop is the test-substitutable surface for the Tier-2 io-snoop eBPF
+	// gadget, parallel to opensnoop. Zero value disables it.
+	iosnoop iosnoopDeps
 	// syscalls is the test-substitutable surface for the boot-time syscall-list
 	// dump (enumerate tracefs → write the available-syscalls file). Not a
 	// gadget; runs once at boot. Zero value (listEnter == nil) disables it.
@@ -166,14 +170,15 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	// folder (one-shot; the share was mounted by applySharesFromCmdline above)
 	// so a user can always discover what is traceable inside the microvm.
 	startSyscallDumpFromCmdline(w, d, cmdline)
-	// Attach the open-snoop + exec-snoop + sleep-snoop gadgets before the
-	// container so their tracepoints are live for the workload's first
-	// syscalls, then start the build-progress summary as a live view over
+	// Attach the open-snoop + exec-snoop + sleep-snoop + io-snoop gadgets
+	// before the container so their tracepoints are live for the workload's
+	// first syscalls, then start the build-progress summary as a live view over
 	// whichever gadgets came up.
 	osAgg := startOpensnoopFromCmdline(ctx, w, d, cmdline)
 	exAgg := startExecsnoopFromCmdline(ctx, w, d, cmdline)
 	slAgg := startSleepsnoopFromCmdline(ctx, w, d, cmdline)
-	startSummaryWriter(ctx, w, d, cmdline, osAgg, exAgg, slAgg)
+	ioAgg := startIosnoopFromCmdline(ctx, w, d, cmdline)
+	startSummaryWriter(ctx, w, d, cmdline, osAgg, exAgg, slAgg, ioAgg)
 	runContainerFromCmdline(ctx, w, d, cmdline)
 	bootSpan.End()
 

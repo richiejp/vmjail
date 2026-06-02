@@ -178,7 +178,7 @@ func renderObserveSummary(now time.Time, workspace string, raw []byte) (string, 
 	}
 	fmt.Fprintf(&b, "snapshot:  %s ago%s\n", fmtDuration(snapAge), staleNote)
 
-	if s.Opensnoop == nil && s.ExecSnoop == nil && s.SleepSnoop == nil {
+	if s.Opensnoop == nil && s.ExecSnoop == nil && s.SleepSnoop == nil && s.IOSnoop == nil {
 		b.WriteString("\nno gadgets running\n")
 		return b.String(), nil
 	}
@@ -190,6 +190,9 @@ func renderObserveSummary(now time.Time, workspace string, raw []byte) (string, 
 	}
 	if s.SleepSnoop != nil {
 		writeSleepsnoop(&b, *s.SleepSnoop)
+	}
+	if s.IOSnoop != nil {
+		writeIosnoop(&b, *s.IOSnoop)
 	}
 	b.WriteString("\ndrill down: daft sandbox observer-tail " + workspace +
 		"   (raw Tier-1 per-event trace)\n")
@@ -226,6 +229,36 @@ func writeSleepsnoop(b *strings.Builder, sl progress.SleepSnoop) {
 
 	writeTopN(b, "top callers (by sleep count)", sl.TopCallers)
 	writeTopMillis(b, "top sleepers (by total sleep)", sl.TopSleepers)
+}
+
+// writeIosnoop renders the io-snoop section: the liveness headline (I/O call
+// count / failed calls / cumulative bytes read+written / rate / last-I/O age)
+// then the three target rankings — biggest readers and writers (by bytes) and
+// the chattiest fds (by call count). The reader/writer counts are bytes, so
+// they render as sizes.
+func writeIosnoop(b *strings.Builder, ios progress.IOSnoop) {
+	b.WriteString("\nio-snoop (fd reads/writes)\n")
+	fmt.Fprintf(b, "  io calls    : %d\n", ios.Total)
+	fmt.Fprintf(b, "  failed calls: %d\n", ios.Failed)
+	fmt.Fprintf(b, "  bytes r/w   : %s / %s\n", formatBytes(ios.ReadBytes), formatBytes(ios.WriteBytes))
+	fmt.Fprintf(b, "  io rate     : %.1f/s\n", ios.IORate)
+	fmt.Fprintf(b, "  last io     : %s\n", lastOpenAge(ios.LastEventAgeMs))
+
+	writeTopBytes(b, "top readers (by bytes)", ios.TopReaders)
+	writeTopBytes(b, "top writers (by bytes)", ios.TopWriters)
+	writeTopN(b, "top busiest (by io calls)", ios.TopBusiest)
+}
+
+// writeTopBytes renders a ranking whose Counted.Count is a byte total (the
+// io-snoop reader/writer rankings) as human-readable sizes.
+func writeTopBytes(b *strings.Builder, title string, items []progress.Counted) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintf(b, "  %s:\n", title)
+	for _, c := range items {
+		fmt.Fprintf(b, "    %s (%s)\n", c.Key, formatBytes(c.Count))
+	}
 }
 
 // writeTopMillis renders a ranking whose Counted.Count is a millisecond total

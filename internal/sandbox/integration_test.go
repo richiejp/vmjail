@@ -247,6 +247,10 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 	const guestSleepLogName = "sleepsnoop.log"
 	cfg.SleepsnoopLogPath = testMountpoint + "/" + guestSleepLogName
 	hostSleepLog := filepath.Join(shareDir, guestSleepLogName)
+	// The io-snoop gadget (#7c) writes its per-fd I/O trace alongside.
+	const guestIoLogName = "iosnoop.log"
+	cfg.IosnoopLogPath = testMountpoint + "/" + guestIoLogName
+	hostIoLog := filepath.Join(shareDir, guestIoLogName)
 	// The boot-time syscall dump writes the guest's available-syscall list.
 	const guestSyscallsName = "syscalls.txt"
 	cfg.SyscallListPath = testMountpoint + "/" + guestSyscallsName
@@ -269,6 +273,9 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 		}
 		if data, err := os.ReadFile(hostSleepLog); err == nil {
 			t.Logf("sleepsnoop trace (%s):\n%s", hostSleepLog, data)
+		}
+		if data, err := os.ReadFile(hostIoLog); err == nil {
+			t.Logf("iosnoop trace (%s):\n%s", hostIoLog, data)
 		}
 		if data, err := os.ReadFile(hostSyscalls); err == nil {
 			t.Logf("syscall list (%s):\n%s", hostSyscalls, data)
@@ -359,6 +366,25 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 		}
 	}
 
+	// The agent started the container-scoped io gadget (deterministic console
+	// line). io-snoop aggregates per-fd in the kernel and the Go drain ticks
+	// ~1 Hz, so whether a per-fd snapshot has flushed before the abrupt teardown
+	// is racy (like sleep-snoop) — only the console report and the summary
+	// section (below) are asserted deterministically. When the trace did flush
+	// its header lists the attached syscalls (read/write are always present) and
+	// any per-fd line is well-formed.
+	if !strings.Contains(buf.String(), agent.IosnoopReportPrefix+"tracing container fd I/O") {
+		t.Fatalf("agent did not report the container-scoped io filter; console:\n%s", buf.String())
+	}
+	if ioData, err := os.ReadFile(hostIoLog); err == nil && len(ioData) > 0 {
+		if !strings.Contains(string(ioData), "# iosnoop attached=[") ||
+			!strings.Contains(string(ioData), "read") || !strings.Contains(string(ioData), "write") {
+			t.Errorf("iosnoop trace flushed but its header does not list the core I/O syscalls\n--- trace ---\n%s", ioData)
+		} else {
+			t.Logf("iosnoop captured:\n%s", bytes.TrimSpace(ioData))
+		}
+	}
+
 	// The boot-time syscall dump is written synchronously at boot (not
 	// event-driven), so unlike the gadget traces it's reliably present before
 	// teardown — assert it strictly. It must enumerate the core fd-I/O syscalls
@@ -416,10 +442,17 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 	if summary.SleepSnoop == nil {
 		t.Fatalf("summary missing sleep-snoop section: %+v\n--- summary ---\n%s", summary, sumData)
 	}
-	t.Logf("build-progress summary: opens total=%d rate=%.1f/s | execs total=%d top_commands=%v | sleeps total=%d total_sleep_ms=%d",
+	// All four gadgets fold into the one summary, so the io-snoop section must
+	// be present too — its Total/bytes are timing/workload-dependent (asserted
+	// as presence, like exec-snoop and sleep-snoop).
+	if summary.IOSnoop == nil {
+		t.Fatalf("summary missing io-snoop section: %+v\n--- summary ---\n%s", summary, sumData)
+	}
+	t.Logf("build-progress summary: opens total=%d rate=%.1f/s | execs total=%d top_commands=%v | sleeps total=%d total_sleep_ms=%d | io calls=%d r=%d w=%d",
 		summary.Opensnoop.Total, summary.Opensnoop.OpenatRate,
 		summary.ExecSnoop.Total, summary.ExecSnoop.TopCommands,
-		summary.SleepSnoop.Total, summary.SleepSnoop.TotalSleepMs)
+		summary.SleepSnoop.Total, summary.SleepSnoop.TotalSleepMs,
+		summary.IOSnoop.Total, summary.IOSnoop.ReadBytes, summary.IOSnoop.WriteBytes)
 }
 
 // TestHelloIntegrationBootsVMWithImagestoreBundle proves the

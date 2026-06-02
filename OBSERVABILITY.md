@@ -256,7 +256,7 @@ deprioritised; build them only if a specific symptom demands it.
 | `open-snoop` | "what files is the workload opening, and which are missing?" | sys_enter_openat + sys_exit_openat | landed |
 | `exec-snoop` | "what is the build running, with what args, and what failed to exec?" | sys_enter_execve + sys_exit_execve | landed |
 | `sleep-snoop`| "is a process spin-polling instead of waiting?"             | sys_enter_nanosleep + sys_enter_clock_nanosleep | landed |
-| `io-snoop`   | "what I/O hits which files/sockets, by PID, with what errno?" | syscall tracepoints on the fd-I/O syscalls (fd→target in-handler) | planned |
+| `io-snoop`   | "what is the build shovelling data through — which files/sockets, how much?" | enter+exit tracepoints on the fd-I/O syscalls; in-kernel per-fd aggregation, fd→target via /proc | landed |
 
 **`open-snoop` landed first** (roadmap #5b) — the lint cache-miss bug
 that motivated this work was an `openat()` returning ENOENT on a path
@@ -625,19 +625,34 @@ In rough order:
      with the sleeper ranking shown as durations). This is the canonical
      "tests are slow because we never waited for the process to start"
      symptom.
-   - **7c — io-snoop** (*planned; syscall layer*) — read/write/connect/accept/
-     sendto/recvfrom with the **fd → file/socket target**, PID, and errno.
-     Attach at the **syscall layer** (a tracepoint per fd-operating I/O
-     syscall — `sys_enter_read`/`sys_exit_read`, …), enumerating the available
-     set at runtime from tracefs (see the syscall-list dump below) and
-     attaching to whichever are enabled; resolve the fd to its target in the
-     handler (fd → `task->files->fdt->fd[fd]` → struct file → dentry path, or
-     socket). **Do not** go down to the VFS layer (vfs_read/vfs_write): an
-     abandoned cut did, first via fexit — which EBUSYs because the minimal
-     guest kernel lacks `CONFIG_FUNCTION_TRACER` — then via kprobe, which fires
-     guest-wide and added enough per-call overhead to destabilise open-snoop.
-     The fd lives at the syscall layer, and that's where the per-workload
-     filter is cheapest. See [[feedback_gadget_attach]].
+   - **7c — io-snoop** (*landed*) — per-fd byte/call/error counts resolved to
+     a **file/socket/pipe target**, surfaced as a "what is this build
+     shovelling data through" section (top readers/writers by bytes, busiest
+     fds by call count). `internal/observability/ebpf/iosnoop/` +
+     `internal/agent/iosnoop.go` + `daft.observe.iosnoop=` cmdline token.
+     Design (see `iosnoop_bpf.c`, and [[feedback_gadget_attach]]):
+     - **Syscall layer, runtime-enumerated.** A tracepoint per fd-operating
+       I/O syscall: the read/write families, the socket send/recv families,
+       `connect`/`accept`, and the zero-copy fd→fd family (`splice`,
+       `sendfile64`, `tee`, `copy_file_range`, `vmsplice`). The loader reads
+       `/sys/kernel/tracing/events/syscalls/` and attaches only the syscalls
+       this kernel exposes, logging the rest to the trace header — no silent
+       gaps. **Not** the VFS layer (vfs_read/vfs_write): an abandoned cut did,
+       first via fexit — which EBUSYs because the minimal guest kernel lacks
+       `CONFIG_FUNCTION_TRACER` — then via kprobe, which fires guest-wide and
+       added enough per-call overhead to destabilise open-snoop.
+     - **In-kernel aggregation, not a record per syscall.** read/write are the
+       busiest syscalls in a build, so a ring-buffer event each would add the
+       very per-syscall overhead the gadget measures. Each call folds into a
+       per-`(pid,fd)` LRU hash + a monotonic per-CPU global; the Go drain
+       iterates the maps ~1 Hz, resolves each fd, and rebuilds the aggregate.
+     - **fd→target via `/proc/<pid>/fd/<fd>`.** `bpf_d_path` is not callable
+       from a syscall tracepoint, so the drain reads the proc symlink — which
+       also names sockets/pipes/anon_inodes for free. Direction-aware bytes:
+       the return count is charged as a read on the fd read from and a write on
+       the fd written to, so the zero-copy family tracks both fds with
+       meaningful counts (`vmsplice`/`recvmmsg`/`sendmmsg`/`connect`/`accept`
+       are calls-only on their fd).
    - Deferred: `biolatency`, `runqlat`, `tcpstat` — systems-performance
      gadgets, built only if a specific symptom points at the kernel
      subsystem rather than userland.

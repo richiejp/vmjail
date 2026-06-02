@@ -681,6 +681,23 @@ func TestBuildKernelCmdlineOmitsSleepsnoopWhenUnset(t *testing.T) {
 	}
 }
 
+func TestBuildKernelCmdlineIncludesIosnoop(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.IosnoopLogPath = "/share/iosnoop.log"
+	got := buildKernelCmdline(cfg)
+	if !strings.Contains(got, agent.IosnoopCmdlineKey+"=/share/iosnoop.log") {
+		t.Errorf("cmdline %q missing iosnoop token", got)
+	}
+}
+
+func TestBuildKernelCmdlineOmitsIosnoopWhenUnset(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	got := buildKernelCmdline(cfg)
+	if strings.Contains(got, agent.IosnoopCmdlineKey) {
+		t.Errorf("cmdline %q should not contain iosnoop token when path empty", got)
+	}
+}
+
 func TestBuildKernelCmdlineIncludesSyscalls(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	cfg.SyscallListPath = "/share/syscalls.txt"

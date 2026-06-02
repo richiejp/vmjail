@@ -156,6 +156,12 @@ type Config struct {
 	// contract as OpensnoopLogPath. Empty (the default) leaves the gadget off.
 	SleepsnoopLogPath string
 
+	// IosnoopLogPath, when non-empty, is the *in-guest* absolute path the
+	// agent writes the Tier-2 io-snoop eBPF trace to (per-fd byte/call counts
+	// resolved to a target). Same contract as OpensnoopLogPath. Empty (the
+	// default) leaves the gadget off.
+	IosnoopLogPath string
+
 	// SyscallListPath, when non-empty, is the *in-guest* absolute path the
 	// agent writes the guest kernel's available-syscall list to at boot
 	// (enumerated from tracefs; one syscall name per line, sorted). Not a
@@ -633,6 +639,9 @@ func buildKernelCmdline(cfg Config) string {
 	}
 	if cfg.SleepsnoopLogPath != "" {
 		parts = append(parts, agent.FormatSleepsnoopCmdline(cfg.SleepsnoopLogPath))
+	}
+	if cfg.IosnoopLogPath != "" {
+		parts = append(parts, agent.FormatIosnoopCmdline(cfg.IosnoopLogPath))
 	}
 	if cfg.SyscallListPath != "" {
 		parts = append(parts, agent.FormatSyscallsCmdline(cfg.SyscallListPath))

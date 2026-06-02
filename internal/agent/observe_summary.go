@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/execsnoop"
+	"github.com/localai-org/darkaifactory/internal/observability/ebpf/iosnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/opensnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/sleepsnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/progress"
@@ -48,8 +49,8 @@ func defaultSummaryDeps() summaryDeps {
 //
 // Called from run() after the gadgets start, so the summary is a view over
 // whichever gadgets came up rather than coupled to any single one.
-func startSummaryWriter(ctx context.Context, w io.Writer, d runDeps, cmdline string, osAgg *opensnoop.Aggregator, exAgg *execsnoop.Aggregator, slAgg *sleepsnoop.Aggregator) {
-	if d.summary.write == nil || (osAgg == nil && exAgg == nil && slAgg == nil) {
+func startSummaryWriter(ctx context.Context, w io.Writer, d runDeps, cmdline string, osAgg *opensnoop.Aggregator, exAgg *execsnoop.Aggregator, slAgg *sleepsnoop.Aggregator, ioAgg *iosnoop.Aggregator) {
+	if d.summary.write == nil || (osAgg == nil && exAgg == nil && slAgg == nil && ioAgg == nil) {
 		return
 	}
 	path, ok, err := ParseSummaryCmdline(cmdline)
@@ -61,7 +62,7 @@ func startSummaryWriter(ctx context.Context, w io.Writer, d runDeps, cmdline str
 		return
 	}
 	writeReport(w, SummaryReportPrefix, "writing → "+path)
-	go runSummaryLoop(ctx, d.summary, path, osAgg, exAgg, slAgg)
+	go runSummaryLoop(ctx, d.summary, path, osAgg, exAgg, slAgg, ioAgg)
 }
 
 // rateTracker turns a gadget's clock-free cumulative total into the
@@ -101,11 +102,12 @@ func (r *rateTracker) observe(total uint64, now time.Time) (rate float64, lastAg
 // cancelled, then writes one final snapshot so the on-disk file reflects the
 // end state. Write errors are dropped: the summary is a best-effort
 // debugging surface and the host reader tolerates a momentarily stale file.
-func runSummaryLoop(ctx context.Context, d summaryDeps, path string, osAgg *opensnoop.Aggregator, exAgg *execsnoop.Aggregator, slAgg *sleepsnoop.Aggregator) {
+func runSummaryLoop(ctx context.Context, d summaryDeps, path string, osAgg *opensnoop.Aggregator, exAgg *execsnoop.Aggregator, slAgg *sleepsnoop.Aggregator, ioAgg *iosnoop.Aggregator) {
 	start := d.now()
 	osRate := newRateTracker(start)
 	exRate := newRateTracker(start)
 	slRate := newRateTracker(start)
+	ioRate := newRateTracker(start)
 	// build folds each present gadget's clock-free snapshot into one summary,
 	// filling its time-derived fields from a single clock read so the
 	// sections and the file timestamp share one instant.
@@ -126,6 +128,11 @@ func runSummaryLoop(ctx context.Context, d summaryDeps, path string, osAgg *open
 			sl := slAgg.Snapshot()
 			sl.SleepRate, sl.LastEventAgeMs = slRate.observe(sl.Total, now)
 			s.SleepSnoop = &sl
+		}
+		if ioAgg != nil {
+			iosn := ioAgg.Snapshot()
+			iosn.IORate, iosn.LastEventAgeMs = ioRate.observe(iosn.Total, now)
+			s.IOSnoop = &iosn
 		}
 		return s
 	}

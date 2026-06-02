@@ -599,6 +599,9 @@ func TestHandleSandboxEventRegistersSummaryRoute(t *testing.T) {
 	if seen.SleepsnoopLogPath != "/run/daft/observe/sleepsnoop.log" {
 		t.Errorf("guest sleepsnoop path = %q", seen.SleepsnoopLogPath)
 	}
+	if seen.IosnoopLogPath != "/run/daft/observe/iosnoop.log" {
+		t.Errorf("guest iosnoop path = %q", seen.IosnoopLogPath)
+	}
 	if seen.SyscallListPath != "/run/daft/observe/syscalls.txt" {
 		t.Errorf("guest syscalls path = %q", seen.SyscallListPath)
 	}

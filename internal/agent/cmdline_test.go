@@ -252,6 +252,19 @@ func TestSleepsnoopCmdline(t *testing.T) {
 	}
 }
 
+func TestIosnoopCmdline(t *testing.T) {
+	s := FormatIosnoopCmdline("/share/iosnoop.log")
+	if got, ok, err := ParseIosnoopCmdline(s); err != nil || !ok || got != "/share/iosnoop.log" {
+		t.Errorf("round-trip via %q: got=%q ok=%v err=%v", s, got, ok, err)
+	}
+	if _, ok, err := ParseIosnoopCmdline(testCmdlineShareOnly); ok || err != nil {
+		t.Errorf("absent token: ok=%v err=%v, want false/nil", ok, err)
+	}
+	if _, _, err := ParseIosnoopCmdline("daft.observe.iosnoop=rel/path"); err == nil {
+		t.Error("relative path should error")
+	}
+}
+
 // TestSyscallsCmdline covers the round-trip plus the absent and relative-path
 // branches of the parser (same contract as open-snoop).
 func TestSyscallsCmdline(t *testing.T) {

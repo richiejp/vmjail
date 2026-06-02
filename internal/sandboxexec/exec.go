@@ -639,6 +639,7 @@ const (
 	observeOpensnoopName  = "opensnoop.log"
 	observeExecsnoopName  = "execsnoop.log"
 	observeSleepsnoopName = "sleepsnoop.log"
+	observeIosnoopName    = "iosnoop.log"
 	observeSyscallsName   = "syscalls.txt"
 	observeSummaryName    = "progress.json"
 )
@@ -650,8 +651,8 @@ func (e *Executor) observeHostDir(uid string) string {
 
 // applyObserveSummary wires the Tier-2 observe share: it mkdir's the host
 // backing dir, exports it as a writable virtiofs share, and points the
-// guest's open-snoop + exec-snoop + sleep-snoop traces and the build-progress
-// summary into the mountpoint so the gadgets run and the output lands
+// guest's open-snoop + exec-snoop + sleep-snoop + io-snoop traces and the
+// build-progress summary into the mountpoint so the gadgets run and the output lands
 // somewhere the host can read. Gated
 // on the same observerDir opt-in as the observer log and equally
 // best-effort: an unset observerDir, already-set paths, an empty uid, or a
@@ -673,6 +674,7 @@ func (e *Executor) applyObserveSummary(cfg *sandbox.Config, uid string) {
 	cfg.OpensnoopLogPath = filepath.Join(observeMount, observeOpensnoopName)
 	cfg.ExecsnoopLogPath = filepath.Join(observeMount, observeExecsnoopName)
 	cfg.SleepsnoopLogPath = filepath.Join(observeMount, observeSleepsnoopName)
+	cfg.IosnoopLogPath = filepath.Join(observeMount, observeIosnoopName)
 	cfg.SyscallListPath = filepath.Join(observeMount, observeSyscallsName)
 	cfg.ObserveSummaryPath = filepath.Join(observeMount, observeSummaryName)
 }

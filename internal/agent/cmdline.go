@@ -220,6 +220,30 @@ func ParseSleepsnoopCmdline(cmdline string) (path string, ok bool, err error) {
 	return val, true, nil
 }
 
+// IosnoopCmdlineKey names the kernel cmdline parameter that asks the agent to
+// run the Tier-2 io-snoop eBPF gadget, writing its per-fd I/O trace to the
+// given absolute guest path. Same contract as OpensnoopCmdlineKey. Format:
+// `daft.observe.iosnoop=<absolute-path>`.
+const IosnoopCmdlineKey = "daft.observe.iosnoop"
+
+// FormatIosnoopCmdline renders a guest log path to the wire form.
+func FormatIosnoopCmdline(path string) string {
+	return fmt.Sprintf("%s=%s", IosnoopCmdlineKey, path)
+}
+
+// ParseIosnoopCmdline scans a kernel cmdline for `daft.observe.iosnoop=<path>`,
+// with the same absolute-path contract as ParseOpensnoopCmdline.
+func ParseIosnoopCmdline(cmdline string) (path string, ok bool, err error) {
+	val, ok := findCmdlineValue(cmdline, IosnoopCmdlineKey)
+	if !ok {
+		return "", false, nil
+	}
+	if err := validateAbsoluteCmdlinePath(IosnoopCmdlineKey, val); err != nil {
+		return "", false, err
+	}
+	return val, true, nil
+}
+
 // SyscallsCmdlineKey names the kernel cmdline parameter that asks the agent to
 // dump the guest kernel's available syscall list (enumerated from tracefs at
 // boot) to the given absolute guest path. Same absolute-path contract as

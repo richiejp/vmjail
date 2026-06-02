@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/execsnoop"
+	"github.com/localai-org/darkaifactory/internal/observability/ebpf/iosnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/opensnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/sleepsnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/progress"
@@ -68,7 +69,7 @@ func TestStartSummaryWriterDisabled(t *testing.T) {
 	var console bytes.Buffer
 	startSummaryWriter(context.Background(), &console,
 		runDeps{summary: summaryDeps{write: nil}},
-		"daft.observe.summary=/share/p.json", opensnoop.NewAggregator(), nil, nil)
+		"daft.observe.summary=/share/p.json", opensnoop.NewAggregator(), nil, nil, nil)
 	if console.Len() != 0 {
 		t.Fatalf("unexpected console output: %q", console.String())
 	}
@@ -84,7 +85,7 @@ func TestStartSummaryWriterNoGadgets(t *testing.T) {
 	}}
 	var console bytes.Buffer
 	startSummaryWriter(context.Background(), &console, d,
-		"daft.observe.summary=/share/p.json", nil, nil, nil)
+		"daft.observe.summary=/share/p.json", nil, nil, nil, nil)
 	time.Sleep(5 * time.Millisecond)
 	if wrote || console.Len() != 0 {
 		t.Fatalf("summary started with no gadgets: wrote=%v console=%q", wrote, console.String())
@@ -100,7 +101,7 @@ func TestStartSummaryWriterAbsentToken(t *testing.T) {
 		write: func(string, progress.Summary) error { wrote = true; return nil },
 	}}
 	var console bytes.Buffer
-	startSummaryWriter(context.Background(), &console, d, "console=hvc0", opensnoop.NewAggregator(), nil, nil)
+	startSummaryWriter(context.Background(), &console, d, "console=hvc0", opensnoop.NewAggregator(), nil, nil, nil)
 	time.Sleep(5 * time.Millisecond) // a started loop would have written by now
 	if wrote || console.Len() != 0 {
 		t.Fatalf("summary started despite absent token: wrote=%v console=%q", wrote, console.String())
@@ -115,7 +116,7 @@ func TestStartSummaryWriterReportsCmdlineError(t *testing.T) {
 		write: func(string, progress.Summary) error { return nil },
 	}}
 	var console bytes.Buffer
-	startSummaryWriter(context.Background(), &console, d, "daft.observe.summary=rel/path", opensnoop.NewAggregator(), nil, nil)
+	startSummaryWriter(context.Background(), &console, d, "daft.observe.summary=rel/path", opensnoop.NewAggregator(), nil, nil, nil)
 	if !bytes.Contains(console.Bytes(), []byte(SummaryReportPrefix+"cmdline:")) {
 		t.Fatalf("missing cmdline error report: %q", console.String())
 	}
@@ -146,10 +147,13 @@ func TestStartSummaryWriterHappyPath(t *testing.T) {
 	exAgg.Observe(execsnoop.Event{Comm: "sh", Argv: []string{"/bin/cc"}})
 	slAgg := sleepsnoop.NewAggregator()
 	slAgg.Observe(sleepsnoop.Event{Comm: "poller", ReqNs: uint64(100 * time.Millisecond)})
+	ioAgg := iosnoop.NewAggregator()
+	ioAgg.Update(iosnoop.Totals{Calls: 1, WrBytes: 4096},
+		[]iosnoop.Resolved{{Name: "/work/out.o", Stat: iosnoop.FDStat{WrBytes: 4096, Calls: 1}}})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var console bytes.Buffer
-	startSummaryWriter(ctx, &console, d, "daft.observe.summary="+testSummaryPath, agg, exAgg, slAgg)
+	startSummaryWriter(ctx, &console, d, "daft.observe.summary="+testSummaryPath, agg, exAgg, slAgg, ioAgg)
 
 	got := <-writes // the immediate initial write
 	cancel()
@@ -161,6 +165,9 @@ func TestStartSummaryWriterHappyPath(t *testing.T) {
 	}
 	if got.SleepSnoop == nil || got.SleepSnoop.Total != 1 || got.SleepSnoop.TopSleepers[0].Key != "poller" {
 		t.Fatalf("summary did not reflect the sleep-snoop aggregator: %+v", got.SleepSnoop)
+	}
+	if got.IOSnoop == nil || got.IOSnoop.Total != 1 || got.IOSnoop.TopWriters[0].Key != "/work/out.o" {
+		t.Fatalf("summary did not reflect the io-snoop aggregator: %+v", got.IOSnoop)
 	}
 	if !bytes.Contains(console.Bytes(), []byte(SummaryReportPrefix+"writing → "+testSummaryPath)) {
 		t.Fatalf("missing writing report: %q", console.String())

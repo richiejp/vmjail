@@ -56,6 +56,12 @@ func TestRenderObserveSummaryActive(t *testing.T) {
 			TopCallers:  []progress.Counted{{Key: "poller", Count: 200}},
 			TopSleepers: []progress.Counted{{Key: "waiter", Count: 9000}}, // 9000 ms → 9s
 		},
+		IOSnoop: &progress.IOSnoop{
+			Total: 5000, Failed: 4, ReadBytes: 3 << 20, WriteBytes: 2 << 30, IORate: 120.0, LastEventAgeMs: 70,
+			TopReaders: []progress.Counted{{Key: "/nix/store/x/lib.a", Count: 3 << 20}}, // 3 MiB
+			TopWriters: []progress.Counted{{Key: "/work/out.o", Count: 2 << 30}},        // 2 GiB
+			TopBusiest: []progress.Counted{{Key: "socket:[42]", Count: 4096}},
+		},
 	})
 	out, err := renderObserveSummary(observeFixedNow, "myapp", raw)
 	if err != nil {
@@ -88,6 +94,17 @@ func TestRenderObserveSummaryActive(t *testing.T) {
 		"poller (200)",
 		"top sleepers (by total sleep)",
 		"waiter (9.0s)",
+		"io-snoop (fd reads/writes)",
+		"io calls    : 5000",
+		"failed calls: 4",
+		"bytes r/w   : 3.0 MiB / 2.0 GiB",
+		"io rate     : 120.0/s",
+		"top readers (by bytes)",
+		"/nix/store/x/lib.a (3.0 MiB)",
+		"top writers (by bytes)",
+		"/work/out.o (2.0 GiB)",
+		"top busiest (by io calls)",
+		"socket:[42] (4096)",
 		"drill down: daft sandbox observer-tail myapp",
 	} {
 		if !strings.Contains(out, want) {
@@ -173,6 +190,37 @@ func TestRenderObserveSummarySleepsnoopOnly(t *testing.T) {
 		"last sleep  : never",
 		"top sleepers (by total sleep)",
 		"sh (1.5s)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("render missing %q\n--- got ---\n%s", want, out)
+		}
+	}
+}
+
+// TestRenderObserveSummaryIosnoopOnly: a summary with only the io-snoop section
+// renders it, with the reader/writer rankings shown as byte sizes (their counts
+// are bytes) and the busiest ranking as a raw call count.
+func TestRenderObserveSummaryIosnoopOnly(t *testing.T) {
+	raw := mustMarshalSummary(t, progress.Summary{
+		TakenAtUnixMs: observeFixedNow.UnixMilli(),
+		IOSnoop: &progress.IOSnoop{
+			Total: 10, ReadBytes: 1 << 10, LastEventAgeMs: -1,
+			TopReaders: []progress.Counted{{Key: "/etc/hosts", Count: 1 << 10}}, // 1 KiB
+			TopBusiest: []progress.Counted{{Key: "pipe:[7]", Count: 10}},
+		},
+	})
+	out, err := renderObserveSummary(observeFixedNow, "ws", raw)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{
+		"io-snoop (fd reads/writes)",
+		"io calls    : 10",
+		"last io     : never",
+		"top readers (by bytes)",
+		"/etc/hosts (1.0 KiB)",
+		"top busiest (by io calls)",
+		"pipe:[7] (10)",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("render missing %q\n--- got ---\n%s", want, out)
