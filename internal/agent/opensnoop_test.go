@@ -25,7 +25,7 @@ func (f *fakeLog) Close() error                { close(f.closed); return nil }
 
 // opensnoopTestDeps builds a runDeps wiring the gadget seam with a
 // no-op tracefs mount (the privileged mount is covered separately).
-func opensnoopTestDeps(openLog func(string) (io.WriteCloser, error), run func(context.Context, io.Writer, *opensnoop.Aggregator) error) runDeps {
+func opensnoopTestDeps(openLog func(string) (io.WriteCloser, error), run func(context.Context, io.Writer, *opensnoop.Aggregator, uint32) error) runDeps {
 	return runDeps{opensnoop: opensnoopDeps{
 		mountTracefs: func() error { return nil },
 		openLog:      openLog,
@@ -56,7 +56,7 @@ func TestStartOpensnoopDisabledWhenRunNil(t *testing.T) {
 func TestStartOpensnoopAbsentToken(t *testing.T) {
 	called := false
 	openLog := func(string) (io.WriteCloser, error) { called = true; return newFakeLog(), nil }
-	run := func(context.Context, io.Writer, *opensnoop.Aggregator) error { return nil }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32) error { return nil }
 	var console bytes.Buffer
 	startOpensnoopFromCmdline(context.Background(), &console,
 		opensnoopTestDeps(openLog, run), "console=hvc0 reboot=t")
@@ -73,7 +73,7 @@ func TestStartOpensnoopAbsentToken(t *testing.T) {
 func TestStartOpensnoopReportsCmdlineError(t *testing.T) {
 	called := false
 	openLog := func(string) (io.WriteCloser, error) { called = true; return newFakeLog(), nil }
-	run := func(context.Context, io.Writer, *opensnoop.Aggregator) error { return nil }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32) error { return nil }
 	var console bytes.Buffer
 	startOpensnoopFromCmdline(context.Background(), &console,
 		opensnoopTestDeps(openLog, run), "daft.observe.opensnoop=rel/path")
@@ -91,7 +91,7 @@ func TestStartOpensnoopReportsCmdlineError(t *testing.T) {
 func TestStartOpensnoopReportsTracefsError(t *testing.T) {
 	opened := false
 	openLog := func(string) (io.WriteCloser, error) { opened = true; return newFakeLog(), nil }
-	run := func(context.Context, io.Writer, *opensnoop.Aggregator) error { return nil }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32) error { return nil }
 	var console bytes.Buffer
 	d := runDeps{opensnoop: opensnoopDeps{
 		mountTracefs: func() error { return errors.New("boom-tracefs") },
@@ -112,7 +112,7 @@ func TestStartOpensnoopReportsTracefsError(t *testing.T) {
 func TestStartOpensnoopReportsOpenError(t *testing.T) {
 	openLog := func(string) (io.WriteCloser, error) { return nil, errors.New("boom-open") }
 	runCalled := false
-	run := func(context.Context, io.Writer, *opensnoop.Aggregator) error { runCalled = true; return nil }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32) error { runCalled = true; return nil }
 	var console bytes.Buffer
 	startOpensnoopFromCmdline(context.Background(), &console,
 		opensnoopTestDeps(openLog, run), "daft.observe.opensnoop=/share/x.log")
@@ -135,13 +135,15 @@ func TestStartOpensnoopHappyPath(t *testing.T) {
 		return log, nil
 	}
 	started := make(chan io.Writer, 1)
-	run := func(ctx context.Context, w io.Writer, _ *opensnoop.Aggregator) error {
+	run := func(ctx context.Context, w io.Writer, _ *opensnoop.Aggregator, _ uint32) error {
 		started <- w
 		<-ctx.Done()
 		return nil
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	var console bytes.Buffer
+	// opensnoopTestDeps leaves selfPIDNS nil, so the filter is off and the
+	// report says "all"; the container-scope path is covered separately.
 	startOpensnoopFromCmdline(ctx, &console, opensnoopTestDeps(openLog, run),
 		"daft.observe.opensnoop=/share/openat.log")
 
@@ -152,11 +154,73 @@ func TestStartOpensnoopHappyPath(t *testing.T) {
 	if opened != "/share/openat.log" {
 		t.Fatalf("openLog path = %q, want /share/openat.log", opened)
 	}
-	if !strings.Contains(console.String(), OpensnoopReportPrefix+"tracing openat → /share/openat.log") {
+	if !strings.Contains(console.String(), OpensnoopReportPrefix+"tracing all openat → /share/openat.log") {
 		t.Fatalf("missing tracing report: %q", console.String())
 	}
 	cancel()
 	<-log.closed // run returned on ctx cancel → file closed
+}
+
+// TestStartOpensnoopFiltersToContainer: when selfPIDNS resolves, its value
+// is threaded into the gadget run and the report names the container scope —
+// the path that drops agent/init noise from the build summary.
+func TestStartOpensnoopFiltersToContainer(t *testing.T) {
+	log := newFakeLog()
+	gotNS := make(chan uint32, 1)
+	d := runDeps{opensnoop: opensnoopDeps{
+		mountTracefs: func() error { return nil },
+		openLog:      func(string) (io.WriteCloser, error) { return log, nil },
+		selfPIDNS:    func() (uint32, error) { return 4026531836, nil },
+		run: func(ctx context.Context, _ io.Writer, _ *opensnoop.Aggregator, selfPidns uint32) error {
+			gotNS <- selfPidns
+			<-ctx.Done()
+			return nil
+		},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	var console bytes.Buffer
+	startOpensnoopFromCmdline(ctx, &console, d, "daft.observe.opensnoop=/share/openat.log")
+
+	if ns := <-gotNS; ns != 4026531836 {
+		t.Errorf("run received selfPidns = %d, want 4026531836", ns)
+	}
+	if !strings.Contains(console.String(), OpensnoopReportPrefix+"tracing container openat → ") {
+		t.Fatalf("missing container-scope report: %q", console.String())
+	}
+	cancel()
+	<-log.closed
+}
+
+// TestStartOpensnoopReportsPIDNSError: a namespace read failure is reported
+// and the gadget still starts unfiltered (selfPidns 0) rather than not at
+// all — a degraded but non-empty trace beats a silent gap.
+func TestStartOpensnoopReportsPIDNSError(t *testing.T) {
+	log := newFakeLog()
+	gotNS := make(chan uint32, 1)
+	d := runDeps{opensnoop: opensnoopDeps{
+		mountTracefs: func() error { return nil },
+		openLog:      func(string) (io.WriteCloser, error) { return log, nil },
+		selfPIDNS:    func() (uint32, error) { return 0, errors.New("boom-pidns") },
+		run: func(ctx context.Context, _ io.Writer, _ *opensnoop.Aggregator, selfPidns uint32) error {
+			gotNS <- selfPidns
+			<-ctx.Done()
+			return nil
+		},
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	var console bytes.Buffer
+	startOpensnoopFromCmdline(ctx, &console, d, "daft.observe.opensnoop=/share/openat.log")
+
+	if ns := <-gotNS; ns != 0 {
+		t.Errorf("run received selfPidns = %d, want 0 (unfiltered fallback)", ns)
+	}
+	out := console.String()
+	if !strings.Contains(out, OpensnoopReportPrefix+"pidns: boom-pidns") ||
+		!strings.Contains(out, OpensnoopReportPrefix+"tracing all openat → ") {
+		t.Fatalf("missing pidns-error fallback report: %q", out)
+	}
+	cancel()
+	<-log.closed
 }
 
 // TestStartOpensnoopReportsRunError: a real mid-run failure (ctx still
@@ -166,7 +230,7 @@ func TestStartOpensnoopHappyPath(t *testing.T) {
 func TestStartOpensnoopReportsRunError(t *testing.T) {
 	log := newFakeLog()
 	openLog := func(string) (io.WriteCloser, error) { return log, nil }
-	run := func(context.Context, io.Writer, *opensnoop.Aggregator) error { return errors.New("boom-run") }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32) error { return errors.New("boom-run") }
 	var console bytes.Buffer
 	startOpensnoopFromCmdline(context.Background(), &console,
 		opensnoopTestDeps(openLog, run), "daft.observe.opensnoop=/share/x.log")
@@ -182,6 +246,15 @@ func TestDefaultOpensnoopDeps(t *testing.T) {
 	d := defaultOpensnoopDeps()
 	if d.run == nil {
 		t.Fatal("defaultOpensnoopDeps run is nil")
+	}
+	// selfPIDNS is the real reader: on this Linux test host it must return
+	// the test process's PID-namespace inode (non-zero), so the gadget gets
+	// a usable filter rather than silently degrading to unfiltered.
+	if d.selfPIDNS == nil {
+		t.Fatal("defaultOpensnoopDeps selfPIDNS is nil")
+	}
+	if ns, err := d.selfPIDNS(); err != nil || ns == 0 {
+		t.Fatalf("selfPIDNS() = (%d, %v), want a non-zero inode and no error", ns, err)
 	}
 	path := filepath.Join(t.TempDir(), "openat.log")
 	wc, err := d.openLog(path)

@@ -14,6 +14,30 @@ import (
 // CONFIG_TRACEFS is set (selected by FTRACE); it just needs mounting.
 const tracefsMountpoint = "/sys/kernel/tracing"
 
+// selfPIDNSPath is the procfs link whose inode IS the calling task's PID
+// namespace id — the same number the kernel exposes as `ns.inum` and that
+// the gadget's BPF program reads off each task. The agent stats it to learn
+// its own namespace so the gadget can exclude it (see opensnoop.go).
+const selfPIDNSPath = "/proc/self/ns/pid"
+
+// readSelfPIDNS returns the inode number of the agent's PID namespace. The
+// gadget treats every openat from a task in this namespace — the agent,
+// guest init, kernel threads, crun — as harness noise and drops it, leaving
+// only the container workload (a child PID namespace per the OCI bundle).
+func readSelfPIDNS() (uint32, error) { return readSelfPIDNSAt(selfPIDNSPath) }
+
+// readSelfPIDNSAt is the testable core: the procfs path is a parameter so a
+// test can drive the stat-failure branch without unmounting /proc.
+func readSelfPIDNSAt(path string) (uint32, error) {
+	var st syscall.Stat_t
+	if err := syscall.Stat(path, &st); err != nil {
+		return 0, fmt.Errorf("agent: stat %s: %w", path, err)
+	}
+	// Namespace inode numbers are the kernel's 32-bit ns.inum; the wider
+	// st.Ino carries the same value, so the narrowing is exact.
+	return uint32(st.Ino), nil //nolint:gosec // G115: ns.inum is 32-bit; the value fits.
+}
+
 // ensureTracefs mounts tracefs at /sys/kernel/tracing so the open-snoop
 // gadget's `tracepoint:syscalls:sys_enter_openat` attach can read the
 // probe id. The minimal u-root guest mounts neither tracefs nor

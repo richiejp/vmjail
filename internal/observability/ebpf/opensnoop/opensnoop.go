@@ -127,15 +127,20 @@ type opener func() (rd recordReader, cleanup func() error, err error)
 // and writes one line per openat(2) to w until ctx is cancelled. It is
 // the entry point daft-agent calls in the guest. Cancelling ctx is the
 // normal stop and returns nil.
-func Run(ctx context.Context, w io.Writer) error {
-	return run(ctx, w, nil, openSource)
+//
+// selfPidns is the caller's own PID-namespace inode number: when non-zero
+// the gadget drops every openat from a task in that namespace (the agent,
+// guest init, kernel threads, crun) and reports only the container
+// workload, which runs in a child PID namespace. Zero traces every openat.
+func Run(ctx context.Context, w io.Writer, selfPidns uint32) error {
+	return run(ctx, w, nil, openSourceFor(selfPidns))
 }
 
 // RunAggregating is Run that additionally folds every decoded event into
 // agg, so the agent's summary writer can snapshot the live aggregate while
 // the same drain still writes the raw trace to w. A nil agg behaves like Run.
-func RunAggregating(ctx context.Context, w io.Writer, agg *Aggregator) error {
-	return run(ctx, w, agg, openSource)
+func RunAggregating(ctx context.Context, w io.Writer, agg *Aggregator, selfPidns uint32) error {
+	return run(ctx, w, agg, openSourceFor(selfPidns))
 }
 
 func run(ctx context.Context, w io.Writer, agg *Aggregator, open opener) error {
@@ -189,8 +194,11 @@ func run(ctx context.Context, w io.Writer, agg *Aggregator, open opener) error {
 // so the success path is fakeable (link.Link has an unexported method and
 // can't be implemented outside cilium/ebpf).
 type bpfDeps struct {
-	memlock   func() error
-	load      func(*opensnoopObjects) error
+	memlock func() error
+	// load loads + assigns the embedded objects, first writing selfPidns
+	// into the program's .rodata container-workload filter (a no-op when
+	// the .rodata variable is absent or selfPidns is 0).
+	load      func(o *opensnoopObjects, selfPidns uint32) error
 	attach    func(prog *ebpf.Program) (detach func() error, err error)
 	newReader func(*ebpf.Map) (recordReader, error)
 }
@@ -201,7 +209,22 @@ type bpfDeps struct {
 func defaultBPFDeps() bpfDeps {
 	return bpfDeps{
 		memlock: rlimit.RemoveMemlock,
-		load:    func(o *opensnoopObjects) error { return loadOpensnoopObjects(o, nil) },
+		load: func(o *opensnoopObjects, selfPidns uint32) error {
+			spec, err := loadOpensnoop()
+			if err != nil {
+				return fmt.Errorf("opensnoop: load spec: %w", err)
+			}
+			// Write the container-workload filter into .rodata before load.
+			// Guarded against a future C rename dropping the variable; Set
+			// is a width-matched marshal (u32 → __u32) that can't fail here,
+			// so its error is swallowed rather than added as a branch no
+			// unprivileged test could ever take. Set(0) is harmless — the C
+			// default is already 0 (filter off).
+			if v := spec.Variables["self_pidns"]; v != nil {
+				_ = v.Set(selfPidns)
+			}
+			return spec.LoadAndAssign(o, nil)
+		},
 		attach: func(prog *ebpf.Program) (func() error, error) {
 			l, err := link.Tracepoint("syscalls", "sys_enter_openat", prog, nil)
 			if err != nil {
@@ -216,20 +239,25 @@ func defaultBPFDeps() bpfDeps {
 	}
 }
 
-func openSource() (recordReader, func() error, error) {
-	return openSourceWith(defaultBPFDeps())
+// openSourceFor binds selfPidns into an opener so run's drain loop stays
+// unaware of the filter (and the test fakes keep the no-arg opener shape).
+func openSourceFor(selfPidns uint32) opener {
+	return func() (recordReader, func() error, error) {
+		return openSourceWith(defaultBPFDeps(), selfPidns)
+	}
 }
 
 // openSourceWith composes the load path from injected primitives. On any
 // failure it unwinds the steps already taken; on success it returns the
 // ring-buffer reader plus a cleanup that closes the reader, detaches the
-// tracepoint, and unloads the objects.
-func openSourceWith(d bpfDeps) (recordReader, func() error, error) {
+// tracepoint, and unloads the objects. selfPidns is the container-workload
+// filter handed to the load step (see bpfDeps.load).
+func openSourceWith(d bpfDeps, selfPidns uint32) (recordReader, func() error, error) {
 	if err := d.memlock(); err != nil {
 		return nil, nil, fmt.Errorf("opensnoop: remove memlock: %w", err)
 	}
 	var objs opensnoopObjects
-	if err := d.load(&objs); err != nil {
+	if err := d.load(&objs, selfPidns); err != nil {
 		return nil, nil, fmt.Errorf("opensnoop: load objects: %w", err)
 	}
 	detach, err := d.attach(objs.HandleOpenat)

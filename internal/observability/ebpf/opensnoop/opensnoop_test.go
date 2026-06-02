@@ -263,7 +263,7 @@ func TestRunAggregatingFeedsAggregator(t *testing.T) {
 func baseDeps() bpfDeps {
 	return bpfDeps{
 		memlock:   func() error { return nil },
-		load:      func(*opensnoopObjects) error { return nil },
+		load:      func(*opensnoopObjects, uint32) error { return nil },
 		attach:    func(*ebpf.Program) (func() error, error) { return func() error { return nil }, nil },
 		newReader: func(*ebpf.Map) (recordReader, error) { return newFakeReader(), nil },
 	}
@@ -271,7 +271,7 @@ func baseDeps() bpfDeps {
 
 func TestOpenSourceWith(t *testing.T) {
 	t.Run("success returns reader and a working cleanup", func(t *testing.T) {
-		rd, cleanup, err := openSourceWith(baseDeps())
+		rd, cleanup, err := openSourceWith(baseDeps(), 0)
 		if err != nil {
 			t.Fatalf("openSourceWith: %v", err)
 		}
@@ -286,15 +286,15 @@ func TestOpenSourceWith(t *testing.T) {
 	t.Run("memlock failure", func(t *testing.T) {
 		d := baseDeps()
 		d.memlock = func() error { return errors.New("memlock denied") }
-		if _, _, err := openSourceWith(d); err == nil || !strings.Contains(err.Error(), "memlock denied") {
+		if _, _, err := openSourceWith(d, 0); err == nil || !strings.Contains(err.Error(), "memlock denied") {
 			t.Fatalf("err = %v, want a memlock failure", err)
 		}
 	})
 
 	t.Run("load failure", func(t *testing.T) {
 		d := baseDeps()
-		d.load = func(*opensnoopObjects) error { return errors.New("verifier rejected") }
-		if _, _, err := openSourceWith(d); err == nil || !strings.Contains(err.Error(), "verifier rejected") {
+		d.load = func(*opensnoopObjects, uint32) error { return errors.New("verifier rejected") }
+		if _, _, err := openSourceWith(d, 0); err == nil || !strings.Contains(err.Error(), "verifier rejected") {
 			t.Fatalf("err = %v, want a load failure", err)
 		}
 	})
@@ -302,7 +302,7 @@ func TestOpenSourceWith(t *testing.T) {
 	t.Run("attach failure", func(t *testing.T) {
 		d := baseDeps()
 		d.attach = func(*ebpf.Program) (func() error, error) { return nil, errors.New("no tracepoint") }
-		if _, _, err := openSourceWith(d); err == nil || !strings.Contains(err.Error(), "no tracepoint") {
+		if _, _, err := openSourceWith(d, 0); err == nil || !strings.Contains(err.Error(), "no tracepoint") {
 			t.Fatalf("err = %v, want an attach failure", err)
 		}
 	})
@@ -314,11 +314,25 @@ func TestOpenSourceWith(t *testing.T) {
 			return func() error { detached = true; return nil }, nil
 		}
 		d.newReader = func(*ebpf.Map) (recordReader, error) { return nil, errors.New("ringbuf gone") }
-		if _, _, err := openSourceWith(d); err == nil || !strings.Contains(err.Error(), "ringbuf gone") {
+		if _, _, err := openSourceWith(d, 0); err == nil || !strings.Contains(err.Error(), "ringbuf gone") {
 			t.Fatalf("err = %v, want a ringbuf failure", err)
 		}
 		if !detached {
 			t.Error("tracepoint not detached after a ring-buffer open failure")
+		}
+	})
+
+	t.Run("threads selfPidns into load", func(t *testing.T) {
+		var got uint32
+		d := baseDeps()
+		d.load = func(_ *opensnoopObjects, selfPidns uint32) error { got = selfPidns; return nil }
+		_, cleanup, err := openSourceWith(d, 4026531836)
+		if err != nil {
+			t.Fatalf("openSourceWith: %v", err)
+		}
+		_ = cleanup()
+		if got != 4026531836 {
+			t.Errorf("selfPidns threaded to load = %d, want 4026531836", got)
 		}
 	})
 }
@@ -343,7 +357,10 @@ func TestDefaultBPFDeps(t *testing.T) {
 	// newReader is left out: ringbuf.NewReader nil-derefs a nil *ebpf.Map
 	// (panics rather than erroring), and a real map needs BPF privileges.
 	_ = d.memlock() // may succeed (memcg-accounted kernels) or fail; either is fine.
-	if err := d.load(&opensnoopObjects{}); err == nil {
+	// A non-zero selfPidns also covers the .rodata Set branch (the spec
+	// parse + variable write happen in userspace; only LoadAndAssign needs
+	// CAP_BPF, so this fails at the load, not the Set).
+	if err := d.load(&opensnoopObjects{}, 4026531836); err == nil {
 		t.Skip("BPF load unexpectedly succeeded; attach/read paths are covered by the VM e2e test")
 	}
 	if _, err := d.attach(nil); err == nil {
@@ -357,11 +374,24 @@ func TestDefaultBPFDeps(t *testing.T) {
 // rather than panic — and this covers openSource's load + error path.
 // The success path is exercised by the e2e gadget test inside a VM.
 func TestRunWithRealOpenSourceFailsUnprivileged(t *testing.T) {
-	err := Run(context.Background(), io.Discard)
+	err := Run(context.Background(), io.Discard, 4026531836)
 	if err == nil {
 		t.Skip("environment unexpectedly allowed BPF load; success path is covered by the VM e2e test")
 	}
 	if !strings.Contains(err.Error(), "opensnoop:") {
 		t.Errorf("Run error = %v, want an opensnoop-prefixed failure", err)
+	}
+}
+
+// TestRunAggregatingFailsUnprivileged drives the aggregating production
+// entry the agent actually calls: like Run, the real load must fail cleanly
+// without CAP_BPF rather than panic. The success path is the VM e2e.
+func TestRunAggregatingFailsUnprivileged(t *testing.T) {
+	err := RunAggregating(context.Background(), io.Discard, NewAggregator(), 4026531836)
+	if err == nil {
+		t.Skip("environment unexpectedly allowed BPF load; success path is covered by the VM e2e test")
+	}
+	if !strings.Contains(err.Error(), "opensnoop:") {
+		t.Errorf("RunAggregating error = %v, want an opensnoop-prefixed failure", err)
 	}
 }

@@ -45,6 +45,22 @@ func TestMountTracefsWith(t *testing.T) {
 	}
 }
 
+// TestReadSelfPIDNS drives both branches of the namespace reader: the real
+// /proc/self/ns/pid link resolves to a non-zero inode, and a missing path
+// surfaces a wrapped stat error (the unfiltered-fallback trigger).
+func TestReadSelfPIDNS(t *testing.T) {
+	ns, err := readSelfPIDNSAt(selfPIDNSPath)
+	if err != nil {
+		t.Fatalf("readSelfPIDNSAt(%s) = %v, want the agent's own namespace", selfPIDNSPath, err)
+	}
+	if ns == 0 {
+		t.Fatal("readSelfPIDNSAt returned a zero inode for a live namespace")
+	}
+	if _, err := readSelfPIDNSAt("/proc/nonexistent-pid/ns/pid"); err == nil {
+		t.Error("stat of a missing namespace link should error")
+	}
+}
+
 // TestEnsureTracefs covers the production entry point: it calls the real
 // syscall.Mount, which fails without CAP_SYS_ADMIN in the test sandbox —
 // we only assert it runs without panicking (the statement is what the

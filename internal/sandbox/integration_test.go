@@ -264,6 +264,23 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 		t.Fatalf("opensnoop trace has no decoded openat event (%d bytes)\n--- trace ---\n%s\n--- console ---\n%s",
 			len(data), data, buf.String())
 	}
+	// The PID-namespace filter keeps only the container workload: the
+	// agent runs /hello (comm "hello") in a child PID namespace, so its
+	// openat (the Go runtime's /sys reads, the /workspace probe) must be
+	// captured, while the agent's own opens (comm "daft-agent") must not.
+	// Both checks together prove the filter is on and selective, not just
+	// that *something* was traced.
+	if !strings.Contains(string(data), `comm="hello"`) {
+		t.Fatalf("opensnoop trace missing the container workload (comm=\"hello\"); filter may have dropped everything\n--- trace ---\n%s\n--- console ---\n%s",
+			data, buf.String())
+	}
+	if strings.Contains(string(data), `comm="daft-agent"`) {
+		t.Fatalf("opensnoop trace contains agent opens (comm=\"daft-agent\"); the container-workload filter is not excluding the agent's namespace\n--- trace ---\n%s",
+			data)
+	}
+	if !strings.Contains(buf.String(), agent.OpensnoopReportPrefix+"tracing container openat") {
+		t.Fatalf("agent did not report the container-scoped filter; console:\n%s", buf.String())
+	}
 
 	// The summary writer ran the whole guest→host pipeline: cmdline token →
 	// agent parse → writer → atomic rewrite onto the share. Assert the host

@@ -27,11 +27,19 @@ type opensnoopDeps struct {
 	mountTracefs func() error
 	// openLog creates/truncates the trace file at the guest path.
 	openLog func(path string) (io.WriteCloser, error)
+	// selfPIDNS returns the agent's own PID-namespace inode number, passed
+	// to the gadget so it traces only the container workload (which crun
+	// runs in a child PID namespace) and drops the agent / init / kernel-
+	// thread openat noise that otherwise dominated the summary. A zero
+	// return — or this being nil — disables the filter, so a host that
+	// can't read the namespace degrades to the unfiltered firehose rather
+	// than an empty trace.
+	selfPIDNS func() (uint32, error)
 	// run drains the gadget into w until ctx is cancelled, folding each
 	// event into agg so the summary writer can snapshot the live aggregate.
 	// Production wires opensnoop.RunAggregating; tests inject a fake so the
 	// file + goroutine wiring is covered without loading BPF.
-	run func(ctx context.Context, w io.Writer, agg *opensnoop.Aggregator) error
+	run func(ctx context.Context, w io.Writer, agg *opensnoop.Aggregator, selfPidns uint32) error
 }
 
 // defaultOpensnoopDeps wires the real gadget. opensnoop.Run loads the
@@ -45,7 +53,8 @@ func defaultOpensnoopDeps() opensnoopDeps {
 			//nolint:gosec // G304: path is the host-operator-set daft.observe.opensnoop cmdline value — same trust boundary as daft.bundle; no untrusted input.
 			return os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		},
-		run: opensnoop.RunAggregating,
+		selfPIDNS: readSelfPIDNS,
+		run:       opensnoop.RunAggregating,
 	}
 }
 
@@ -81,14 +90,28 @@ func startOpensnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdl
 		writeReport(w, OpensnoopReportPrefix, err.Error())
 		return
 	}
+	// Resolve the agent's own PID namespace so the gadget filters to the
+	// container workload. A failure (or no dep) leaves selfPidns 0, which
+	// the gadget reads as "trace everything" — the unfiltered firehose is
+	// a degraded but non-empty fallback, so the build summary survives a
+	// host that can't read the namespace.
+	var selfPidns uint32
+	scope := "all"
+	if d.opensnoop.selfPIDNS != nil {
+		if ns, perr := d.opensnoop.selfPIDNS(); perr != nil {
+			writeReport(w, OpensnoopReportPrefix, "pidns: "+perr.Error()+" (tracing all processes)")
+		} else {
+			selfPidns, scope = ns, "container"
+		}
+	}
 	agg := opensnoop.NewAggregator()
-	writeReport(w, OpensnoopReportPrefix, "tracing openat → "+path)
+	writeReport(w, OpensnoopReportPrefix, "tracing "+scope+" openat → "+path)
 	go func() {
 		defer func() { _ = f.Close() }()
 		// ctx cancel is the normal stop (Run returns nil); only a real
 		// mid-run failure is worth a console line, and only while the VM
 		// is still up to carry it.
-		if rerr := d.opensnoop.run(ctx, f, agg); rerr != nil && ctx.Err() == nil {
+		if rerr := d.opensnoop.run(ctx, f, agg, selfPidns); rerr != nil && ctx.Err() == nil {
 			writeReport(w, OpensnoopReportPrefix, rerr.Error())
 		}
 	}()

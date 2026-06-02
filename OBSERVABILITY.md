@@ -259,6 +259,24 @@ and pushes one ring-buffer record per open (pid, uid, comm, dirfd,
 flags, path). The remaining gadgets follow as they're motivated by a
 real symptom.
 
+**Container-workload filter (PID namespace).** Unfiltered, the openat
+stream is dominated by the agent, the guest init, and `crun` — the
+harness — not the workload the user cares about, so the build-progress
+summary's top-paths/dirs rankings were swamped by `/proc`, `/sys`, and
+agent reads. The gadget therefore filters to the container workload by
+PID namespace: a `const volatile __u32 self_pidns` in `.rodata` (set by
+the Go loader before load) carries the agent's own PID-namespace inode,
+and the BPF program drops every openat whose task is in that namespace.
+crun runs the workload in a *child* PID namespace (the OCI bundle always
+requests a `pid` namespace — `internal/imagestore/runtimespec.go`), so
+"not the agent's namespace" is exactly "inside the container". The agent
+reads its namespace from `/proc/self/ns/pid` (`readSelfPIDNS`) and passes
+it to `opensnoop.RunAggregating`; a read failure leaves `self_pidns` 0,
+which the program reads as "trace everything" — a degraded but non-empty
+fallback, never a silent gap. This assumes the bundle gives the container
+its own PID namespace; a future host-PID-namespace bundle would need a
+different filter key (cgroup id), but that path doesn't exist today.
+
 ### Kernel-side prerequisites for Tier 2 (landed — roadmap #5a)
 
 Set in the microVM kernel (`third_party/kernel-config/daft.config`)
@@ -579,6 +597,9 @@ In rough order:
 - `internal/agent/opensnoop.go` — wires the gadget into daft-agent
   (`startOpensnoopFromCmdline` + the `opensnoopDeps` seam), driven by the
   `daft.observe.opensnoop=` cmdline token (`internal/agent/cmdline.go`).
+  Resolves the agent's PID namespace (`readSelfPIDNS`,
+  `internal/agent/opensnoop_linux.go`) and passes it as the gadget's
+  container-workload filter (see "Container-workload filter" above).
 - `internal/sandbox/sandbox.go` — `Config.OpensnoopLogPath` →
   `buildKernelCmdline` emits the `daft.observe.opensnoop=` token;
   `internal/sandbox/integration_test.go` holds the in-VM e2e

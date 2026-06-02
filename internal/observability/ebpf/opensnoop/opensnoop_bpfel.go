@@ -80,6 +80,7 @@ type opensnoopMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type opensnoopVariableSpecs struct {
+	SelfPidns   *ebpf.VariableSpec `ebpf:"self_pidns"`
 	UnusedEvent *ebpf.VariableSpec `ebpf:"unused_event"`
 }
 
@@ -116,6 +117,7 @@ func (m *opensnoopMaps) Close() error {
 //
 // It can be passed to loadOpensnoopObjects or ebpf.CollectionSpec.LoadAndAssign.
 type opensnoopVariables struct {
+	SelfPidns   *ebpf.Variable `ebpf:"self_pidns"`
 	UnusedEvent *ebpf.Variable `ebpf:"unused_event"`
 }
 
