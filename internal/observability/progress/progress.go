@@ -70,15 +70,45 @@ type ExecSnoop struct {
 	TopFailed []Counted `json:"top_failed"`
 }
 
+// SleepSnoop is the sleep-snoop gadget's section of the summary: the
+// nanosleep(2) / clock_nanosleep(2) calls the workload made. Total and the
+// rankings come straight from the (clock-free) aggregator; SleepRate and
+// LastEventAgeMs are time-derived and filled in by the agent's summary writer.
+// It is the poll-with-sleep retry-loop signal — a build that is slow because a
+// process keeps sleeping-and-retrying instead of waiting on a real event.
+type SleepSnoop struct {
+	// Total is the exact number of sleep calls observed.
+	Total uint64 `json:"total"`
+	// TotalSleepMs is the cumulative *requested* sleep across all calls, in
+	// milliseconds — the wall-clock the workload voluntarily gave up (modulo
+	// early wakeups). Absolute-deadline sleeps contribute 0 (their duration is
+	// not recorded), so this is a lower bound.
+	TotalSleepMs uint64 `json:"total_sleep_ms"`
+	// SleepRate is sleep calls per second over the last write window — a high
+	// rate against little real progress is the tell-tale poll loop.
+	SleepRate float64 `json:"sleep_rate_per_sec"`
+	// LastEventAgeMs is how long ago (ms) Total last advanced. -1 means no
+	// sleep has been observed yet.
+	LastEventAgeMs int64 `json:"last_event_age_ms"`
+	// TopCallers ranks the comms that called sleep most often — the tight
+	// poll loops (many short sleeps).
+	TopCallers []Counted `json:"top_callers"`
+	// TopSleepers ranks the comms by cumulative requested sleep in
+	// milliseconds (Counted.Count is milliseconds here, not a call count) —
+	// who is voluntarily giving up the most wall-clock.
+	TopSleepers []Counted `json:"top_sleepers"`
+}
+
 // Summary is the whole build-progress snapshot: a timestamp plus one section
 // per enabled gadget. A nil section means that gadget was not running.
 type Summary struct {
 	// TakenAtUnixMs is the guest wall-clock at which the snapshot was taken,
 	// so a reader can tell whether the writer itself has stalled (a stale
 	// file) independently of the gadget's own activity age.
-	TakenAtUnixMs int64      `json:"taken_at_unix_ms"`
-	Opensnoop     *Opensnoop `json:"opensnoop,omitempty"`
-	ExecSnoop     *ExecSnoop `json:"execsnoop,omitempty"`
+	TakenAtUnixMs int64       `json:"taken_at_unix_ms"`
+	Opensnoop     *Opensnoop  `json:"opensnoop,omitempty"`
+	ExecSnoop     *ExecSnoop  `json:"execsnoop,omitempty"`
+	SleepSnoop    *SleepSnoop `json:"sleepsnoop,omitempty"`
 }
 
 // Marshal renders a Summary as indented JSON with a trailing newline — the

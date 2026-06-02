@@ -27,29 +27,43 @@ func New(capacity int) *Counter {
 	return &Counter{cap: capacity, counts: make(map[string]uint64, capacity)}
 }
 
-// Add folds one observation of key into the counter.
-func (c *Counter) Add(key string) {
-	if n, ok := c.counts[key]; ok {
-		c.counts[key] = n + 1
+// Add folds one observation of key into the counter — AddN with weight 1, the
+// common call-counting case.
+func (c *Counter) Add(key string) { c.AddN(key, 1) }
+
+// AddN folds an observation of key carrying weight n (e.g. a sleep's requested
+// milliseconds, so the ranking is by cumulative duration rather than call
+// count). It is the weighted generalisation of Add: an existing key gains n, a
+// newcomer under cap starts at n, and once full a newcomer evicts the current
+// minimum and inherits its count+n — so a key that turns hot by weight climbs
+// out of the noise floor instead of being evicted on every appearance. A
+// zero-weight observation is dropped (it would track a key at 0, polluting the
+// ranking with keys that contributed nothing).
+func (c *Counter) AddN(key string, n uint64) {
+	if n == 0 {
+		return
+	}
+	if cur, ok := c.counts[key]; ok {
+		c.counts[key] = cur + n
 		return
 	}
 	if len(c.counts) < c.cap {
-		c.counts[key] = 1
+		c.counts[key] = n
 		return
 	}
-	// Full: evict the current minimum; the newcomer inherits its count+1.
+	// Full: evict the current minimum; the newcomer inherits its count+n.
 	// Map iteration order is random, but the minimum it finds — and thus the
 	// resulting state — is deterministic regardless of visitation order.
 	var minKey string
 	var minCount uint64
 	first := true
-	for k, n := range c.counts {
-		if first || n < minCount {
-			minKey, minCount, first = k, n, false
+	for k, v := range c.counts {
+		if first || v < minCount {
+			minKey, minCount, first = k, v, false
 		}
 	}
 	delete(c.counts, minKey)
-	c.counts[key] = minCount + 1
+	c.counts[key] = minCount + n
 }
 
 // Top returns the n highest-count keys, descending, with a lexicographic
