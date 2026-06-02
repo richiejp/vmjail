@@ -256,7 +256,7 @@ deprioritised; build them only if a specific symptom demands it.
 | `open-snoop` | "what files is the workload opening, and which are missing?" | sys_enter_openat + sys_exit_openat | landed |
 | `exec-snoop` | "what is the build running, with what args, and what failed to exec?" | sys_enter_execve + sys_exit_execve | landed |
 | `sleep-snoop`| "is a process spin-polling instead of waiting?"             | sys_enter_nanosleep + sys_enter_clock_nanosleep | landed |
-| `io-snoop`   | "what I/O hits which files/sockets, by PID, with what errno?" | read/write/connect/accept/sendto/recvfrom | planned |
+| `io-snoop`   | "what I/O hits which files/sockets, by PID, with what errno?" | syscall tracepoints on the fd-I/O syscalls (fd→target in-handler) | planned |
 
 **`open-snoop` landed first** (roadmap #5b) — the lint cache-miss bug
 that motivated this work was an `openat()` returning ENOENT on a path
@@ -625,12 +625,39 @@ In rough order:
      with the sleeper ranking shown as durations). This is the canonical
      "tests are slow because we never waited for the process to start"
      symptom.
-   - **7c — io-snoop** — read/write/connect/accept/sendto/recvfrom with the
-     fd → file/socket target, PID, and errno (reuses open-snoop's fd→path
-     resolution). The broadest signal; largest build.
+   - **7c — io-snoop** (*planned; syscall layer*) — read/write/connect/accept/
+     sendto/recvfrom with the **fd → file/socket target**, PID, and errno.
+     Attach at the **syscall layer** (a tracepoint per fd-operating I/O
+     syscall — `sys_enter_read`/`sys_exit_read`, …), enumerating the available
+     set at runtime from tracefs (see the syscall-list dump below) and
+     attaching to whichever are enabled; resolve the fd to its target in the
+     handler (fd → `task->files->fdt->fd[fd]` → struct file → dentry path, or
+     socket). **Do not** go down to the VFS layer (vfs_read/vfs_write): an
+     abandoned cut did, first via fexit — which EBUSYs because the minimal
+     guest kernel lacks `CONFIG_FUNCTION_TRACER` — then via kprobe, which fires
+     guest-wide and added enough per-call overhead to destabilise open-snoop.
+     The fd lives at the syscall layer, and that's where the per-workload
+     filter is cheapest. See [[feedback_gadget_attach]].
    - Deferred: `biolatency`, `runqlat`, `tcpstat` — systems-performance
      gadgets, built only if a specific symptom points at the kernel
      subsystem rather than userland.
+8. **Boot-time syscall-list dump** (*landed*). At every boot the agent
+   enumerates the guest kernel's syscall tracepoints from
+   `/sys/kernel/tracing/events/syscalls/` (the runtime source of truth for
+   what's traceable) and writes the sorted list to `observe/syscalls.txt` on
+   the observe share, so a user can always discover what is available inside
+   the microvm without booting it interactively (the real guest exposes ~326).
+   `internal/agent/syscalls.go` + `daft.observe.syscalls=` cmdline token.
+9. **Runtime gadget toggle over vsock** (*planned; replaces the cmdline
+   control plane*). Gadgets are enabled via `daft.observe.*=` kernel-cmdline
+   tokens parsed at agent boot. That is boot-fixed; observability should be
+   flipped on/off **at runtime**. Move gadget enable/disable onto the agent's
+   vsock control surface (the default channel for talking to the agent),
+   attaching/detaching the BPF on demand — which also sidesteps "can't attach
+   to a cgroup/namespace that doesn't exist yet", since by toggle time the
+   container exists and its cgroup/pidns can scope the filter. The cmdline path
+   stays for now; all gadgets migrate onto the toggle. See
+   [[feedback_gadget_attach]].
 
 ## Related
 

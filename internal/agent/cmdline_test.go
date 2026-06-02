@@ -252,6 +252,21 @@ func TestSleepsnoopCmdline(t *testing.T) {
 	}
 }
 
+// TestSyscallsCmdline covers the round-trip plus the absent and relative-path
+// branches of the parser (same contract as open-snoop).
+func TestSyscallsCmdline(t *testing.T) {
+	s := FormatSyscallsCmdline("/share/syscalls.txt")
+	if got, ok, err := ParseSyscallsCmdline(s); err != nil || !ok || got != "/share/syscalls.txt" {
+		t.Errorf("round-trip via %q: got=%q ok=%v err=%v", s, got, ok, err)
+	}
+	if _, ok, err := ParseSyscallsCmdline(testCmdlineShareOnly); ok || err != nil {
+		t.Errorf("absent token: ok=%v err=%v, want false/nil", ok, err)
+	}
+	if _, _, err := ParseSyscallsCmdline("daft.observe.syscalls=rel/path"); err == nil {
+		t.Error("relative path should error")
+	}
+}
+
 //nolint:dupl // same table-test harness as TestParseOpensnoopCmdline by design; the per-parser cases differ.
 func TestParseSummaryCmdline(t *testing.T) {
 	tests := []struct {

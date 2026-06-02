@@ -156,6 +156,13 @@ type Config struct {
 	// contract as OpensnoopLogPath. Empty (the default) leaves the gadget off.
 	SleepsnoopLogPath string
 
+	// SyscallListPath, when non-empty, is the *in-guest* absolute path the
+	// agent writes the guest kernel's available-syscall list to at boot
+	// (enumerated from tracefs; one syscall name per line, sorted). Not a
+	// gadget — a one-shot boot diagnostic so a user can discover what is
+	// traceable inside the microvm. Empty (the default) skips the dump.
+	SyscallListPath string
+
 	// ObserveSummaryPath, when non-empty, is the *in-guest* absolute path
 	// the agent atomically rewrites the live build-progress summary to
 	// (~1 Hz JSON: openat total/rate/last-activity-age + top processes,
@@ -626,6 +633,9 @@ func buildKernelCmdline(cfg Config) string {
 	}
 	if cfg.SleepsnoopLogPath != "" {
 		parts = append(parts, agent.FormatSleepsnoopCmdline(cfg.SleepsnoopLogPath))
+	}
+	if cfg.SyscallListPath != "" {
+		parts = append(parts, agent.FormatSyscallsCmdline(cfg.SyscallListPath))
 	}
 	if cfg.ObserveSummaryPath != "" {
 		parts = append(parts, agent.FormatSummaryCmdline(cfg.ObserveSummaryPath))

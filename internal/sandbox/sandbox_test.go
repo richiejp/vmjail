@@ -681,6 +681,23 @@ func TestBuildKernelCmdlineOmitsSleepsnoopWhenUnset(t *testing.T) {
 	}
 }
 
+func TestBuildKernelCmdlineIncludesSyscalls(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.SyscallListPath = "/share/syscalls.txt"
+	got := buildKernelCmdline(cfg)
+	if !strings.Contains(got, agent.SyscallsCmdlineKey+"=/share/syscalls.txt") {
+		t.Errorf("cmdline %q missing syscalls token", got)
+	}
+}
+
+func TestBuildKernelCmdlineOmitsSyscallsWhenUnset(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	got := buildKernelCmdline(cfg)
+	if strings.Contains(got, agent.SyscallsCmdlineKey) {
+		t.Errorf("cmdline %q should not contain syscalls token when path empty", got)
+	}
+}
+
 func TestBuildKernelCmdlineIncludesObserveSummary(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	cfg.ObserveSummaryPath = "/share/progress.json"

@@ -639,6 +639,7 @@ const (
 	observeOpensnoopName  = "opensnoop.log"
 	observeExecsnoopName  = "execsnoop.log"
 	observeSleepsnoopName = "sleepsnoop.log"
+	observeSyscallsName   = "syscalls.txt"
 	observeSummaryName    = "progress.json"
 )
 
@@ -672,6 +673,7 @@ func (e *Executor) applyObserveSummary(cfg *sandbox.Config, uid string) {
 	cfg.OpensnoopLogPath = filepath.Join(observeMount, observeOpensnoopName)
 	cfg.ExecsnoopLogPath = filepath.Join(observeMount, observeExecsnoopName)
 	cfg.SleepsnoopLogPath = filepath.Join(observeMount, observeSleepsnoopName)
+	cfg.SyscallListPath = filepath.Join(observeMount, observeSyscallsName)
 	cfg.ObserveSummaryPath = filepath.Join(observeMount, observeSummaryName)
 }
 

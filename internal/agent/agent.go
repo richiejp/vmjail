@@ -86,6 +86,7 @@ func Run(ctx context.Context, w io.Writer) error {
 		opensnoop:   defaultOpensnoopDeps(),
 		execsnoop:   defaultExecsnoopDeps(),
 		sleepsnoop:  defaultSleepsnoopDeps(),
+		syscalls:    defaultSyscallDumpDeps(),
 		summary:     defaultSummaryDeps(),
 	})
 }
@@ -122,6 +123,10 @@ type runDeps struct {
 	// sleepsnoop is the test-substitutable surface for the Tier-2 sleep-snoop
 	// eBPF gadget, parallel to opensnoop. Zero value disables it.
 	sleepsnoop sleepsnoopDeps
+	// syscalls is the test-substitutable surface for the boot-time syscall-list
+	// dump (enumerate tracefs → write the available-syscalls file). Not a
+	// gadget; runs once at boot. Zero value (listEnter == nil) disables it.
+	syscalls syscallDumpDeps
 	// summary is the test-substitutable surface for the build-progress
 	// summary writer (clock + tick interval + atomic file write). Zero
 	// value (write == nil) disables it. Fed by the open-snoop, exec-snoop, and
@@ -157,6 +162,10 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	if bundle != "" {
 		ensureCgroupV2(w)
 	}
+	// Dump the guest kernel's available syscall list to the observe state
+	// folder (one-shot; the share was mounted by applySharesFromCmdline above)
+	// so a user can always discover what is traceable inside the microvm.
+	startSyscallDumpFromCmdline(w, d, cmdline)
 	// Attach the open-snoop + exec-snoop + sleep-snoop gadgets before the
 	// container so their tracepoints are live for the workload's first
 	// syscalls, then start the build-progress summary as a live view over

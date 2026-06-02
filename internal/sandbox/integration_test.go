@@ -197,6 +197,17 @@ func TestHelloIntegrationBootsVMWithContainer(t *testing.T) {
 	}
 }
 
+// linePresent reports whether want is an exact line in the newline-separated
+// text s — so a check for "read" is not satisfied by "readv"/"readahead".
+func linePresent(s, want string) bool {
+	for _, l := range strings.Split(s, "\n") {
+		if l == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestHelloIntegrationOpensnoopCapturesOpenat is the e2e proof of the
 // Tier-2 open-snoop eBPF gadget: boot a container VM with
 // daft.observe.opensnoop pointed at a path on a writable virtiofs share,
@@ -236,6 +247,10 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 	const guestSleepLogName = "sleepsnoop.log"
 	cfg.SleepsnoopLogPath = testMountpoint + "/" + guestSleepLogName
 	hostSleepLog := filepath.Join(shareDir, guestSleepLogName)
+	// The boot-time syscall dump writes the guest's available-syscall list.
+	const guestSyscallsName = "syscalls.txt"
+	cfg.SyscallListPath = testMountpoint + "/" + guestSyscallsName
+	hostSyscalls := filepath.Join(shareDir, guestSyscallsName)
 	// The build-progress summary (#6b) writes alongside the raw trace.
 	const guestSummaryName = "progress.json"
 	cfg.ObserveSummaryPath = testMountpoint + "/" + guestSummaryName
@@ -254,6 +269,9 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 		}
 		if data, err := os.ReadFile(hostSleepLog); err == nil {
 			t.Logf("sleepsnoop trace (%s):\n%s", hostSleepLog, data)
+		}
+		if data, err := os.ReadFile(hostSyscalls); err == nil {
+			t.Logf("syscall list (%s):\n%s", hostSyscalls, data)
 		}
 		if data, err := os.ReadFile(hostSummary); err == nil {
 			t.Logf("build-progress summary (%s):\n%s", hostSummary, data)
@@ -340,6 +358,27 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 			t.Logf("sleepsnoop captured: %s", bytes.TrimSpace(sleepData))
 		}
 	}
+
+	// The boot-time syscall dump is written synchronously at boot (not
+	// event-driven), so unlike the gadget traces it's reliably present before
+	// teardown — assert it strictly. It must enumerate the core fd-I/O syscalls
+	// any Linux guest exposes. The full list is logged so the actual
+	// in-microvm syscall set is visible in the test output.
+	if !strings.Contains(buf.String(), agent.SyscallsReportPrefix+"wrote ") {
+		t.Fatalf("agent did not report writing the syscall list; console:\n%s", buf.String())
+	}
+	scData, err := os.ReadFile(hostSyscalls)
+	if err != nil {
+		t.Fatalf("read syscall list %s: %v\n--- console ---\n%s", hostSyscalls, err, buf.String())
+	}
+	syscallSet := string(scData)
+	for _, want := range []string{"read", "write", "openat", "execve"} {
+		if !linePresent(syscallSet, want) {
+			t.Errorf("syscall list missing %q\n--- list ---\n%s", want, syscallSet)
+		}
+	}
+	t.Logf("microvm exposes %d syscall tracepoints:\n%s",
+		strings.Count(strings.TrimSpace(syscallSet), "\n")+1, syscallSet)
 
 	// The summary writer ran the whole guest→host pipeline: cmdline token →
 	// agent parse → writer → atomic rewrite onto the share. Assert the host

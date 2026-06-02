@@ -220,6 +220,33 @@ func ParseSleepsnoopCmdline(cmdline string) (path string, ok bool, err error) {
 	return val, true, nil
 }
 
+// SyscallsCmdlineKey names the kernel cmdline parameter that asks the agent to
+// dump the guest kernel's available syscall list (enumerated from tracefs at
+// boot) to the given absolute guest path. Same absolute-path contract as
+// OpensnoopCmdlineKey. Format: `daft.observe.syscalls=<absolute-path>`. Usually
+// a path on the observe share so the host can read back what is traceable
+// inside the microvm without booting it interactively.
+const SyscallsCmdlineKey = "daft.observe.syscalls"
+
+// FormatSyscallsCmdline renders a guest path to the wire form.
+func FormatSyscallsCmdline(path string) string {
+	return fmt.Sprintf("%s=%s", SyscallsCmdlineKey, path)
+}
+
+// ParseSyscallsCmdline scans a kernel cmdline for
+// `daft.observe.syscalls=<path>`, with the same absolute-path contract as
+// ParseOpensnoopCmdline.
+func ParseSyscallsCmdline(cmdline string) (path string, ok bool, err error) {
+	val, ok := findCmdlineValue(cmdline, SyscallsCmdlineKey)
+	if !ok {
+		return "", false, nil
+	}
+	if err := validateAbsoluteCmdlinePath(SyscallsCmdlineKey, val); err != nil {
+		return "", false, err
+	}
+	return val, true, nil
+}
+
 // SummaryCmdlineKey names the kernel cmdline parameter that asks the agent
 // to write the live build-progress summary (OBSERVABILITY.md #6) to the
 // given absolute guest path, rewritten atomically ~1 Hz. Format:
