@@ -377,6 +377,7 @@ const (
 	nameFlag        = "--name"
 	nameFlagVal     = "x"
 	orchestratorArg = "--orchestrator"
+	enableFlag      = "--enable"
 )
 
 const (
@@ -594,7 +595,7 @@ func TestWorkspaceResourcesRejectsBadMemory(t *testing.T) {
 func TestWorkspaceNestedEnable(t *testing.T) {
 	h := newWorkspaceE2EHarness(t)
 	h.run(append([]string{createSubName}, h.commonArgs...)...)
-	out := h.run(append([]string{nestedSubName, "--enable"}, h.commonArgs...)...)
+	out := h.run(append([]string{nestedSubName, enableFlag}, h.commonArgs...)...)
 	if !strings.Contains(out, "Nested-virt:") {
 		t.Errorf("nested --enable summary missing Nested-virt row:\n%s", out)
 	}
@@ -608,11 +609,41 @@ func TestWorkspaceNestedRequiresExactlyOneFlag(t *testing.T) {
 	h.run(append([]string{createSubName}, h.commonArgs...)...)
 	for _, flags := range [][]string{
 		{},                        // neither
-		{"--enable", "--disable"}, // both
+		{enableFlag, "--disable"}, // both
 	} {
 		args := append(append([]string{nestedSubName}, flags...), h.commonArgs...)
 		if _, err := h.runErr(args...); err == nil {
 			t.Errorf("nested %v: expected error, got nil", flags)
+		}
+	}
+}
+
+// TestWorkspacePrivilegedFuseEnable drives the privileged-fuse
+// subcommand end-to-end: --enable calls SetPrivilegedFuseMounts and
+// the rendered summary surfaces the grant (with its CAP_SYS_ADMIN
+// caveat).
+func TestWorkspacePrivilegedFuseEnable(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	out := h.run(append([]string{fuseSubName, enableFlag}, h.commonArgs...)...)
+	if !strings.Contains(out, "Privileged-FUSE:") || !strings.Contains(out, "CAP_SYS_ADMIN") {
+		t.Errorf("privileged-fuse --enable summary missing Privileged-FUSE/CAP_SYS_ADMIN row:\n%s", out)
+	}
+}
+
+// TestWorkspacePrivilegedFuseRequiresExactlyOneFlag pins the same
+// client-side guard for the FUSE grant: neither flag (or both) is a
+// usage error that never reaches the wire.
+func TestWorkspacePrivilegedFuseRequiresExactlyOneFlag(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	for _, flags := range [][]string{
+		{},                        // neither
+		{enableFlag, "--disable"}, // both
+	} {
+		args := append(append([]string{fuseSubName}, flags...), h.commonArgs...)
+		if _, err := h.runErr(args...); err == nil {
+			t.Errorf("privileged-fuse %v: expected error, got nil", flags)
 		}
 	}
 }

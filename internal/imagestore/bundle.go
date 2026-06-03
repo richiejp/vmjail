@@ -63,6 +63,13 @@ type BundleOptions struct {
 	// privilege/attack-surface bump, emitted only when the workspace
 	// opts in (SandboxSpec.nested_virtualization.enable).
 	Nested bool
+	// PrivilegedFuseMounts grants the container the ability to mount
+	// FUSE filesystems: the runtime spec binds /dev/fuse, adds the
+	// 10:229 cgroup device-allow, and grants CAP_SYS_ADMIN. Off by
+	// default — a real privilege bump (CAP_SYS_ADMIN is near-root
+	// inside the VM), emitted only when the workspace opts in
+	// (SandboxSpec.privileged_fuse_mounts.enable).
+	PrivilegedFuseMounts bool
 }
 
 // BundleMount mirrors the subset of the OCI runtime-spec mount type

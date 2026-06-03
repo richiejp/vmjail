@@ -194,6 +194,10 @@ func TestHandleSandboxEventProjectsEnv(t *testing.T) {
 // nested_virtualization.enable reaches the assembler's
 // BootOptions.Nested — the wire that flips the /dev/kvm bind — and
 // that an unset section leaves it false (the unprivileged default).
+//
+// projection test; each pins one grant's spec→BootOptions wire.
+//
+//nolint:dupl // Deliberately parallel to the privileged-fuse
 func TestHandleSandboxEventProjectsNestedVirt(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -224,6 +228,49 @@ func TestHandleSandboxEventProjectsNestedVirt(t *testing.T) {
 			}
 			if seen != tc.want {
 				t.Fatalf("assembler BootOptions.Nested = %v, want %v", seen, tc.want)
+			}
+		})
+	}
+}
+
+// TestHandleSandboxEventProjectsPrivilegedFuse proves the spec's
+// privileged_fuse_mounts.enable reaches the assembler's
+// BootOptions.PrivilegedFuseMounts — the wire that flips the /dev/fuse
+// bind + CAP_SYS_ADMIN — and that an unset section leaves it false.
+//
+// test; each pins one grant's spec→BootOptions wire.
+//
+//nolint:dupl // Deliberately parallel to the nested-virt projection
+func TestHandleSandboxEventProjectsPrivilegedFuse(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		pf   *sandboxv1.PrivilegedFuseMounts
+		want bool
+	}{
+		{"unset", nil, false},
+		{"disabled", &sandboxv1.PrivilegedFuseMounts{Enable: false}, false},
+		{"enabled", &sandboxv1.PrivilegedFuseMounts{Enable: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var seen bool
+			asm := func(_ context.Context, _ string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+				seen = opts.PrivilegedFuseMounts
+				return sandbox.Config{Bundle: "/b"}, func() {}, nil
+			}
+			runner := func(context.Context, io.Writer, sandbox.Config) error { return nil }
+			e, err := New(Config{Stdout: io.Discard, Runner: runner, Assembler: asm})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			evt := addedEvent("sb-pf", &sandboxv1.SandboxSpec{
+				ImageRef:             testImageRef,
+				PrivilegedFuseMounts: tc.pf,
+			})
+			if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
+				t.Fatalf("HandleSandboxEvent: %v", err)
+			}
+			if seen != tc.want {
+				t.Fatalf("assembler BootOptions.PrivilegedFuseMounts = %v, want %v", seen, tc.want)
 			}
 		})
 	}

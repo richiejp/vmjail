@@ -227,6 +227,22 @@ func (h *WorkspaceCatalogHandler) SetNestedVirtualization(
 		})
 }
 
+// SetPrivilegedFuseMounts toggles the workspace's privileged-FUSE
+// grant. Enabling binds /dev/fuse into the workload container and adds
+// CAP_SYS_ADMIN at Launch; disabling reverts to the unprivileged
+// default.
+func (h *WorkspaceCatalogHandler) SetPrivilegedFuseMounts(
+	_ context.Context,
+	req *connect.Request[workspacev1.SetPrivilegedFuseMountsRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	enable := req.Msg.GetEnable()
+	return h.mutate(req.Header(), req.Msg.GetHandle(),
+		func(w *workspacecatalog.Workspace) error {
+			w.Spec.PrivilegedFuseMounts = enable
+			return nil
+		})
+}
+
 // mutate is the shared auth → resolve → Update → project plumbing
 // behind every per-field setter. Defaults to MutateSpec (bumps
 // generation + recomputes Missing/Ready). Add* handlers don't use
@@ -792,6 +808,9 @@ func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Finge
 		NestedVirtualization: &sandboxv1.NestedVirtualization{
 			Enable: ws.Spec.NestedVirt,
 		},
+		PrivilegedFuseMounts: &sandboxv1.PrivilegedFuseMounts{
+			Enable: ws.Spec.PrivilegedFuseMounts,
+		},
 	}
 }
 
@@ -934,6 +953,9 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 			CpuCores:                 ws.Spec.CPUCores,
 			NestedVirtualization: &sandboxv1.NestedVirtualization{
 				Enable: ws.Spec.NestedVirt,
+			},
+			PrivilegedFuseMounts: &sandboxv1.PrivilegedFuseMounts{
+				Enable: ws.Spec.PrivilegedFuseMounts,
 			},
 		},
 		Status: &workspacev1.WorkspaceStatus{

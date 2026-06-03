@@ -241,6 +241,10 @@ type WorkspaceSpec struct {
 	// Nested-virtualisation grant. Unset ⇒ disabled. Projected
 	// directly onto SandboxSpec.nested_virtualization at Launch.
 	NestedVirtualization *v1.NestedVirtualization `protobuf:"bytes,11,opt,name=nested_virtualization,json=nestedVirtualization,proto3" json:"nested_virtualization,omitempty"`
+	// Privileged FUSE-mount grant (CAP_SYS_ADMIN + /dev/fuse). Unset ⇒
+	// disabled. Projected directly onto
+	// SandboxSpec.privileged_fuse_mounts at Launch.
+	PrivilegedFuseMounts *v1.PrivilegedFuseMounts `protobuf:"bytes,12,opt,name=privileged_fuse_mounts,json=privilegedFuseMounts,proto3" json:"privileged_fuse_mounts,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -348,6 +352,13 @@ func (x *WorkspaceSpec) GetCpuCores() uint32 {
 func (x *WorkspaceSpec) GetNestedVirtualization() *v1.NestedVirtualization {
 	if x != nil {
 		return x.NestedVirtualization
+	}
+	return nil
+}
+
+func (x *WorkspaceSpec) GetPrivilegedFuseMounts() *v1.PrivilegedFuseMounts {
+	if x != nil {
+		return x.PrivilegedFuseMounts
 	}
 	return nil
 }
@@ -531,7 +542,7 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xb7\x04\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x94\x05\n" +
 	"\rWorkspaceSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12(\n" +
 	"\x10pending_build_id\x18\x02 \x01(\tR\x0ependingBuildId\x12.\n" +
@@ -545,7 +556,8 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\fmemory_bytes\x18\t \x01(\x04R\vmemoryBytes\x12\x1b\n" +
 	"\tcpu_cores\x18\n" +
 	" \x01(\rR\bcpuCores\x12Z\n" +
-	"\x15nested_virtualization\x18\v \x01(\v2%.daft.sandbox.v1.NestedVirtualizationR\x14nestedVirtualization\"\x8b\x02\n" +
+	"\x15nested_virtualization\x18\v \x01(\v2%.daft.sandbox.v1.NestedVirtualizationR\x14nestedVirtualization\x12[\n" +
+	"\x16privileged_fuse_mounts\x18\f \x01(\v2%.daft.sandbox.v1.PrivilegedFuseMountsR\x14privilegedFuseMounts\"\x8b\x02\n" +
 	"\x0fWorkspaceStatus\x12/\n" +
 	"\x13observed_generation\x18\x01 \x01(\x04R\x12observedGeneration\x12:\n" +
 	"\n" +
@@ -585,8 +597,9 @@ var file_workspace_v1_catalog_proto_goTypes = []any{
 	(*v1.GpuRequest)(nil),           // 9: daft.sandbox.v1.GpuRequest
 	(v1.Isolation)(0),               // 10: daft.sandbox.v1.Isolation
 	(*v1.NestedVirtualization)(nil), // 11: daft.sandbox.v1.NestedVirtualization
-	(*v1.Condition)(nil),            // 12: daft.sandbox.v1.Condition
-	(*v1.SandboxRef)(nil),           // 13: daft.sandbox.v1.SandboxRef
+	(*v1.PrivilegedFuseMounts)(nil), // 12: daft.sandbox.v1.PrivilegedFuseMounts
+	(*v1.Condition)(nil),            // 13: daft.sandbox.v1.Condition
+	(*v1.SandboxRef)(nil),           // 14: daft.sandbox.v1.SandboxRef
 }
 var file_workspace_v1_catalog_proto_depIdxs = []int32{
 	1,  // 0: daft.workspace.v1.Workspace.metadata:type_name -> daft.workspace.v1.WorkspaceMetadata
@@ -600,15 +613,16 @@ var file_workspace_v1_catalog_proto_depIdxs = []int32{
 	9,  // 8: daft.workspace.v1.WorkspaceSpec.gpu_request:type_name -> daft.sandbox.v1.GpuRequest
 	10, // 9: daft.workspace.v1.WorkspaceSpec.isolation:type_name -> daft.sandbox.v1.Isolation
 	11, // 10: daft.workspace.v1.WorkspaceSpec.nested_virtualization:type_name -> daft.sandbox.v1.NestedVirtualization
-	12, // 11: daft.workspace.v1.WorkspaceStatus.conditions:type_name -> daft.sandbox.v1.Condition
-	13, // 12: daft.workspace.v1.WorkspaceStatus.current_sandbox:type_name -> daft.sandbox.v1.SandboxRef
-	4,  // 13: daft.workspace.v1.WorkspaceStatus.lock:type_name -> daft.workspace.v1.Lock
-	5,  // 14: daft.workspace.v1.Lock.expires_at:type_name -> google.protobuf.Timestamp
-	15, // [15:15] is the sub-list for method output_type
-	15, // [15:15] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	12, // 11: daft.workspace.v1.WorkspaceSpec.privileged_fuse_mounts:type_name -> daft.sandbox.v1.PrivilegedFuseMounts
+	13, // 12: daft.workspace.v1.WorkspaceStatus.conditions:type_name -> daft.sandbox.v1.Condition
+	14, // 13: daft.workspace.v1.WorkspaceStatus.current_sandbox:type_name -> daft.sandbox.v1.SandboxRef
+	4,  // 14: daft.workspace.v1.WorkspaceStatus.lock:type_name -> daft.workspace.v1.Lock
+	5,  // 15: daft.workspace.v1.Lock.expires_at:type_name -> google.protobuf.Timestamp
+	16, // [16:16] is the sub-list for method output_type
+	16, // [16:16] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_workspace_v1_catalog_proto_init() }

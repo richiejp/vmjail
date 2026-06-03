@@ -320,6 +320,112 @@ func TestApplyNestedVirtAddsKVM(t *testing.T) {
 	}
 }
 
+// TestApplyPrivilegedFuseMountsAddsFuse pins the opt-in FUSE path:
+// applyPrivilegedFuseMounts appends the /dev/fuse bind, the 10:229
+// cgroup device-allow, and CAP_SYS_ADMIN — all three must travel
+// together (the bind without the cap EPERMs on mount, the cap without
+// the device has nothing to open).
+func TestApplyPrivilegedFuseMountsAddsFuse(t *testing.T) {
+	mounts, linux, caps := applyPrivilegedFuseMounts(
+		defaultRuntimeMounts(), defaultRuntimeLinuxConfig(), emptyCapabilities(),
+	)
+
+	var fuse *runtimeMount
+	for i := range mounts {
+		if mounts[i].Destination == devFusePath {
+			fuse = &mounts[i]
+		}
+	}
+	if fuse == nil {
+		t.Fatal("privileged-fuse mounts missing /dev/fuse bind")
+	}
+	if fuse.Type != mountTypeBind || fuse.Source != devFusePath {
+		t.Errorf("/dev/fuse mount = %+v, want bind of /dev/fuse", *fuse)
+	}
+
+	if linux.Resources == nil {
+		t.Fatal("privileged-fuse linux config missing Resources device-allow")
+	}
+	var allowed bool
+	for _, d := range linux.Resources.Devices {
+		if d.Allow && d.Type == "c" &&
+			d.Major != nil && *d.Major == 10 &&
+			d.Minor != nil && *d.Minor == 229 {
+			allowed = true
+		}
+	}
+	if !allowed {
+		t.Errorf("device-allow 10:229 missing from %+v", linux.Resources.Devices)
+	}
+
+	for _, set := range [][]string{caps.Bounding, caps.Effective, caps.Permitted} {
+		if !slices.Contains(set, capSysAdmin) {
+			t.Errorf("capability set %v missing %s", set, capSysAdmin)
+		}
+	}
+	if slices.Contains(caps.Ambient, capSysAdmin) {
+		t.Errorf("ambient caps unexpectedly carry %s: %v", capSysAdmin, caps.Ambient)
+	}
+}
+
+// TestDefaultRuntimeOmitsFuse pins that a plain workload gets neither
+// the /dev/fuse bind nor any CAP_SYS_ADMIN — the FUSE grant is opt-in,
+// so the unprivileged default carries no mount capability.
+func TestDefaultRuntimeOmitsFuse(t *testing.T) {
+	for _, m := range defaultRuntimeMounts() {
+		if m.Destination == devFusePath {
+			t.Errorf("default mounts unexpectedly bind /dev/fuse: %+v", m)
+		}
+	}
+	caps := emptyCapabilities()
+	for _, set := range [][]string{caps.Bounding, caps.Effective, caps.Permitted, caps.Ambient} {
+		if len(set) != 0 {
+			t.Errorf("default capabilities non-empty: %+v", caps)
+		}
+	}
+}
+
+// TestBundlePrivilegedFuseGatesFuse proves the
+// BundleOptions.PrivilegedFuseMounts flag is what flips the /dev/fuse
+// bind and CAP_SYS_ADMIN in the emitted config.json: off by default,
+// present when set.
+func TestBundlePrivilegedFuseGatesFuse(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/privfuse:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{Entrypoint: []string{testEntrypoint}})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+
+	for _, tc := range []struct {
+		name string
+		on   bool
+		want bool
+	}{
+		{"default omits fuse", false, false},
+		{"enabled binds fuse", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle, err := store.Bundle(context.Background(), pulled.Digest,
+				BundleOptions{PrivilegedFuseMounts: tc.on})
+			if err != nil {
+				t.Fatalf("Bundle: %v", err)
+			}
+			cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+			for _, tok := range []string{`"/dev/fuse"`, capSysAdmin} {
+				if got := strings.Contains(string(cfg), tok); got != tc.want {
+					t.Errorf("config.json contains %s = %v, want %v:\n%s", tok, got, tc.want, cfg)
+				}
+			}
+		})
+	}
+}
+
 // TestBundleNestedVirtGatesKVM proves the BundleOptions.Nested flag
 // is what flips the /dev/kvm bind in the emitted config.json: off by
 // default, present when set.

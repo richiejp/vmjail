@@ -82,6 +82,9 @@ const (
 	// WorkspaceCatalogServiceSetNestedVirtualizationProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's SetNestedVirtualization RPC.
 	WorkspaceCatalogServiceSetNestedVirtualizationProcedure = "/daft.workspace.v1.WorkspaceCatalogService/SetNestedVirtualization"
+	// WorkspaceCatalogServiceSetPrivilegedFuseMountsProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's SetPrivilegedFuseMounts RPC.
+	WorkspaceCatalogServiceSetPrivilegedFuseMountsProcedure = "/daft.workspace.v1.WorkspaceCatalogService/SetPrivilegedFuseMounts"
 	// WorkspaceCatalogServiceAddMountProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's AddMount RPC.
 	WorkspaceCatalogServiceAddMountProcedure = "/daft.workspace.v1.WorkspaceCatalogService/AddMount"
@@ -163,6 +166,13 @@ type WorkspaceCatalogServiceClient interface {
 	// default (a privilege/attack-surface bump). Projected onto the
 	// SandboxSpec at Launch.
 	SetNestedVirtualization(context.Context, *connect.Request[v1.SetNestedVirtualizationRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// SetPrivilegedFuseMounts toggles whether the workload may mount
+	// FUSE filesystems — when enabled the executor binds /dev/fuse into
+	// the container, adds the cgroup device-allow, and grants
+	// CAP_SYS_ADMIN (near-root inside the VM). Off by default (a real
+	// privilege/attack-surface bump). Projected onto the SandboxSpec at
+	// Launch.
+	SetPrivilegedFuseMounts(context.Context, *connect.Request[v1.SetPrivilegedFuseMountsRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 	// AddMount appends a Mount to the workspace. Mount.target must
 	// be absolute; the orchestrator rejects empty or relative targets
 	// and refuses a duplicate target in the existing mount set.
@@ -342,6 +352,12 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetNestedVirtualization")),
 			connect.WithClientOptions(opts...),
 		),
+		setPrivilegedFuseMounts: connect.NewClient[v1.SetPrivilegedFuseMountsRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceSetPrivilegedFuseMountsProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetPrivilegedFuseMounts")),
+			connect.WithClientOptions(opts...),
+		),
 		addMount: connect.NewClient[v1.AddMountRequest, v1.WorkspaceResponse](
 			httpClient,
 			baseURL+WorkspaceCatalogServiceAddMountProcedure,
@@ -444,6 +460,7 @@ type workspaceCatalogServiceClient struct {
 	setTarget               *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
 	setResources            *connect.Client[v1.SetResourcesRequest, v1.WorkspaceResponse]
 	setNestedVirtualization *connect.Client[v1.SetNestedVirtualizationRequest, v1.WorkspaceResponse]
+	setPrivilegedFuseMounts *connect.Client[v1.SetPrivilegedFuseMountsRequest, v1.WorkspaceResponse]
 	addMount                *connect.Client[v1.AddMountRequest, v1.WorkspaceResponse]
 	addEnv                  *connect.Client[v1.AddEnvRequest, v1.WorkspaceResponse]
 	addPort                 *connect.Client[v1.AddPortRequest, v1.WorkspaceResponse]
@@ -494,6 +511,11 @@ func (c *workspaceCatalogServiceClient) SetResources(ctx context.Context, req *c
 // SetNestedVirtualization calls daft.workspace.v1.WorkspaceCatalogService.SetNestedVirtualization.
 func (c *workspaceCatalogServiceClient) SetNestedVirtualization(ctx context.Context, req *connect.Request[v1.SetNestedVirtualizationRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return c.setNestedVirtualization.CallUnary(ctx, req)
+}
+
+// SetPrivilegedFuseMounts calls daft.workspace.v1.WorkspaceCatalogService.SetPrivilegedFuseMounts.
+func (c *workspaceCatalogServiceClient) SetPrivilegedFuseMounts(ctx context.Context, req *connect.Request[v1.SetPrivilegedFuseMountsRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.setPrivilegedFuseMounts.CallUnary(ctx, req)
 }
 
 // AddMount calls daft.workspace.v1.WorkspaceCatalogService.AddMount.
@@ -605,6 +627,13 @@ type WorkspaceCatalogServiceHandler interface {
 	// default (a privilege/attack-surface bump). Projected onto the
 	// SandboxSpec at Launch.
 	SetNestedVirtualization(context.Context, *connect.Request[v1.SetNestedVirtualizationRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// SetPrivilegedFuseMounts toggles whether the workload may mount
+	// FUSE filesystems — when enabled the executor binds /dev/fuse into
+	// the container, adds the cgroup device-allow, and grants
+	// CAP_SYS_ADMIN (near-root inside the VM). Off by default (a real
+	// privilege/attack-surface bump). Projected onto the SandboxSpec at
+	// Launch.
+	SetPrivilegedFuseMounts(context.Context, *connect.Request[v1.SetPrivilegedFuseMountsRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 	// AddMount appends a Mount to the workspace. Mount.target must
 	// be absolute; the orchestrator rejects empty or relative targets
 	// and refuses a duplicate target in the existing mount set.
@@ -780,6 +809,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetNestedVirtualization")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceSetPrivilegedFuseMountsHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceSetPrivilegedFuseMountsProcedure,
+		svc.SetPrivilegedFuseMounts,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetPrivilegedFuseMounts")),
+		connect.WithHandlerOptions(opts...),
+	)
 	workspaceCatalogServiceAddMountHandler := connect.NewUnaryHandler(
 		WorkspaceCatalogServiceAddMountProcedure,
 		svc.AddMount,
@@ -886,6 +921,8 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceSetResourcesHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceSetNestedVirtualizationProcedure:
 			workspaceCatalogServiceSetNestedVirtualizationHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceSetPrivilegedFuseMountsProcedure:
+			workspaceCatalogServiceSetPrivilegedFuseMountsHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceAddMountProcedure:
 			workspaceCatalogServiceAddMountHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceAddEnvProcedure:
@@ -951,6 +988,10 @@ func (UnimplementedWorkspaceCatalogServiceHandler) SetResources(context.Context,
 
 func (UnimplementedWorkspaceCatalogServiceHandler) SetNestedVirtualization(context.Context, *connect.Request[v1.SetNestedVirtualizationRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.SetNestedVirtualization is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) SetPrivilegedFuseMounts(context.Context, *connect.Request[v1.SetPrivilegedFuseMountsRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.SetPrivilegedFuseMounts is not implemented"))
 }
 
 func (UnimplementedWorkspaceCatalogServiceHandler) AddMount(context.Context, *connect.Request[v1.AddMountRequest]) (*connect.Response[v1.WorkspaceResponse], error) {

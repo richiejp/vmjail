@@ -85,6 +85,10 @@ message SandboxSpec {
   // flag, so the grant grows its own options without polluting the
   // spec's top level.
   NestedVirtualization nested_virtualization = 11;
+  // Privileged FUSE-mount grant. Unset ⇒ disabled. See the
+  // PrivilegedFuseMounts message — the name foregrounds the danger
+  // (it hands the workload CAP_SYS_ADMIN, near-root inside the VM).
+  PrivilegedFuseMounts privileged_fuse_mounts = 12;
 }
 
 // SandboxStatus is the orchestrator's observed runtime state.
@@ -178,6 +182,27 @@ message GpuRequest {
 //   bool expose_host_cpu_features = 2;  // pass vendor CPUID through
 //   string kvm_device = 3;              // override /dev/kvm path
 message NestedVirtualization {
+  bool enable = 1;
+}
+
+// PrivilegedFuseMounts lets a workload mount FUSE filesystems from
+// inside the sandbox. The mount(2) syscall requires CAP_SYS_ADMIN and
+// our container is neither userns-wrapped nor running the setuid
+// `fusermount` helper (NoNewPrivileges would neutralise its setuid bit
+// anyway), so the only lever is a real capability: when enabled, the
+// executor binds /dev/fuse into the container, adds the 10:229 cgroup
+// device-allow, and adds CAP_SYS_ADMIN to the container's capability
+// set. CAP_SYS_ADMIN is "the new root" — it unlocks far more than FUSE
+// (arbitrary mount/umount/pivot_root, sethostname, remounting over the
+// masked /proc paths, …) — so the field name foregrounds the danger
+// rather than reading like a benign feature toggle. Off by default;
+// the VM remains the security boundary, so the blast radius of a
+// FUSE deadlock or capability misuse is the one disposable VM, not the
+// host. Do NOT enable for workloads expecting container-level
+// confinement. Config-section idiom (Nix-module: one section per
+// capability with `enable`), so future knobs attach here, e.g.:
+//   bool allow_other = 2;  // permit FUSE mounts with allow_other
+message PrivilegedFuseMounts {
   bool enable = 1;
 }
 

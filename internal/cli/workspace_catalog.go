@@ -54,6 +54,7 @@ const (
 	rmSubName        = "rm"
 	resourcesSubName = "resources"
 	nestedSubName    = "nested"
+	fuseSubName      = "privileged-fuse"
 )
 
 // workspaceClientOpts is the shared flag set every catalog
@@ -229,6 +230,7 @@ func newWorkspaceCatalogSubcommands() []*cobra.Command {
 		newWorkspaceTargetCmd(),
 		newWorkspaceResourcesCmd(),
 		newWorkspaceNestedCmd(),
+		newWorkspacePrivilegedFuseCmd(),
 		newWorkspaceMountCmd(),
 		newWorkspacePushCmd(),
 		newWorkspacePullCatalogCmd(),
@@ -440,6 +442,10 @@ func newWorkspaceResourcesCmd() *cobra.Command {
 // it can run its own (L2) VMs; `--disable` reverts to the
 // unprivileged default. Exactly one of the two flags is required so
 // the grant is never changed by accident.
+//
+// (see that function's note) — each grant keeps its own wording.
+//
+//nolint:dupl // Deliberately parallel to newWorkspacePrivilegedFuseCmd
 func newWorkspaceNestedCmd() *cobra.Command {
 	var (
 		opts    workspaceClientOpts
@@ -474,6 +480,57 @@ func newWorkspaceNestedCmd() *cobra.Command {
 		"grant nested virtualisation (bind /dev/kvm into the workload container)")
 	cmd.Flags().BoolVar(&disable, "disable", false,
 		"revoke nested virtualisation (the default)")
+	bindWorkspaceClientFlags(cmd, &opts)
+	return cmd
+}
+
+// newWorkspacePrivilegedFuseCmd toggles the workspace's privileged
+// FUSE-mount grant. `--enable` binds /dev/fuse into the workload
+// container and grants CAP_SYS_ADMIN at Launch so it can mount FUSE
+// filesystems; `--disable` reverts to the unprivileged default.
+// CAP_SYS_ADMIN is near-root inside the VM, so the grant is named for
+// its danger and exactly one of the two flags is required — it is
+// never changed by accident.
+//
+// are --enable/--disable grant toggles differing only by RPC and copy;
+// merging them behind a generic helper would obscure the per-grant
+// wording the danger-naming relies on.
+//
+//nolint:dupl // Deliberately parallel to newWorkspaceNestedCmd: both
+func newWorkspacePrivilegedFuseCmd() *cobra.Command {
+	var (
+		opts    workspaceClientOpts
+		enable  bool
+		disable bool
+	)
+	cmd := &cobra.Command{
+		Use:           fuseSubName,
+		Short:         "Enable/disable privileged FUSE mounts (--enable grants CAP_SYS_ADMIN + /dev/fuse)",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if enable == disable {
+				return fmt.Errorf("specify exactly one of --enable / --disable")
+			}
+			return runCatalogCmd(cmd, opts, fuseSubName,
+				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
+					resp, err := c.SetPrivilegedFuseMounts(ctx, connect.NewRequest(
+						&workspacev1.SetPrivilegedFuseMountsRequest{
+							Handle: h,
+							Enable: enable,
+						},
+					))
+					if err != nil {
+						return err
+					}
+					return writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace())
+				})
+		},
+	}
+	cmd.Flags().BoolVar(&enable, "enable", false,
+		"grant privileged FUSE mounts (bind /dev/fuse + CAP_SYS_ADMIN into the workload container)")
+	cmd.Flags().BoolVar(&disable, "disable", false,
+		"revoke privileged FUSE mounts (the default)")
 	bindWorkspaceClientFlags(cmd, &opts)
 	return cmd
 }
@@ -1011,6 +1068,9 @@ func writeWorkspaceSummary(w io.Writer, ws *workspacev1.Workspace) error {
 	)
 	if spec.GetNestedVirtualization().GetEnable() {
 		rows = append(rows, [2]string{"Nested-virt", "enabled"})
+	}
+	if spec.GetPrivilegedFuseMounts().GetEnable() {
+		rows = append(rows, [2]string{"Privileged-FUSE", "enabled (CAP_SYS_ADMIN)"})
 	}
 	for _, row := range rows {
 		if _, err := fmt.Fprintf(tw, "%s:\t%s\n", row[0], row[1]); err != nil {

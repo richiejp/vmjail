@@ -76,6 +76,11 @@ type BootOptions struct {
 	// set from SandboxSpec.nested_virtualization.enable by the
 	// executor. See imagestore.BundleOptions.Nested.
 	Nested bool
+	// PrivilegedFuseMounts grants the workload container FUSE-mount
+	// access (/dev/fuse bind + cgroup device-allow + CAP_SYS_ADMIN).
+	// Off by default; set from SandboxSpec.privileged_fuse_mounts.enable
+	// by the executor. See imagestore.BundleOptions.PrivilegedFuseMounts.
+	PrivilegedFuseMounts bool
 }
 
 // Store is the imagestore surface BuildBundleConfig needs. Kept as
@@ -133,7 +138,6 @@ func BuildBundleConfig(
 	if err := validateMounts(opts.Mounts); err != nil {
 		return sandbox.Config{}, unlock, err
 	}
-
 	store, err := deps.OpenStore()
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: open store: %w", err)
@@ -143,9 +147,10 @@ func BuildBundleConfig(
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: pull %s: %w", ref, err)
 	}
 	bundle, err := store.Bundle(ctx, img.Digest, imagestore.BundleOptions{
-		ExtraMounts: bundleMountsFromSpec(opts.Mounts),
-		Env:         opts.Env,
-		Nested:      opts.Nested,
+		ExtraMounts:          bundleMountsFromSpec(opts.Mounts),
+		Env:                  opts.Env,
+		Nested:               opts.Nested,
+		PrivilegedFuseMounts: opts.PrivilegedFuseMounts,
 	})
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: bundle %s: %w", img.Digest, err)

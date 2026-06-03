@@ -43,6 +43,20 @@ func (m *Mount) Serve(_ context.Context, mountpoint string) (*Server, error) {
 		MountOptions: fuse.MountOptions{
 			Name:       "daftfuse",
 			AllowOther: false,
+			// DirectMount makes go-fuse issue the mount(2) syscall
+			// itself instead of shelling out to the setuid
+			// `fusermount` helper. Non-strict, so it still falls
+			// back to fusermount if the direct syscall fails. This
+			// is what lets a daft sandbox workload mount FUSE with
+			// nothing but CAP_SYS_ADMIN + /dev/fuse (the
+			// PrivilegedFuseMounts grant) — the hardened image
+			// ships no fusermount binary, and NoNewPrivileges would
+			// neutralise its setuid bit anyway. Host-side daftfuse
+			// (sandboxd's lazy mount) keeps working: it runs with
+			// CAP_SYS_ADMIN in sandboxd's userns, so the direct
+			// syscall succeeds there too, and the fusermount
+			// fallback covers any environment that lacks it.
+			DirectMount: true,
 		},
 	}
 	srv, err := gofuse.Mount(mountpoint, root, opts)

@@ -736,6 +736,10 @@ func TestSetResourcesRoundTripsAndClears(t *testing.T) {
 // TestSetNestedVirtualizationRoundTripsAndClears proves the grant
 // toggles on then back off through the wire spec — the field the
 // Launch projection reads onto SandboxSpec.nested_virtualization.
+//
+// round-trip test; each pins one grant's enable→disable wire behaviour.
+//
+//nolint:dupl // Deliberately parallel to the privileged-fuse
 func TestSetNestedVirtualizationRoundTripsAndClears(t *testing.T) {
 	rig := newWorkspaceCatalogRig(t)
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
@@ -761,6 +765,41 @@ func TestSetNestedVirtualizationRoundTripsAndClears(t *testing.T) {
 	}
 	if cleared.Msg.GetWorkspace().GetSpec().GetNestedVirtualization().GetEnable() {
 		t.Error("after disable, spec nested_virtualization.enable = true, want false")
+	}
+}
+
+// TestSetPrivilegedFuseMountsRoundTripsAndClears proves the FUSE
+// grant toggles on then back off through the wire spec — the field the
+// Launch projection reads onto SandboxSpec.privileged_fuse_mounts.
+//
+// test; each pins one grant's enable→disable wire behaviour.
+//
+//nolint:dupl // Deliberately parallel to the nested-virt round-trip
+func TestSetPrivilegedFuseMountsRoundTripsAndClears(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "pf"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
+
+	set, err := rig.client.SetPrivilegedFuseMounts(t.Context(), connect.NewRequest(
+		&workspacev1.SetPrivilegedFuseMountsRequest{Handle: handle, Enable: true},
+	))
+	if err != nil {
+		t.Fatalf("SetPrivilegedFuseMounts: %v", err)
+	}
+	if !set.Msg.GetWorkspace().GetSpec().GetPrivilegedFuseMounts().GetEnable() {
+		t.Error("after enable, spec privileged_fuse_mounts.enable = false, want true")
+	}
+
+	cleared, err := rig.client.SetPrivilegedFuseMounts(t.Context(), connect.NewRequest(
+		&workspacev1.SetPrivilegedFuseMountsRequest{Handle: handle, Enable: false},
+	))
+	if err != nil {
+		t.Fatalf("SetPrivilegedFuseMounts clear: %v", err)
+	}
+	if cleared.Msg.GetWorkspace().GetSpec().GetPrivilegedFuseMounts().GetEnable() {
+		t.Error("after disable, spec privileged_fuse_mounts.enable = true, want false")
 	}
 }
 

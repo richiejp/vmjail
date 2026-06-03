@@ -194,6 +194,11 @@ type Spec struct {
 	// (/dev/kvm bind + cgroup device-allow). False ⇒ disabled.
 	// Projected onto SandboxSpec.nested_virtualization at Launch.
 	NestedVirt bool
+	// PrivilegedFuseMounts grants the workload FUSE-mount access
+	// (/dev/fuse bind + cgroup device-allow + CAP_SYS_ADMIN). False ⇒
+	// disabled. Projected onto SandboxSpec.privileged_fuse_mounts at
+	// Launch.
+	PrivilegedFuseMounts bool
 }
 
 // Status is the controller-observed workspace state.

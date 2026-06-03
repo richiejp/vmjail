@@ -434,6 +434,10 @@ type SandboxSpec struct {
 	// flag, so the grant grows its own options without polluting the
 	// spec's top level.
 	NestedVirtualization *NestedVirtualization `protobuf:"bytes,11,opt,name=nested_virtualization,json=nestedVirtualization,proto3" json:"nested_virtualization,omitempty"`
+	// Privileged FUSE-mount grant. Unset ⇒ disabled. See the
+	// PrivilegedFuseMounts message — the name foregrounds the danger
+	// (it hands the workload CAP_SYS_ADMIN, near-root inside the VM).
+	PrivilegedFuseMounts *PrivilegedFuseMounts `protobuf:"bytes,12,opt,name=privileged_fuse_mounts,json=privilegedFuseMounts,proto3" json:"privileged_fuse_mounts,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
 }
@@ -541,6 +545,13 @@ func (x *SandboxSpec) GetCpuCores() uint32 {
 func (x *SandboxSpec) GetNestedVirtualization() *NestedVirtualization {
 	if x != nil {
 		return x.NestedVirtualization
+	}
+	return nil
+}
+
+func (x *SandboxSpec) GetPrivilegedFuseMounts() *PrivilegedFuseMounts {
+	if x != nil {
+		return x.PrivilegedFuseMounts
 	}
 	return nil
 }
@@ -931,6 +942,68 @@ func (x *NestedVirtualization) GetEnable() bool {
 	return false
 }
 
+// PrivilegedFuseMounts lets a workload mount FUSE filesystems from
+// inside the sandbox. The mount(2) syscall requires CAP_SYS_ADMIN and
+// our container is neither userns-wrapped nor running the setuid
+// `fusermount` helper (NoNewPrivileges would neutralise its setuid bit
+// anyway), so the only lever is a real capability: when enabled, the
+// executor binds /dev/fuse into the container, adds the 10:229 cgroup
+// device-allow, and adds CAP_SYS_ADMIN to the container's capability
+// set. CAP_SYS_ADMIN is "the new root" — it unlocks far more than FUSE
+// (arbitrary mount/umount/pivot_root, sethostname, remounting over the
+// masked /proc paths, …) — so the field name foregrounds the danger
+// rather than reading like a benign feature toggle. Off by default;
+// the VM remains the security boundary, so the blast radius of a
+// FUSE deadlock or capability misuse is the one disposable VM, not the
+// host. Do NOT enable for workloads expecting container-level
+// confinement. Config-section idiom (Nix-module: one section per
+// capability with `enable`), so future knobs attach here, e.g.:
+//
+//	bool allow_other = 2;  // permit FUSE mounts with allow_other
+type PrivilegedFuseMounts struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enable        bool                   `protobuf:"varint,1,opt,name=enable,proto3" json:"enable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PrivilegedFuseMounts) Reset() {
+	*x = PrivilegedFuseMounts{}
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PrivilegedFuseMounts) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PrivilegedFuseMounts) ProtoMessage() {}
+
+func (x *PrivilegedFuseMounts) ProtoReflect() protoreflect.Message {
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PrivilegedFuseMounts.ProtoReflect.Descriptor instead.
+func (*PrivilegedFuseMounts) Descriptor() ([]byte, []int) {
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *PrivilegedFuseMounts) GetEnable() bool {
+	if x != nil {
+		return x.Enable
+	}
+	return false
+}
+
 // WorkspaceRef points at a Workspace by its canonical UUID.
 // Denormalised name allowed for display; uuid is authoritative.
 type WorkspaceRef struct {
@@ -943,7 +1016,7 @@ type WorkspaceRef struct {
 
 func (x *WorkspaceRef) Reset() {
 	*x = WorkspaceRef{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[9]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -955,7 +1028,7 @@ func (x *WorkspaceRef) String() string {
 func (*WorkspaceRef) ProtoMessage() {}
 
 func (x *WorkspaceRef) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[9]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -968,7 +1041,7 @@ func (x *WorkspaceRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceRef.ProtoReflect.Descriptor instead.
 func (*WorkspaceRef) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{9}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *WorkspaceRef) GetUuid() string {
@@ -995,7 +1068,7 @@ type NodeRef struct {
 
 func (x *NodeRef) Reset() {
 	*x = NodeRef{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[10]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1007,7 +1080,7 @@ func (x *NodeRef) String() string {
 func (*NodeRef) ProtoMessage() {}
 
 func (x *NodeRef) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[10]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1020,7 +1093,7 @@ func (x *NodeRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeRef.ProtoReflect.Descriptor instead.
 func (*NodeRef) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{10}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *NodeRef) GetFingerprint() string {
@@ -1042,7 +1115,7 @@ type SandboxRef struct {
 
 func (x *SandboxRef) Reset() {
 	*x = SandboxRef{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1054,7 +1127,7 @@ func (x *SandboxRef) String() string {
 func (*SandboxRef) ProtoMessage() {}
 
 func (x *SandboxRef) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1067,7 +1140,7 @@ func (x *SandboxRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxRef.ProtoReflect.Descriptor instead.
 func (*SandboxRef) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{11}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *SandboxRef) GetUid() string {
@@ -1109,7 +1182,7 @@ type Condition struct {
 
 func (x *Condition) Reset() {
 	*x = Condition{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1121,7 +1194,7 @@ func (x *Condition) String() string {
 func (*Condition) ProtoMessage() {}
 
 func (x *Condition) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1134,7 +1207,7 @@ func (x *Condition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Condition.ProtoReflect.Descriptor instead.
 func (*Condition) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{12}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *Condition) GetType() string {
@@ -1186,7 +1259,7 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\tworkspace\x18\x02 \x01(\v2\x1d.daft.sandbox.v1.WorkspaceRefR\tworkspace\x129\n" +
 	"\n" +
 	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12I\n" +
-	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xa2\x04\n" +
+	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xff\x04\n" +
 	"\vSandboxSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12.\n" +
 	"\x06mounts\x18\x02 \x03(\v2\x16.daft.sandbox.v1.MountR\x06mounts\x12)\n" +
@@ -1200,7 +1273,8 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\fmemory_bytes\x18\t \x01(\x04R\vmemoryBytes\x12\x1b\n" +
 	"\tcpu_cores\x18\n" +
 	" \x01(\rR\bcpuCores\x12Z\n" +
-	"\x15nested_virtualization\x18\v \x01(\v2%.daft.sandbox.v1.NestedVirtualizationR\x14nestedVirtualization\"\xcc\x01\n" +
+	"\x15nested_virtualization\x18\v \x01(\v2%.daft.sandbox.v1.NestedVirtualizationR\x14nestedVirtualization\x12[\n" +
+	"\x16privileged_fuse_mounts\x18\f \x01(\v2%.daft.sandbox.v1.PrivilegedFuseMountsR\x14privilegedFuseMounts\"\xcc\x01\n" +
 	"\rSandboxStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12\x1b\n" +
 	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12:\n" +
@@ -1223,6 +1297,8 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\x05count\x18\x01 \x01(\rR\x05count\x12$\n" +
 	"\x0emin_vram_bytes\x18\x02 \x01(\x04R\fminVramBytes\".\n" +
 	"\x14NestedVirtualization\x12\x16\n" +
+	"\x06enable\x18\x01 \x01(\bR\x06enable\".\n" +
+	"\x14PrivilegedFuseMounts\x12\x16\n" +
 	"\x06enable\x18\x01 \x01(\bR\x06enable\"6\n" +
 	"\fWorkspaceRef\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x12\n" +
@@ -1272,7 +1348,7 @@ func file_sandbox_v1_sandbox_proto_rawDescGZIP() []byte {
 }
 
 var file_sandbox_v1_sandbox_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_sandbox_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_sandbox_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_sandbox_v1_sandbox_proto_goTypes = []any{
 	(Protocol)(0),                 // 0: daft.sandbox.v1.Protocol
 	(Isolation)(0),                // 1: daft.sandbox.v1.Isolation
@@ -1287,37 +1363,39 @@ var file_sandbox_v1_sandbox_proto_goTypes = []any{
 	(*PortMapping)(nil),           // 10: daft.sandbox.v1.PortMapping
 	(*GpuRequest)(nil),            // 11: daft.sandbox.v1.GpuRequest
 	(*NestedVirtualization)(nil),  // 12: daft.sandbox.v1.NestedVirtualization
-	(*WorkspaceRef)(nil),          // 13: daft.sandbox.v1.WorkspaceRef
-	(*NodeRef)(nil),               // 14: daft.sandbox.v1.NodeRef
-	(*SandboxRef)(nil),            // 15: daft.sandbox.v1.SandboxRef
-	(*Condition)(nil),             // 16: daft.sandbox.v1.Condition
-	(*timestamppb.Timestamp)(nil), // 17: google.protobuf.Timestamp
+	(*PrivilegedFuseMounts)(nil),  // 13: daft.sandbox.v1.PrivilegedFuseMounts
+	(*WorkspaceRef)(nil),          // 14: daft.sandbox.v1.WorkspaceRef
+	(*NodeRef)(nil),               // 15: daft.sandbox.v1.NodeRef
+	(*SandboxRef)(nil),            // 16: daft.sandbox.v1.SandboxRef
+	(*Condition)(nil),             // 17: daft.sandbox.v1.Condition
+	(*timestamppb.Timestamp)(nil), // 18: google.protobuf.Timestamp
 }
 var file_sandbox_v1_sandbox_proto_depIdxs = []int32{
 	5,  // 0: daft.sandbox.v1.Sandbox.metadata:type_name -> daft.sandbox.v1.SandboxMetadata
 	6,  // 1: daft.sandbox.v1.Sandbox.spec:type_name -> daft.sandbox.v1.SandboxSpec
 	7,  // 2: daft.sandbox.v1.Sandbox.status:type_name -> daft.sandbox.v1.SandboxStatus
-	13, // 3: daft.sandbox.v1.SandboxMetadata.workspace:type_name -> daft.sandbox.v1.WorkspaceRef
-	17, // 4: daft.sandbox.v1.SandboxMetadata.created_at:type_name -> google.protobuf.Timestamp
-	17, // 5: daft.sandbox.v1.SandboxMetadata.deletion_timestamp:type_name -> google.protobuf.Timestamp
+	14, // 3: daft.sandbox.v1.SandboxMetadata.workspace:type_name -> daft.sandbox.v1.WorkspaceRef
+	18, // 4: daft.sandbox.v1.SandboxMetadata.created_at:type_name -> google.protobuf.Timestamp
+	18, // 5: daft.sandbox.v1.SandboxMetadata.deletion_timestamp:type_name -> google.protobuf.Timestamp
 	8,  // 6: daft.sandbox.v1.SandboxSpec.mounts:type_name -> daft.sandbox.v1.Mount
 	9,  // 7: daft.sandbox.v1.SandboxSpec.env:type_name -> daft.sandbox.v1.EnvVar
 	10, // 8: daft.sandbox.v1.SandboxSpec.ports:type_name -> daft.sandbox.v1.PortMapping
 	11, // 9: daft.sandbox.v1.SandboxSpec.gpu_request:type_name -> daft.sandbox.v1.GpuRequest
 	1,  // 10: daft.sandbox.v1.SandboxSpec.isolation:type_name -> daft.sandbox.v1.Isolation
-	14, // 11: daft.sandbox.v1.SandboxSpec.node:type_name -> daft.sandbox.v1.NodeRef
+	15, // 11: daft.sandbox.v1.SandboxSpec.node:type_name -> daft.sandbox.v1.NodeRef
 	12, // 12: daft.sandbox.v1.SandboxSpec.nested_virtualization:type_name -> daft.sandbox.v1.NestedVirtualization
-	16, // 13: daft.sandbox.v1.SandboxStatus.conditions:type_name -> daft.sandbox.v1.Condition
-	17, // 14: daft.sandbox.v1.SandboxStatus.last_transition_time:type_name -> google.protobuf.Timestamp
-	0,  // 15: daft.sandbox.v1.PortMapping.protocol:type_name -> daft.sandbox.v1.Protocol
-	14, // 16: daft.sandbox.v1.SandboxRef.node:type_name -> daft.sandbox.v1.NodeRef
-	3,  // 17: daft.sandbox.v1.Condition.status:type_name -> daft.sandbox.v1.ConditionStatus
-	17, // 18: daft.sandbox.v1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	13, // 13: daft.sandbox.v1.SandboxSpec.privileged_fuse_mounts:type_name -> daft.sandbox.v1.PrivilegedFuseMounts
+	17, // 14: daft.sandbox.v1.SandboxStatus.conditions:type_name -> daft.sandbox.v1.Condition
+	18, // 15: daft.sandbox.v1.SandboxStatus.last_transition_time:type_name -> google.protobuf.Timestamp
+	0,  // 16: daft.sandbox.v1.PortMapping.protocol:type_name -> daft.sandbox.v1.Protocol
+	15, // 17: daft.sandbox.v1.SandboxRef.node:type_name -> daft.sandbox.v1.NodeRef
+	3,  // 18: daft.sandbox.v1.Condition.status:type_name -> daft.sandbox.v1.ConditionStatus
+	18, // 19: daft.sandbox.v1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_sandbox_v1_sandbox_proto_init() }
@@ -1331,7 +1409,7 @@ func file_sandbox_v1_sandbox_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sandbox_v1_sandbox_proto_rawDesc), len(file_sandbox_v1_sandbox_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   13,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -1551,32 +1551,78 @@ the user-host or in CI today.
        container withholds** (the old `nix develop` test would hit
        this identically — it just never got past substitution to
        reach `go test`):
-         - `internal/daftfuse` (10): `/dev/fuse` to mount a FUSE fs.
+         - `internal/daftfuse` (10): `/dev/fuse` + CAP_SYS_ADMIN to
+           mount a FUSE fs. **Addressed (2026-06-03)** — see the
+           `PrivilegedFuseMounts` grant below.
+         - `internal/sandboxdcli` (1): lazy-attach happy path — same
+           FUSE mount; **addressed** by the same grant (the
+           `fusermount`-binary plan is dropped: go-fuse now mounts via
+           `DirectMount`, the mount(2) syscall, so no helper is
+           needed).
          - `internal/userns` (6): `newuidmap`/`newgidmap` setuid
-           helpers + user-namespace creation.
+           helpers + user-namespace creation. Still open.
          - `internal/agent` (1): `agent.Run` does real init (mount
            shares, `/dev/vsock`, `/dev/net/tun`, cgroup, tracefs,
            exec `/bin/crun`); nested in a daft sandbox it picks up
            the ambient share/bundle env and its error lines pollute
            the banner the test asserts exactly — needs env isolation,
-           not just a grant.
-         - `internal/observability` (1): read `/proc/<pid>/io`.
-         - `internal/sandboxdcli` (1): lazy-attach happy path.
+           not just a grant. Still open.
+         - `internal/observability` (1): read `/proc/<pid>/io` —
+           guest-kernel `CONFIG_TASK_IO_ACCOUNTING`, not a grant.
+           Still open.
        The **coverage gate compounds it**: `t.Skip`-ing these would
        drop coverage below `coverage.txt`, so `cover-check` fails —
        the in-sandbox check must run the *whole* suite, not tolerate
        skips. So slice 1 is **not green end-to-end yet**; the test
-       stays gated and is red-when-enabled pending the capability
-       work. **Next slices (chosen path): grant the capabilities as
+       stays gated and is red-when-enabled pending the remaining
+       capability work. **Chosen path: grant the capabilities as
        per-workspace config sections** (the `NestedVirtualization`
        idiom — [[feedback-config-section-idiom]]), grant-by-grant so
-       each hardening relaxation is a deliberate, auditable choice:
-       a `DevFuse` section (/dev/fuse) for daftfuse, a userns/idmap
-       grant for userns, env-isolation for the agent test, `/proc`
-       access for observability. A separate, secondary perf
-       follow-up bakes a **warm GOCACHE** so the cold compile (which
-       overran the 6 min cap) stops dominating and the test can
-       eventually leave the gate.
+       each hardening relaxation is a deliberate, auditable choice.
+
+       **`PrivilegedFuseMounts` grant landed (2026-06-03).** The first
+       of those grants: a `PrivilegedFuseMounts` config section (proto
+       → spec → `BootOptions` → `BundleOptions` →
+       `applyPrivilegedFuseMounts` in runtimespec.go → `daft workspace
+       privileged-fuse --enable/--disable`) that binds `/dev/fuse`,
+       adds the 10:229 cgroup device-allow, and grants **CAP_SYS_ADMIN**
+       to the container. The name foregrounds the danger: CAP_SYS_ADMIN
+       is "the new root" (arbitrary mount/umount/pivot_root,
+       remounting over the masked `/proc` paths, …), so it is **off by
+       default** and only the VM-is-the-boundary model makes it
+       acceptable — the blast radius of a FUSE deadlock or cap misuse
+       is the one disposable VM, not the host. Paired with flipping
+       go-fuse's `DirectMount` in `internal/daftfuse` so the mount is
+       the direct mount(2) syscall (works with nothing but
+       CAP_SYS_ADMIN + `/dev/fuse`; the hardened image ships no
+       `fusermount`, and `NoNewPrivileges` would neutralise its setuid
+       bit anyway — fusermount fallback kept for host-side daftfuse).
+       This clears daftfuse + sandboxdcli; userns / agent /
+       observability remain. The gated self-build test will set this
+       section on its workspace once those three also land. A separate,
+       secondary perf follow-up bakes a **warm GOCACHE** so the cold
+       compile (which overran the 6 min cap) stops dominating and the
+       test can eventually leave the gate.
+
+       **Known debt — daftfuse is a host kernel FUSE mount under
+       virtiofsd (2026-06-03).** Lazy-attach mounts `daftfuse` (a
+       real `/dev/fuse` kernel mount) at a host tmpdir and has
+       virtiofsd serve *that* to the guest, so a guest read traverses
+       guest virtiofs → virtiofsd → host kernel FUSE → GetChunk RPC.
+       FUSE is deadlock-prone (memory-pressure reclaim can wait on the
+       FUSE daemon, which needs memory to service the read), and this
+       one runs on the **host** — not disposable. Read-only/immutable
+       content mitigates the worst case (no dirty-page writeback), so
+       it is not urgent, but the clean fix is to **fork virtiofsd**
+       (rust-vmm, already a submodule) and fold the chunk-fetch into
+       the device backend: virtiofsd is a pure userspace vhost-user
+       device speaking the FUSE *protocol*, with no host kernel FUSE
+       mount, so doing the fetch there deletes the whole host-FUSE
+       deadlock class and a hop/copy per chunk. The same fork subsumes
+       the D7-option-4 "FUSE uid translator in front of virtiofsd"
+       idea — both host-FUSE uses collapse into one device. Cost:
+       maintaining a Rust fork + reimplementing the manifest/chunk/RPC
+       logic (currently clean Go) in the device.
 
        **Accidental-clobber surface (2026-06-03).** "The container is
        packaging, not isolation — the VM is the security boundary," so

@@ -149,8 +149,12 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 	// No nested OCI userns: the container shares sandboxd's userns
 	// (D7 slice 1). See PLAN.md "D7 — rootless storage translation".
 	linux := defaultRuntimeLinuxConfig()
+	caps := emptyCapabilities()
 	if opts.Nested {
 		mounts, linux = applyNestedVirt(mounts, linux)
+	}
+	if opts.PrivilegedFuseMounts {
+		mounts, linux, caps = applyPrivilegedFuseMounts(mounts, linux, caps)
 	}
 	return runtimeSpec{
 		OCIVersion: "1.0.2",
@@ -159,7 +163,7 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 			Args:            args,
 			Env:             mergeEnv(imgCfg.Env, opts.Env),
 			Cwd:             firstNonEmpty(opts.Cwd, imgCfg.WorkingDir, "/"),
-			Capabilities:    emptyCapabilities(),
+			Capabilities:    caps,
 			Rlimits:         []any{},
 			NoNewPrivileges: true,
 		},
@@ -197,6 +201,40 @@ func applyNestedVirt(mounts []runtimeMount, linux runtimeLinuxConfig) ([]runtime
 	linux.Resources.Devices = append(linux.Resources.Devices,
 		runtimeDeviceCgroup{Allow: true, Type: "c", Major: int64Ptr(10), Minor: int64Ptr(232), Access: "rwm"})
 	return mounts, linux
+}
+
+// applyPrivilegedFuseMounts grants the container the ability to mount
+// FUSE filesystems: it binds the VM's /dev/fuse into the container,
+// adds the 10:229 cgroup device-allow (so crun's default eBPF device
+// filter permits the open), and adds CAP_SYS_ADMIN to the capability
+// set (the mount(2) syscall needs it — the container is neither
+// userns-wrapped nor running the setuid fusermount helper, so a real
+// capability is the only lever). All three must travel together: the
+// device-allow without the bind has nothing to open, the bind without
+// the cap EPERMs on mount. CAP_SYS_ADMIN is added to bounding,
+// effective and permitted; the uid-0 container keeps it across execve
+// via the kernel's root rule (it is already in permitted, so
+// NoNewPrivileges does not strip it), reaching the deeply-exec'd test
+// binaries `make check` spawns. Returns fresh slices so the
+// unconditional defaults stay unprivileged for every other workload.
+// See PLAN.md "accidental-clobber surface" / the PrivilegedFuseMounts
+// proto for why this is a deliberate, danger-named opt-in.
+func applyPrivilegedFuseMounts(
+	mounts []runtimeMount, linux runtimeLinuxConfig, caps runtimeCapabilities,
+) ([]runtimeMount, runtimeLinuxConfig, runtimeCapabilities) {
+	mounts = append(mounts, runtimeMount{
+		Destination: devFusePath, Type: mountTypeBind, Source: devFusePath,
+		Options: []string{mountOptBind, "rw"},
+	})
+	if linux.Resources == nil {
+		linux.Resources = &runtimeResources{}
+	}
+	linux.Resources.Devices = append(linux.Resources.Devices,
+		runtimeDeviceCgroup{Allow: true, Type: "c", Major: int64Ptr(10), Minor: int64Ptr(229), Access: "rwm"})
+	caps.Bounding = append(caps.Bounding, capSysAdmin)
+	caps.Effective = append(caps.Effective, capSysAdmin)
+	caps.Permitted = append(caps.Permitted, capSysAdmin)
+	return mounts, linux, caps
 }
 
 // mergeArgs returns override unchanged when non-nil, otherwise
@@ -373,6 +411,12 @@ const (
 	// devKVMPath is the host hypervisor device bound into a
 	// nested-virt workload container (see applyNestedVirt).
 	devKVMPath = "/dev/kvm"
+	// devFusePath is the FUSE control device bound into a container
+	// granted PrivilegedFuseMounts (see applyPrivilegedFuseMounts).
+	devFusePath = "/dev/fuse"
+	// capSysAdmin is the capability the FUSE mount(2) syscall needs;
+	// it is "the new root" — see the PrivilegedFuseMounts proto doc.
+	capSysAdmin = "CAP_SYS_ADMIN"
 )
 
 // defaultRuntimeMounts mirrors contrib/hello-bundle/config.json. Kept

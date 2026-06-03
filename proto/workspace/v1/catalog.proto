@@ -96,6 +96,10 @@ message WorkspaceSpec {
   // Nested-virtualisation grant. Unset ⇒ disabled. Projected
   // directly onto SandboxSpec.nested_virtualization at Launch.
   daft.sandbox.v1.NestedVirtualization nested_virtualization = 11;
+  // Privileged FUSE-mount grant (CAP_SYS_ADMIN + /dev/fuse). Unset ⇒
+  // disabled. Projected directly onto
+  // SandboxSpec.privileged_fuse_mounts at Launch.
+  daft.sandbox.v1.PrivilegedFuseMounts privileged_fuse_mounts = 12;
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.
