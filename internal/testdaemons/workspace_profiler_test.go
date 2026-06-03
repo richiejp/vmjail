@@ -131,3 +131,33 @@ func attachWorkspaceProfiler(t *testing.T, c *testdaemons.Cluster, wsName string
 		"--", "/bin/sh", "-lc", workspaceProfilerScript,
 	)
 }
+
+// attachWorkspaceObserve streams the Tier-2 eBPF gadget summary
+// (`daft sandbox observe <ws> --follow`) into the test log as a
+// background subprocess, killed at cleanup. This is the gadget-based
+// counterpart to attachWorkspaceProfiler: where the in-container
+// /proc sampler answers "is the VM OOM/CPU-bound/blocked", the
+// gadgets answer "what is the workload *doing*" — exec-snoop shows
+// the build's process tree + failed execs, io-snoop shows whether
+// it's actually fetching bytes or wedged on a socket, sleep-snoop
+// shows poll/retry loops, and open-snoop's ENOENT tallies are
+// exactly how the /dev/ptmx bug first surfaced. The two are
+// complementary and both invisible on a passing run; per
+// [[feedback-observability]] the host-side gadget view is the
+// preferred surface and the in-guest sampler is transitional.
+//
+// Unlike the profiler this runs entirely host-side over the
+// orchestrator's ObserveSummary RPC — it does not exec into the
+// container, so it adds no in-VM load to whatever it's measuring.
+// Call it after launch so the first poll already covers the workload.
+func attachWorkspaceObserve(t *testing.T, c *testdaemons.Cluster, wsName string) {
+	t.Helper()
+	observeLog := filepath.Join(t.TempDir(), "observe-"+wsName+".log")
+	startDaftSubprocess(
+		t, observeLog,
+		c.DaftBin, "--config-dir", c.ClientConfigDir,
+		"sandbox", "observe", wsName,
+		"--follow", "--interval", "5s",
+		"--orchestrator", c.OrchestratorURL,
+	)
+}

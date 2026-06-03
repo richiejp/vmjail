@@ -179,13 +179,17 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 		daftSelfBuildInnerTimeout, daftSelfBuildSentinel,
 	)
 
-	// Profiler attaches before the build exec so its first sample
-	// covers the lint window. With the previous order — build first,
-	// profiler after — `daft workspace exec` spin-up for the profiler
-	// delayed the first sample by ~10 s, and failures inside that
-	// window (e.g. the GOCACHE-cold typecheck race) left no
-	// resource-usage trace at all.
+	// Two debugging aids attach before the build exec so they cover
+	// the whole run from the first sample. The in-container /proc
+	// profiler answers "is the VM OOM/CPU-bound/blocked"; the Tier-2
+	// eBPF gadget stream (sandbox observe) answers "what is the build
+	// actually doing" — process tree, fetch bytes, poll loops, ENOENT.
+	// Both are invisible on a pass and right there in the log on a
+	// stall. Per [[feedback-observability]] the gadget view is the
+	// preferred surface; the /proc sampler stays as a complementary
+	// resource view while it's still useful.
 	attachWorkspaceProfiler(t, c, wsName)
+	attachWorkspaceObserve(t, c, wsName)
 	buildProc := startDaftSubprocess(
 		t, buildLog,
 		c.DaftBin, "--config-dir", c.ClientConfigDir,

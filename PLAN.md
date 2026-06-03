@@ -1527,6 +1527,30 @@ the user-host or in CI today.
        leaning on D6c.3 slice 3's host-mounted store; both solve
        the same substitution cost.
 
+       **Gadget observe wired as the debugging surface
+       (2026-06-03).** The self-build test now attaches
+       `attachWorkspaceObserve` (host-side `daft sandbox observe
+       <ws> --follow`, streamed into the test log) alongside the
+       in-container `/proc` profiler — per [[feedback-observability]]
+       the Tier-2 eBPF gadget view is the preferred surface and the
+       in-guest sampler is the complementary, transitional one. A
+       gated run confirmed the gadgets answer the stall question
+       directly: a cold run (no warm `/nix/store`) reached the 4m30s
+       cap mid-`make check`, and the final gadget snapshot showed it
+       was **substitution-bound, not wedged** — io-snoop: 677 MiB
+       read with the top readers `socket:[…]` (the cache.nixos.org
+       download of the clang/llvm/bpftools/libbpf closure — the
+       dev-shell now carries the eBPF gadget-gen toolchain) plus
+       go-module fetches; exec-snoop: 1796 execs of the
+       check-submodule-revs.sh shell pipeline + go/compile/asm;
+       sleep-snoop: go/golangci-lint/gofumpt already running. This
+       is direct empirical evidence that **closure delivery is the
+       blocker** (the cold substitution front-loads ~4 min), which
+       is the case for D6c.3 slice 3 (host-mounted `/nix/store`)
+       over the live-substitute path. (exec-snoop also surfaced 42
+       failed execs, 40× `sh`, inside the container's `make check` —
+       noted for a later look, not chased here.)
+
        **Bug surfaced by the first run (2026-05-28, fixed
        same day):** the in-VM nix client mis-handled
        cache.nixos.org's 404 for a not-cached narinfo, parsing
