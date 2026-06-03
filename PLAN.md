@@ -1574,18 +1574,26 @@ the user-host or in CI today.
            the ambient share/bundle env and its error lines pollute
            the banner the test asserts exactly — needs env isolation,
            not just a grant. Still open.
-         - `internal/observability` (1): read `/proc/<pid>/io` —
-           guest-kernel `CONFIG_TASK_IO_ACCOUNTING`, not a grant.
-           Still open.
+         - `internal/observability` (1): the always-on Tier-1 sampler
+           reads `/proc/<pid>/io`, which only exists with the
+           `TASK_IO_ACCOUNTING → TASK_XACCT → TASKSTATS` kernel chain —
+           a guest-kernel config, not a grant. **Addressed
+           (2026-06-03)** — added the chain to `daft.config`
+           (kconfig-verify enforces it).
        The **coverage gate compounds it**: `t.Skip`-ing these would
        drop coverage below `coverage.txt`, so `cover-check` fails —
        the in-sandbox check must run the *whole* suite, not tolerate
        skips. So slice 1 is **not green end-to-end yet**; the test
-       stays gated and is red-when-enabled pending the remaining
-       capability work. **Chosen path: grant the capabilities as
-       per-workspace config sections** (the `NestedVirtualization`
-       idiom — [[feedback-config-section-idiom]]), grant-by-grant so
-       each hardening relaxation is a deliberate, auditable choice.
+       stays gated and is red-when-enabled pending the last item
+       (agent). **What the breakdown actually turned out to be** (the
+       initial "grant the capabilities as config sections" framing was
+       only ¼ right): one genuine capability grant (FUSE, via the
+       `NestedVirtualization` config-section idiom —
+       [[feedback-config-section-idiom]]), two guest-kernel config
+       one-liners (BINFMT_SCRIPT for userns, the IO-accounting chain
+       for observability), and one test env-isolation fix (agent) that
+       is neither a grant nor a kernel knob. So most of the work was
+       *not* relaxing the sandbox.
 
        **`PrivilegedFuseMounts` grant landed (2026-06-03).** The first
        of those grants: a `PrivilegedFuseMounts` config section (proto
