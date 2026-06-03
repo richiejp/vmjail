@@ -488,6 +488,67 @@ func TestBuildRuntimeConfigOmitsUserNamespace(t *testing.T) {
 	}
 }
 
+// TestDefaultRuntimeSeccompBlocksVsock pins the accidental-clobber
+// guard: the default linux config carries a seccomp filter that allows
+// everything except socket(AF_VSOCK), which ERRNOs so a workload can't
+// open its own host vsock channel. The filter is unconditional (every
+// workload gets it), unlike the opt-in KVM device-allow.
+func TestDefaultRuntimeSeccompBlocksVsock(t *testing.T) {
+	sc := defaultRuntimeLinuxConfig().Seccomp
+	if sc == nil {
+		t.Fatal("default linux config missing seccomp filter")
+	}
+	if sc.DefaultAction != "SCMP_ACT_ALLOW" {
+		t.Errorf("defaultAction = %q, want SCMP_ACT_ALLOW (allowlist-by-default)", sc.DefaultAction)
+	}
+	var rule *runtimeSeccompSyscall
+	for i := range sc.Syscalls {
+		for _, n := range sc.Syscalls[i].Names {
+			if n == "socket" {
+				rule = &sc.Syscalls[i]
+			}
+		}
+	}
+	if rule == nil {
+		t.Fatalf("no socket() rule in %+v", sc.Syscalls)
+	}
+	if rule.Action != "SCMP_ACT_ERRNO" || rule.ErrnoRet == nil || *rule.ErrnoRet != errnoEAFNOSUPPORT {
+		t.Errorf("socket rule action/errno = %q/%v, want SCMP_ACT_ERRNO/%d",
+			rule.Action, rule.ErrnoRet, errnoEAFNOSUPPORT)
+	}
+	if len(rule.Args) != 1 || rule.Args[0].Index != 0 ||
+		rule.Args[0].Value != afVsock || rule.Args[0].Op != "SCMP_CMP_EQ" {
+		t.Errorf("socket arg predicate = %+v, want index0==AF_VSOCK(%d)", rule.Args, afVsock)
+	}
+}
+
+// TestBundleEmitsSeccomp proves the filter reaches the on-disk
+// config.json for a plain workload — the guard ships by default, no
+// opt-in flag required.
+func TestBundleEmitsSeccomp(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/seccomp:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{Entrypoint: []string{testEntrypoint}})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+	bundle, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{})
+	if err != nil {
+		t.Fatalf("Bundle: %v", err)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+	for _, want := range []string{`"seccomp"`, `"SCMP_ACT_ERRNO"`, `"socket"`} {
+		if !strings.Contains(string(cfg), want) {
+			t.Errorf("config.json missing %s:\n%s", want, cfg)
+		}
+	}
+}
+
 func TestBundleAppliesOverrides(t *testing.T) {
 	host := localRegistry(t)
 	ref := host + "/test/override:v1"

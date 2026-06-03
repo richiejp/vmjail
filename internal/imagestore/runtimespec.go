@@ -64,8 +64,37 @@ type runtimeMount struct {
 type runtimeLinuxConfig struct {
 	Namespaces    []runtimeNamespace `json:"namespaces"`
 	Resources     *runtimeResources  `json:"resources,omitempty"`
+	Seccomp       *runtimeSeccomp    `json:"seccomp,omitempty"`
 	MaskedPaths   []string           `json:"maskedPaths"`
 	ReadonlyPaths []string           `json:"readonlyPaths"`
+}
+
+// runtimeSeccomp is the container's syscall filter. v0 uses it for one
+// narrow job: deny socket(AF_VSOCK) so a confused workload can't open
+// its own vsock channel to the host. DefaultAction is ALLOW — this is
+// an accidental-breakage guard, not a security sandbox (the VM is the
+// boundary). See PLAN.md "accidental-clobber surface".
+type runtimeSeccomp struct {
+	DefaultAction string                  `json:"defaultAction"`
+	Architectures []string                `json:"architectures,omitempty"`
+	Syscalls      []runtimeSeccompSyscall `json:"syscalls,omitempty"`
+}
+
+// runtimeSeccompSyscall is one rule: when any name in Names is called
+// and every Args predicate matches, take Action (returning ErrnoRet
+// for SCMP_ACT_ERRNO).
+type runtimeSeccompSyscall struct {
+	Names    []string            `json:"names"`
+	Action   string              `json:"action"`
+	ErrnoRet *uint               `json:"errnoRet,omitempty"`
+	Args     []runtimeSeccompArg `json:"args,omitempty"`
+}
+
+// runtimeSeccompArg matches one syscall argument: arg[Index] Op Value.
+type runtimeSeccompArg struct {
+	Index uint64 `json:"index"`
+	Value uint64 `json:"value"`
+	Op    string `json:"op"`
 }
 
 // runtimeResources carries the cgroup resource limits. We only populate
@@ -283,6 +312,7 @@ func defaultRuntimeLinuxConfig() runtimeLinuxConfig {
 		// Resources (the /dev/kvm 10:232 device-allow) are added only
 		// for nested-virt workspaces — see applyNestedVirt. A plain
 		// workload gets crun's default device filter with no extra holes.
+		Seccomp: defaultRuntimeSeccomp(),
 		MaskedPaths: []string{
 			"/proc/kcore", "/proc/keys", "/proc/latency_stats",
 			"/proc/timer_list", "/proc/sched_debug",
@@ -290,6 +320,44 @@ func defaultRuntimeLinuxConfig() runtimeLinuxConfig {
 		ReadonlyPaths: []string{
 			"/proc/asound", "/proc/bus", "/proc/fs",
 			"/proc/irq", "/proc/sys", "/proc/sysrq-trigger",
+		},
+	}
+}
+
+// Seccomp constants for the AF_VSOCK socket guard.
+const (
+	// afVsock is the AF_VSOCK address-family number (linux/socket.h),
+	// matched against socket(2)'s domain argument (index 0).
+	afVsock = 40
+	// errnoEAFNOSUPPORT ("address family not supported") is returned
+	// for a blocked socket(AF_VSOCK) — the same errno a kernel without
+	// vsock would give, so probe-and-fallback workloads behave normally.
+	errnoEAFNOSUPPORT = 97
+)
+
+// defaultRuntimeSeccomp returns the v0 syscall filter: allow everything
+// except socket(AF_VSOCK), which ERRNOs with EAFNOSUPPORT. The container
+// never needs vsock — egress is via tap0 in the VM netns and the agent
+// (not the container) owns the vsock control/trace channels — so blocking
+// the family stops a workload from accidentally opening its own host
+// vsock conn without touching AF_INET/AF_UNIX. Native x86_64 only,
+// matching daft's single-arch microVM target. The filter installs under
+// the container's existing NoNewPrivileges=true (no CAP_SYS_ADMIN needed
+// to load it). See PLAN.md "accidental-clobber surface".
+func defaultRuntimeSeccomp() *runtimeSeccomp {
+	errno := uint(errnoEAFNOSUPPORT)
+	return &runtimeSeccomp{
+		DefaultAction: "SCMP_ACT_ALLOW",
+		Architectures: []string{"SCMP_ARCH_X86_64"},
+		Syscalls: []runtimeSeccompSyscall{
+			{
+				Names:    []string{"socket"},
+				Action:   "SCMP_ACT_ERRNO",
+				ErrnoRet: &errno,
+				Args: []runtimeSeccompArg{
+					{Index: 0, Value: afVsock, Op: "SCMP_CMP_EQ"},
+				},
+			},
 		},
 	}
 }

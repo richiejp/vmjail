@@ -1578,6 +1578,39 @@ the user-host or in CI today.
        overran the 6 min cap) stops dominating and the test can
        eventually leave the gate.
 
+       **Accidental-clobber surface (2026-06-03).** "The container is
+       packaging, not isolation — the VM is the security boundary," so
+       the question for the workload isn't *malice* but *can it
+       accidentally break the agent it runs under*. The namespaces
+       already wall off most of it: the container's **mount namespace**
+       roots it at the bundle rootfs, so the agent binary and its
+       working files (`/run/daft/overlay`, the gadget trace logs the
+       agent writes to guest paths) are simply **not reachable by
+       path** — a stray write or `rm -rf` hits the throwaway per-bundle
+       rootfs, not agent state; the only binds in are `/workspace` +
+       the user's configured mounts, none pointing at agent files. The
+       **pid namespace** stops it signalling the agent. `/dev` is a
+       fresh 64 MB tmpfs with **no `/dev/vsock` node** (crun's default
+       device set is null/zero/full/tty/(u)random), and the agent's
+       vsock conn is an fd in another fd/pid namespace. The **one
+       residual gap**: `AF_VSOCK` is a socket *address family*, not
+       gated by a `/dev` node, so a confused workload could still
+       `socket(AF_VSOCK,…)` and open its *own* host vsock conn (it
+       can't corrupt the agent's, but could emit stray traffic to a
+       port sandboxd listens on). Closed by a minimal **seccomp
+       filter** in the OCI spec (`defaultRuntimeSeccomp`,
+       runtimespec.go) — `defaultAction` ALLOW, one rule denying
+       `socket(AF_VSOCK)` with `EAFNOSUPPORT`, leaving AF_INET/AF_UNIX
+       untouched; installs under the existing `NoNewPrivileges=true`
+       with no extra cap. (Cross-container bundle-rootfs writes are a
+       *separate*, D5 multi-container concern, not an agent one.)
+       Bearing on the capability work above: because the container is
+       **not** userns-wrapped (D7 slice 2 dropped its OCI userns — it
+       shares the guest init userns), a future `DevFuse` `CAP_SYS_ADMIN`
+       grant is the **genuine** init-userns capability, not a
+       userns-scoped facsimile — real within the guest, with only the
+       VM beneath it. The `DevFuse` design doc must say so plainly.
+
        **Gadget observe wired as the debugging surface
        (2026-06-03).** The self-build test now attaches
        `attachWorkspaceObserve` (host-side `daft sandbox observe
