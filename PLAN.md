@@ -1559,8 +1559,15 @@ the user-host or in CI today.
            `fusermount`-binary plan is dropped: go-fuse now mounts via
            `DirectMount`, the mount(2) syscall, so no helper is
            needed).
-         - `internal/userns` (6): `newuidmap`/`newgidmap` setuid
-           helpers + user-namespace creation. Still open.
+         - `internal/userns` (6): **not** a capability grant — the
+           tests write `#!/bin/sh` stubs and direct-`execve` them, and
+           the microVM kernel was built **without `CONFIG_BINFMT_SCRIPT`**
+           (tinyconfig drops it), so every script exec returns ENOEXEC
+           ("exec format error"). The real-userns smoke test already
+           skips when newuidmap is absent, so the setuid-helper story
+           was a red herring. **Addressed (2026-06-03)** — added
+           `CONFIG_BINFMT_SCRIPT=y` to `microvm-base.config`
+           (kconfig-verify now enforces it).
          - `internal/agent` (1): `agent.Run` does real init (mount
            shares, `/dev/vsock`, `/dev/net/tun`, cgroup, tracefs,
            exec `/bin/crun`); nested in a daft sandbox it picks up
