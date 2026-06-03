@@ -1568,12 +1568,25 @@ the user-host or in CI today.
            was a red herring. **Addressed (2026-06-03)** — added
            `CONFIG_BINFMT_SCRIPT=y` to `microvm-base.config`
            (kconfig-verify now enforces it).
-         - `internal/agent` (1): `agent.Run` does real init (mount
-           shares, `/dev/vsock`, `/dev/net/tun`, cgroup, tracefs,
-           exec `/bin/crun`); nested in a daft sandbox it picks up
-           the ambient share/bundle env and its error lines pollute
-           the banner the test asserts exactly — needs env isolation,
-           not just a grant. Still open.
+         - `internal/agent` (1): `agent.Run` reads `/proc/cmdline`
+           (kernel-global, un-namespaceable) and acts on it — mount
+           shares, gadgets, port-forwarders, etc. Nested in a daft
+           sandbox, `/proc/cmdline` is the *outer* VM's boot line
+           (daft.* tokens), so those fire and their output pollutes
+           the banner the test asserts by exact-match. **Addressed
+           (2026-06-03)** — not a grant or kernel knob but a test-
+           determinism fix: the banner test now drives `runWith` with
+           an injected empty cmdline + zero-valued deps, so only the
+           banner is written regardless of the ambient kernel cmdline.
+           Also added a path-injection seam (`readCmdlineFrom`) so the
+           cmdline-read error branch is tested for real, replacing a
+           tautological coverage-gate test. The deeper fix — moving
+           operational settings off the world-readable, un-namespaceable
+           kernel cmdline onto the vsock control channel — is tracked
+           separately (see the vsock control-channel work, D2b/D6c.2);
+           hardcoding fixed vsock ports as protocol constants is part
+           of that, but per-VM data (bundle, shares) still needs to be
+           pushed over the channel.
          - `internal/observability` (1): the always-on Tier-1 sampler
            reads `/proc/<pid>/io`, which only exists with the
            `TASK_IO_ACCOUNTING → TASK_XACCT → TASKSTATS` kernel chain —
@@ -1583,9 +1596,11 @@ the user-host or in CI today.
        The **coverage gate compounds it**: `t.Skip`-ing these would
        drop coverage below `coverage.txt`, so `cover-check` fails —
        the in-sandbox check must run the *whole* suite, not tolerate
-       skips. So slice 1 is **not green end-to-end yet**; the test
-       stays gated and is red-when-enabled pending the last item
-       (agent). **What the breakdown actually turned out to be** (the
+       skips. **All five blockers are now addressed** (2026-06-03); the
+       next step is to set `PrivilegedFuseMounts` on the gated
+       self-build test's workspace and attempt the end-to-end green run
+       (cold-GOCACHE timeout permitting — see the warm-GOCACHE
+       follow-up). **What the breakdown actually turned out to be** (the
        initial "grant the capabilities as config sections" framing was
        only ¼ right): one genuine capability grant (FUSE, via the
        `NestedVirtualization` config-section idiom —

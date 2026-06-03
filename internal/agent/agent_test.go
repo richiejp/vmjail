@@ -47,9 +47,19 @@ func TestRunPrintsBannerAndBlocksUntilContextCancelled(t *testing.T) {
 	defer cancel()
 
 	var buf bytes.Buffer
-	err := Run(ctx, &buf)
+	// Drive runWith with an empty cmdline and zero-valued deps: every
+	// share/gadget/forward/container path is gated on a cmdline token
+	// or a non-nil dep, so none fire and the only thing written to w is
+	// the banner. This makes the banner+block contract a test of Run's
+	// own behaviour rather than of the ambient /proc/cmdline. The public
+	// Run reads the real cmdline, which carries daft.* tokens when the
+	// suite runs *inside* a daft sandbox VM (the D6c.4 dogfood); their
+	// operational output would otherwise pollute this exact-match.
+	err := runWith(ctx, &buf, runDeps{
+		readCmdline: func() (string, error) { return "", nil },
+	})
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("Run returned %v, want DeadlineExceeded", err)
+		t.Fatalf("runWith returned %v, want DeadlineExceeded", err)
 	}
 	if got := strings.TrimRight(buf.String(), "\n"); got != Banner {
 		t.Fatalf("banner = %q, want %q", got, Banner)
