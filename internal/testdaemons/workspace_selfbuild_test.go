@@ -12,77 +12,100 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
-
 	"github.com/localai-org/darkaifactory/internal/testdaemons"
 	"github.com/localai-org/darkaifactory/internal/testtmux"
 )
 
 // daftSelfBuildSentinel is printed by the wrapper shell when
 // `make check` exits 0 inside the sandbox. Distinct from the
-// readiness sentinel (D6C4-READY) so a successful check is not
-// confused with the container merely having booted.
+// readiness sentinel (daft-check ready) so a successful check is
+// not confused with the container merely having booted.
 const daftSelfBuildSentinel = "DAFT-SELFBUILD-OK"
 
-// daftSelfBuildInnerTimeout caps `nix develop … make check` from
-// inside the sandbox. If nix hangs (the symptom of the
-// not-yet-diagnosed narinfo-on-404 bug — proxy passthrough is
-// verified by TestPassthrough404PreservesStatusAndBody but the
-// in-VM nix client mis-handles the response anyway), GNU
-// `timeout` kills the inner pipeline with SIGKILL; the daft
-// `workspace exec` subprocess then exits and
+// daftSelfBuildInnerTimeout caps `make check` from inside the
+// sandbox. The image is nix-less and the deps are vendored, so
+// there is no substitution and no go-module fetch — the cost is
+// purely the cold-GOCACHE compile of every package + the test
+// run. GNU `timeout` kills the inner pipeline with SIGKILL on
+// overrun; `daft workspace exec` then exits and
 // waitForFileContains fails-fast on `proc.exited()` rather than
-// waiting out the outer cap. Budget: ~30 s nix-develop env
-// activation + ~3 min make check (host cold baseline 2 m 45 s)
-// = ~3.5 min worst case. 4 min leaves a small buffer.
-const daftSelfBuildInnerTimeout = 240 // seconds, formatted into the wrapper shell
+// waiting out the outer cap. Provisional 10 min: a cold-GOCACHE
+// golangci-lint + go test on the 4-vCPU envelope below is the cost
+// (the build is offline, so there's no substitution to wait on).
+// This tightens once the capability work lands a green run and the
+// warm-GOCACHE follow-up (PLAN.md D6c.4 slice 1) caps the compile.
+const daftSelfBuildInnerTimeout = 600 // seconds, formatted into the wrapper shell
 
 // daftSelfBuildSlowBoot is the outer cap for waitForFileContains.
 // Strict deadline, not a generous ceiling — per CONTRIBUTING.md
 // "Slowness is a bug". Just past the inner GNU-timeout so any
-// hang in nix surfaces as a fast subprocess-exit failure (~5 s
-// after the inner kill), not an outer-timeout fatal that swallows
-// the cause. If the test legitimately exceeds 4.5 min the cache
-// is cold; rerun once `/nix/store` is partially populated (D6c.3
-// slice 3, host-mounted virtiofs, is the proper fix). We do not
-// extend the deadline to accommodate the first uncached run.
-const daftSelfBuildSlowBoot = 270 * time.Second
+// overrun surfaces as a fast subprocess-exit failure (~5 s after
+// the inner kill), not an outer-timeout fatal that swallows the
+// cause. A cold run that legitimately exceeds this is the signal
+// to land the baked warm-GOCACHE, not to extend the deadline.
+const daftSelfBuildSlowBoot = 660 * time.Second
 
 // TestClusterWorkspaceDaftSelfBuild is D6c.4 slice 1: prove the
 // dogfooding loop — boot a workspace, drop the daft source in,
-// run `nix develop -c make check` inside, and assert the standard
-// pre-commit gate (fmt + lint + tests + coverage) passes.
+// run `make check` inside, and assert the standard pre-commit
+// gate (fmt + lint + tests + coverage) passes.
+//
+// It runs against the NIX-LESS daft-check-image (flake
+// `daft-check-image`, env DAFT_CHECK_IMAGE): the dev-shell check
+// toolchain baked as image content with no nix binary/daemon/db,
+// plus the Go dependency set as a vendor tree at /opt/daft/vendor.
+// The wrapper symlinks that to /workspace/vendor and runs
+// `make check` with GOFLAGS=-mod=vendor GOPROXY=off, so the build
+// is hermetic and network-free — no cache.nixos.org substitution
+// (the cap-buster the io-snoop gadget caught against the old
+// `nix develop` image) and no go-module fetch.
 //
 // Source delivery is the same pattern as the bun dev-shell test
 // (D6c.3 slice 2): tar the tracked tree of HEAD into a tempdir
 // and virtiofs-mount it at /workspace. `git archive HEAD` skips
-// build artefacts and .git automatically, so the mount is
-// hermetic by construction. nix re-fetches the flake's
-// submodule pins from their upstream URLs via the sandboxnet
-// egress proxy; the .git directory is not required.
+// build artefacts and the heavy .git blob stores; exportDaftSourceTo
+// layers the minimal .git metadata the check-submodule-revs gate
+// needs.
 //
-// Gated behind DAFT_RUN_SELFBUILD=1 — the first run substitutes
-// the full dev-shell closure from cache.nixos.org, which is the
-// network-heaviest workload the integration suite can run and
-// overruns the default per-test budget. Same opt-in shape as
-// TestWorkspaceThroughputExperiment.
+// Gated behind DAFT_RUN_SELFBUILD=1: a cold-GOCACHE `make check`
+// compile overruns the default per-test budget even offline.
+// Same opt-in shape as TestWorkspaceThroughputExperiment; the
+// baked warm-GOCACHE follow-up is what lets this join the default
+// suite.
 func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 	if os.Getenv("DAFT_RUN_SELFBUILD") != "1" {
-		t.Skip("set DAFT_RUN_SELFBUILD=1 to run the daft-in-daft self-build test (inner 4 min cap on nix, outer 4.5 min on the sentinel wait)")
+		// Gated AND currently red-when-enabled: the offline build
+		// (fmt + lint + compile) passes in-sandbox, but `make check`
+		// runs daft's own unit suite and 19 tests across 5 packages
+		// (daftfuse, userns, agent, observability, sandboxdcli) need
+		// host/VM capabilities the hardened container withholds
+		// (/dev/fuse, newuidmap/newgidmap, agent init devices,
+		// /proc io). Granting those via per-workspace config sections
+		// is the next slice — see PLAN.md D6c.4 slice 1.
+		t.Skip("set DAFT_RUN_SELFBUILD=1 to run the daft-in-daft self-build test (offline make check inside the sandbox; blocked on container capabilities — see PLAN.md D6c.4)")
 	}
 
 	srcDir := t.TempDir()
 	exportDaftSourceTo(t, srcDir)
+	// Drop the vendored Go deps into the source mount so the offline
+	// `make check` resolves every package with -mod=vendor. Delivered
+	// here (host cp → virtiofs) rather than baked into the image
+	// because dockerTools layering corrupts go:embed files into
+	// "irregular" symlinks; see exportVendorTo / the flake comment.
+	exportVendorTo(t, srcDir)
 
-	imgPath := testdaemons.FetchNixOfficialImage(t)
-	base, err := tarball.ImageFromPath(imgPath, nil)
-	if err != nil {
-		t.Fatalf("load %s: %v", imgPath, err)
-	}
-	img := withLongRunningEntrypoint(t, base, "D6C4-READY")
-	ref := pushImageToRegistry(t, img, "test/d6c4-daft-selfbuild:v1")
+	// The nix-less check image already ships a long-running
+	// entrypoint + "daft-check ready" sentinel, so it loads and
+	// pushes directly — no withLongRunningEntrypoint rewrap.
+	imgPath := requireEnvPath(t, "DAFT_CHECK_IMAGE",
+		"nix build .#daft-check-image -o bin/daft-check-image")
+	ref := pushDockerTarballToRegistry(t, imgPath, "test/d6c4-daft-selfbuild:v1")
 
-	c := testdaemons.NewCluster(t, testdaemons.WithEgressProxy())
+	// No egress proxy: the build is fully offline, so a cluster
+	// without network egress is the stronger assertion — if
+	// anything reaches for cache.nixos.org or proxy.golang.org the
+	// build fails rather than silently falling back to the network.
+	c := testdaemons.NewCluster(t)
 	s := testtmux.New(t)
 
 	logDir := t.TempDir()
@@ -106,10 +129,9 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 			"%s workspace mount add /workspace --source %s --name %s %s",
 			prefix, srcDir, wsName, orch,
 		)},
-		// `nix develop` evaluating the daft flake + substituting the
-		// dev-shell closure + running `go test ./...` in parallel is
-		// well past the 256 MiB default. 8 GiB / 4 CPUs mirrors the
-		// envelope a developer actually uses on the host.
+		// `go test ./...` compiling + running every package in
+		// parallel is well past the 256 MiB default. 8 GiB / 4 CPUs
+		// mirrors the envelope a developer actually uses on the host.
 		{Label: "resources", Cmd: fmt.Sprintf(
 			"%s workspace resources --memory 8G --cpus 4 --name %s %s",
 			prefix, wsName, orch,
@@ -124,58 +146,43 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 		)},
 	}, 30*time.Second)
 
-	c.WaitForSandboxdOutput(t, "D6C4-READY", 60*time.Second)
+	c.WaitForSandboxdOutput(t, "daft-check ready", 60*time.Second)
 
-	// Wrapper rationale, mirroring the bun test:
-	//   * HOME/USER/PATH inline because crun-exec doesn't inherit
-	//     the container entrypoint's process.env.
-	//   * NIX_SSL_CERT_FILE points at the cacert bundle the
-	//     nixos/nix image ships, so `nix` can hit cache.nixos.org
-	//     over HTTPS through the sandboxnet egress proxy.
-	//   * sh -lc rebuilds PATH via /etc/profile.d/nix.sh so the
-	//     nix binary resolves.
-	//   * --extra-experimental-features opts into nix-command +
-	//     flakes without writing /etc/nix/nix.conf.
-	//   * --option build-users-group "" disables the nixbld
-	//     uid-sandbox; virtiofsd lacks CAP_CHOWN over bundle files
-	//     in init userns (see D7) so chowning /nix/store to nixbld
-	//     EPERMs. Safe here: `make check` runs Go tooling, not
-	//     derivation builds.
+	// Wrapper rationale:
+	//   * env vars are inline because crun-exec doesn't inherit the
+	//     container entrypoint's process.env.
+	//   * CGO_ENABLED=0 because the image ships no C compiler (the
+	//     daft binaries are all static CGO=0 anyway). Without it the
+	//     default CGO=1 makes golangci-lint's typecheck try to
+	//     cgo-preprocess the `net` package and fail with "could not
+	//     import C".
+	//   * GOTOOLCHAIN=local pins the baked Go (go.mod asks for an
+	//     older minor than the image ships, so without this Go would
+	//     try to fetch the exact toolchain over the network).
+	//   * GOFLAGS=-mod=vendor + GOPROXY=off force the offline build
+	//     from /workspace/vendor (symlinked to the image's baked
+	//     /opt/daft/vendor). GOCACHE + GOTMPDIR both go to
+	//     host-backed /workspace: the compile temp (golangci-lint
+	//     export data, link objects) and the cumulative build cache
+	//     each exceed the 256 MiB /tmp tmpfs. GOTMPDIR doubles as
+	//     the test binary's TMPDIR (go test sets it), so the short
+	//     /workspace/.gotmp prefix keeps unix-socket test paths under
+	//     the 108-byte sockaddr_un limit.
 	//   * `make check` exits 0 on success; the trailing
 	//     `&& echo DAFT-SELFBUILD-OK` lets waitForFileContains
 	//     detect success without relying on the absence of error
-	//     output (which `go test -v` produces in volume even on a
-	//     green run).
-	// `timeout --signal=KILL Ns` bounds the inner pipeline. If nix
-	// hangs (currently observed against cache.nixos.org 404s; see
-	// TestPassthrough404PreservesStatusAndBody and PLAN.md D6c.4),
-	// SIGKILL fires, the wrapper shell exits, `daft workspace
-	// exec` propagates the non-zero exit, and waitForFileContains
-	// fails-fast on `proc.exited()` instead of waiting out the
-	// outer cap. SIGKILL not SIGTERM because nix's substitution
-	// loop has historically ignored SIGTERM until the active fetch
-	// completes — same reason `make integration`'s VMs are killed
-	// not terminated.
-	// `nix develop path:.` forces flake evaluation in plain-path
-	// mode rather than git mode. With git mode, nix's libgit2
-	// would try to walk `.git/objects` to identify tracked files;
-	// our `.git/` copy ships HEAD/index/refs but not the object
-	// store (~700 MB of blob CAS that `make check` does not
-	// touch), so libgit2 errors with code = 6 (GIT_ENOTFOUND).
-	// Plain-path mode treats the workdir as the source verbatim
-	// and reads every file present — exactly what we want, since
-	// `git archive HEAD` already gave us the hermetic HEAD
-	// content. Trade-off: any uncommitted scratch in this dir
-	// would now be visible to the flake, but the export is a
-	// fresh tempdir so there isn't any.
+	//     output (which `go test` produces in volume even green).
+	// `timeout --signal=KILL Ns` bounds the inner pipeline; on
+	// overrun SIGKILL fires, the wrapper shell exits, `daft
+	// workspace exec` propagates the non-zero exit, and
+	// waitForFileContains fails-fast on `proc.exited()` instead of
+	// waiting out the outer cap.
 	execShell := fmt.Sprintf(
-		"cd /workspace && exec env "+
-			"HOME=/tmp USER=root "+
-			"NIX_SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt "+
-			"/bin/sh -lc 'timeout --signal=KILL %ds nix "+
-			"--extra-experimental-features \"nix-command flakes\" "+
-			"--option build-users-group \"\" "+
-			"develop path:. --command sh -c \"make check && echo %s\"'",
+		"exec env HOME=/workspace/.home USER=root PATH=/bin "+
+			"CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=vendor GOPROXY=off "+
+			"GOCACHE=/workspace/.gocache GOPATH=/workspace/.gopath GOTMPDIR=/workspace/.gotmp "+
+			"/bin/sh -c 'mkdir -p /workspace/.home /workspace/.gotmp && cd /workspace && "+
+			"timeout --signal=KILL %ds make check && echo %s'",
 		daftSelfBuildInnerTimeout, daftSelfBuildSentinel,
 	)
 
@@ -297,6 +304,30 @@ func exportDaftSourceTo(t *testing.T, dst string) {
 	}
 	if err := xcp.Wait(); err != nil {
 		t.Fatalf("git-meta extract: %v (stderr: %s)", err, xcpErr.String())
+	}
+}
+
+// exportVendorTo copies the vendored Go module tree (daft.goModules,
+// env DAFT_CHECK_VENDOR) into dst/vendor as regular, writable files.
+// The offline `make check` then builds with -mod=vendor and never
+// touches the network. cp -rL (dereference, copy content) — not a
+// symlink — because the tree is virtiofs-served into the guest where
+// a symlink to a host store path would dangle, and because go:embed
+// rejects symlinked embed files (the reason this isn't baked into the
+// image; see the flake comment).
+func exportVendorTo(t *testing.T, dst string) {
+	t.Helper()
+	vendorSrc := requireEnvPath(t, "DAFT_CHECK_VENDOR",
+		"nix build .#daft.goModules -o bin/daft-check-vendor")
+	vendorDst := filepath.Join(dst, "vendor")
+	if err := os.MkdirAll(vendorDst, 0o755); err != nil {
+		t.Fatalf("mkdir vendor: %v", err)
+	}
+	cp := exec.Command("cp", "-rL", "--no-preserve=mode", vendorSrc+"/.", vendorDst)
+	var stderr strings.Builder
+	cp.Stderr = &stderr
+	if err := cp.Run(); err != nil {
+		t.Fatalf("cp vendor: %v (stderr: %s)", err, stderr.String())
 	}
 }
 

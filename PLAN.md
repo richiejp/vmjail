@@ -1491,41 +1491,92 @@ the user-host or in CI today.
   cgroup v2, nested virt, `make dev` umbrella) is to make the
   daft dev loop run *inside* a daft workspace. Sliced:
     1. `make check` (fmt + lint + tests + coverage gate) inside.
-       **landed (test only)**:
+       **landed — nix-less offline image (2026-06-03)**:
        `testdaemons.TestClusterWorkspaceDaftSelfBuild` tars the
-       tracked tree of HEAD via `git archive`, virtiofs-mounts
-       it at /workspace, exec's `nix develop --command make
-       check` in the nixos/nix container, and waits for a
-       `DAFT-SELFBUILD-OK` sentinel. Same source-delivery and
-       nix-flag wiring as the D6c.3 bun test (HOME/USER inline
-       for the crun-exec env gap, `--option build-users-group ""`
-       around the D7 CAP_CHOWN gap, NIX_SSL_CERT_FILE pointing
-       at the image's cacert). 8 GiB / 4 vCPU sizing because
-       the 256 MiB default OOM-kills nix evaluation.
-       Gated behind `DAFT_RUN_SELFBUILD=1` and capped at 6 min
-       — a strict deadline, not a generous ceiling (CONTRIBUTING.md
-       "Slowness is a bug"). Budget comes from measurement:
-       `make check` is 32 s warm, 2 m 45 s fully cold (empty Go
-       build cache + modcache + golangci-lint cache, 971 MB
-       footprint); inside the sandbox add ~2–3 min for nix to
-       substitute the dev-shell closure (~1.5 GB: Go toolchain
-       + golangci-lint + gofumpt + …) from cache.nixos.org
-       through sandboxnet's egress NAT, so a healthy cold run
-       is ~5–6 min total. With a warm `/nix/store` (D6c.3 slice
-       3, host-mounted via virtiofs) it drops to ~1 min. Caching
-       policy: a true cold-substitute run that legitimately
-       exceeds 6 min lands the closure on `/nix/store` anyway —
-       rerun and the next attempt is warm. Anything longer than
-       6 min on a *cached* run is the known 50 KB/s sandboxnet-
-       egress throughput floor (D6c.3 slice 2 "Throughput floor
-       under investigation") surfacing as a failure, which is
-       the point. Stays opt-in until the throughput regression
-       is fixed or D6c.3 slice 3 lands; with the host-mounted
-       store the test fits the default integration budget.
-       **Open**: choose between baking a `daft-dev-shell-image`
-       extending nixos/nix with the closure pre-populated vs
-       leaning on D6c.3 slice 3's host-mounted store; both solve
-       the same substitution cost.
+       tracked tree of HEAD via `git archive`, layers the minimal
+       `.git` the check-submodule-revs gate needs, virtiofs-mounts
+       it at /workspace, exec's `make check`, and waits for a
+       `DAFT-SELFBUILD-OK` sentinel. 8 GiB / 4 vCPU sizing because
+       the 256 MiB default OOM-kills the parallel compile.
+
+       The image is the new flake output **`daft-check-image`**
+       (DAFT_CHECK_IMAGE): the dev-shell's check toolchain (Go +
+       golangci-lint + gofumpt + gocyclo/goconst/scc + make + git
+       + dash/bash + coreutils + tmux) baked as image content with
+       **no nix binary, daemon, or store DB** — just the closure's
+       files (binaries keep their non-relocatable /nix/store paths,
+       so the dir exists, but nothing in it is nix-managed). The
+       eBPF compile chain (clang/llvm/bpftool/libbpf) is omitted:
+       `make check` consumes the committed `*_bpfel.go` + `*.o`.
+       The Go dependency set is delivered as a **vendor tree**
+       (`daft.goModules`, same vendorHash as the daft binaries):
+       the test copies it (env DAFT_CHECK_VENDOR, host `cp -rL` →
+       virtiofs) into its source mount at /workspace/vendor, and
+       `make check` runs with `CGO_ENABLED=0 GOFLAGS=-mod=vendor
+       GOPROXY=off GOTOOLCHAIN=local`. Result: the build is
+       **hermetic and network-free** — no cache.nixos.org
+       substitution and no go-module fetch — so the test runs
+       against a cluster with **no egress proxy at all** (any reach
+       for the network fails the build rather than silently
+       degrading). Proven in-sandbox: `net rx ≈ 960 B`, **fmt +
+       `golangci-lint` 0 issues + every package compiled** offline.
+
+       Four things the dogfood run surfaced (each fixed; the Tier-2
+       gadgets + the in-VM `/proc` profiler pinpointed all four):
+       (a) the image ships **no C compiler**, so default CGO=1 made
+       golangci-lint's typecheck fail to cgo-preprocess `net` →
+       `CGO_ENABLED=0` (the daft binaries are static CGO=0 anyway);
+       (b) golangci-lint's per-package compile temp **overflowed
+       the 256 MiB `/tmp` tmpfs** → GOCACHE + GOTMPDIR moved to
+       host-backed /workspace, GOTMPDIR shallow (`/workspace/.gotmp`,
+       18-char prefix) so go test's unix-socket paths stay under the
+       108-byte `sockaddr_un` limit; (c) baking the vendor tree into
+       the image **corrupted a go:embed file** (protobuf's
+       `editions_defaults.binpb`) into an "irregular" symlink via
+       dockerTools layering + the imagestore tar-unpack → vendor now
+       arrives over the mount, not the image (so the image is
+       toolchain-only); (d) image trimmed accordingly.
+
+       Why nix-less beats the alternatives: this replaces the old
+       `nix develop` self-build, whose cold run substituted the
+       ~1.5 GB dev-shell closure from cache.nixos.org on every run
+       (the stall the io-snoop gadget caught — see below). Baking
+       the toolchain + vendoring removes that whole class of cost.
+       The user rejected a host-mounted `/nix/store` (D6c.3 slice
+       3) in favour of self-contained image content; this is that.
+
+       **Blocker the dogfood run exposed — container capabilities.**
+       `make check` runs daft's *own* unit suite, and **19 tests in
+       5 packages need host/VM primitives the hardened sandbox
+       container withholds** (the old `nix develop` test would hit
+       this identically — it just never got past substitution to
+       reach `go test`):
+         - `internal/daftfuse` (10): `/dev/fuse` to mount a FUSE fs.
+         - `internal/userns` (6): `newuidmap`/`newgidmap` setuid
+           helpers + user-namespace creation.
+         - `internal/agent` (1): `agent.Run` does real init (mount
+           shares, `/dev/vsock`, `/dev/net/tun`, cgroup, tracefs,
+           exec `/bin/crun`); nested in a daft sandbox it picks up
+           the ambient share/bundle env and its error lines pollute
+           the banner the test asserts exactly — needs env isolation,
+           not just a grant.
+         - `internal/observability` (1): read `/proc/<pid>/io`.
+         - `internal/sandboxdcli` (1): lazy-attach happy path.
+       The **coverage gate compounds it**: `t.Skip`-ing these would
+       drop coverage below `coverage.txt`, so `cover-check` fails —
+       the in-sandbox check must run the *whole* suite, not tolerate
+       skips. So slice 1 is **not green end-to-end yet**; the test
+       stays gated and is red-when-enabled pending the capability
+       work. **Next slices (chosen path): grant the capabilities as
+       per-workspace config sections** (the `NestedVirtualization`
+       idiom — [[feedback-config-section-idiom]]), grant-by-grant so
+       each hardening relaxation is a deliberate, auditable choice:
+       a `DevFuse` section (/dev/fuse) for daftfuse, a userns/idmap
+       grant for userns, env-isolation for the agent test, `/proc`
+       access for observability. A separate, secondary perf
+       follow-up bakes a **warm GOCACHE** so the cold compile (which
+       overran the 6 min cap) stops dominating and the test can
+       eventually leave the gate.
 
        **Gadget observe wired as the debugging surface
        (2026-06-03).** The self-build test now attaches
@@ -1544,12 +1595,15 @@ the user-host or in CI today.
        go-module fetches; exec-snoop: 1796 execs of the
        check-submodule-revs.sh shell pipeline + go/compile/asm;
        sleep-snoop: go/golangci-lint/gofumpt already running. This
-       is direct empirical evidence that **closure delivery is the
-       blocker** (the cold substitution front-loads ~4 min), which
-       is the case for D6c.3 slice 3 (host-mounted `/nix/store`)
-       over the live-substitute path. (exec-snoop also surfaced 42
-       failed execs, 40× `sh`, inside the container's `make check` —
-       noted for a later look, not chased here.)
+       is direct empirical evidence that **closure delivery was the
+       blocker** (the cold substitution front-loaded ~4 min). That
+       finding drove the slice-1 redesign above: rather than deliver
+       the closure faster (host-mounted store), the nix-less
+       `daft-check-image` removes the substitution entirely by
+       baking the toolchain and vendoring the modules. (exec-snoop
+       also surfaced 42 failed execs, 40× `sh`, inside the
+       container's `make check` — noted for a later look, not chased
+       here.)
 
        **Bug surfaced by the first run (2026-05-28, fixed
        same day):** the in-VM nix client mis-handled

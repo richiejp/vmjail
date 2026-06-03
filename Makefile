@@ -200,6 +200,13 @@ BUNDLE_OUT    := $(BIN_DIR)/hello-bundle
 NIX_IMAGE_OUT         := $(BIN_DIR)/nix-shell-image
 NIX_TOOLING_IMAGE_OUT := $(BIN_DIR)/nix-tooling-image
 NIX_FLAKE_FIXTURE_OUT := $(BIN_DIR)/nix-flake-fixture
+# Nix-less make-check image (D6c.4 slice 1): toolchain only, runs
+# `make check` offline. The Go deps are delivered separately as the
+# vendor tree (daft.goModules) the test copies into its source mount —
+# baking go:embed files through dockerTools corrupts them. See
+# flake.nix `daft-check-image`.
+NIX_CHECK_IMAGE_OUT   := $(BIN_DIR)/daft-check-image
+NIX_CHECK_VENDOR_OUT  := $(BIN_DIR)/daft-check-vendor
 # Sandbox-VM toolchain artefacts, built fresh from the flake by
 # `build-artefacts` (nix build -o) instead of exported by the dev shell.
 # Nobody runs these by hand — they're dependencies of the sandbox build
@@ -274,6 +281,8 @@ integration-build: dev
 	@echo "[images] nix build test-fixture images + bundled daft-sandboxd"
 	@nix build .#nix-shell-image    -o $(NIX_IMAGE_OUT)
 	@nix build .#nix-tooling-image  -o $(NIX_TOOLING_IMAGE_OUT)
+	@nix build .#daft-check-image   -o $(NIX_CHECK_IMAGE_OUT)
+	@nix build .#daft.goModules     -o $(NIX_CHECK_VENDOR_OUT)
 	@nix build .#d6c1-flake-fixture -o $(NIX_FLAKE_FIXTURE_OUT)
 	@nix build .#daft-sandboxd      -o $(NIX_SANDBOXD_OUT)
 
@@ -305,6 +314,8 @@ integration: integration-build
 			DAFT_SANDBOXD_BUNDLED_BIN=$(CURDIR)/$(NIX_SANDBOXD_OUT)/bin/daft-sandboxd \
 			DAFT_NIX_IMAGE=$$(realpath $(NIX_IMAGE_OUT)) \
 			DAFT_NIX_TOOLING_IMAGE=$$(realpath $(NIX_TOOLING_IMAGE_OUT)) \
+			DAFT_CHECK_IMAGE=$$(realpath $(NIX_CHECK_IMAGE_OUT)) \
+			DAFT_CHECK_VENDOR=$$(realpath $(NIX_CHECK_VENDOR_OUT)) \
 			DAFT_NIX_FLAKE_FIXTURE=$$(realpath $(NIX_FLAKE_FIXTURE_OUT)) \
 			go test -v -tags=integration -count=1 -timeout 20m ./internal/sandbox/ ./internal/testdaemons/; \
 	)

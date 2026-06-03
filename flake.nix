@@ -419,6 +419,96 @@
               };
             };
 
+          # daft-check-image is the D6c.4 slice-1 self-build image:
+          # a NIX-LESS toolchain image that runs `make check` fully
+          # offline. It carries the dev-shell's check toolchain (Go +
+          # linters + make + git + a POSIX shell + coreutils) baked
+          # under /nix/store as plain files — no nix binary, no daemon,
+          # no store DB. The project's Go dependencies ride along as a
+          # vendor tree (daft.goModules, pinned by the same vendorHash
+          # as the daft binaries) which the self-build test copies into
+          # its source mount at /workspace/vendor, so `go build
+          # -mod=vendor` resolves every package without the network.
+          # The vendor tree is delivered via the mount rather than baked
+          # into the image on purpose: go:embed rejects "irregular"
+          # files, and routing a vendored embed (e.g. protobuf's
+          # editions_defaults.binpb) through dockerTools layering + the
+          # imagestore tar-unpack turns it into a hardlink/symlink,
+          # which fails `cannot embed irregular file`. A host `cp -r`
+          # over virtiofs keeps every file regular.
+          #
+          # Why nix-less: the prior self-build ran `nix develop` inside
+          # the VM, which substituted the multi-GB dev-shell closure
+          # from cache.nixos.org on every cold run — the network-bound
+          # stall the Tier-2 io-snoop gadget caught (OBSERVABILITY.md /
+          # PLAN.md D6c.4). Baking the closure as image content and
+          # vendoring the modules removes BOTH the nix substitution and
+          # the go-module fetch: `make check` becomes hermetic and
+          # network-free. Binaries keep their /nix/store paths (ELF
+          # interpreter + RPATH are non-relocatable), so the store dir
+          # exists in the guest — but nothing in it is nix-managed.
+          #
+          # Scope: `make check` only (fmt + lint + test + coverage).
+          # `make dev` / `make integration` `nix build` the VM toolchain
+          # and fixture images, so a full `make verify` still needs a
+          # real nix — that is a separate hermetic-nix image (the
+          # nix-tooling-image pattern extended), not this one.
+          daft-check-image =
+            let
+              # Mirrors devShells.default's buildInputs MINUS the eBPF
+              # compile chain (clang/llvm/bpftool/libbpf): `make check`
+              # consumes the committed *_bpfel.go + *.o and needs none
+              # of it (see the devShell note). buf/gzip/cpio are
+              # likewise build-time-only (proto / initramfs), not check.
+              checkToolchain = pkgs.buildEnv {
+                name = "daft-check-toolchain";
+                paths = with pkgs; [
+                  go gofumpt golangci-lint gocyclo goconst scc
+                  gnumake git bashInteractive dash coreutils
+                  gnugrep gnused gawk findutils diffutils which
+                  # internal/testtmux drives a dash pane via tmux in a
+                  # few non-integration unit tests run by `make test`.
+                  tmux
+                ];
+              };
+              # `make` runs recipes via /bin/sh and the self-build
+              # wrapper execs /bin/sh; buildEnv ships dash as
+              # /bin/dash, so alias /bin/sh → dash.
+              binSh = pkgs.runCommand "daft-check-binsh" { } ''
+                mkdir -p $out/bin
+                ln -s ${pkgs.dash}/bin/dash $out/bin/sh
+              '';
+            in pkgs.dockerTools.buildLayeredImage {
+              name = "daft-check";
+              tag = "v1";
+              contents = [ checkToolchain binSh ];
+              config = {
+                # Entrypoint sentinel mirrors the other fixtures so the
+                # test can WaitForSandboxdOutput on a stable string.
+                Entrypoint = [
+                  "/bin/dash" "-c"
+                  "echo daft-check ready; exec /bin/sleep infinity"
+                ];
+                # NOTE: crun-exec does NOT inherit these for `workspace
+                # exec` (only the entrypoint sees them), so the
+                # self-build wrapper re-exports the build env inline.
+                # Kept here for interactive `workspace exec … sh` use.
+                Env = [
+                  "PATH=/bin"
+                  "HOME=/workspace/.home"
+                  "USER=root"
+                  # No C compiler is baked (the daft binaries are all
+                  # static CGO=0); CGO_ENABLED=0 keeps golangci-lint's
+                  # typecheck off the cgo `net` path, which would else
+                  # fail to preprocess C.
+                  "CGO_ENABLED=0"
+                  "GOTOOLCHAIN=local"
+                  "GOFLAGS=-mod=vendor"
+                  "GOPROXY=off"
+                ];
+              };
+            };
+
           # d6c1-flake-fixture is the tiny flake the D6c.1 test
           # mounts at /workspace. Its `serve` app's `program`
           # points at python3 inside the nix-tooling-image's
