@@ -1902,11 +1902,117 @@ the user-host or in CI today.
        device-allow (see PLAN.md "Nested virtualisation"). A
        dogfood workspace that runs `make integration` inside sets
        `daft workspace nested --enable`; an ordinary workspace
-       gets no hypervisor device. Still open for this slice: the
-       VM-toolchain closure (clang/lld/llvm + kernel source from
-       slice 2) must be present inside the sandbox, and the inner
-       VM-in-VM memory envelope sits on top of slice 2's already
-       large footprint.
+       gets no hypervisor device.
+
+       **Scoping (2026-06-04).** A read of the integration path
+       reframes this slice: it is **decoupled from slice 2** and
+       far lighter than "carry the whole `make dev` closure" implies.
+
+       - *Deliver, don't rebuild.* `make integration` does two
+         things: (i) `go build` the daft/sandboxd/orchestrator
+         binaries, and (ii) `go test -tags=integration
+         ./internal/sandbox/ ./internal/testdaemons/`, which
+         **consume pre-built VM artefacts** located via env vars
+         (`artefactPath` in `internal/sandbox/integration_test.go`):
+         `DAFT_CLOUD_HYPERVISOR`, `DAFT_KERNEL`, `DAFT_INITRAMFS`,
+         `DAFT_VIRTIOFSD`, `DAFT_BUNDLE`, `DAFT_SANDBOXD_BUNDLED_BIN`,
+         plus the test-fixture OCI tarballs (`DAFT_NIX_IMAGE`,
+         `DAFT_NIX_TOOLING_IMAGE`, `DAFT_CHECK_IMAGE` + `DAFT_CHECK_VENDOR`,
+         `DAFT_NIX_FLAKE_FIXTURE`). The Go build is the same offline,
+         vendored, `CGO_ENABLED=0` build `make check` already runs
+         in-sandbox — it consumes the **committed** `*_bpfel.go` + `*.o`,
+         so **no eBPF chain (clang/llvm/bpftool) and no kernel-source /
+         lld closure is needed inside**. The heavy `slice 2` toolchain is
+         only for *rebuilding* the kernel/CH/eBPF; the dogfood run reuses
+         the host-built artefacts. So slice 3 ≈ daft-check-image philosophy
+         (deliver the toolchain, vendor the modules) extended with the
+         pre-built VM-artefact set + fixture tarballs.
+
+       - *Device / capability surface is small.* `NestedVirtualization`
+         grants `/dev/kvm` (10:232) — **proven sufficient for nested
+         KVM** by `TestClusterNestedKVMProbe` (KVM_CREATE_VM succeeds in
+         a nested-enabled container). The inner VMM stack needs little
+         more: sandboxnet is **userspace** gvisor-tap-vsock (no host
+         `/dev/net/tun`, no CAP_NET_ADMIN), virtiofsd is **socket-based**
+         (serves the virtio-fs protocol over a UDS — no `/dev/fuse`, no
+         CAP_SYS_ADMIN), and CH's guest vsock is a hybrid UDS (no
+         `/dev/vhost-vsock`). The inner sandboxd's startup `newuidmap`
+         self-wrap (D7.1) is **skippable** with `DAFT_DISABLE_USERNS=1`
+         (it already shares the L2 container's userns) — so no setuid
+         helper / `/etc/subuid` is needed inside. Remaining unknowns to
+         de-risk: (a) the inner per-VM cgroup-v2 creation
+         (`createVMCgroup`) needs a **delegated** cgroup subtree inside
+         the container; (b) CH may need a memlock rlimit bump; (c) the
+         inner hybrid-vsock UDS path must stay under the 108-byte
+         `sockaddr_un` limit (the same trap the self-build hit — keep the
+         socket dir shallow).
+
+       - *Memory.* Inner VM default is `256M`
+         (`sandbox.go` `defaultMemory`); the self-build envelope is 8 GiB
+         / 4 vCPU. A nested run stacks one (mostly sequential) inner
+         VM on top → size the dogfood workspace at **~10–12 GiB / 4–6
+         vCPU**.
+
+       - *Incremental de-risk ladder* (cheapest first; each a separate
+         gated test so a failure localises):
+         1. **(landed)** `TestClusterNestedKVMProbe` — nested
+            KVM_CREATE_VM. Green here (`KVM-CREATE-VM-FD`, `NESTED-KVM-OK`).
+         2. **(landed — feasibility gate GREEN, 2026-06-04)**
+            `TestClusterNestedVMBoot` (internal/testdaemons): inside a
+            nested-enabled container, mounts the self-contained bundled
+            `daft-sandboxd` (embeds kernel + CH + initramfs + virtiofsd)
+            and runs `daft-sandboxd hello`, which boots a full **L2 VM**
+            and prints the agent banner (`hello world from daft-agent`)
+            over the inner vsock control channel — proves the whole CH +
+            virtiofsd + vsock + agent stack boots nested, not just the KVM
+            ioctl. Empirical findings from running it:
+            - **Recipe:** `NestedVirtualization` (/dev/kvm bind) +
+              `DAFT_DISABLE_USERNS=1` is **sufficient** for a full nested
+              boot. No `/dev/net/tun`, `/dev/vhost-*`, `/dev/fuse`, or
+              extra caps were needed — confirming sandboxnet (userspace
+              gvisor-tap-vsock) and virtiofsd (socket-based) ask nothing
+              of the host, and the hybrid-vsock UDS stays well under the
+              108-byte `sockaddr_un` limit (the inner sandboxd sees the
+              short *container* path).
+            - **Blocker found + fixed:** without `DAFT_DISABLE_USERNS=1`
+              the inner sandboxd's startup `newuidmap` self-wrap (D7.1)
+              fails (`locate newuidmap: none exist`) — the hardened image
+              has no setuid helper. The env opt-out (the inner process
+              already shares the container's userns) is the clean fix.
+            - **One remaining gap (non-fatal):** the inner per-VM cgroup
+              `createVMCgroup` fails (`mkdir /sys/fs/cgroup/.../daft-vm-…:
+              permission denied`). It is **best-effort** (observability /
+              accounting only) so the VM boots regardless, and it is **not
+              nesting-specific** — the *outer* sandboxd hits the identical
+              error in this rootless / user-session-scope environment. So
+              it's a cgroup-**delegation** item (matters for per-VM
+              resource limits + the Tier-1 observer), not a boot blocker;
+              closing it cleanly is a separate task (delegate a cgroup
+              subtree into the container, or run the dogfood workspace
+              with a delegated scope).
+         3. **(next) One e2e VM-boot test** — deliver the artefact set +
+            fixture tarballs into the container, set the `DAFT_*` env +
+            `DAFT_DISABLE_USERNS=1`, and run a single `internal/sandbox`
+            integration test that boots a VM. This is where the
+            artefact-delivery image/mount work (the daft-check-image-style
+            payload) gets built.
+         4. **Full `make integration` subset** — the gated
+            `TestClusterWorkspaceDaftIntegration` (mirror of
+            `TestClusterWorkspaceDaftSelfBuild`): 10–12 GiB workspace,
+            `nested --enable`, artefacts delivered over the mount,
+            `go test -tags=integration` run offline against a sentinel.
+            Likely start with a curated subset (timeout budget) before the
+            full 20-minute suite.
+
+       - *Future / nice-to-have (not on the integration critical path):*
+         carrying the **kernel-build toolchain** inside the sandbox
+         (clang/lld/llvm + kernel source — the slice-2 `make dev`
+         closure) is **not needed** for `make integration` (which reuses
+         pre-built artefacts), but is independently interesting: it would
+         let a workspace **build a guest kernel tailored to a workload's
+         requirements** (extra modules, config knobs, a different version)
+         from inside the sandbox. Tracked here as a deliberate later
+         option, decoupled from the dogfood integration run.
 
 - D7: **Rootless storage translation** — bridge the
   CAP_CHOWN gap between the sandbox-host process and the
