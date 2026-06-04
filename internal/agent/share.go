@@ -8,6 +8,14 @@ import (
 	"strings"
 )
 
+// ShareSpec names a virtio-fs share to mount: Tag is the virtio-fs tag
+// the host exported, Mountpoint the in-guest path to mount it at. The
+// agent receives these in the GuestConfig (see configShareSpecs).
+type ShareSpec struct {
+	Tag        string
+	Mountpoint string
+}
+
 // ShareMarkerFile is the file the agent reads from the mounted share to
 // prove file sharing actually works end-to-end. The host writes this
 // before booting; the agent reads it and reports the contents on the

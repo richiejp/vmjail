@@ -13,6 +13,16 @@ import (
 	"github.com/localai-org/darkaifactory/internal/trace"
 )
 
+// PortForwardSpec names one in-VM port forward: VsockPort is the
+// AF_VSOCK port the agent listens on; ContainerPort is the TCP port
+// inside the VM the container is already bound to. Both are required and
+// must be non-zero. The agent receives these in the GuestConfig (see
+// configPortForwards).
+type PortForwardSpec struct {
+	VsockPort     uint32
+	ContainerPort uint32
+}
+
 // portForwardReportPrefix is the console prefix the agent uses for
 // every port-forward status line. Same shape as the share / trace
 // prefixes so a host-side test can scan for it without coupling
@@ -50,21 +60,11 @@ func dialLoopbackTCP(ctx context.Context, port uint32) (net.Conn, error) {
 	return d.DialContext(ctx, "tcp", "127.0.0.1:"+strconv.FormatUint(uint64(port), 10))
 }
 
-// startPortForwarders resolves the port-forward table — preferring the
-// config payload, falling back to the cmdline daft.port tokens — reports
-// any cmdline parse error to the agent console, and kicks off
-// runPortForwarders on a detached goroutine. The agent's main loop blocks
-// on ctx; this helper must not block.
-func startPortForwarders(ctx context.Context, w io.Writer, d runDeps, cmdline string) {
+// startPortForwarders reads the port-forward table from the GuestConfig
+// and kicks off runPortForwarders on a detached goroutine. The agent's
+// main loop blocks on ctx; this helper must not block.
+func startPortForwarders(ctx context.Context, w io.Writer, d runDeps) {
 	specs := configPortForwards(d.cfg)
-	if specs == nil {
-		var err error
-		specs, err = ParsePortForwardCmdlines(cmdline)
-		if err != nil {
-			writeReport(w, portForwardReportPrefix, "cmdline: "+err.Error())
-			return
-		}
-	}
 	if len(specs) == 0 {
 		return
 	}

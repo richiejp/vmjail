@@ -45,7 +45,7 @@ const ContainerBanner = "hello world from container"
 const ContainerReportPrefix = "container: "
 
 // TraceReportPrefix tags console lines about the trace channel —
-// cmdline parse errors, exporter Flush failures. Same separator
+// exporter Flush failures. Same separator
 // convention as ShareReportPrefix / ContainerReportPrefix so the
 // host scanner's regex doesn't have to special-case this stream.
 const TraceReportPrefix = "trace: "
@@ -62,23 +62,15 @@ const (
 	WorkspaceSuffix  = " (modified-in-sandbox)"
 )
 
-// BundleCmdlineKey names the kernel cmdline parameter that asks the
-// agent to crun-run an OCI bundle from the given absolute path inside
-// the guest. Format: `daft.bundle=<absolute-path>`. The path is
-// usually somewhere on the share mount (so the host can ship the
-// bundle into the VM via virtiofs).
-const BundleCmdlineKey = "daft.bundle"
-
-// Run prints Banner to w, applies any `daft.share=...` cmdline directive
-// (mounting the share and reporting via ShareReportPrefix), runs the
-// `daft.bundle=...` container if set (forwarded via ContainerReportPrefix),
+// Run prints Banner to w, applies the per-VM settings fetched over the
+// vsock control channel (shares mounted and reported via ShareReportPrefix,
+// the container run if a bundle is set, forwarded via ContainerReportPrefix),
 // then blocks until ctx is cancelled, returning ctx.Err(). It does not
 // exit on its own: when the agent is PID 1's only child a return would
 // let init exit, which panics the kernel. Lifetime is therefore
 // controlled by ctx — Main wires it to SIGTERM/SIGINT.
 func Run(ctx context.Context, w io.Writer) error {
 	return runWith(ctx, w, runDeps{
-		readCmdline: readKernelCmdline,
 		openControl: func(ctx context.Context) (controlChannel, error) {
 			cc, err := OpenControlChannel(ctx, DialHostVsock)
 			if err != nil {
@@ -116,20 +108,19 @@ type controlChannel interface {
 // substitute in-memory fakes. Production wires the real Linux
 // implementations via Run.
 type runDeps struct {
-	readCmdline func() (string, error)
 	// cfg is the GuestConfig fetched over the control channel, set by
-	// runWith after the handshake. The start* helpers prefer it over the
-	// cmdline for the settings it carries (port-forwards, observe paths,
-	// …), falling back to the cmdline token when it is nil or the field is
-	// unset (the slice-3a transition, and the vsock-unreachable degrade).
+	// runWith after the handshake. The start* helpers read every per-VM
+	// setting (bundle, shares, port-forwards, observe paths, feature
+	// toggles) from it. Nil when the control channel was unreachable —
+	// the vsock-unreachable degrade, where the agent is banner-only.
 	cfg *agentv1.GuestConfig
 	// openControl dials the host's per-VM config/event server, performs
 	// the handshake, and returns the open control channel (config +
 	// event writer). A non-nil error means the channel was unreachable
 	// (no vsock device, AF_VSOCK seccomp-denied, wedged listener) or the
-	// handshake failed; the agent then degrades to a cmdline/banner-only
-	// boot. Zero value (nil) skips the channel entirely — tests that
-	// exercise only cmdline behaviour leave it unset.
+	// handshake failed; the agent then degrades to a banner-only boot
+	// (cfg nil, every feature off). Zero value (nil) skips the channel
+	// entirely — tests that exercise the no-config path leave it unset.
 	openControl func(context.Context) (controlChannel, error)
 	share       ShareDeps
 	container   ContainerDeps
@@ -174,13 +165,12 @@ type runDeps struct {
 }
 
 func runWith(ctx context.Context, w io.Writer, d runDeps) error {
-	cmdline, _ := d.readCmdline()
 	// Open the vsock control channel: fetch this VM's settings and keep
 	// the connection for streaming status events back. On any failure
-	// the agent degrades — ctrl is nil, cfg is nil, and each setting
-	// falls back to the cmdline; the console banner then doubles as the
-	// host's only completion signal (the sanctioned vsock-unreachable
-	// fallback).
+	// the agent degrades — ctrl and cfg are nil, every setting is
+	// unset, and the console banner is all that remains (the sanctioned
+	// vsock-unreachable degrade, e.g. a nested check-container with no
+	// device of its own).
 	ctrl := openControlChannel(ctx, w, d)
 	var cfg *agentv1.GuestConfig
 	if ctrl != nil {
@@ -188,21 +178,20 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 		d.cfg = cfg
 		defer func() { _ = ctrl.Close() }()
 	}
-	tracer, ctx := startTracer(ctx, w, d, cmdline)
+	tracer, ctx := startTracer(ctx, w, d)
 
-	ctx, bootSpan := trace.Start(ctx, "agent.boot",
-		trace.WithAttributes(trace.KV{Key: "cmdline.len", Value: fmt.Sprintf("%d", len(cmdline))}))
-	bundle := resolveBundle(w, cfg, cmdline)
-	applyShares(w, d, cfg, cmdline, bundle != "")
+	ctx, bootSpan := trace.Start(ctx, "agent.boot")
+	bundle := resolveBundle(w, cfg)
+	applyShares(w, d, cfg, bundle != "")
 	// Port-forwarders and the attach listener must come up
 	// BEFORE the container so a long-running workload like
 	// `bash` doesn't block the agent's main goroutine forever
 	// before any listener is ready. Each helper spawns its own
 	// goroutines and returns immediately; the listeners live for
 	// the agent's lifetime.
-	startPortForwarders(ctx, w, d, cmdline)
-	startAttachListenerFromCmdline(ctx, w, d, cmdline)
-	if startNetBridgeFromCmdline(ctx, w, d, cmdline) != nil && bundle != "" {
+	startPortForwarders(ctx, w, d)
+	startAttachListener(ctx, w, d)
+	if startNetBridge(ctx, w, d) != nil && bundle != "" {
 		// The container shares the VM's init netns, so it inherits
 		// tap0 + the default route. resolv.conf is the only missing
 		// piece for DNS to resolve through the sandboxnet gateway.
@@ -216,16 +205,16 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	// Dump the guest kernel's available syscall list to the observe state
 	// folder (one-shot; the share was mounted by applyShares above) so a
 	// user can always discover what is traceable inside the microvm.
-	startSyscallDumpFromCmdline(w, d, cmdline)
+	startSyscallDump(w, d)
 	// Attach the open-snoop + exec-snoop + sleep-snoop + io-snoop gadgets
 	// before the container so their tracepoints are live for the workload's
 	// first syscalls, then start the build-progress summary as a live view over
 	// whichever gadgets came up.
-	osAgg := startOpensnoopFromCmdline(ctx, w, d, cmdline)
-	exAgg := startExecsnoopFromCmdline(ctx, w, d, cmdline)
-	slAgg := startSleepsnoopFromCmdline(ctx, w, d, cmdline)
-	ioAgg := startIosnoopFromCmdline(ctx, w, d, cmdline)
-	startSummaryWriter(ctx, w, d, cmdline, osAgg, exAgg, slAgg, ioAgg)
+	osAgg := startOpensnoop(ctx, w, d)
+	exAgg := startExecsnoop(ctx, w, d)
+	slAgg := startSleepsnoop(ctx, w, d)
+	ioAgg := startIosnoop(ctx, w, d)
+	startSummaryWriter(ctx, w, d, osAgg, exAgg, slAgg, ioAgg)
 	runContainer(ctx, w, d, bundle)
 	bootSpan.End()
 
@@ -246,9 +235,9 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 
 // openControlChannel opens the control channel via d.openControl (when
 // wired) and reports any failure on the console best-effort. A nil
-// return — no dep wired, or a handshake failure — means "no channel";
-// every setting then falls back to the cmdline and the banner becomes
-// the host's only completion signal. The report is deliberately not
+// return — no dep wired, or a handshake failure — means "no channel":
+// cfg stays nil, every feature stays off, and the banner becomes the
+// host's only completion signal. The report is deliberately not
 // fatal (unlike writeReport's oops.Must): a channel failure is already a
 // graceful degrade (the VM may simply have no vsock device, the off-VM
 // unit-test case), so a broken console must not escalate to an exit.
@@ -279,23 +268,18 @@ func signalBootComplete(w io.Writer, ctrl controlChannel) {
 }
 
 // resolveBundle picks the OCI bundle path to run: the GuestConfig's
-// bundle when the config channel delivered one, else the daft.bundle
-// cmdline token. Returns "" (no container) when neither is set, or when
-// the value is malformed (reported on the console). cfg may be nil.
-func resolveBundle(w io.Writer, cfg *agentv1.GuestConfig, cmdline string) string {
-	if b := cfg.GetBundle(); b != "" {
-		if !strings.HasPrefix(b, "/") {
-			writeReport(w, ContainerReportPrefix, "config: bundle path "+b+" must be absolute")
-			return ""
-		}
-		return b
-	}
-	bundle, _, err := ParseBundleCmdline(cmdline)
-	if err != nil {
-		writeReport(w, ContainerReportPrefix, "cmdline: "+err.Error())
+// bundle. Returns "" (no container) when none is set, or when the value
+// is malformed (reported on the console). cfg may be nil.
+func resolveBundle(w io.Writer, cfg *agentv1.GuestConfig) string {
+	b := cfg.GetBundle()
+	if b == "" {
 		return ""
 	}
-	return bundle
+	if !strings.HasPrefix(b, "/") {
+		writeReport(w, ContainerReportPrefix, "config: bundle path "+b+" must be absolute")
+		return ""
+	}
+	return b
 }
 
 // runContainer crun-runs the resolved bundle, forwarding the container's
@@ -314,35 +298,19 @@ func runContainer(ctx context.Context, w io.Writer, d runDeps, bundle string) {
 // hang the banner-print path on it.
 const tracerShutdownTimeout = 2 * time.Second
 
-// startTracer returns a Tracer (with a vsock StreamExporter wired up
-// when daft.vsock.trace_port is set on the cmdline) and the ctx
-// augmented with that tracer. Cmdline parse errors are reported
-// on the console; span shipping is best-effort.
-func startTracer(ctx context.Context, w io.Writer, d runDeps, cmdline string) (*trace.Tracer, context.Context) {
+// startTracer returns a Tracer (with a vsock StreamExporter wired up to
+// the fixed DefaultTraceVsockPort when the GuestConfig's trace_enabled bit
+// is set) and the ctx augmented with that tracer. Span shipping is
+// best-effort.
+func startTracer(ctx context.Context, w io.Writer, d runDeps) (*trace.Tracer, context.Context) {
 	tr := trace.New(component.Agent)
-	port, ok, err := resolveTracePort(d.cfg, cmdline)
-	switch {
-	case err != nil:
-		writeReport(w, TraceReportPrefix, "cmdline: "+err.Error())
-	case ok:
+	if d.cfg.GetTraceEnabled() {
 		dial := d.dialVsock
 		tr.SetExporter(trace.NewStreamExporter(func(ctx context.Context) (net.Conn, error) {
-			return dial(ctx, port)
+			return dial(ctx, DefaultTraceVsockPort)
 		}))
 	}
 	return tr, trace.ContextWithTracer(ctx, tr)
-}
-
-// resolveTracePort decides whether (and where) to ship spans: the
-// GuestConfig's trace_enabled bit selects the fixed DefaultTraceVsockPort;
-// otherwise it falls back to the daft.vsock.trace_port cmdline token. The
-// (port, ok, err) shape matches ParseVsockTracePortCmdline so startTracer's
-// switch is unchanged.
-func resolveTracePort(cfg *agentv1.GuestConfig, cmdline string) (port uint32, ok bool, err error) {
-	if cfg.GetTraceEnabled() {
-		return DefaultTraceVsockPort, true, nil
-	}
-	return ParseVsockTracePortCmdline(cmdline)
 }
 
 // shutdownTracer Flushes the tracer with a bounded timeout. The
@@ -362,10 +330,8 @@ func shutdownTracer(parent context.Context, tr *trace.Tracer, w io.Writer) {
 	}
 }
 
-// applyShares mounts each configured virtio-fs share. The share list
-// comes from the GuestConfig when the config channel delivered one,
-// else from the daft.share= cmdline tokens (slice-1 fallback). Overlay
-// mountpoints are still read from the cmdline this slice.
+// applyShares mounts each virtio-fs share carried in the GuestConfig,
+// redirecting any share whose overlay bit is set through a tmpfs overlay.
 //
 // When haveBundle is false (the v0 marker-demo path), the first share
 // is mounted via ApplyShare so its hello.txt marker gets read and
@@ -375,27 +341,11 @@ func shutdownTracer(parent context.Context, tr *trace.Tracer, w io.Writer) {
 //
 // All failure paths print a single ShareReportPrefix line so the
 // host scanner sees one prefix per failure mode.
-func applyShares(w io.Writer, d runDeps, cfg *agentv1.GuestConfig, cmdline string, haveBundle bool) {
-	// Shares and their overlay flags travel together: when the config
-	// payload carried shares, the overlays come from each Share's overlay
-	// bit; otherwise both fall back to the cmdline tokens.
+func applyShares(w io.Writer, d runDeps, cfg *agentv1.GuestConfig, haveBundle bool) {
+	// Shares and their overlay flags travel together: the overlays come
+	// from each Share's overlay bit.
 	specs := configShareSpecs(cfg)
-	var overlays []string
-	if specs != nil {
-		overlays = configOverlays(cfg)
-	} else {
-		var err error
-		specs, err = ParseShareCmdlines(cmdline)
-		if err != nil {
-			writeReport(w, ShareReportPrefix, "cmdline: "+err.Error())
-			return
-		}
-		overlays, err = ParseWorkspaceOverlayCmdlines(cmdline)
-		if err != nil {
-			writeReport(w, OverlayReportPrefix, "cmdline: "+err.Error())
-			overlays = nil
-		}
-	}
+	overlays := configOverlays(cfg)
 	overlaySet := make(map[string]bool, len(overlays))
 	for _, mp := range overlays {
 		overlaySet[mp] = true

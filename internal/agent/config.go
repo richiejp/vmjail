@@ -67,7 +67,7 @@ type ControlChannel struct {
 // sends. The handshake + config read are bounded by configFetchTimeout;
 // the deadline is then cleared because events are sent much later (after
 // the boot sequence). Any failure (dial, write, read) returns an error —
-// the caller degrades to a cmdline/banner-only boot rather than blocking.
+// the caller degrades to a banner-only boot rather than blocking.
 func OpenControlChannel(
 	ctx context.Context,
 	dial func(ctx context.Context, port uint32) (net.Conn, error),
@@ -200,8 +200,7 @@ func ReadAgentEvent(r io.Reader) (*agentv1.AgentEvent, error) {
 
 // configShareSpecs converts the shares carried in a GuestConfig to the
 // agent's ShareSpec form. Returns nil when cfg is nil or carries no
-// shares, which the caller treats as "fall back to the cmdline shares"
-// during the slice-1 transition.
+// shares (a bare boot, or the vsock-unreachable degrade).
 func configShareSpecs(cfg *agentv1.GuestConfig) []ShareSpec {
 	protoShares := cfg.GetShares()
 	if len(protoShares) == 0 {
@@ -215,9 +214,8 @@ func configShareSpecs(cfg *agentv1.GuestConfig) []ShareSpec {
 }
 
 // configOverlays returns the mountpoints of the GuestConfig shares whose
-// overlay bit is set, in share order. The parallel-to-cmdline form of
-// ParseWorkspaceOverlayCmdlines, consumed by the agent's applyShares to
-// redirect those shares through a tmpfs overlay. Returns nil when no
+// overlay bit is set, in share order. Consumed by the agent's applyShares
+// to redirect those shares through a tmpfs overlay. Returns nil when no
 // share requests an overlay.
 func configOverlays(cfg *agentv1.GuestConfig) []string {
 	var mps []string
@@ -229,31 +227,27 @@ func configOverlays(cfg *agentv1.GuestConfig) []string {
 	return mps
 }
 
-// resolveObservePath returns the effective Tier-2 gadget output path:
-// the GuestConfig's Observe value when set (sel extracts the field), else
-// the result of parsing the cmdline daft.observe.* token. The
-// (path, ok, err) shape matches the ParseXxxCmdline helpers so each gadget
-// starter keeps its existing absent/malformed switch unchanged. cfg may
-// be nil (GetObserve is nil-safe), which falls straight through to the
-// cmdline parse.
+// resolveObservePath returns the effective Tier-2 gadget output path from
+// the GuestConfig's Observe block (sel extracts the field), or ("", false)
+// when the gadget was not requested. cfg may be nil (GetObserve is
+// nil-safe). The host is now the sole source of these paths — it ships
+// only absolute, validated paths over the control channel — so there is
+// no parse/malformed case left for the gadget starters to handle.
 func resolveObservePath(
 	cfg *agentv1.GuestConfig,
 	sel func(*agentv1.GuestConfig_Observe) string,
-	parse func(string) (string, bool, error),
-	cmdline string,
-) (path string, ok bool, err error) {
+) (path string, ok bool) {
 	if obs := cfg.GetObserve(); obs != nil {
 		if p := sel(obs); p != "" {
-			return p, true, nil
+			return p, true
 		}
 	}
-	return parse(cmdline)
+	return "", false
 }
 
 // configPortForwards converts the port-forward table carried in a
 // GuestConfig to the agent's PortForwardSpec form. Returns nil when cfg
-// is nil or carries none, which the caller treats as "fall back to the
-// cmdline daft.port tokens" during the slice-3a transition.
+// is nil or carries none (no port-forwards requested for this VM).
 func configPortForwards(cfg *agentv1.GuestConfig) []PortForwardSpec {
 	protoPFs := cfg.GetPortForwards()
 	if len(protoPFs) == 0 {

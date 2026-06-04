@@ -182,57 +182,6 @@ func (e *fakeAttachExec) request() (AttachExecRequest, bool) {
 	return e.gotReq, e.gotReqSet
 }
 
-// TestParseAttachPortCmdlineRoundtrip pins the wire form.
-func TestParseAttachPortCmdlineRoundtrip(t *testing.T) {
-	cmdline := FormatAttachPortCmdline(4242)
-	port, ok, err := ParseAttachPortCmdline(cmdline)
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if !ok {
-		t.Fatal("ok=false on a well-formed token")
-	}
-	if port != 4242 {
-		t.Errorf("port = %d, want 4242", port)
-	}
-}
-
-// TestParseAttachPortCmdlineAbsent → ok=false with no error.
-func TestParseAttachPortCmdlineAbsent(t *testing.T) {
-	port, ok, err := ParseAttachPortCmdline("daft.bundle=/foo")
-	if err != nil {
-		t.Fatalf("parse: %v", err)
-	}
-	if ok {
-		t.Errorf("ok=true on absent token (got port=%d)", port)
-	}
-}
-
-// TestParseAttachPortCmdlineRejectsBadInput pins every malformed-
-// value branch so a typo on the host surfaces.
-func TestParseAttachPortCmdlineRejectsBadInput(t *testing.T) {
-	cases := []struct {
-		name    string
-		cmdline string
-		want    string
-	}{
-		{"empty", AttachPortCmdlineKey + "=", "empty"},
-		{"non-numeric", AttachPortCmdlineKey + "=abc", `"abc"`},
-		{"zero", AttachPortCmdlineKey + "=0", "non-zero"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := ParseAttachPortCmdline(tc.cmdline)
-			if err == nil {
-				t.Fatal("expected error, got nil")
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Errorf("error %q does not contain %q", err.Error(), tc.want)
-			}
-		})
-	}
-}
-
 // TestAttachFrameRoundtrip pins the wire format end-to-end.
 func TestAttachFrameRoundtrip(t *testing.T) {
 	var buf bytes.Buffer
@@ -614,12 +563,11 @@ func TestUnavailableAttachExec(t *testing.T) {
 	}
 }
 
-// TestStartAttachListenerFromCmdlineWiringHappyPath drives
-// runWith via startAttachListenerFromCmdline end-to-end: a
-// daft.attach_port token brings up a fake vsock listener and a
-// pushed connection reaches handleAttach.
-func TestStartAttachListenerFromCmdlineWiringHappyPath(t *testing.T) {
-	ln := newFakeVsockListener(9001)
+// TestStartAttachListenerWiringHappyPath drives the attach
+// listener end-to-end: an enabled GuestConfig brings up a fake
+// vsock listener and a pushed connection reaches handleAttach.
+func TestStartAttachListenerWiringHappyPath(t *testing.T) {
+	ln := newFakeVsockListener(DefaultAttachVsockPort)
 	proc := newFakeAttachProcess(0)
 	exec := &fakeAttachExec{proc: proc}
 
@@ -627,17 +575,18 @@ func TestStartAttachListenerFromCmdlineWiringHappyPath(t *testing.T) {
 	t.Cleanup(cancel)
 	var w bytes.Buffer
 
-	startAttachListenerFromCmdline(ctx, &w, runDeps{
+	startAttachListener(ctx, &w, runDeps{
+		cfg: &agentv1.GuestConfig{AttachEnabled: true},
 		attach: attachDeps{
 			listenVsock: func(port uint32) (net.Listener, error) {
-				if port != 9001 {
-					t.Fatalf("listen port = %d, want 9001", port)
+				if port != DefaultAttachVsockPort {
+					t.Fatalf("listen port = %d, want %d", port, DefaultAttachVsockPort)
 				}
 				return ln, nil
 			},
 			exec: exec,
 		},
-	}, FormatAttachPortCmdline(9001))
+	})
 
 	// Push a connection and drive a Hello.
 	client, serverSide := net.Pipe()
@@ -667,38 +616,20 @@ const testShellPath = "/bin/sh"
 // linter.
 var errShouldNotListen = errors.New("test: listenVsock should not be called")
 
-// TestStartAttachListenerFromCmdlineAbsent: no token ⇒ no listen.
-func TestStartAttachListenerFromCmdlineAbsent(t *testing.T) {
+// TestStartAttachListenerDisabled: attach not enabled ⇒ no listen.
+func TestStartAttachListenerDisabled(t *testing.T) {
 	called := false
 	var w bytes.Buffer
-	startAttachListenerFromCmdline(context.Background(), &w, runDeps{
+	startAttachListener(context.Background(), &w, runDeps{
 		attach: attachDeps{
 			listenVsock: func(uint32) (net.Listener, error) {
 				called = true
 				return nil, errShouldNotListen
 			},
 		},
-	}, "daft.bundle=/foo")
+	})
 	if called {
-		t.Error("listenVsock was called for absent token")
-	}
-}
-
-// TestStartAttachListenerFromCmdlineMalformedReportsToConsole
-// pins the cmdline-error console line and verifies no listener
-// is started.
-func TestStartAttachListenerFromCmdlineMalformedReportsToConsole(t *testing.T) {
-	var w bytes.Buffer
-	startAttachListenerFromCmdline(context.Background(), &w, runDeps{
-		attach: attachDeps{
-			listenVsock: func(uint32) (net.Listener, error) {
-				t.Fatal("listenVsock should not be called for malformed cmdline")
-				return nil, errShouldNotListen
-			},
-		},
-	}, AttachPortCmdlineKey+"=abc")
-	if !strings.Contains(w.String(), attachReportPrefix) {
-		t.Errorf("console output %q missing %q prefix", w.String(), attachReportPrefix)
+		t.Error("listenVsock was called when attach is disabled")
 	}
 }
 

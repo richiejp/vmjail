@@ -77,14 +77,13 @@ func resolveSelfPIDNS(w io.Writer, prefix string, fn func() (uint32, error)) (se
 	return selfPidns, scope
 }
 
-// startOpensnoopFromCmdline resolves the open-snoop log path (the
-// GuestConfig's observe.opensnoop, else the daft.observe.opensnoop cmdline
-// token) and, when set,
+// startOpensnoop resolves the open-snoop log path from the GuestConfig's
+// observe.opensnoop and, when set,
 // opens the guest-side trace file and spawns the gadget's drain loop for
 // the agent's lifetime (ctx cancel stops it and closes the file). It returns
 // the live aggregator so the caller can fold it into the build-progress
 // summary, or nil when the gadget was not requested / could not start. Like
-// the other start*FromCmdline helpers it reports one OpensnoopReportPrefix
+// the other start* gadget helpers it reports one OpensnoopReportPrefix
 // line per outcome and never fails the boot — observability is a debugging
 // surface, not a correctness invariant.
 //
@@ -92,17 +91,13 @@ func resolveSelfPIDNS(w io.Writer, prefix string, fn func() (uint32, error)) (se
 // workload's openat storm; the ring buffer absorbs events emitted while
 // the drain goroutine is still being scheduled.
 //
-//nolint:dupl // deliberately parallel to startExecsnoopFromCmdline; the two gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
-func startOpensnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdline string) *opensnoop.Aggregator {
+//nolint:dupl // deliberately parallel to startExecsnoop; the two gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
+func startOpensnoop(ctx context.Context, w io.Writer, d runDeps) *opensnoop.Aggregator {
 	if d.opensnoop.run == nil {
 		return nil
 	}
-	path, ok, err := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetOpensnoop, ParseOpensnoopCmdline, cmdline)
-	switch {
-	case err != nil:
-		writeReport(w, OpensnoopReportPrefix, "cmdline: "+err.Error())
-		return nil
-	case !ok:
+	path, ok := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetOpensnoop)
+	if !ok {
 		return nil
 	}
 	if err := d.opensnoop.mountTracefs(); err != nil {

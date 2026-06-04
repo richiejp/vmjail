@@ -47,30 +47,26 @@ func defaultIosnoopDeps() iosnoopDeps {
 	}
 }
 
-// startIosnoopFromCmdline resolves the io-snoop log path (the GuestConfig's
-// observe.iosnoop, else the daft.observe.iosnoop cmdline token) and, when
+// startIosnoop resolves the io-snoop log path from the GuestConfig's
+// observe.iosnoop and, when
 // set, opens the
 // guest-side trace file and spawns the gadget's drain loop for the agent's
 // lifetime. It returns the live aggregator so the caller can fold it into the
 // build-progress summary alongside the other gadgets', or nil when the gadget
-// was not requested / could not start. Like the other start*FromCmdline helpers
+// was not requested / could not start. Like the other start* gadget helpers
 // it reports one line per outcome and never fails the boot — observability is a
 // debugging surface, not a correctness invariant.
 //
 // Called before the container so the tracepoints are attaching before the
 // workload's first I/O.
 //
-//nolint:dupl // deliberately parallel to startSleepsnoopFromCmdline / startExecsnoopFromCmdline; the gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
-func startIosnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdline string) *iosnoop.Aggregator {
+//nolint:dupl // deliberately parallel to startSleepsnoop / startExecsnoop; the gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
+func startIosnoop(ctx context.Context, w io.Writer, d runDeps) *iosnoop.Aggregator {
 	if d.iosnoop.run == nil {
 		return nil
 	}
-	path, ok, err := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetIosnoop, ParseIosnoopCmdline, cmdline)
-	switch {
-	case err != nil:
-		writeReport(w, IosnoopReportPrefix, "cmdline: "+err.Error())
-		return nil
-	case !ok:
+	path, ok := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetIosnoop)
+	if !ok {
 		return nil
 	}
 	if err := d.iosnoop.mountTracefs(); err != nil {

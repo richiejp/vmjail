@@ -6,53 +6,15 @@ import (
 	"strconv"
 )
 
-// WorkspaceOverlayCmdlineKey names the kernel cmdline parameter that
-// asks the agent to wrap a virtio-fs share in a tmpfs-backed
-// overlayfs. Format: `daft.workspace.overlay=<mountpoint>` where
-// <mountpoint> is the in-guest path of the share to overlay (the
-// merged dir the container sees). Multiple tokens are honoured —
-// one per share to overlay.
-//
-// Effect: the named share is mounted at `<mountpoint>.lower` instead
-// of `<mountpoint>`; a tmpfs at OverlayStoreRoot backs an overlayfs
-// upper+work pair at `<OverlayStoreRoot>/<idx>/{upper,work}`; an
-// overlayfs is mounted at `<mountpoint>` with the lower share as
-// lowerdir. Container writes go to the tmpfs upper and are gone
-// when the VM exits — the underlying share is never written to.
-const WorkspaceOverlayCmdlineKey = "daft.workspace.overlay"
-
 // OverlayStoreRoot is the in-guest tmpfs that backs every overlay's
 // upper+work dirs. One tmpfs total; per-overlay subdirs disambiguate
 // by index. Lives under /run so it's clearly volatile.
 const OverlayStoreRoot = "/run/daft/overlay"
 
 // OverlayReportPrefix tags console lines about overlay setup —
-// cmdline parse errors, mount/mkdir failures. Same convention as
-// ShareReportPrefix so the host scanner's regex doesn't have to
-// special-case this stream.
+// mount/mkdir failures. Same convention as ShareReportPrefix so the
+// host scanner's regex doesn't have to special-case this stream.
 const OverlayReportPrefix = "overlay: "
-
-// FormatWorkspaceOverlayCmdline renders an in-guest mountpoint back
-// to the wire form. Used by the sandbox-host when assembling the
-// kernel cmdline.
-func FormatWorkspaceOverlayCmdline(mountpoint string) string {
-	return fmt.Sprintf("%s=%s", WorkspaceOverlayCmdlineKey, mountpoint)
-}
-
-// ParseWorkspaceOverlayCmdlines returns the merged mountpoints from
-// every daft.workspace.overlay=... token. A malformed token aborts
-// rather than being silently skipped — a stray bad token usually
-// means the host wired the cmdline wrong, and continuing past it
-// would mask the bug.
-func ParseWorkspaceOverlayCmdlines(cmdline string) ([]string, error) {
-	vals := findAllCmdlineValues(cmdline, WorkspaceOverlayCmdlineKey)
-	for _, v := range vals {
-		if err := validateAbsoluteCmdlinePath(WorkspaceOverlayCmdlineKey, v); err != nil {
-			return nil, err
-		}
-	}
-	return vals, nil
-}
 
 // OverlayLowerPath returns the path the share-mount step should
 // redirect a to-be-overlaid share to. Centralised so the share-mount

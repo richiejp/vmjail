@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 )
 
 // testMountpoint and testTag are the in-VM share parameters reused
@@ -134,18 +136,19 @@ func TestApplyShareTrimsTrailingNewlines(t *testing.T) {
 	}
 }
 
-// TestRunWithCmdlineApplySharePath wires the runWith deps to a fake
-// cmdline reader and a fake share, exercising the full cmdline → mount
-// → report path without any kernel involvement.
-func TestRunWithCmdlineApplySharePath(t *testing.T) {
+// TestRunWithConfigApplySharePath wires the runWith deps to a fake
+// control channel carrying one share and a fake share, exercising the
+// full config → mount → report path without any kernel involvement.
+func TestRunWithConfigApplySharePath(t *testing.T) {
 	fake := newFakeShareDeps()
 	fake.files["/share/"+ShareMarkerFile] = []byte("payload-from-host")
 
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{
+		Shares: []*agentv1.GuestConfig_Share{{Tag: testTag, Mountpoint: "/share"}},
+	}}
 	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "console=hvc0 daft.share=workspace:/share", nil
-		},
-		share: fake.toShareDeps(),
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       fake.toShareDeps(),
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -162,32 +165,11 @@ func TestRunWithCmdlineApplySharePath(t *testing.T) {
 	}
 }
 
-func TestRunWithMalformedCmdlineReportsError(t *testing.T) {
+func TestRunWithNoConfigSharesIsSilent(t *testing.T) {
+	// No control channel (the vsock-unreachable degrade) means no
+	// config and no shares — the agent simply skips sharing, emitting
+	// no share line.
 	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "daft.share=no-colon-here", nil
-		},
-		share: newFakeShareDeps().toShareDeps(),
-	}
-
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	var buf bytes.Buffer
-	_ = runWith(ctx, &buf, deps)
-
-	if !strings.Contains(buf.String(), ShareReportPrefix+"cmdline:") {
-		t.Errorf("expected cmdline error report, got: %q", buf.String())
-	}
-}
-
-func TestRunWithCmdlineReadErrorIsSilent(t *testing.T) {
-	// /proc/cmdline missing (e.g. running outside a VM for a sanity check)
-	// should not surface a share line — the agent simply skips sharing.
-	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "", errors.New("no /proc/cmdline")
-		},
 		share: newFakeShareDeps().toShareDeps(),
 	}
 
@@ -198,6 +180,6 @@ func TestRunWithCmdlineReadErrorIsSilent(t *testing.T) {
 	_ = runWith(ctx, &buf, deps)
 
 	if strings.Contains(buf.String(), ShareReportPrefix) {
-		t.Errorf("unexpected share report when cmdline read fails: %q", buf.String())
+		t.Errorf("unexpected share report when no config shares present: %q", buf.String())
 	}
 }

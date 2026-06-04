@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 )
 
 // fakeCrunEnv is the env var that turns the test binary into a fake
@@ -131,18 +133,17 @@ func TestRunContainerReportsExecError(t *testing.T) {
 	}
 }
 
-// TestRunWithBundleCmdlineExecsContainer wires the runWith deps to a
-// fake cmdline + container and asserts the cmdline → exec → report
-// path runs once with the parsed bundle path.
-func TestRunWithBundleCmdlineExecsContainer(t *testing.T) {
+// TestRunWithBundleConfigExecsContainer wires the runWith deps to a
+// fake control channel carrying a bundle + a fake container and asserts
+// the config → exec → report path runs once with the bundle path.
+func TestRunWithBundleConfigExecsContainer(t *testing.T) {
 	f := &fakeContainerDeps{stdout: ContainerReportPrefix + "from-the-fake\n"}
 
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{Bundle: "/share/bundle"}}
 	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "console=hvc0 daft.bundle=/share/bundle", nil
-		},
-		share:     newFakeShareDeps().toShareDeps(),
-		container: f.toContainerDeps(),
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       newFakeShareDeps().toShareDeps(),
+		container:   f.toContainerDeps(),
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -167,12 +168,11 @@ func TestRunWithBundleCmdlineExecsContainer(t *testing.T) {
 
 func TestRunWithMalformedBundleReportsError(t *testing.T) {
 	f := &fakeContainerDeps{}
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{Bundle: "relative-path"}}
 	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "daft.bundle=relative-path", nil
-		},
-		share:     newFakeShareDeps().toShareDeps(),
-		container: f.toContainerDeps(),
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       newFakeShareDeps().toShareDeps(),
+		container:   f.toContainerDeps(),
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -184,19 +184,18 @@ func TestRunWithMalformedBundleReportsError(t *testing.T) {
 	if f.calls != 0 {
 		t.Errorf("Exec must not be called for malformed bundle, got %d calls", f.calls)
 	}
-	if !strings.Contains(buf.String(), ContainerReportPrefix+"cmdline:") {
-		t.Errorf("expected cmdline error line: %q", buf.String())
+	if !strings.Contains(buf.String(), ContainerReportPrefix+"config: bundle path relative-path must be absolute") {
+		t.Errorf("expected absolute-bundle error line: %q", buf.String())
 	}
 }
 
 func TestRunWithoutBundleSkipsContainer(t *testing.T) {
 	f := &fakeContainerDeps{}
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{}} // no bundle
 	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "console=hvc0", nil // no daft.bundle
-		},
-		share:     newFakeShareDeps().toShareDeps(),
-		container: f.toContainerDeps(),
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       newFakeShareDeps().toShareDeps(),
+		container:   f.toContainerDeps(),
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
 	"github.com/localai-org/darkaifactory/internal/trace"
 )
@@ -18,8 +19,8 @@ import (
 // TestRunWithVsockShipsSpansToFakeHost wires runWith with a fake
 // dialVsock that returns one side of a net.Pipe; the test reads
 // the other side and decodes the framed ReportSpansRequest. Same
-// flow as the real e2e path but no VM, no kernel cmdline parser
-// path — just the agent's tracer→exporter→dial chain.
+// flow as the real e2e path but no VM — just the agent's
+// tracer→exporter→dial chain, driven by the config's trace bit.
 func TestRunWithVsockShipsSpansToFakeHost(t *testing.T) {
 	hostSide, agentSide := net.Pipe()
 	t.Cleanup(func() { _ = hostSide.Close() })
@@ -35,13 +36,12 @@ func TestRunWithVsockShipsSpansToFakeHost(t *testing.T) {
 		receivedCh <- spans
 	}()
 
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{TraceEnabled: true}}
 	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "console=hvc0 daft.vsock.trace_port=8000", nil
-		},
-		share: noopShareDeps(),
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       noopShareDeps(),
 		dialVsock: func(_ context.Context, port uint32) (net.Conn, error) {
-			if port != 8000 {
+			if port != DefaultTraceVsockPort {
 				return nil, errors.New("wrong port")
 			}
 			return agentSide, nil
@@ -77,47 +77,14 @@ func TestRunWithVsockShipsSpansToFakeHost(t *testing.T) {
 	}
 }
 
-// TestRunWithVsockMalformedCmdlinePortReports surfaces the parse
-// error on the console without preventing the banner. The test
-// also confirms no dial is attempted (since the cmdline never
-// successfully resolved a port).
-func TestRunWithVsockMalformedCmdlinePortReports(t *testing.T) {
-	dialed := false
-	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "daft.vsock.trace_port=notanumber", nil
-		},
-		share: noopShareDeps(),
-		dialVsock: func(context.Context, uint32) (net.Conn, error) {
-			dialed = true
-			return nil, errors.New("should not be called")
-		},
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	var buf bytes.Buffer
-	_ = runWith(ctx, &buf, deps)
-
-	if dialed {
-		t.Error("dial attempted despite cmdline parse failure")
-	}
-	if !strings.Contains(buf.String(), TraceReportPrefix+"cmdline:") {
-		t.Errorf("expected %s line for cmdline parse failure; got:\n%s", TraceReportPrefix, buf.String())
-	}
-	if !strings.Contains(buf.String(), Banner) {
-		t.Errorf("banner missing despite trace failure; got:\n%s", buf.String())
-	}
-}
-
 // TestRunWithVsockDialFailureReports confirms a Flush error (dial
 // returns an error) lands on the console as TraceReportPrefix
 // without preventing the banner or downstream behaviour.
 func TestRunWithVsockDialFailureReports(t *testing.T) {
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{TraceEnabled: true}}
 	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "daft.vsock.trace_port=8000", nil
-		},
-		share: noopShareDeps(),
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       noopShareDeps(),
 		dialVsock: func(context.Context, uint32) (net.Conn, error) {
 			return nil, errors.New("vsock dial nope")
 		},
@@ -144,17 +111,18 @@ func TestShutdownTracerNilIsNoOp(t *testing.T) {
 	}
 }
 
-// TestRunWithNoVsockCmdlineSkipsShipping confirms a missing trace
-// port leaves the agent shipping no spans (and no TraceReportPrefix
+// TestRunWithNoVsockConfigSkipsShipping confirms an unset trace bit
+// leaves the agent shipping no spans (and no TraceReportPrefix
 // line). Span data still accumulates in the local Tracer buffer —
 // the integration test side never sees it.
-func TestRunWithNoVsockCmdlineSkipsShipping(t *testing.T) {
+func TestRunWithNoVsockConfigSkipsShipping(t *testing.T) {
 	dialed := false
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{
+		Shares: []*agentv1.GuestConfig_Share{{Tag: testTag, Mountpoint: testMountpoint}},
+	}}
 	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return testCmdlineShareOnly, nil
-		},
-		share: noopShareDeps(),
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       noopShareDeps(),
 		dialVsock: func(context.Context, uint32) (net.Conn, error) {
 			dialed = true
 			return nil, errors.New("dial should not have been called")

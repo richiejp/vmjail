@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/execsnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/iosnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/opensnoop"
@@ -63,13 +64,21 @@ func TestRateTrackerObserve(t *testing.T) {
 	}
 }
 
+// testSummaryPath is the summary output path injected via the GuestConfig.
+const testSummaryPath = "/share/p.json"
+
+// summaryCfg builds a runDeps cfg carrying the given summary observe path.
+func summaryCfg(path string) *agentv1.GuestConfig {
+	return &agentv1.GuestConfig{Observe: &agentv1.GuestConfig_Observe{Summary: path}}
+}
+
 // TestStartSummaryWriterDisabled: a nil write disables the writer — no
 // console line, no goroutine.
 func TestStartSummaryWriterDisabled(t *testing.T) {
 	var console bytes.Buffer
 	startSummaryWriter(context.Background(), &console,
-		runDeps{summary: summaryDeps{write: nil}},
-		"daft.observe.summary=/share/p.json", opensnoop.NewAggregator(), nil, nil, nil)
+		runDeps{cfg: summaryCfg(testSummaryPath), summary: summaryDeps{write: nil}},
+		opensnoop.NewAggregator(), nil, nil, nil)
 	if console.Len() != 0 {
 		t.Fatalf("unexpected console output: %q", console.String())
 	}
@@ -79,21 +88,21 @@ func TestStartSummaryWriterDisabled(t *testing.T) {
 // nothing to summarise, so no loop and no console line.
 func TestStartSummaryWriterNoGadgets(t *testing.T) {
 	wrote := false
-	d := runDeps{summary: summaryDeps{
+	d := runDeps{cfg: summaryCfg(testSummaryPath), summary: summaryDeps{
 		now: time.Now, interval: time.Millisecond,
 		write: func(string, progress.Summary) error { wrote = true; return nil },
 	}}
 	var console bytes.Buffer
 	startSummaryWriter(context.Background(), &console, d,
-		"daft.observe.summary=/share/p.json", nil, nil, nil, nil)
+		nil, nil, nil, nil)
 	time.Sleep(5 * time.Millisecond)
 	if wrote || console.Len() != 0 {
 		t.Fatalf("summary started with no gadgets: wrote=%v console=%q", wrote, console.String())
 	}
 }
 
-// TestStartSummaryWriterAbsentToken: writer wired but no cmdline token →
-// silent skip.
+// TestStartSummaryWriterAbsentToken: writer wired but no summary path in the
+// config → silent skip.
 func TestStartSummaryWriterAbsentToken(t *testing.T) {
 	wrote := false
 	d := runDeps{summary: summaryDeps{
@@ -101,24 +110,10 @@ func TestStartSummaryWriterAbsentToken(t *testing.T) {
 		write: func(string, progress.Summary) error { wrote = true; return nil },
 	}}
 	var console bytes.Buffer
-	startSummaryWriter(context.Background(), &console, d, "console=hvc0", opensnoop.NewAggregator(), nil, nil, nil)
+	startSummaryWriter(context.Background(), &console, d, opensnoop.NewAggregator(), nil, nil, nil)
 	time.Sleep(5 * time.Millisecond) // a started loop would have written by now
 	if wrote || console.Len() != 0 {
 		t.Fatalf("summary started despite absent token: wrote=%v console=%q", wrote, console.String())
-	}
-}
-
-// TestStartSummaryWriterReportsCmdlineError: a malformed (relative) path is
-// reported and no loop starts.
-func TestStartSummaryWriterReportsCmdlineError(t *testing.T) {
-	d := runDeps{summary: summaryDeps{
-		now: time.Now, interval: time.Millisecond,
-		write: func(string, progress.Summary) error { return nil },
-	}}
-	var console bytes.Buffer
-	startSummaryWriter(context.Background(), &console, d, "daft.observe.summary=rel/path", opensnoop.NewAggregator(), nil, nil, nil)
-	if !bytes.Contains(console.Bytes(), []byte(SummaryReportPrefix+"cmdline:")) {
-		t.Fatalf("missing cmdline error report: %q", console.String())
 	}
 }
 
@@ -127,7 +122,7 @@ func TestStartSummaryWriterReportsCmdlineError(t *testing.T) {
 func TestStartSummaryWriterHappyPath(t *testing.T) {
 	clock := newFakeClock()
 	writes := make(chan progress.Summary, 16)
-	d := runDeps{summary: summaryDeps{
+	d := runDeps{cfg: summaryCfg(testSummaryPath), summary: summaryDeps{
 		now:      clock.now,
 		interval: time.Millisecond,
 		write: func(path string, s progress.Summary) error {
@@ -153,7 +148,7 @@ func TestStartSummaryWriterHappyPath(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var console bytes.Buffer
-	startSummaryWriter(ctx, &console, d, "daft.observe.summary="+testSummaryPath, agg, exAgg, slAgg, ioAgg)
+	startSummaryWriter(ctx, &console, d, agg, exAgg, slAgg, ioAgg)
 
 	got := <-writes // the immediate initial write
 	cancel()

@@ -9,8 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/iosnoop"
 )
+
+// iosnoopCfg builds a GuestConfig carrying the io-snoop observe path.
+func iosnoopCfg(path string) *agentv1.GuestConfig {
+	return &agentv1.GuestConfig{Observe: &agentv1.GuestConfig_Observe{Iosnoop: path}}
+}
 
 // iosnoopTestDeps builds a runDeps wiring the io-snoop gadget seam with a no-op
 // tracefs mount and a fixed self-PID-namespace (container scope).
@@ -27,9 +33,8 @@ func TestStartIosnoopDisabledWhenRunNil(t *testing.T) {
 	called := false
 	openLog := func(string) (io.WriteCloser, error) { called = true; return newFakeLog(), nil }
 	var console bytes.Buffer
-	agg := startIosnoopFromCmdline(context.Background(), &console,
-		runDeps{iosnoop: iosnoopDeps{openLog: openLog, run: nil}},
-		"daft.observe.iosnoop=/share/x.log")
+	agg := startIosnoop(context.Background(), &console,
+		runDeps{cfg: iosnoopCfg("/share/x.log"), iosnoop: iosnoopDeps{openLog: openLog, run: nil}})
 	if agg != nil || called || console.Len() != 0 {
 		t.Fatalf("disabled gadget did something: agg=%v called=%v console=%q", agg, called, console.String())
 	}
@@ -38,33 +43,21 @@ func TestStartIosnoopDisabledWhenRunNil(t *testing.T) {
 func TestStartIosnoopAbsentToken(t *testing.T) {
 	run := func(context.Context, io.Writer, *iosnoop.Aggregator, uint32) error { return nil }
 	var console bytes.Buffer
-	if agg := startIosnoopFromCmdline(context.Background(), &console,
-		iosnoopTestDeps(func(string) (io.WriteCloser, error) { return newFakeLog(), nil }, run),
-		"console=hvc0"); agg != nil || console.Len() != 0 {
+	if agg := startIosnoop(context.Background(), &console,
+		iosnoopTestDeps(func(string) (io.WriteCloser, error) { return newFakeLog(), nil }, run)); agg != nil || console.Len() != 0 {
 		t.Fatalf("absent token started the gadget: agg=%v console=%q", agg, console.String())
-	}
-}
-
-func TestStartIosnoopReportsCmdlineError(t *testing.T) {
-	run := func(context.Context, io.Writer, *iosnoop.Aggregator, uint32) error { return nil }
-	var console bytes.Buffer
-	startIosnoopFromCmdline(context.Background(), &console,
-		iosnoopTestDeps(func(string) (io.WriteCloser, error) { return newFakeLog(), nil }, run),
-		"daft.observe.iosnoop=rel/path")
-	if !strings.Contains(console.String(), IosnoopReportPrefix+"cmdline:") {
-		t.Fatalf("missing cmdline error report: %q", console.String())
 	}
 }
 
 func TestStartIosnoopReportsTracefsError(t *testing.T) {
 	run := func(context.Context, io.Writer, *iosnoop.Aggregator, uint32) error { return nil }
 	var console bytes.Buffer
-	d := runDeps{iosnoop: iosnoopDeps{
+	d := runDeps{cfg: iosnoopCfg("/share/x.log"), iosnoop: iosnoopDeps{
 		mountTracefs: func() error { return errors.New("boom-tracefs") },
 		openLog:      func(string) (io.WriteCloser, error) { return newFakeLog(), nil },
 		run:          run,
 	}}
-	if agg := startIosnoopFromCmdline(context.Background(), &console, d, "daft.observe.iosnoop=/share/x.log"); agg != nil {
+	if agg := startIosnoop(context.Background(), &console, d); agg != nil {
 		t.Fatal("gadget started despite tracefs failure")
 	}
 	if !strings.Contains(console.String(), IosnoopReportPrefix+"boom-tracefs") {
@@ -79,8 +72,9 @@ func TestStartIosnoopReportsOpenError(t *testing.T) {
 		return nil
 	}
 	var console bytes.Buffer
-	startIosnoopFromCmdline(context.Background(), &console,
-		iosnoopTestDeps(openLog, run), "daft.observe.iosnoop=/share/x.log")
+	d := iosnoopTestDeps(openLog, run)
+	d.cfg = iosnoopCfg("/share/x.log")
+	startIosnoop(context.Background(), &console, d)
 	if !strings.Contains(console.String(), IosnoopReportPrefix+"boom-open") {
 		t.Fatalf("missing open error report: %q", console.String())
 	}
@@ -101,8 +95,9 @@ func TestStartIosnoopHappyPath(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	var console bytes.Buffer
-	agg := startIosnoopFromCmdline(ctx, &console, iosnoopTestDeps(openLog, run),
-		"daft.observe.iosnoop=/share/io.log")
+	d := iosnoopTestDeps(openLog, run)
+	d.cfg = iosnoopCfg("/share/io.log")
+	agg := startIosnoop(ctx, &console, d)
 	if agg == nil {
 		t.Fatal("happy path returned a nil aggregator")
 	}
@@ -126,7 +121,7 @@ func TestStartIosnoopHappyPath(t *testing.T) {
 func TestStartIosnoopReportsPIDNSError(t *testing.T) {
 	log := newFakeLog()
 	gotNS := make(chan uint32, 1)
-	d := runDeps{iosnoop: iosnoopDeps{
+	d := runDeps{cfg: iosnoopCfg("/share/x.log"), iosnoop: iosnoopDeps{
 		mountTracefs: func() error { return nil },
 		openLog:      func(string) (io.WriteCloser, error) { return log, nil },
 		selfPIDNS:    func() (uint32, error) { return 0, errors.New("boom-pidns") },
@@ -138,7 +133,7 @@ func TestStartIosnoopReportsPIDNSError(t *testing.T) {
 	}}
 	ctx, cancel := context.WithCancel(context.Background())
 	var console bytes.Buffer
-	startIosnoopFromCmdline(ctx, &console, d, "daft.observe.iosnoop=/share/x.log")
+	startIosnoop(ctx, &console, d)
 	if ns := <-gotNS; ns != 0 {
 		t.Errorf("run received selfPidns = %d, want 0 (unfiltered fallback)", ns)
 	}
@@ -157,9 +152,9 @@ func TestStartIosnoopReportsRunError(t *testing.T) {
 	log := newFakeLog()
 	run := func(context.Context, io.Writer, *iosnoop.Aggregator, uint32) error { return errors.New("boom-run") }
 	var console bytes.Buffer
-	startIosnoopFromCmdline(context.Background(), &console,
-		iosnoopTestDeps(func(string) (io.WriteCloser, error) { return log, nil }, run),
-		"daft.observe.iosnoop=/share/x.log")
+	d := iosnoopTestDeps(func(string) (io.WriteCloser, error) { return log, nil }, run)
+	d.cfg = iosnoopCfg("/share/x.log")
+	startIosnoop(context.Background(), &console, d)
 	<-log.closed
 	if !strings.Contains(console.String(), IosnoopReportPrefix+"boom-run") {
 		t.Fatalf("missing run error report: %q", console.String())

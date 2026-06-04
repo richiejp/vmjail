@@ -9,8 +9,14 @@ import (
 	"strings"
 	"testing"
 
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/execsnoop"
 )
+
+// execsnoopCfg builds a GuestConfig carrying the exec-snoop observe path.
+func execsnoopCfg(path string) *agentv1.GuestConfig {
+	return &agentv1.GuestConfig{Observe: &agentv1.GuestConfig_Observe{Execsnoop: path}}
+}
 
 // execsnoopTestDeps builds a runDeps wiring the exec-snoop gadget seam with a
 // no-op tracefs mount and a fixed self-PID-namespace (container scope).
@@ -27,9 +33,8 @@ func TestStartExecsnoopDisabledWhenRunNil(t *testing.T) {
 	called := false
 	openLog := func(string) (io.WriteCloser, error) { called = true; return newFakeLog(), nil }
 	var console bytes.Buffer
-	agg := startExecsnoopFromCmdline(context.Background(), &console,
-		runDeps{execsnoop: execsnoopDeps{openLog: openLog, run: nil}},
-		"daft.observe.execsnoop=/share/x.log")
+	agg := startExecsnoop(context.Background(), &console,
+		runDeps{cfg: execsnoopCfg("/share/x.log"), execsnoop: execsnoopDeps{openLog: openLog, run: nil}})
 	if agg != nil || called || console.Len() != 0 {
 		t.Fatalf("disabled gadget did something: agg=%v called=%v console=%q", agg, called, console.String())
 	}
@@ -38,33 +43,21 @@ func TestStartExecsnoopDisabledWhenRunNil(t *testing.T) {
 func TestStartExecsnoopAbsentToken(t *testing.T) {
 	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32) error { return nil }
 	var console bytes.Buffer
-	if agg := startExecsnoopFromCmdline(context.Background(), &console,
-		execsnoopTestDeps(func(string) (io.WriteCloser, error) { return newFakeLog(), nil }, run),
-		"console=hvc0"); agg != nil || console.Len() != 0 {
+	if agg := startExecsnoop(context.Background(), &console,
+		execsnoopTestDeps(func(string) (io.WriteCloser, error) { return newFakeLog(), nil }, run)); agg != nil || console.Len() != 0 {
 		t.Fatalf("absent token started the gadget: agg=%v console=%q", agg, console.String())
-	}
-}
-
-func TestStartExecsnoopReportsCmdlineError(t *testing.T) {
-	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32) error { return nil }
-	var console bytes.Buffer
-	startExecsnoopFromCmdline(context.Background(), &console,
-		execsnoopTestDeps(func(string) (io.WriteCloser, error) { return newFakeLog(), nil }, run),
-		"daft.observe.execsnoop=rel/path")
-	if !strings.Contains(console.String(), ExecsnoopReportPrefix+"cmdline:") {
-		t.Fatalf("missing cmdline error report: %q", console.String())
 	}
 }
 
 func TestStartExecsnoopReportsTracefsError(t *testing.T) {
 	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32) error { return nil }
 	var console bytes.Buffer
-	d := runDeps{execsnoop: execsnoopDeps{
+	d := runDeps{cfg: execsnoopCfg("/share/x.log"), execsnoop: execsnoopDeps{
 		mountTracefs: func() error { return errors.New("boom-tracefs") },
 		openLog:      func(string) (io.WriteCloser, error) { return newFakeLog(), nil },
 		run:          run,
 	}}
-	if agg := startExecsnoopFromCmdline(context.Background(), &console, d, "daft.observe.execsnoop=/share/x.log"); agg != nil {
+	if agg := startExecsnoop(context.Background(), &console, d); agg != nil {
 		t.Fatal("gadget started despite tracefs failure")
 	}
 	if !strings.Contains(console.String(), ExecsnoopReportPrefix+"boom-tracefs") {
@@ -79,8 +72,9 @@ func TestStartExecsnoopReportsOpenError(t *testing.T) {
 		return nil
 	}
 	var console bytes.Buffer
-	startExecsnoopFromCmdline(context.Background(), &console,
-		execsnoopTestDeps(openLog, run), "daft.observe.execsnoop=/share/x.log")
+	d := execsnoopTestDeps(openLog, run)
+	d.cfg = execsnoopCfg("/share/x.log")
+	startExecsnoop(context.Background(), &console, d)
 	if !strings.Contains(console.String(), ExecsnoopReportPrefix+"boom-open") {
 		t.Fatalf("missing open error report: %q", console.String())
 	}
@@ -101,8 +95,9 @@ func TestStartExecsnoopHappyPath(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	var console bytes.Buffer
-	agg := startExecsnoopFromCmdline(ctx, &console, execsnoopTestDeps(openLog, run),
-		"daft.observe.execsnoop=/share/execve.log")
+	d := execsnoopTestDeps(openLog, run)
+	d.cfg = execsnoopCfg("/share/execve.log")
+	agg := startExecsnoop(ctx, &console, d)
 	if agg == nil {
 		t.Fatal("happy path returned a nil aggregator")
 	}
@@ -126,7 +121,7 @@ func TestStartExecsnoopHappyPath(t *testing.T) {
 func TestStartExecsnoopReportsPIDNSError(t *testing.T) {
 	log := newFakeLog()
 	gotNS := make(chan uint32, 1)
-	d := runDeps{execsnoop: execsnoopDeps{
+	d := runDeps{cfg: execsnoopCfg("/share/x.log"), execsnoop: execsnoopDeps{
 		mountTracefs: func() error { return nil },
 		openLog:      func(string) (io.WriteCloser, error) { return log, nil },
 		selfPIDNS:    func() (uint32, error) { return 0, errors.New("boom-pidns") },
@@ -138,7 +133,7 @@ func TestStartExecsnoopReportsPIDNSError(t *testing.T) {
 	}}
 	ctx, cancel := context.WithCancel(context.Background())
 	var console bytes.Buffer
-	startExecsnoopFromCmdline(ctx, &console, d, "daft.observe.execsnoop=/share/x.log")
+	startExecsnoop(ctx, &console, d)
 	if ns := <-gotNS; ns != 0 {
 		t.Errorf("run received selfPidns = %d, want 0 (unfiltered fallback)", ns)
 	}
@@ -157,9 +152,9 @@ func TestStartExecsnoopReportsRunError(t *testing.T) {
 	log := newFakeLog()
 	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32) error { return errors.New("boom-run") }
 	var console bytes.Buffer
-	startExecsnoopFromCmdline(context.Background(), &console,
-		execsnoopTestDeps(func(string) (io.WriteCloser, error) { return log, nil }, run),
-		"daft.observe.execsnoop=/share/x.log")
+	d := execsnoopTestDeps(func(string) (io.WriteCloser, error) { return log, nil }, run)
+	d.cfg = execsnoopCfg("/share/x.log")
+	startExecsnoop(context.Background(), &console, d)
 	<-log.closed
 	if !strings.Contains(console.String(), ExecsnoopReportPrefix+"boom-run") {
 		t.Fatalf("missing run error report: %q", console.String())

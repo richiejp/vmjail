@@ -47,30 +47,25 @@ func defaultSleepsnoopDeps() sleepsnoopDeps {
 	}
 }
 
-// startSleepsnoopFromCmdline resolves the sleep-snoop log path (the
-// GuestConfig's observe.sleepsnoop, else the daft.observe.sleepsnoop
-// cmdline token) and, when set,
+// startSleepsnoop resolves the sleep-snoop log path from the GuestConfig's
+// observe.sleepsnoop and, when set,
 // opens the guest-side trace file and spawns the gadget's drain loop for the
 // agent's lifetime. It returns the live aggregator so the caller can fold it
 // into the build-progress summary alongside the other gadgets', or nil when the
-// gadget was not requested / could not start. Like the other start*FromCmdline
+// gadget was not requested / could not start. Like the other start* gadget
 // helpers it reports one line per outcome and never fails the boot —
 // observability is a debugging surface, not a correctness invariant.
 //
 // Called before the container so the tracepoints are attaching before the
 // workload's first sleep.
 //
-//nolint:dupl // deliberately parallel to startOpensnoopFromCmdline / startExecsnoopFromCmdline; the gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
-func startSleepsnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdline string) *sleepsnoop.Aggregator {
+//nolint:dupl // deliberately parallel to startOpensnoop / startExecsnoop; the gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
+func startSleepsnoop(ctx context.Context, w io.Writer, d runDeps) *sleepsnoop.Aggregator {
 	if d.sleepsnoop.run == nil {
 		return nil
 	}
-	path, ok, err := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetSleepsnoop, ParseSleepsnoopCmdline, cmdline)
-	switch {
-	case err != nil:
-		writeReport(w, SleepsnoopReportPrefix, "cmdline: "+err.Error())
-		return nil
-	case !ok:
+	path, ok := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetSleepsnoop)
+	if !ok {
 		return nil
 	}
 	if err := d.sleepsnoop.mountTracefs(); err != nil {

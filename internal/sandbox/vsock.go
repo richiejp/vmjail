@@ -112,7 +112,7 @@ const configServeTimeout = 5 * time.Second
 //
 // No-op (do-nothing stop, nil bootComplete) when cfg has no Vsock /
 // HostSocket: such a VM has no vsock device at all, so the agent can't
-// dial and falls back to the cmdline + the banner-scan sentinel.
+// dial and degrades to a banner-only boot (the banner-scan sentinel).
 func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootComplete <-chan struct{}, err error) {
 	if cfg.Vsock == nil || cfg.Vsock.HostSocket == "" {
 		return func() {}, nil, nil
@@ -154,10 +154,10 @@ func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootC
 
 // buildGuestConfig projects the boot Config into the GuestConfig wire
 // message the agent applies: the container bundle, each virtio-fs share
-// (with its overlay flag), the per-workspace port-forward table, and the
-// Tier-2 observe-gadget paths. Mirrors the per-workspace half of
-// buildKernelCmdline; trace/attach/net ports still ride the cmdline until
-// slice 3b collapses them to fixed constants.
+// (with its overlay flag), the per-workspace port-forward table, the
+// Tier-2 observe-gadget paths, and the trace/attach/net feature toggles.
+// This is the sole channel for per-VM settings — the kernel cmdline
+// carries no daft.* tokens at all.
 func buildGuestConfig(cfg Config) *agentv1.GuestConfig {
 	gc := &agentv1.GuestConfig{Bundle: cfg.Bundle}
 	for _, s := range cfg.Shares {

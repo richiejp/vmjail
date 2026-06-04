@@ -47,31 +47,26 @@ func defaultExecsnoopDeps() execsnoopDeps {
 	}
 }
 
-// startExecsnoopFromCmdline resolves the exec-snoop log path (the
-// GuestConfig's observe.execsnoop, else the daft.observe.execsnoop cmdline
-// token) and, when set,
+// startExecsnoop resolves the exec-snoop log path from the GuestConfig's
+// observe.execsnoop and, when set,
 // opens the guest-side trace file and spawns the gadget's drain loop for the
 // agent's lifetime. It returns the live aggregator so the caller can fold it
 // into the build-progress summary alongside open-snoop's, or nil when the
 // gadget was not requested / could not start. Like the other
-// start*FromCmdline helpers it reports one line per outcome and never fails
+// start* gadget helpers it reports one line per outcome and never fails
 // the boot — observability is a debugging surface, not a correctness
 // invariant.
 //
 // Called before the container so the tracepoint is attaching before the
 // workload's first exec.
 //
-//nolint:dupl // deliberately parallel to startOpensnoopFromCmdline; the two gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
-func startExecsnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdline string) *execsnoop.Aggregator {
+//nolint:dupl // deliberately parallel to startOpensnoop; the two gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
+func startExecsnoop(ctx context.Context, w io.Writer, d runDeps) *execsnoop.Aggregator {
 	if d.execsnoop.run == nil {
 		return nil
 	}
-	path, ok, err := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetExecsnoop, ParseExecsnoopCmdline, cmdline)
-	switch {
-	case err != nil:
-		writeReport(w, ExecsnoopReportPrefix, "cmdline: "+err.Error())
-		return nil
-	case !ok:
+	path, ok := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetExecsnoop)
+	if !ok {
 		return nil
 	}
 	if err := d.execsnoop.mountTracefs(); err != nil {

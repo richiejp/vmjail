@@ -225,39 +225,6 @@ func TestControlChannelConfigNil(t *testing.T) {
 	}
 }
 
-// TestResolveFeaturePorts covers the trace/attach/net resolvers: the
-// GuestConfig enable-bit selects the fixed constant port; otherwise the
-// cmdline token decides. One table since the three are structurally
-// identical.
-func TestResolveFeaturePorts(t *testing.T) {
-	cases := []struct {
-		name     string
-		resolve  func(*agentv1.GuestConfig, string) (uint32, bool, error)
-		enabled  *agentv1.GuestConfig
-		wantPort uint32
-		cmdline  string
-		cmdPort  uint32
-	}{
-		{"trace", resolveTracePort, &agentv1.GuestConfig{TraceEnabled: true}, DefaultTraceVsockPort, FormatVsockTracePortCmdline(8001), 8001},
-		{"attach", resolveAttachPort, &agentv1.GuestConfig{AttachEnabled: true}, DefaultAttachVsockPort, FormatAttachPortCmdline(9001), 9001},
-		{"net", resolveNetPort, &agentv1.GuestConfig{NetEnabled: true}, DefaultNetVsockPort, FormatNetPortCmdline(9501), 9501},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Config enable-bit wins with the constant port, cmdline ignored.
-			p, ok, err := tc.resolve(tc.enabled, tc.cmdline)
-			if err != nil || !ok || p != tc.wantPort {
-				t.Fatalf("enabled: got (%d,%v,%v), want (%d,true,nil)", p, ok, err, tc.wantPort)
-			}
-			// Disabled config: fall back to the cmdline token.
-			p, ok, err = tc.resolve(nil, tc.cmdline)
-			if err != nil || !ok || p != tc.cmdPort {
-				t.Fatalf("cmdline: got (%d,%v,%v), want (%d,true,nil)", p, ok, err, tc.cmdPort)
-			}
-		})
-	}
-}
-
 // TestConfigShareSpecs covers the proto→ShareSpec projection and its
 // nil / empty fallbacks.
 //
@@ -313,28 +280,29 @@ func TestConfigPortForwards(t *testing.T) {
 	}
 }
 
-// TestResolveObservePath covers all three branches: config hit (cmdline
-// ignored), config miss → cmdline, and nil cfg → cmdline.
+// TestResolveObservePath covers both branches: config hit (the selected
+// Observe field carries a path), and the misses (Observe present but this
+// field empty, or nil cfg) which return ok=false.
 func TestResolveObservePath(t *testing.T) {
 	sel := (*agentv1.GuestConfig_Observe).GetOpensnoop
 
-	// Config carries the path: cmdline is not consulted.
+	// Config carries the path.
 	cfg := &agentv1.GuestConfig{Observe: &agentv1.GuestConfig_Observe{Opensnoop: "/cfg.log"}}
-	p, ok, err := resolveObservePath(cfg, sel, ParseOpensnoopCmdline, "daft.observe.opensnoop=/cmd.log")
-	if err != nil || !ok || p != "/cfg.log" {
-		t.Fatalf("config-hit: got (%q,%v,%v), want (/cfg.log,true,nil)", p, ok, err)
+	p, ok := resolveObservePath(cfg, sel)
+	if !ok || p != "/cfg.log" {
+		t.Fatalf("config-hit: got (%q,%v), want (/cfg.log,true)", p, ok)
 	}
 
-	// Observe present but this field empty: fall back to the cmdline.
+	// Observe present but this field empty: miss.
 	cfg = &agentv1.GuestConfig{Observe: &agentv1.GuestConfig_Observe{Execsnoop: "/other.log"}}
-	p, ok, err = resolveObservePath(cfg, sel, ParseOpensnoopCmdline, "daft.observe.opensnoop=/cmd.log")
-	if err != nil || !ok || p != "/cmd.log" {
-		t.Fatalf("config-miss: got (%q,%v,%v), want (/cmd.log,true,nil)", p, ok, err)
+	p, ok = resolveObservePath(cfg, sel)
+	if ok || p != "" {
+		t.Fatalf("config-miss: got (%q,%v), want (\"\",false)", p, ok)
 	}
 
-	// nil cfg: straight to the cmdline (here absent → ok=false).
-	p, ok, err = resolveObservePath(nil, sel, ParseOpensnoopCmdline, "console=ttyS0")
-	if err != nil || ok || p != "" {
-		t.Fatalf("nil-cfg: got (%q,%v,%v), want (\"\",false,nil)", p, ok, err)
+	// nil cfg: miss.
+	p, ok = resolveObservePath(nil, sel)
+	if ok || p != "" {
+		t.Fatalf("nil-cfg: got (%q,%v), want (\"\",false)", p, ok)
 	}
 }

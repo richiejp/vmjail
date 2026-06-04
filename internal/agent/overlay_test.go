@@ -17,61 +17,6 @@ const (
 	fstypeVirtiofs    = "virtiofs"
 )
 
-func TestParseWorkspaceOverlayCmdlinesHappyPath(t *testing.T) {
-	got, err := ParseWorkspaceOverlayCmdlines(
-		"console=hvc0 daft.workspace.overlay=/workspace daft.workspace.overlay=/data reboot=t",
-	)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	want := []string{overlayMergedTest, "/data"}
-	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
-		t.Errorf("got %v, want %v", got, want)
-	}
-}
-
-func TestParseWorkspaceOverlayCmdlinesAbsent(t *testing.T) {
-	got, err := ParseWorkspaceOverlayCmdlines("console=hvc0 reboot=t")
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if got != nil {
-		t.Errorf("got %v, want nil", got)
-	}
-}
-
-func TestParseWorkspaceOverlayCmdlinesRejectsBadValues(t *testing.T) {
-	cases := []struct {
-		name      string
-		cmdline   string
-		errSubstr string
-	}{
-		{caseNameEmptyValue, "daft.workspace.overlay=", errSubEmptyValue},
-		{"relative", "daft.workspace.overlay=workspace", errSubMustBeAbsolute},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseWorkspaceOverlayCmdlines(tc.cmdline)
-			if err == nil || !strings.Contains(err.Error(), tc.errSubstr) {
-				t.Errorf("err = %v, want substring %q", err, tc.errSubstr)
-			}
-		})
-	}
-}
-
-func TestFormatWorkspaceOverlayCmdlineRoundTrips(t *testing.T) {
-	for _, mp := range []string{overlayMergedTest, "/mnt/x", "/data"} {
-		s := FormatWorkspaceOverlayCmdline(mp)
-		got, err := ParseWorkspaceOverlayCmdlines(s)
-		if err != nil {
-			t.Fatalf("round-trip %q via %q: %v", mp, s, err)
-		}
-		if len(got) != 1 || got[0] != mp {
-			t.Errorf("round-trip %q: got %v", mp, got)
-		}
-	}
-}
-
 func TestOverlayLowerPath(t *testing.T) {
 	if got := OverlayLowerPath(overlayMergedTest); got != "/workspace.lower" {
 		t.Errorf("OverlayLowerPath(%q) = %q, want /workspace.lower", overlayMergedTest, got)
@@ -135,50 +80,18 @@ func TestMountOverlayReportsMkdirError(t *testing.T) {
 	}
 }
 
-// TestApplySharesFromCmdlineRedirectsToLowerWhenOverlaid pins the
-// agent-side handoff: when daft.workspace.overlay matches a
-// daft.share's mountpoint, the share is mounted at <mp>.lower and
-// an overlayfs follows at <mp>.
-func TestApplySharesFromCmdlineRedirectsToLowerWhenOverlaid(t *testing.T) {
-	f := newFakeShareDeps()
-	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "daft.share=workspace:" + overlayMergedTest + " daft.workspace.overlay=" + overlayMergedTest, nil
-		},
-		share: f.toShareDeps(),
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	var buf bytes.Buffer
-	_ = runWith(ctx, &buf, deps)
-
-	// Expect: virtiofs mount at /workspace.lower, tmpfs at the
-	// overlay root, overlayfs at /workspace.
-	if len(f.mounts) != 3 {
-		t.Fatalf("mounts = %+v, want 3 (virtiofs+tmpfs+overlay)", f.mounts)
-	}
-	if f.mounts[0].fstype != fstypeVirtiofs || f.mounts[0].target != overlayMergedTest+".lower" {
-		t.Errorf("share mount = %+v, want virtiofs at %q.lower", f.mounts[0], overlayMergedTest)
-	}
-	if f.mounts[2].fstype != fstypeOverlay || f.mounts[2].target != overlayMergedTest {
-		t.Errorf("overlay mount = %+v, want overlay at %q", f.mounts[2], overlayMergedTest)
-	}
-}
-
-// TestApplySharesFromConfigRedirectsToLowerWhenOverlaid is the
-// config-payload twin of the cmdline test above: a GuestConfig share with
-// its overlay bit set must drive the same .lower + overlayfs handoff,
-// with the cmdline empty.
+// TestApplySharesFromConfigRedirectsToLowerWhenOverlaid pins the
+// agent-side handoff: a GuestConfig share with its overlay bit set must
+// drive the .lower + overlayfs handoff — the share is mounted at
+// <mp>.lower and an overlayfs follows at <mp>.
 func TestApplySharesFromConfigRedirectsToLowerWhenOverlaid(t *testing.T) {
 	f := newFakeShareDeps()
 	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{
 		Shares: []*agentv1.GuestConfig_Share{
-			{Tag: "workspace", Mountpoint: overlayMergedTest, Overlay: true},
+			{Tag: testTag, Mountpoint: overlayMergedTest, Overlay: true},
 		},
 	}}
 	deps := runDeps{
-		readCmdline: func() (string, error) { return "", nil },
 		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
 		share:       f.toShareDeps(),
 	}
@@ -199,47 +112,22 @@ func TestApplySharesFromConfigRedirectsToLowerWhenOverlaid(t *testing.T) {
 	}
 }
 
-// TestApplySharesFromCmdlineReportsOverlayCmdlineError ensures a
-// malformed daft.workspace.overlay token surfaces on the console
-// (without bringing the agent down or skipping the share mount).
-func TestApplySharesFromCmdlineReportsOverlayCmdlineError(t *testing.T) {
-	f := newFakeShareDeps()
-	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "daft.share=workspace:/workspace daft.workspace.overlay=relative", nil
-		},
-		share: f.toShareDeps(),
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	var buf bytes.Buffer
-	_ = runWith(ctx, &buf, deps)
-
-	if !strings.Contains(buf.String(), OverlayReportPrefix+"cmdline:") {
-		t.Errorf("expected overlay cmdline error report, got: %q", buf.String())
-	}
-	// Share mount still happens against the raw mountpoint, since
-	// we couldn't honour the overlay request — no overlayfs/tmpfs
-	// should follow.
-	if len(f.mounts) != 1 || f.mounts[0].target != "/workspace" {
-		t.Errorf("mounts = %+v, want one virtiofs at /workspace", f.mounts)
-	}
-}
-
-// TestApplySharesFromCmdlineReportsOverlayMountError pins the
+// TestApplySharesFromConfigReportsOverlayMountError pins the
 // overlay: <err> console report path when MountOverlay fails after
 // the share is in place. The same fake's mountErr fires for both
 // share + overlay mounts; we still expect the overlay error to
 // surface via the overlay reporter.
-func TestApplySharesFromCmdlineReportsOverlayMountError(t *testing.T) {
+func TestApplySharesFromConfigReportsOverlayMountError(t *testing.T) {
 	f := newFakeShareDeps()
 	f.mountErr = errors.New("overlay mount bang")
-	deps := runDeps{
-		readCmdline: func() (string, error) {
-			return "daft.share=workspace:/workspace daft.workspace.overlay=/workspace", nil
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{
+		Shares: []*agentv1.GuestConfig_Share{
+			{Tag: "workspace", Mountpoint: "/workspace", Overlay: true},
 		},
-		share: f.toShareDeps(),
+	}}
+	deps := runDeps{
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       f.toShareDeps(),
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
@@ -250,28 +138,4 @@ func TestApplySharesFromCmdlineReportsOverlayMountError(t *testing.T) {
 	if !strings.Contains(buf.String(), OverlayReportPrefix+"mount tmpfs: overlay mount bang") {
 		t.Errorf("expected overlay mount error report, got: %q", buf.String())
 	}
-}
-
-// FuzzParseWorkspaceOverlayCmdlines guards the cmdline parser
-// against panics on arbitrary input. Same threat model as the
-// share parser.
-//
-//	go test -run='^$' -fuzz=FuzzParseWorkspaceOverlayCmdlines -fuzztime=30s ./internal/agent
-func FuzzParseWorkspaceOverlayCmdlines(f *testing.F) {
-	seeds := []string{
-		"",
-		"daft.workspace.overlay=/workspace",
-		"daft.workspace.overlay=/workspace daft.workspace.overlay=/data",
-		"daft.workspace.overlay=",
-		"daft.workspace.overlay=relative",
-		"daft.workspace.overlay=/" + strings.Repeat("a", 4096),
-		"daft.workspace.overlay=\x00",
-		"daft.workspace.overlay=日本語",
-	}
-	for _, s := range seeds {
-		f.Add(s)
-	}
-	f.Fuzz(func(t *testing.T, raw string) {
-		_, _ = ParseWorkspaceOverlayCmdlines(raw)
-	})
 }

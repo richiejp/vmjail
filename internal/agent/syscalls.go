@@ -33,24 +33,19 @@ type syscallDumpDeps struct {
 	openLog func(path string) (io.WriteCloser, error)
 }
 
-// startSyscallDumpFromCmdline resolves the syscall-list path (the
-// GuestConfig's observe.syscalls, else the daft.observe.syscalls cmdline
-// token) and, when set,
+// startSyscallDump resolves the syscall-list path from the GuestConfig's
+// observe.syscalls and, when set,
 // enumerates the kernel's syscall tracepoints and writes the sorted list to the
 // given guest path (on the observe share, so the host can read it back). Like
 // the gadget start helpers it reports one line per outcome and never fails the
 // boot — it is a diagnostic, not a correctness invariant. One-shot: no
 // goroutine, no BPF.
-func startSyscallDumpFromCmdline(w io.Writer, d runDeps, cmdline string) {
+func startSyscallDump(w io.Writer, d runDeps) {
 	if d.syscalls.listEnter == nil {
 		return
 	}
-	path, ok, err := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetSyscalls, ParseSyscallsCmdline, cmdline)
-	switch {
-	case err != nil:
-		writeReport(w, SyscallsReportPrefix, "cmdline: "+err.Error())
-		return
-	case !ok:
+	path, ok := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetSyscalls)
+	if !ok {
 		return
 	}
 	if err := d.syscalls.mountTracefs(); err != nil {

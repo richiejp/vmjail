@@ -55,17 +55,12 @@ func TestRunPrintsBannerAndBlocksUntilContextCancelled(t *testing.T) {
 	defer cancel()
 
 	var buf bytes.Buffer
-	// Drive runWith with an empty cmdline and zero-valued deps: every
-	// share/gadget/forward/container path is gated on a cmdline token
-	// or a non-nil dep, so none fire and the only thing written to w is
-	// the banner. This makes the banner+block contract a test of Run's
-	// own behaviour rather than of the ambient /proc/cmdline. The public
-	// Run reads the real cmdline, which carries daft.* tokens when the
-	// suite runs *inside* a daft sandbox VM (the D6c.4 dogfood); their
-	// operational output would otherwise pollute this exact-match.
-	err := runWith(ctx, &buf, runDeps{
-		readCmdline: func() (string, error) { return "", nil },
-	})
+	// Drive runWith with zero-valued deps: openControl is nil so no
+	// config is fetched, cfg stays nil, every share/gadget/forward/
+	// container path is gated on a config field or a non-nil dep, so
+	// none fire and the only thing written to w is the banner. This
+	// makes the banner+block contract a test of Run's own behaviour.
+	err := runWith(ctx, &buf, runDeps{})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("runWith returned %v, want DeadlineExceeded", err)
 	}
@@ -87,7 +82,6 @@ func TestRunDegradesToBannerWhenConfigFetchFails(t *testing.T) {
 	var buf bytes.Buffer
 	containerRan := false
 	err := runWith(ctx, &buf, runDeps{
-		readCmdline: func() (string, error) { return "", nil },
 		openControl: func(context.Context) (controlChannel, error) {
 			return nil, errors.New("dial config port: no vsock device")
 		},
@@ -128,7 +122,6 @@ func TestRunAppliesConfigBundleAndShares(t *testing.T) {
 		Shares: []*agentv1.GuestConfig_Share{{Tag: testTag, Mountpoint: testMountpoint}},
 	}}
 	err := runWith(ctx, &buf, runDeps{
-		readCmdline: func() (string, error) { return "", nil },
 		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
 		share: ShareDeps{
 			Mount:    func(_, target, _, _ string) error { mountedTargets = append(mountedTargets, target); return nil },
@@ -166,7 +159,6 @@ func TestRunReportsBootCompleteSendError(t *testing.T) {
 	var buf bytes.Buffer
 	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{}, sendErr: errors.New("send boom")}
 	err := runWith(ctx, &buf, runDeps{
-		readCmdline: func() (string, error) { return "", nil },
 		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -177,38 +169,33 @@ func TestRunReportsBootCompleteSendError(t *testing.T) {
 	}
 }
 
-// TestResolveBundle covers all four branches of bundle resolution:
-// config bundle (absolute), config bundle rejected (relative, reported),
-// cmdline fallback, and a malformed cmdline token (reported).
+// TestResolveBundle covers the three branches of bundle resolution:
+// an absolute config bundle (used), a relative config bundle (rejected
+// and reported), and no bundle (nil cfg → no container).
 func TestResolveBundle(t *testing.T) {
 	// Config bundle wins when absolute.
 	var buf bytes.Buffer
-	if got := resolveBundle(&buf, &agentv1.GuestConfig{Bundle: "/cfg/bundle"}, ""); got != "/cfg/bundle" {
+	if got := resolveBundle(&buf, &agentv1.GuestConfig{Bundle: "/cfg/bundle"}); got != "/cfg/bundle" {
 		t.Errorf("config-absolute = %q, want /cfg/bundle", got)
 	}
 
 	// A relative config bundle is rejected and reported, not run.
 	buf.Reset()
-	if got := resolveBundle(&buf, &agentv1.GuestConfig{Bundle: "rel/bundle"}, ""); got != "" {
+	if got := resolveBundle(&buf, &agentv1.GuestConfig{Bundle: "rel/bundle"}); got != "" {
 		t.Errorf("config-relative = %q, want \"\"", got)
 	}
 	if !strings.Contains(buf.String(), ContainerReportPrefix+"config: bundle path rel/bundle must be absolute") {
 		t.Errorf("missing relative-bundle report: %q", buf.String())
 	}
 
-	// No config bundle: fall back to the cmdline token.
+	// No config at all (nil cfg → the vsock-unreachable degrade): no
+	// container, nothing reported.
 	buf.Reset()
-	if got := resolveBundle(&buf, nil, FormatBundleCmdline("/cmd/bundle")); got != "/cmd/bundle" {
-		t.Errorf("cmdline = %q, want /cmd/bundle", got)
+	if got := resolveBundle(&buf, nil); got != "" {
+		t.Errorf("nil-cfg = %q, want \"\"", got)
 	}
-
-	// Malformed cmdline bundle is reported and yields no container.
-	buf.Reset()
-	if got := resolveBundle(&buf, nil, BundleCmdlineKey+"=rel"); got != "" {
-		t.Errorf("cmdline-malformed = %q, want \"\"", got)
-	}
-	if !strings.Contains(buf.String(), ContainerReportPrefix+"cmdline:") {
-		t.Errorf("missing malformed-cmdline report: %q", buf.String())
+	if buf.Len() != 0 {
+		t.Errorf("unexpected report for nil cfg: %q", buf.String())
 	}
 }
 

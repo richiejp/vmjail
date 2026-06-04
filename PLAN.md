@@ -1805,22 +1805,34 @@ the user-host or in CI today.
              `Parse*Cmdline` fallbacks and the `VsockConfig` port fields are
              left in place as now-unreachable scaffolding (the cmdline can
              no longer carry the tokens), to be removed in 3b-3.
-           - **Slice 3b-3a (VsockConfig ports → bools) — in progress.**
-             `VsockConfig.{TracePort,AttachPort,NetPort}` (uint32) collapse
-             to `{Trace,Attach,Net}` (bool); the host listeners/dials use
-             the fixed constants directly (`startVsockTraceReceiver`,
-             `startVsockNetReceiver`, `registerAttachRoute`), and
-             `validatePortForwards` rejects a forward that reuses an
-             *enabled* feature's constant port. The per-port collision
-             checks in `VsockConfig.validate()` go away (distinct constants
-             can't collide). No behavior change.
-           - **Slice 3b-3b (cmdline machinery deletion).** Delete the
-             now-uncalled `Format*Cmdline` host funcs and the
-             `Parse*Cmdline` / `startXxxFromCmdline` cmdline fallbacks +
-             their tests/fuzz targets, so the agent reads config only. Note
-             the coverage gotcha: `cmdline.go` is ~99% covered, so deleting
-             it lowers the ratio — compensate with tests in the same change
-             (CLAUDE.md "Verification monotonically increases").
+           - **Slice 3b-3a (VsockConfig ports → bools) — landed
+             (`c5e29dc`).** `VsockConfig.{TracePort,AttachPort,NetPort}`
+             (uint32) collapsed to `{Trace,Attach,Net}` (bool); the host
+             listeners/dials use the fixed constants directly
+             (`startVsockTraceReceiver`, `startVsockNetReceiver`,
+             `registerAttachRoute`), and `validatePortForwards` rejects a
+             forward that reuses an *enabled* feature's constant port. The
+             per-port collision checks in `VsockConfig.validate()` went
+             away (distinct constants can't collide). No behavior change.
+           - **Slice 3b-3b (cmdline machinery deletion) — landed.** The
+             agent is now config-only: `runWith` no longer reads
+             `/proc/cmdline` at all. Deleted `internal/agent/cmdline.go`
+             (every `Parse*Cmdline`/`Format*Cmdline` + helpers), the
+             `*CmdlineKey` consts, `readKernelCmdline`/`readCmdlineFrom`,
+             the `resolve{Trace,Net,Attach}Port` helpers (inlined to the
+             feature bit + fixed constant), and the `runDeps.readCmdline`
+             field. The gadget/syscall/summary starters dropped their
+             `FromCmdline` suffix and `cmdline` param, reading paths from
+             `d.cfg.GetObserve()`; `ShareSpec`/`PortForwardSpec` moved to
+             `share.go`/`port_forward.go`. The vsock-unreachable degrade is
+             now strictly banner-only (no cmdline to fall back to). Coverage
+             gotcha handled per CLAUDE.md: `cmdline.go` was ~99% covered, so
+             its deletion dropped the ratio ~0.1pp; compensated in the same
+             change with control-channel wire error-path tests
+             (`wire_error_test.go`: marshal/unmarshal/framing errors for the
+             GuestConfig + AgentEvent serializers, resolv.conf write errors)
+             plus syscall-dump and accept-loop error arms — total back to
+             94.23% (baseline 94.22).
 
        **Gadget observe wired as the debugging surface
        (2026-06-03).** The self-build test now attaches

@@ -64,6 +64,33 @@ type fakeAddr struct{ net, str string }
 func (a fakeAddr) Network() string { return a.net }
 func (a fakeAddr) String() string  { return a.str }
 
+// errAcceptListener's Accept always fails with a non-ErrClosed error,
+// to drive acceptLoop's "real accept failure" report-and-exit arm.
+type errAcceptListener struct{ addr fakeAddr }
+
+func (e errAcceptListener) Accept() (net.Conn, error) {
+	return nil, errors.New("vsock accept boom")
+}
+func (e errAcceptListener) Close() error   { return nil }
+func (e errAcceptListener) Addr() net.Addr { return e.addr }
+
+// TestAcceptLoopReportsNonClosedError pins acceptLoop's error arm: an
+// Accept failure that is neither ErrClosed nor a cancelled ctx is
+// reported on the console, and the loop exits rather than spinning.
+func TestAcceptLoopReportsNonClosedError(t *testing.T) {
+	var console bytes.Buffer
+	acceptLoop(
+		context.Background(), &console,
+		errAcceptListener{addr: fakeAddr{net: "vsock", str: "vsock:9"}},
+		PortForwardSpec{VsockPort: 9, ContainerPort: 80},
+		// Never reached — Accept fails before any dial.
+		func(context.Context, uint32) (net.Conn, error) { return nil, errors.New("unused") },
+	)
+	if !bytes.Contains(console.Bytes(), []byte(portForwardReportPrefix)) {
+		t.Errorf("missing accept-error report: %q", console.String())
+	}
+}
+
 // TestPortForwarderPumpsBytesEndToEnd drives runPortForwarders
 // against an in-process pair: a test net.Pipe stands in for the
 // vsock-side connection, another net.Pipe stands in for the
@@ -182,28 +209,9 @@ func TestPortForwarderEmptySpecsIsNoOp(t *testing.T) {
 	runPortForwarders(context.Background(), &buf, nil, d)
 }
 
-// TestStartPortForwardersReportsBadCmdline pins the cmdline-parse
-// error branch on the dispatcher: a malformed daft.port= must be
-// surfaced on the console, not silently dropped.
-func TestStartPortForwardersReportsBadCmdline(t *testing.T) {
-	var buf bytes.Buffer
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	startPortForwarders(ctx, &buf, runDeps{
-		portForward: portForwardDeps{
-			listenVsock: func(uint32) (net.Listener, error) {
-				t.Fatal("listenVsock should not be called for a malformed cmdline")
-				return nil, errors.New("unreachable")
-			},
-		},
-	}, "daft.port=abc:def")
-	if got := buf.String(); !bytes.Contains([]byte(got), []byte("daft.port")) {
-		t.Errorf("console missing cmdline error:\n%s", got)
-	}
-}
-
-// TestStartPortForwardersEmptyIsNoOp pins the no-tokens path: an
-// empty cmdline must not spawn a goroutine nor touch listenVsock.
+// TestStartPortForwardersEmptyIsNoOp pins the no-table path: a config
+// without any port-forwards must not spawn a goroutine nor touch
+// listenVsock.
 func TestStartPortForwardersEmptyIsNoOp(t *testing.T) {
 	var buf bytes.Buffer
 	called := false
@@ -214,9 +222,9 @@ func TestStartPortForwardersEmptyIsNoOp(t *testing.T) {
 				return nil, errors.New("unreachable")
 			},
 		},
-	}, "console=ttyS0")
+	})
 	if called {
-		t.Error("listenVsock was called for empty cmdline")
+		t.Error("listenVsock was called for empty config")
 	}
 }
 
@@ -241,10 +249,10 @@ func TestDialLoopbackTCPConnects(t *testing.T) {
 	_ = conn.Close()
 }
 
-// TestStartPortForwardersPrefersConfig pins the config-preferred path:
-// when the GuestConfig carries a port-forward table, the dispatcher uses
-// it (and ignores the cmdline daft.port token entirely).
-func TestStartPortForwardersPrefersConfig(t *testing.T) {
+// TestStartPortForwardersFromConfig pins the config-driven path: when the
+// GuestConfig carries a port-forward table, the dispatcher listens on the
+// configured vsock port.
+func TestStartPortForwardersFromConfig(t *testing.T) {
 	var buf bytes.Buffer
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -259,11 +267,11 @@ func TestStartPortForwardersPrefersConfig(t *testing.T) {
 				return newFakeVsockListener(port), nil
 			},
 		},
-	}, "daft.port=10009:9999")
+	})
 	select {
 	case p := <-gotPort:
 		if p != 10001 {
-			t.Errorf("listened on vsock %d, want 10001 (config, not cmdline)", p)
+			t.Errorf("listened on vsock %d, want 10001 (from config)", p)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("listenVsock never called for config port-forward")

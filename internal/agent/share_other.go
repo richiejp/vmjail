@@ -24,10 +24,6 @@ func defaultShareDeps() ShareDeps {
 	}
 }
 
-func readKernelCmdline() (string, error) {
-	return "", errors.New("agent: /proc/cmdline unsupported off Linux")
-}
-
 // defaultContainerDeps on non-Linux returns Exec that always errors —
 // crun is Linux-only.
 func defaultContainerDeps() ContainerDeps {

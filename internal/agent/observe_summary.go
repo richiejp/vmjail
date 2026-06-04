@@ -40,8 +40,8 @@ func defaultSummaryDeps() summaryDeps {
 	}
 }
 
-// startSummaryWriter resolves the summary path (the GuestConfig's
-// observe.summary, else the daft.observe.summary cmdline token) and, when
+// startSummaryWriter resolves the summary path from the GuestConfig's
+// observe.summary and, when
 // set, spawns a
 // goroutine that rewrites the summary file every d.summary.interval until ctx
 // is cancelled (a final write captures the end state). Like the gadget start
@@ -52,16 +52,12 @@ func defaultSummaryDeps() summaryDeps {
 //
 // Called from run() after the gadgets start, so the summary is a view over
 // whichever gadgets came up rather than coupled to any single one.
-func startSummaryWriter(ctx context.Context, w io.Writer, d runDeps, cmdline string, osAgg *opensnoop.Aggregator, exAgg *execsnoop.Aggregator, slAgg *sleepsnoop.Aggregator, ioAgg *iosnoop.Aggregator) {
+func startSummaryWriter(ctx context.Context, w io.Writer, d runDeps, osAgg *opensnoop.Aggregator, exAgg *execsnoop.Aggregator, slAgg *sleepsnoop.Aggregator, ioAgg *iosnoop.Aggregator) {
 	if d.summary.write == nil || (osAgg == nil && exAgg == nil && slAgg == nil && ioAgg == nil) {
 		return
 	}
-	path, ok, err := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetSummary, ParseSummaryCmdline, cmdline)
-	switch {
-	case err != nil:
-		writeReport(w, SummaryReportPrefix, "cmdline: "+err.Error())
-		return
-	case !ok:
+	path, ok := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetSummary)
+	if !ok {
 		return
 	}
 	writeReport(w, SummaryReportPrefix, "writing → "+path)

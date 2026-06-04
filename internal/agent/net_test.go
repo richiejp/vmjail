@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -12,58 +13,9 @@ import (
 	"testing"
 	"time"
 
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	"github.com/localai-org/darkaifactory/internal/sandboxnet/sandboxnettest"
 )
-
-func TestFormatNetPortCmdlineRoundTrips(t *testing.T) {
-	for _, port := range []uint32{1, 8000, 9000, 65535} {
-		got := FormatNetPortCmdline(port)
-		want := "daft.net_port=" + strings.TrimSpace(strings.SplitN(got, "=", 2)[1])
-		if got != want {
-			t.Fatalf("format = %q, want %q", got, want)
-		}
-		parsed, ok, err := ParseNetPortCmdline(got)
-		if err != nil || !ok || parsed != port {
-			t.Fatalf("parse(%q) = (%d, %v, %v), want (%d, true, nil)", got, parsed, ok, err, port)
-		}
-	}
-}
-
-func TestParseNetPortCmdline(t *testing.T) {
-	const (
-		errEmpty   = "empty"
-		errNonNum  = "abc"
-		errNonZero = "non-zero"
-	)
-	cases := []struct {
-		name    string
-		cmdline string
-		port    uint32
-		ok      bool
-		wantErr string
-	}{
-		{"absent_token", "console=ttyS0", 0, false, ""},
-		{"present_token", "console=ttyS0 daft.net_port=9100", 9100, true, ""},
-		{"blank_value", "daft.net_port=", 0, false, errEmpty},
-		{"alpha_value", "daft.net_port=abc", 0, false, errNonNum},
-		{"zero_value", "daft.net_port=0", 0, false, errNonZero},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			port, ok, err := ParseNetPortCmdline(tc.cmdline)
-			if port != tc.port || ok != tc.ok {
-				t.Fatalf("port=%d ok=%v, want %d/%v", port, ok, tc.port, tc.ok)
-			}
-			if tc.wantErr == "" {
-				if err != nil {
-					t.Fatalf("err = %v, want nil", err)
-				}
-			} else if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
-			}
-		})
-	}
-}
 
 func TestStartNetBridgeHappyPath(t *testing.T) {
 	hostSide, guestSide := net.Pipe()
@@ -101,41 +53,29 @@ func TestStartNetBridgeWrapsDialError(t *testing.T) {
 	}
 }
 
-func TestStartNetBridgeFromCmdlineAbsent(t *testing.T) {
+func TestStartNetBridgeDisabled(t *testing.T) {
 	var w bytes.Buffer
 	d := runDeps{dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
 		t.Fatal("dial should not have been called")
 		return nil, errors.New("unreachable")
 	}}
-	if got := startNetBridgeFromCmdline(t.Context(), &w, d, "console=ttyS0"); got != nil {
-		t.Fatal("expected nil bridge when cmdline lacks key")
+	if got := startNetBridge(t.Context(), &w, d); got != nil {
+		t.Fatal("expected nil bridge when net is not enabled")
 	}
 	if w.Len() != 0 {
 		t.Fatalf("unexpected output: %q", w.String())
 	}
 }
 
-func TestStartNetBridgeFromCmdlineMalformed(t *testing.T) {
+func TestStartNetBridgeDialError(t *testing.T) {
 	var w bytes.Buffer
-	d := runDeps{dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
-		t.Fatal("dial should not have been called")
-		return nil, errors.New("unreachable")
-	}}
-	if got := startNetBridgeFromCmdline(t.Context(), &w, d, "daft.net_port=abc"); got != nil {
-		t.Fatal("expected nil bridge on malformed value")
+	d := runDeps{
+		cfg: &agentv1.GuestConfig{NetEnabled: true},
+		dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
+			return nil, errors.New("no host listener")
+		},
 	}
-	if !strings.Contains(w.String(), NetReportPrefix) ||
-		!strings.Contains(w.String(), "cmdline:") {
-		t.Fatalf("output %q missing cmdline-error report", w.String())
-	}
-}
-
-func TestStartNetBridgeFromCmdlineDialError(t *testing.T) {
-	var w bytes.Buffer
-	d := runDeps{dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
-		return nil, errors.New("no host listener")
-	}}
-	if got := startNetBridgeFromCmdline(t.Context(), &w, d, "daft.net_port=9100"); got != nil {
+	if got := startNetBridge(t.Context(), &w, d); got != nil {
 		t.Fatal("expected nil bridge on dial error")
 	}
 	if !strings.Contains(w.String(), "no host listener") {
@@ -145,7 +85,7 @@ func TestStartNetBridgeFromCmdlineDialError(t *testing.T) {
 
 func TestNetBridgeCloseWithBothEndsSet(t *testing.T) {
 	// NetBridge.Close has a tap-close branch that only runs when
-	// startNetBridgeFromCmdline's tap path was wired. The
+	// startNetBridge's tap path was wired. The
 	// integration test exercises the conn-close branch via
 	// pumpFrames teardown but never calls bridge.Close directly,
 	// so we cover the both-set path here in isolation.
@@ -168,7 +108,7 @@ func TestNetBridgeCloseWithBothEndsSet(t *testing.T) {
 	}
 }
 
-func TestStartNetBridgeFromCmdlineWithTap(t *testing.T) {
+func TestStartNetBridgeWithTap(t *testing.T) {
 	// Cross-platform tap-path test: fake the tap deps with a
 	// net.Pipe pair so the unit test never needs /dev/net/tun or
 	// CAP_NET_ADMIN. Exercises attachTapToBridge + pumpFrames glue
@@ -188,9 +128,10 @@ func TestStartNetBridgeFromCmdlineWithTap(t *testing.T) {
 		mtu     int
 	}
 	d := runDeps{
+		cfg: &agentv1.GuestConfig{NetEnabled: true},
 		dialVsock: func(_ context.Context, port uint32) (net.Conn, error) {
-			if port != 9100 {
-				t.Fatalf("dial port=%d, want 9100", port)
+			if port != DefaultNetVsockPort {
+				t.Fatalf("dial port=%d, want %d", port, DefaultNetVsockPort)
 			}
 			return guestSide, nil
 		},
@@ -215,11 +156,11 @@ func TestStartNetBridgeFromCmdlineWithTap(t *testing.T) {
 	defer cancel()
 
 	var w bytes.Buffer
-	b := startNetBridgeFromCmdline(ctx, &w, d, "daft.net_port=9100")
+	b := startNetBridge(ctx, &w, d)
 	if b == nil {
 		t.Fatal("expected non-nil bridge")
 	}
-	if !strings.Contains(w.String(), "connected port=9100") ||
+	if !strings.Contains(w.String(), fmt.Sprintf("connected port=%d", DefaultNetVsockPort)) ||
 		!strings.Contains(w.String(), "tap up name="+DefaultTapName) {
 		t.Fatalf("output %q missing connected + tap-up reports", w.String())
 	}
@@ -256,12 +197,13 @@ func TestStartNetBridgeFromCmdlineWithTap(t *testing.T) {
 	}
 }
 
-func TestStartNetBridgeFromCmdlineTapOpenError(t *testing.T) {
+func TestStartNetBridgeTapOpenError(t *testing.T) {
 	_, guestSide := net.Pipe()
 	t.Cleanup(func() { _ = guestSide.Close() })
 
 	var w bytes.Buffer
 	d := runDeps{
+		cfg: &agentv1.GuestConfig{NetEnabled: true},
 		dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
 			return guestSide, nil
 		},
@@ -275,7 +217,7 @@ func TestStartNetBridgeFromCmdlineTapOpenError(t *testing.T) {
 			},
 		},
 	}
-	if got := startNetBridgeFromCmdline(t.Context(), &w, d, "daft.net_port=9100"); got != nil {
+	if got := startNetBridge(t.Context(), &w, d); got != nil {
 		t.Fatal("expected nil bridge on tap open failure")
 	}
 	if !strings.Contains(w.String(), "no /dev/net/tun") {
@@ -283,7 +225,7 @@ func TestStartNetBridgeFromCmdlineTapOpenError(t *testing.T) {
 	}
 }
 
-func TestStartNetBridgeFromCmdlineTapConfigureError(t *testing.T) {
+func TestStartNetBridgeTapConfigureError(t *testing.T) {
 	_, guestSide := net.Pipe()
 	tapHost, tapAgent := net.Pipe()
 	t.Cleanup(func() {
@@ -293,6 +235,7 @@ func TestStartNetBridgeFromCmdlineTapConfigureError(t *testing.T) {
 
 	var w bytes.Buffer
 	d := runDeps{
+		cfg: &agentv1.GuestConfig{NetEnabled: true},
 		dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
 			return guestSide, nil
 		},
@@ -305,7 +248,7 @@ func TestStartNetBridgeFromCmdlineTapConfigureError(t *testing.T) {
 			},
 		},
 	}
-	if got := startNetBridgeFromCmdline(t.Context(), &w, d, "daft.net_port=9100"); got != nil {
+	if got := startNetBridge(t.Context(), &w, d); got != nil {
 		t.Fatal("expected nil bridge on configure failure")
 	}
 	if !strings.Contains(w.String(), "netlink: addr in use") {
@@ -375,20 +318,19 @@ func TestWriteContainerResolvConfOverwritesExisting(t *testing.T) {
 }
 
 // TestRunWithWritesResolvConfWhenNetAndBundleAreSet pins the
-// agent-side composition: when daft.net_port wires a net bridge
-// AND daft.bundle points at an OCI bundle, runWith drops a
-// resolv.conf into the bundle's rootfs/etc before launching the
-// container. The container shares the VM's netns, so this file is
-// the only DNS plumbing it sees.
+// agent-side composition: when the GuestConfig enables the net
+// bridge AND points at an OCI bundle, runWith drops a resolv.conf
+// into the bundle's rootfs/etc before launching the container. The
+// container shares the VM's netns, so this file is the only DNS
+// plumbing it sees.
 func TestRunWithWritesResolvConfWhenNetAndBundleAreSet(t *testing.T) {
 	bundle := t.TempDir()
 	_, guestSide := net.Pipe()
 	t.Cleanup(func() { _ = guestSide.Close() })
 
-	cmdline := FormatNetPortCmdline(DefaultNetVsockPort) + " " + FormatBundleCmdline(bundle)
-
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{NetEnabled: true, Bundle: bundle}}
 	deps := runDeps{
-		readCmdline: func() (string, error) { return cmdline, nil },
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
 		share:       noopShareDeps(),
 		dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
 			return guestSide, nil
@@ -413,15 +355,15 @@ func TestRunWithWritesResolvConfWhenNetAndBundleAreSet(t *testing.T) {
 }
 
 // TestRunWithSkipsResolvConfWithoutBundle pins the negative branch:
-// when no bundle is configured (cmdline lacks daft.bundle) we don't
-// fabricate a rootfs to write into.
+// when no bundle is configured we don't fabricate a rootfs to write
+// into.
 func TestRunWithSkipsResolvConfWithoutBundle(t *testing.T) {
 	_, guestSide := net.Pipe()
 	t.Cleanup(func() { _ = guestSide.Close() })
 
-	cmdline := FormatNetPortCmdline(DefaultNetVsockPort)
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{NetEnabled: true}}
 	deps := runDeps{
-		readCmdline: func() (string, error) { return cmdline, nil },
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
 		share:       noopShareDeps(),
 		dialVsock: func(_ context.Context, _ uint32) (net.Conn, error) {
 			return guestSide, nil
@@ -455,25 +397,28 @@ func TestWriteContainerResolvConfReportsMkdirFailure(t *testing.T) {
 	}
 }
 
-func TestStartNetBridgeFromCmdlineHappyPath(t *testing.T) {
+func TestStartNetBridgeWiringHappyPath(t *testing.T) {
 	hostSide, guestSide := net.Pipe()
 	t.Cleanup(func() { _ = hostSide.Close(); _ = guestSide.Close() })
 
 	var w bytes.Buffer
-	d := runDeps{dialVsock: func(_ context.Context, port uint32) (net.Conn, error) {
-		if port != 9100 {
-			t.Fatalf("dial port=%d, want 9100", port)
-		}
-		return guestSide, nil
-	}}
+	d := runDeps{
+		cfg: &agentv1.GuestConfig{NetEnabled: true},
+		dialVsock: func(_ context.Context, port uint32) (net.Conn, error) {
+			if port != DefaultNetVsockPort {
+				t.Fatalf("dial port=%d, want %d", port, DefaultNetVsockPort)
+			}
+			return guestSide, nil
+		},
+	}
 
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	b := startNetBridgeFromCmdline(ctx, &w, d, "daft.net_port=9100")
+	b := startNetBridge(ctx, &w, d)
 	if b == nil {
 		t.Fatal("expected non-nil bridge")
 	}
-	if !strings.Contains(w.String(), "connected port=9100") {
+	if !strings.Contains(w.String(), fmt.Sprintf("connected port=%d", DefaultNetVsockPort)) {
 		t.Fatalf("output %q missing connected report", w.String())
 	}
 

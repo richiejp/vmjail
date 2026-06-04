@@ -6,6 +6,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 )
 
 // Tracefs syscall-events entry names reused across the table cases.
@@ -19,6 +21,13 @@ type capLog struct{ buf *bytes.Buffer }
 
 func (c capLog) Write(p []byte) (int, error) { return c.buf.Write(p) }
 func (c capLog) Close() error                { return nil }
+
+// errWriteLog is a trace file whose Write always fails, to drive the
+// dump's write-error branch.
+type errWriteLog struct{}
+
+func (errWriteLog) Write([]byte) (int, error) { return 0, errors.New("disk full") }
+func (errWriteLog) Close() error              { return nil }
 
 func TestSyscallNamesFromEntries(t *testing.T) {
 	// A realistic mix: sys_enter_/sys_exit_ pairs, an out-of-order pair, a
@@ -51,10 +60,17 @@ func syscallTestDeps(list func() ([]string, error), openLog func(string) (io.Wri
 	}}
 }
 
+// syscallCfg builds a runDeps cfg carrying the given syscalls observe path.
+func syscallCfg(path string) *agentv1.GuestConfig {
+	return &agentv1.GuestConfig{Observe: &agentv1.GuestConfig_Observe{Syscalls: path}}
+}
+
 func TestStartSyscallDumpDisabledWhenListNil(t *testing.T) {
 	var console bytes.Buffer
-	startSyscallDumpFromCmdline(&console, runDeps{syscalls: syscallDumpDeps{listEnter: nil}},
-		"daft.observe.syscalls=/share/syscalls.txt")
+	startSyscallDump(&console, runDeps{
+		cfg:      syscallCfg("/share/syscalls.txt"),
+		syscalls: syscallDumpDeps{listEnter: nil},
+	})
 	if console.Len() != 0 {
 		t.Fatalf("disabled dump produced console output: %q", console.String())
 	}
@@ -65,30 +81,39 @@ func TestStartSyscallDumpAbsentToken(t *testing.T) {
 	d := syscallTestDeps(func() ([]string, error) { called = true; return nil, nil },
 		func(string) (io.WriteCloser, error) { return capLog{&bytes.Buffer{}}, nil })
 	var console bytes.Buffer
-	startSyscallDumpFromCmdline(&console, d, "console=hvc0")
+	startSyscallDump(&console, d)
 	if called || console.Len() != 0 {
 		t.Fatalf("absent token did work: called=%v console=%q", called, console.String())
 	}
 }
 
-func TestStartSyscallDumpReportsCmdlineError(t *testing.T) {
-	d := syscallTestDeps(func() ([]string, error) { return nil, nil },
-		func(string) (io.WriteCloser, error) { return capLog{&bytes.Buffer{}}, nil })
+// TestStartSyscallDumpReportsWriteError covers the io.WriteString failure
+// arm: the list is gathered and the log opened, but writing the syscall
+// names out fails, which is reported (and the dump aborts).
+func TestStartSyscallDumpReportsWriteError(t *testing.T) {
+	d := syscallTestDeps(
+		func() ([]string, error) { return []string{tpEnterRead}, nil },
+		func(string) (io.WriteCloser, error) { return errWriteLog{}, nil },
+	)
+	d.cfg = syscallCfg("/share/syscalls.txt")
 	var console bytes.Buffer
-	startSyscallDumpFromCmdline(&console, d, "daft.observe.syscalls=rel/path")
-	if !strings.Contains(console.String(), SyscallsReportPrefix+"cmdline:") {
-		t.Fatalf("missing cmdline error report: %q", console.String())
+	startSyscallDump(&console, d)
+	if !strings.Contains(console.String(), SyscallsReportPrefix+"disk full") {
+		t.Fatalf("missing write-error report: %q", console.String())
 	}
 }
 
 func TestStartSyscallDumpReportsTracefsError(t *testing.T) {
-	d := runDeps{syscalls: syscallDumpDeps{
-		mountTracefs: func() error { return errors.New("boom-tracefs") },
-		listEnter:    func() ([]string, error) { return nil, nil },
-		openLog:      func(string) (io.WriteCloser, error) { return capLog{&bytes.Buffer{}}, nil },
-	}}
+	d := runDeps{
+		cfg: syscallCfg("/share/syscalls.txt"),
+		syscalls: syscallDumpDeps{
+			mountTracefs: func() error { return errors.New("boom-tracefs") },
+			listEnter:    func() ([]string, error) { return nil, nil },
+			openLog:      func(string) (io.WriteCloser, error) { return capLog{&bytes.Buffer{}}, nil },
+		},
+	}
 	var console bytes.Buffer
-	startSyscallDumpFromCmdline(&console, d, "daft.observe.syscalls=/share/syscalls.txt")
+	startSyscallDump(&console, d)
 	if !strings.Contains(console.String(), SyscallsReportPrefix+"boom-tracefs") {
 		t.Fatalf("missing tracefs error report: %q", console.String())
 	}
@@ -97,8 +122,9 @@ func TestStartSyscallDumpReportsTracefsError(t *testing.T) {
 func TestStartSyscallDumpReportsListError(t *testing.T) {
 	d := syscallTestDeps(func() ([]string, error) { return nil, errors.New("boom-list") },
 		func(string) (io.WriteCloser, error) { return capLog{&bytes.Buffer{}}, nil })
+	d.cfg = syscallCfg("/share/syscalls.txt")
 	var console bytes.Buffer
-	startSyscallDumpFromCmdline(&console, d, "daft.observe.syscalls=/share/syscalls.txt")
+	startSyscallDump(&console, d)
 	if !strings.Contains(console.String(), SyscallsReportPrefix+"boom-list") {
 		t.Fatalf("missing list error report: %q", console.String())
 	}
@@ -107,8 +133,9 @@ func TestStartSyscallDumpReportsListError(t *testing.T) {
 func TestStartSyscallDumpReportsOpenError(t *testing.T) {
 	d := syscallTestDeps(func() ([]string, error) { return []string{tpEnterRead}, nil },
 		func(string) (io.WriteCloser, error) { return nil, errors.New("boom-open") })
+	d.cfg = syscallCfg("/share/syscalls.txt")
 	var console bytes.Buffer
-	startSyscallDumpFromCmdline(&console, d, "daft.observe.syscalls=/share/syscalls.txt")
+	startSyscallDump(&console, d)
 	if !strings.Contains(console.String(), SyscallsReportPrefix+"boom-open") {
 		t.Fatalf("missing open error report: %q", console.String())
 	}
@@ -123,8 +150,9 @@ func TestStartSyscallDumpHappyPath(t *testing.T) {
 		},
 		func(path string) (io.WriteCloser, error) { opened = path; return capLog{&written}, nil },
 	)
+	d.cfg = syscallCfg("/share/syscalls.txt")
 	var console bytes.Buffer
-	startSyscallDumpFromCmdline(&console, d, "daft.observe.syscalls=/share/syscalls.txt")
+	startSyscallDump(&console, d)
 	if opened != "/share/syscalls.txt" {
 		t.Fatalf("openLog path = %q", opened)
 	}

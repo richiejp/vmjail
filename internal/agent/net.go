@@ -8,20 +8,11 @@ import (
 	"os"
 	"path/filepath"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	"github.com/localai-org/darkaifactory/internal/oops"
 )
 
-// NetPortCmdlineKey is the kernel cmdline parameter that asks
-// the agent to dial AF_VSOCK CID 2 port N and pump Ethernet
-// frames between that conn and a tap device, so the container
-// can reach the sandboxd-side userspace network stack
-// (internal/sandboxnet). Format: `daft.net_port=<port>`. Absent
-// disables the bridge — the VM keeps loopback only.
-const NetPortCmdlineKey = "daft.net_port"
-
 // NetReportPrefix tags console lines about the net bridge —
-// cmdline parse errors, dial failures, connection-up notice.
+// dial failures, connection-up notice.
 // Same separator convention as the other Report prefixes.
 const NetReportPrefix = "net: "
 
@@ -42,18 +33,6 @@ const (
 // 10000), well clear of CH's reserved low-numbered ports. One per
 // VM — sandboxnet runs one Network per Sandbox.
 const DefaultNetVsockPort uint32 = 9500
-
-// FormatNetPortCmdline renders a net-port to the wire form.
-func FormatNetPortCmdline(port uint32) string {
-	return fmt.Sprintf("%s=%d", NetPortCmdlineKey, port)
-}
-
-// ParseNetPortCmdline returns the parsed net port plus ok=true
-// when the token is present. Absent ⇒ (0, false, nil); malformed
-// or zero ⇒ error so a host-side typo surfaces.
-func ParseNetPortCmdline(cmdline string) (port uint32, ok bool, err error) {
-	return parseNonZeroUintCmdline(cmdline, NetPortCmdlineKey)
-}
 
 // VsockDialer is the indirection that lets the agent dial host
 // vsock through either the real DialHostVsock or a test fake.
@@ -147,40 +126,24 @@ func (b *NetBridge) Conn() net.Conn {
 // a byte stream, so net.Conn must remain io.ReadWriteCloser.
 var _ io.ReadWriteCloser = net.Conn(nil)
 
-// resolveNetPort decides whether (and where) to bridge to sandboxd's
-// netstack: the GuestConfig's net_enabled bit selects the fixed
-// DefaultNetVsockPort; otherwise it falls back to the daft.net_port
-// cmdline token. The (port, ok, err) shape matches ParseNetPortCmdline so
-// startNetBridgeFromCmdline's switch is unchanged.
-func resolveNetPort(cfg *agentv1.GuestConfig, cmdline string) (port uint32, ok bool, err error) {
-	if cfg.GetNetEnabled() {
-		return DefaultNetVsockPort, true, nil
-	}
-	return ParseNetPortCmdline(cmdline)
-}
-
-// startNetBridgeFromCmdline parses daft.net_port and, when set,
-// dials the sandboxd-side listener. Reports a one-line status on
-// w so the host's banner scan sees per-prefix output for this
-// channel. Returns nil when the cmdline lacks the key (the
-// "feature not requested" path) or on any failure — every layer
-// here is best-effort; an unreachable host listener or a missing
-// /dev/net/tun doesn't take down the agent.
+// startNetBridge brings up the bridge to sandboxd's netstack when the
+// GuestConfig's net_enabled bit is set, dialing the host-side listener on
+// the fixed DefaultNetVsockPort. Reports a one-line status on w so the
+// host's banner scan sees per-prefix output for this channel. Returns nil
+// when the feature is not requested or on any failure — every layer here
+// is best-effort; an unreachable host listener or a missing /dev/net/tun
+// doesn't take down the agent.
 //
 // When d.tap.open is wired (production), this also opens tap0,
 // configures L3 (addr/route/MTU) via netlink, and launches the
 // rx/tx pumps. When d.tap.open is nil (slice-2a tests), the
 // bridge is conn-only and the caller's ctx-cancel goroutine
 // owns teardown.
-func startNetBridgeFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdline string) *NetBridge {
-	port, ok, err := resolveNetPort(d.cfg, cmdline)
-	switch {
-	case err != nil:
-		writeReport(w, NetReportPrefix, "cmdline: "+err.Error())
-		return nil
-	case !ok:
+func startNetBridge(ctx context.Context, w io.Writer, d runDeps) *NetBridge {
+	if !d.cfg.GetNetEnabled() {
 		return nil
 	}
+	port := DefaultNetVsockPort
 	bridge, err := StartNetBridge(ctx, d.dialVsock, port)
 	if err != nil {
 		writeReport(w, NetReportPrefix, err.Error())
