@@ -135,9 +135,8 @@ type Executor struct {
 	observeSummary bool
 	// netEnabled toggles the sandboxnet listener wiring on every
 	// dispatched VM (Slice D6c.2 step 3). When true, resolveBootConfig
-	// allocates a Vsock device if one isn't already there and sets
-	// cfg.Vsock.NetPort so the agent dials the host-side sandboxnet
-	// stack on boot.
+	// sets cfg.Vsock.Net so the agent dials the host-side sandboxnet
+	// stack (on the fixed DefaultNetVsockPort) at boot.
 	netEnabled bool
 	// egressProxy, when non-nil, drives Phase-J proxy-env + CA
 	// injection on every image-backed dispatch (see Config.EgressProxy).
@@ -525,15 +524,15 @@ func (e *Executor) registerPortRoutes(cfg sandbox.Config, workspaceUUID string) 
 // defers it so the route vanishes on dispatch exit.
 //
 // No-op when no AttachRegistry is configured or when cfg.Vsock /
-// AttachPort is unset (resolveBootConfig only populates them
-// when AttachRegistry != nil; the guard mirrors registerPortRoutes'
-// defensive style).
+// the attach feature is unset (resolveBootConfig only enables it when
+// AttachRegistry != nil; the guard mirrors registerPortRoutes'
+// defensive style). The dial targets the fixed DefaultAttachVsockPort.
 func (e *Executor) registerAttachRoute(cfg sandbox.Config, uid string) func() {
-	if e.attachRegistry == nil || cfg.Vsock == nil || cfg.Vsock.AttachPort == 0 || uid == "" {
+	if e.attachRegistry == nil || cfg.Vsock == nil || !cfg.Vsock.Attach || uid == "" {
 		return func() {}
 	}
 	hostSocket := cfg.Vsock.HostSocket
-	attachPort := cfg.Vsock.AttachPort
+	attachPort := agent.DefaultAttachVsockPort
 	dial := func(ctx context.Context, req sandboxgateway.AttachRequest) (sandboxgateway.AttachSession, error) {
 		conn, err := sandbox.DialGuestVsock(ctx, hostSocket, attachPort)
 		if err != nil {
@@ -592,10 +591,10 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 	if e.vsockDir != "" {
 		cfg.Vsock = e.assignVsock(uid)
 		if e.attachRegistry != nil {
-			cfg.Vsock.AttachPort = agent.DefaultAttachVsockPort
+			cfg.Vsock.Attach = true
 		}
 		if e.netEnabled {
-			cfg.Vsock.NetPort = agent.DefaultNetVsockPort
+			cfg.Vsock.Net = true
 			// With an egress proxy configured, serve it in-stack on the
 			// gateway and lock the netstack to default-deny: every
 			// legitimate egress is injected to route through the proxy
@@ -941,8 +940,9 @@ func (e *Executor) teardownMounts(uid string, spec *sandboxv1.SandboxSpec) {
 
 // BaseVsockPort is the first AF_VSOCK port the executor hands out
 // for orchestrator-driven ingress. Sits well clear of CH's reserved
-// low-numbered ports and the TracePort=8000 convention so a typo
-// in one half doesn't collide with the other.
+// low-numbered ports and the fixed control-channel ports (config 7000,
+// trace 8000, attach 9000, net 9500) so a port-forward never collides
+// with a control feature.
 const BaseVsockPort = 10000
 
 // portForwardsFromSpec assigns a unique guest-side AF_VSOCK port

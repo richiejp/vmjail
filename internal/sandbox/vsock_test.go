@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/agent"
 	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
 	"github.com/localai-org/darkaifactory/internal/trace"
 )
@@ -25,7 +24,7 @@ func TestBuildCloudHypervisorArgsEmitsVsockFlag(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: testHostSocketPath,
 		GuestCID:   3,
-		TracePort:  8000,
+		Trace:      true,
 	}
 	args := buildCloudHypervisorArgs(cfg, nil)
 
@@ -61,24 +60,24 @@ func TestBuildCloudHypervisorArgsOmitsVsockWhenAbsent(t *testing.T) {
 }
 
 // TestBuildGuestConfigProjectsFeatureToggles confirms the trace/attach/net
-// feature bits ride the vsock payload (a non-zero per-feature port in the
-// VsockConfig == that feature on), replacing the daft.vsock.trace_port /
-// daft.attach_port / daft.net_port cmdline tokens. The agent brings each up
-// on its fixed constant port, so only the bit travels.
+// feature bits ride the vsock payload (the VsockConfig's per-feature bool),
+// replacing the daft.vsock.trace_port / daft.attach_port / daft.net_port
+// cmdline tokens. The agent brings each up on its fixed constant port, so
+// only the bit travels.
 func TestBuildGuestConfigProjectsFeatureToggles(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	cfg.Vsock = &VsockConfig{
 		HostSocket: testHostSocketPath,
 		GuestCID:   3,
-		TracePort:  agent.DefaultTraceVsockPort,
-		AttachPort: agent.DefaultAttachVsockPort,
+		Trace:      true,
+		Attach:     true,
 	}
 	gc := buildGuestConfig(cfg)
 	if !gc.GetTraceEnabled() || !gc.GetAttachEnabled() {
 		t.Errorf("toggles = trace %v / attach %v, want both true", gc.GetTraceEnabled(), gc.GetAttachEnabled())
 	}
 	if gc.GetNetEnabled() {
-		t.Errorf("net_enabled = true, want false (NetPort unset)")
+		t.Errorf("net_enabled = true, want false (Net unset)")
 	}
 
 	// No Vsock at all: every toggle off.
@@ -140,7 +139,7 @@ func TestStartVsockTraceReceiverNilWhenDisabled(t *testing.T) {
 				Vsock: &VsockConfig{
 					HostSocket: testHostSocketPath,
 					GuestCID:   3,
-					TracePort:  0,
+					Trace:      false,
 				},
 			},
 		},
@@ -165,7 +164,7 @@ func TestStartVsockTraceReceiverRoundTrip(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: filepath.Join(dir, "v.sock"),
 		GuestCID:   3,
-		TracePort:  8000,
+		Trace:      true,
 	}
 
 	hostTracer := trace.New("test-host")
@@ -215,7 +214,7 @@ func TestStartVsockTraceReceiverWithoutTracerInContext(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: filepath.Join(dir, "v.sock"),
 		GuestCID:   3,
-		TracePort:  8000,
+		Trace:      true,
 	}
 	stop, err := startVsockTraceReceiver(context.Background(), cfg)
 	if err != nil {
@@ -241,7 +240,7 @@ func TestStartVsockTraceReceiverPreCleansStaleSocket(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: filepath.Join(dir, "v.sock"),
 		GuestCID:   3,
-		TracePort:  8000,
+		Trace:      true,
 	}
 
 	stalePath := cfg.Vsock.HostSocket + "_8000"
@@ -267,7 +266,7 @@ func TestStartVsockTraceReceiverSurfacesListenError(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: "/no/such/directory/v.sock",
 		GuestCID:   3,
-		TracePort:  8000,
+		Trace:      true,
 	}
 	stop, err := startVsockTraceReceiver(context.Background(), cfg)
 	if err == nil {

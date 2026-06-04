@@ -43,7 +43,7 @@ func TestAttachExecE2E(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: filepath.Join(t.TempDir(), "v.sock"),
 		GuestCID:   3,
-		AttachPort: agent.DefaultAttachVsockPort,
+		Attach:     true,
 	}
 
 	console := &syncBuf{}
@@ -75,7 +75,7 @@ func TestAttachExecE2E(t *testing.T) {
 	// `crun exec daft-container /hello`.
 	dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer dialCancel()
-	conn, err := DialGuestVsock(dialCtx, cfg.Vsock.HostSocket, cfg.Vsock.AttachPort)
+	conn, err := DialGuestVsock(dialCtx, cfg.Vsock.HostSocket, agent.DefaultAttachVsockPort)
 	if err != nil {
 		t.Fatalf("DialGuestVsock: %v\n--- console ---\n%s", err, console.String())
 	}

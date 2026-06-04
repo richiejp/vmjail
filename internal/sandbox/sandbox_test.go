@@ -616,9 +616,9 @@ func TestBuildKernelCmdlineHasNoDaftTokens(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: testHostSocketPath,
 		GuestCID:   3,
-		AttachPort: agent.DefaultAttachVsockPort,
-		NetPort:    agent.DefaultNetVsockPort,
-		TracePort:  agent.DefaultTraceVsockPort,
+		Attach:     true,
+		Net:        true,
+		Trace:      true,
 	}
 	got := buildKernelCmdline(cfg)
 	if got != kernelCmdlineBase {
@@ -898,63 +898,49 @@ func TestStartObserverIfConfigured(t *testing.T) {
 }
 
 // TestValidatePortForwardsRejectsTracePortCollision pins the
-// cross-field invariant: a PortForward.VsockPort that matches the
-// already-assigned Vsock.TracePort would result in CH refusing the
-// second guest-side bind at boot.
+// cross-field invariant: a PortForward.VsockPort that matches an enabled
+// feature's fixed port (here the trace channel's DefaultTraceVsockPort)
+// would result in CH refusing the second guest-side bind at boot.
 func TestValidatePortForwardsRejectsTracePortCollision(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	cfg.Vsock = &VsockConfig{
 		HostSocket: testHostSocketPath,
 		GuestCID:   3,
-		TracePort:  10000,
+		Trace:      true,
 	}
-	cfg.PortForwards = []PortForward{{VsockPort: 10000, ContainerPort: 80}}
+	cfg.PortForwards = []PortForward{{VsockPort: agent.DefaultTraceVsockPort, ContainerPort: 80}}
 	err := cfg.validate()
-	if err == nil || !strings.Contains(err.Error(), "TracePort") {
-		t.Fatalf("err = %v, want TracePort-collision error", err)
+	if err == nil || !strings.Contains(err.Error(), "trace channel") {
+		t.Fatalf("err = %v, want trace-channel-collision error", err)
 	}
 }
 
-// TestValidatePortForwardsRejectsNetPortCollision — a
-// PortForward.VsockPort equal to Vsock.NetPort would race the
-// sandboxnet listener for the same guest-side bind.
+// TestValidatePortForwardsRejectsNetPortCollision — a PortForward.VsockPort
+// equal to the enabled net channel's fixed port would race the sandboxnet
+// listener for the same guest-side bind.
 func TestValidatePortForwardsRejectsNetPortCollision(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	cfg.Vsock = &VsockConfig{
 		HostSocket: testHostSocketPath,
 		GuestCID:   3,
-		NetPort:    10000,
+		Net:        true,
 	}
-	cfg.PortForwards = []PortForward{{VsockPort: 10000, ContainerPort: 80}}
+	cfg.PortForwards = []PortForward{{VsockPort: agent.DefaultNetVsockPort, ContainerPort: 80}}
 	err := cfg.validate()
-	if err == nil || !strings.Contains(err.Error(), "NetPort") {
-		t.Fatalf("err = %v, want NetPort-collision error", err)
+	if err == nil || !strings.Contains(err.Error(), "net channel") {
+		t.Fatalf("err = %v, want net-channel-collision error", err)
 	}
 }
 
-func TestVsockConfigValidateRejectsNetPortCollisionWithTracePort(t *testing.T) {
-	v := &VsockConfig{
-		HostSocket: testHostSocketPath,
-		GuestCID:   3,
-		TracePort:  8000,
-		NetPort:    8000,
-	}
-	err := v.validate()
-	if err == nil || !strings.Contains(err.Error(), "NetPort") {
-		t.Fatalf("err = %v, want NetPort-collision error", err)
-	}
-}
-
-func TestVsockConfigValidateRejectsNetPortCollisionWithAttachPort(t *testing.T) {
-	v := &VsockConfig{
-		HostSocket: testHostSocketPath,
-		GuestCID:   3,
-		AttachPort: 9000,
-		NetPort:    9000,
-	}
-	err := v.validate()
-	if err == nil || !strings.Contains(err.Error(), "NetPort") {
-		t.Fatalf("err = %v, want NetPort-collision error", err)
+// TestValidatePortForwardsAllowsFeaturePortWhenFeatureOff confirms the
+// reserved-port guard keys off the feature bit: a forward may reuse a
+// feature's constant port when that feature is disabled.
+func TestValidatePortForwardsAllowsFeaturePortWhenFeatureOff(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.Vsock = &VsockConfig{HostSocket: testHostSocketPath, GuestCID: 3} // no features
+	cfg.PortForwards = []PortForward{{VsockPort: agent.DefaultAttachVsockPort, ContainerPort: 80}}
+	if err := cfg.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil (attach off, port free)", err)
 	}
 }
 

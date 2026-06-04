@@ -42,24 +42,24 @@ func NewStandaloneVsock() (cfg *VsockConfig, cleanup func(), err error) {
 }
 
 // startVsockTraceReceiver opens a UDS listener at
-// <HostSocket>_<TracePort> (the Cloud Hypervisor hybrid-vsock
-// convention: every guest AF_VSOCK port maps to one host UDS) and
-// hands incoming framed batches to the Tracer reachable from ctx
+// <HostSocket>_<agent.DefaultTraceVsockPort> (the Cloud Hypervisor
+// hybrid-vsock convention: every guest AF_VSOCK port maps to one host
+// UDS) and hands incoming framed batches to the Tracer reachable from ctx
 // (via trace.TracerFromContext). Returns a stop func that closes
 // the listener and joins the accept goroutine.
 //
-// No-op (returns a do-nothing stop) when cfg has no Vsock or no
-// TracePort.
+// No-op (returns a do-nothing stop) when cfg has no Vsock or the trace
+// feature is off (cfg.Vsock.Trace == false).
 //
-// If TracePort is set but no Tracer is in ctx, the listener still
+// If trace is on but no Tracer is in ctx, the listener still
 // runs (so the in-VM agent's Flush doesn't error on dial), but the
 // spans are silently dropped. The expected caller wires a Tracer
 // via trace.ContextWithTracer before invoking Hello.
 func startVsockTraceReceiver(ctx context.Context, cfg Config) (stop func(), err error) {
-	if cfg.Vsock == nil || cfg.Vsock.TracePort == 0 {
+	if cfg.Vsock == nil || !cfg.Vsock.Trace {
 		return func() {}, nil
 	}
-	sockPath := fmt.Sprintf("%s_%d", cfg.Vsock.HostSocket, cfg.Vsock.TracePort)
+	sockPath := fmt.Sprintf("%s_%d", cfg.Vsock.HostSocket, agent.DefaultTraceVsockPort)
 	// Pre-clean a stale socket from a crashed previous run; Listen
 	// would otherwise EADDRINUSE.
 	oops.Skip("remove stale vsock trace socket", os.Remove(sockPath), fs.ErrNotExist)
@@ -179,9 +179,9 @@ func buildGuestConfig(cfg Config) *agentv1.GuestConfig {
 	// the per-VM VsockConfig the executor set (a non-zero port == feature
 	// on); the port fields themselves stay host-side for the listeners.
 	if v := cfg.Vsock; v != nil {
-		gc.AttachEnabled = v.AttachPort != 0
-		gc.NetEnabled = v.NetPort != 0
-		gc.TraceEnabled = v.TracePort != 0
+		gc.AttachEnabled = v.Attach
+		gc.NetEnabled = v.Net
+		gc.TraceEnabled = v.Trace
 	}
 	return gc
 }

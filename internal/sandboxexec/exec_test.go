@@ -15,7 +15,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/agent"
 	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/localai-org/darkaifactory/internal/sandbox"
@@ -1291,9 +1290,9 @@ func TestHandleSandboxEventAssignsVsockAlwaysOn(t *testing.T) {
 	if seen.Vsock == nil {
 		t.Fatal("cfg.Vsock not set for a featureless dispatch (always-on flip)")
 	}
-	if seen.Vsock.AttachPort != 0 || seen.Vsock.NetPort != 0 {
-		t.Errorf("ports = attach %d / net %d, want both 0 (features off)",
-			seen.Vsock.AttachPort, seen.Vsock.NetPort)
+	if seen.Vsock.Attach || seen.Vsock.Net {
+		t.Errorf("toggles = attach %v / net %v, want both off (no features)",
+			seen.Vsock.Attach, seen.Vsock.Net)
 	}
 }
 
@@ -1493,9 +1492,8 @@ func TestNewRejectsAttachRegistryWithoutVsockDir(t *testing.T) {
 
 // TestHandleSandboxEventAssignsAttachPortAndVsock pins the
 // attach-side allocation: when an AttachRegistry is wired, every
-// dispatch gets a Vsock device with AttachPort set to
-// agent.DefaultAttachVsockPort — even when the spec has no ports
-// (i.e. the port-forward branch wouldn't have allocated one).
+// dispatch gets a Vsock device with the attach feature enabled — even
+// when the spec has no ports.
 func TestHandleSandboxEventAssignsAttachPortAndVsock(t *testing.T) {
 	var seen sandbox.Config
 	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
@@ -1521,16 +1519,14 @@ func TestHandleSandboxEventAssignsAttachPortAndVsock(t *testing.T) {
 	if seen.Vsock == nil {
 		t.Fatal("Vsock not set")
 	}
-	if seen.Vsock.AttachPort != agent.DefaultAttachVsockPort {
-		t.Errorf("AttachPort = %d, want %d", seen.Vsock.AttachPort, agent.DefaultAttachVsockPort)
+	if !seen.Vsock.Attach {
+		t.Error("Vsock.Attach = false, want true (AttachRegistry wired)")
 	}
 }
 
 // TestHandleSandboxEventAssignsNetPortWhenNetEnabled pins the
-// sandboxnet allocation: when NetEnabled is set, every dispatch
-// gets a Vsock device with NetPort = agent.DefaultNetVsockPort —
-// even when no other Vsock-bearing branch (attach / port forwards)
-// would have allocated one.
+// sandboxnet allocation: when NetEnabled is set, every dispatch gets a
+// Vsock device with the net feature enabled.
 func TestHandleSandboxEventAssignsNetPortWhenNetEnabled(t *testing.T) {
 	var seen sandbox.Config
 	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
@@ -1553,8 +1549,8 @@ func TestHandleSandboxEventAssignsNetPortWhenNetEnabled(t *testing.T) {
 	if seen.Vsock == nil {
 		t.Fatal("Vsock not set")
 	}
-	if seen.Vsock.NetPort != agent.DefaultNetVsockPort {
-		t.Errorf("NetPort = %d, want %d", seen.Vsock.NetPort, agent.DefaultNetVsockPort)
+	if !seen.Vsock.Net {
+		t.Error("Vsock.Net = false, want true (NetEnabled set)")
 	}
 }
 

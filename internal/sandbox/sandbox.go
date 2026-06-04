@@ -90,14 +90,13 @@ type Config struct {
 
 	// PortForwards declares the guest-side ports the in-VM agent
 	// should listen on for orchestrator-driven ingress (Slice C1).
-	// Each entry becomes a `daft.port=<vsockPort>:<containerPort>`
-	// token on the kernel cmdline; the agent vsock-listens on
-	// VsockPort and pumps accepted connections to the container's
-	// `127.0.0.1:ContainerPort`.
+	// Each entry travels in the GuestConfig over the vsock control
+	// channel; the agent vsock-listens on VsockPort and pumps accepted
+	// connections to the container's `127.0.0.1:ContainerPort`.
 	//
-	// VsockPort must be unique across the slice and disjoint from
-	// any Vsock.TracePort the same VM uses, otherwise CH rejects
-	// the duplicate guest-side bind.
+	// VsockPort must be unique across the slice and disjoint from any
+	// enabled control-channel feature's fixed port (trace/attach/net),
+	// otherwise CH rejects the duplicate guest-side bind.
 	PortForwards []PortForward
 
 	// DenyEgress switches the per-VM netstack to default-deny: the
@@ -205,27 +204,18 @@ type VsockConfig struct {
 	// GuestCID is the AF_VSOCK context ID assigned to the guest.
 	// Must be ≥ 3 (0/1/2 are reserved by the AF_VSOCK ABI).
 	GuestCID uint32
-	// TracePort, if non-zero, instructs the in-VM agent (via the
-	// kernel cmdline) to ship its span buffer to this AF_VSOCK
-	// port on the host. The sandbox-host arranges a listener at
-	// <HostSocket>_<TracePort> before booting the VM.
-	TracePort uint32
 
-	// AttachPort, if non-zero, instructs the in-VM agent (via the
-	// kernel cmdline) to vsock-listen on this guest-side port for
-	// inbound attach sessions from the sandboxd host. The host
-	// reaches the listener by dialing
-	// <HostSocket>_<AttachPort> through the CH hybrid-vsock CONNECT
-	// proxy. Conventionally agent.DefaultAttachVsockPort (9000).
-	AttachPort uint32
-
-	// NetPort, if non-zero, is the host-side AF_VSOCK port the
-	// guest agent dials to reach the per-VM userspace TCP/IP
-	// stack (internal/sandboxnet). CH proxies the dial onto
-	// <HostSocket>_<NetPort>; sandboxd accepts and hands the conn
-	// to (*sandboxnet.Network).Accept. Frames travel as
-	// StdioProtocol (<u16-le size><eth frame>).
-	NetPort uint32
+	// Trace, Attach, and Net toggle the three optional control-channel
+	// features. Each runs on a fixed AF_VSOCK port (a protocol constant:
+	// agent.DefaultTraceVsockPort 8000 / DefaultAttachVsockPort 9000 /
+	// DefaultNetVsockPort 9500), and the host arranges a listener at
+	// <HostSocket>_<that constant>. The GuestConfig delivered over the
+	// control channel carries the matching enable-bit so the in-VM agent
+	// brings the feature up on the same constant port — the port number
+	// itself is never per-VM data.
+	Trace  bool // ship the agent's span buffer to the host trace sink
+	Attach bool // vsock-listen for inbound exec-attach sessions
+	Net    bool // dial sandboxd's per-VM userspace TCP/IP stack
 }
 
 // ShareConfig describes one host→guest virtiofs mount.
@@ -295,20 +285,28 @@ func (c *Config) validate() error {
 }
 
 // validatePortForwards enforces the per-PortForward invariants
-// (non-zero ports, unique guest-side VsockPort, no collision with
-// Vsock.TracePort or Vsock.AttachPort). Cloud Hypervisor would
-// otherwise surface a duplicate bind as an opaque virtio-vsock
-// error at boot.
+// (non-zero ports, unique guest-side VsockPort, no collision with an
+// enabled feature's fixed port). Cloud Hypervisor would otherwise
+// surface a duplicate bind as an opaque virtio-vsock error at boot.
 func (c *Config) validatePortForwards() error {
 	if len(c.PortForwards) == 0 {
 		return nil
 	}
 	seen := make(map[uint32]bool, len(c.PortForwards))
-	var tracePort, attachPort, netPort uint32
-	if c.Vsock != nil {
-		tracePort = c.Vsock.TracePort
-		attachPort = c.Vsock.AttachPort
-		netPort = c.Vsock.NetPort
+	// Each enabled control-channel feature occupies its fixed constant
+	// port; a port-forward may not reuse it (CH would surface the
+	// duplicate bind as an opaque virtio-vsock error at boot).
+	reserved := map[uint32]string{}
+	if v := c.Vsock; v != nil {
+		if v.Trace {
+			reserved[agent.DefaultTraceVsockPort] = "the trace channel"
+		}
+		if v.Attach {
+			reserved[agent.DefaultAttachVsockPort] = "the attach channel"
+		}
+		if v.Net {
+			reserved[agent.DefaultNetVsockPort] = "the net channel"
+		}
 	}
 	for i, pf := range c.PortForwards {
 		if pf.VsockPort == 0 {
@@ -321,14 +319,8 @@ func (c *Config) validatePortForwards() error {
 			return fmt.Errorf("sandbox: duplicate PortForwards[*].VsockPort %d", pf.VsockPort)
 		}
 		seen[pf.VsockPort] = true
-		if tracePort != 0 && pf.VsockPort == tracePort {
-			return fmt.Errorf("sandbox: PortForwards[%d].VsockPort %d collides with Vsock.TracePort", i, pf.VsockPort)
-		}
-		if attachPort != 0 && pf.VsockPort == attachPort {
-			return fmt.Errorf("sandbox: PortForwards[%d].VsockPort %d collides with Vsock.AttachPort", i, pf.VsockPort)
-		}
-		if netPort != 0 && pf.VsockPort == netPort {
-			return fmt.Errorf("sandbox: PortForwards[%d].VsockPort %d collides with Vsock.NetPort", i, pf.VsockPort)
+		if who, ok := reserved[pf.VsockPort]; ok {
+			return fmt.Errorf("sandbox: PortForwards[%d].VsockPort %d collides with %s", i, pf.VsockPort, who)
 		}
 	}
 	return nil
@@ -346,15 +338,9 @@ func (v *VsockConfig) validate() error {
 	if v.GuestCID < 3 {
 		return fmt.Errorf("sandbox: Vsock.GuestCID %d must be >= 3 (0/1/2 reserved)", v.GuestCID)
 	}
-	if v.TracePort != 0 && v.TracePort == v.AttachPort {
-		return fmt.Errorf("sandbox: Vsock.TracePort %d collides with Vsock.AttachPort", v.TracePort)
-	}
-	if v.NetPort != 0 && v.NetPort == v.TracePort {
-		return fmt.Errorf("sandbox: Vsock.NetPort %d collides with Vsock.TracePort", v.NetPort)
-	}
-	if v.NetPort != 0 && v.NetPort == v.AttachPort {
-		return fmt.Errorf("sandbox: Vsock.NetPort %d collides with Vsock.AttachPort", v.NetPort)
-	}
+	// The trace/attach/net feature ports are distinct compile-time
+	// constants, so they can no longer collide with each other — there's
+	// nothing left to validate here beyond the socket + CID.
 	return nil
 }
 

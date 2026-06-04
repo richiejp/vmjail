@@ -1805,12 +1805,22 @@ the user-host or in CI today.
              `Parse*Cmdline` fallbacks and the `VsockConfig` port fields are
              left in place as now-unreachable scaffolding (the cmdline can
              no longer carry the tokens), to be removed in 3b-3.
-           - **Slice 3b-3 (dead-code sweep).** Delete the now-uncalled
-             `Format*Cmdline` host funcs, the `Parse*Cmdline` /
-             `startXxxFromCmdline` cmdline fallbacks + their tests/fuzz
-             targets, and collapse `VsockConfig.{TracePort,AttachPort,
-             NetPort}` to the constants (host listeners use the constants
-             directly). Pure deletion, no behavior change.
+           - **Slice 3b-3a (VsockConfig ports → bools) — in progress.**
+             `VsockConfig.{TracePort,AttachPort,NetPort}` (uint32) collapse
+             to `{Trace,Attach,Net}` (bool); the host listeners/dials use
+             the fixed constants directly (`startVsockTraceReceiver`,
+             `startVsockNetReceiver`, `registerAttachRoute`), and
+             `validatePortForwards` rejects a forward that reuses an
+             *enabled* feature's constant port. The per-port collision
+             checks in `VsockConfig.validate()` go away (distinct constants
+             can't collide). No behavior change.
+           - **Slice 3b-3b (cmdline machinery deletion).** Delete the
+             now-uncalled `Format*Cmdline` host funcs and the
+             `Parse*Cmdline` / `startXxxFromCmdline` cmdline fallbacks +
+             their tests/fuzz targets, so the agent reads config only. Note
+             the coverage gotcha: `cmdline.go` is ~99% covered, so deleting
+             it lowers the ratio — compensate with tests in the same change
+             (CLAUDE.md "Verification monotonically increases").
 
        **Gadget observe wired as the debugging surface
        (2026-06-03).** The self-build test now attaches

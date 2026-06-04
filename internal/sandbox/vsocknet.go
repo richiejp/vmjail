@@ -8,25 +8,26 @@ import (
 	"os"
 	"sync"
 
+	"github.com/localai-org/darkaifactory/internal/agent"
 	"github.com/localai-org/darkaifactory/internal/observability"
 	"github.com/localai-org/darkaifactory/internal/oops"
 	"github.com/localai-org/darkaifactory/internal/sandboxnet"
 )
 
 // startVsockNetReceiver opens a UDS listener at
-// <HostSocket>_<NetPort> and hands every accepted conn to a
-// per-VM sandboxnet.Network. No-op (returns a do-nothing stop and
-// nil collector) when cfg has no Vsock or no NetPort. The returned
-// stop is always safe to call.
+// <HostSocket>_<agent.DefaultNetVsockPort> and hands every accepted conn
+// to a per-VM sandboxnet.Network. No-op (returns a do-nothing stop and
+// nil collector) when cfg has no Vsock or the net feature is off
+// (cfg.Vsock.Net == false). The returned stop is always safe to call.
 //
 // collectNet, when non-nil, is a snapshot function over the per-VM
 // network's byte counters in the shape the observer expects. The
 // observer pulls it once per tick to record rx/tx bytes through the
 // userspace netstack — a layer /proc can't see because the traffic
 // never crosses a host tap. Returned nil when no network is wired
-// (cfg.Vsock or NetPort unset).
+// (cfg.Vsock nil or net off).
 func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), collectNet func() *observability.NetSample, err error) {
-	if cfg.Vsock == nil || cfg.Vsock.NetPort == 0 {
+	if cfg.Vsock == nil || !cfg.Vsock.Net {
 		return func() {}, nil, nil
 	}
 	network, err := sandboxnet.New(sandboxnet.Config{
@@ -38,7 +39,7 @@ func startVsockNetReceiver(ctx context.Context, cfg Config) (stop func(), collec
 		return func() {}, nil, fmt.Errorf("sandbox: sandboxnet.New: %w", err)
 	}
 
-	sockPath := fmt.Sprintf("%s_%d", cfg.Vsock.HostSocket, cfg.Vsock.NetPort)
+	sockPath := fmt.Sprintf("%s_%d", cfg.Vsock.HostSocket, agent.DefaultNetVsockPort)
 	oops.Skip("remove stale vsock net socket", os.Remove(sockPath), fs.ErrNotExist)
 
 	listener, err := net.Listen("unix", sockPath)

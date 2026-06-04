@@ -27,7 +27,7 @@ func TestHelloIntegrationShipsAgentSpansOverVsock(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: filepath.Join(t.TempDir(), "v.sock"),
 		GuestCID:   3,
-		TracePort:  8000,
+		Trace:      true,
 	}
 
 	hostTracer := trace.New("test-host")

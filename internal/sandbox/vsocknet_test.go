@@ -29,7 +29,7 @@ func TestStartVsockNetReceiverNilWhenDisabled(t *testing.T) {
 				Vsock: &VsockConfig{
 					HostSocket: testHostSocketPath,
 					GuestCID:   3,
-					NetPort:    0,
+					Net:        false,
 				},
 			},
 		},
@@ -57,7 +57,7 @@ func TestStartVsockNetReceiverRoundTrip(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: filepath.Join(dir, "v.sock"),
 		GuestCID:   3,
-		NetPort:    8001,
+		Net:        true,
 	}
 	stop, collectNet, err := startVsockNetReceiver(context.Background(), cfg)
 	if err != nil {
@@ -74,7 +74,7 @@ func TestStartVsockNetReceiverRoundTrip(t *testing.T) {
 		t.Errorf("collectNet() = %+v before Accept, want nil", *got)
 	}
 
-	conn, err := net.Dial("unix", cfg.Vsock.HostSocket+"_8001")
+	conn, err := net.Dial("unix", cfg.Vsock.HostSocket+"_9500")
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -123,10 +123,10 @@ func TestStartVsockNetReceiverPreCleansStaleSocket(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: filepath.Join(dir, "v.sock"),
 		GuestCID:   3,
-		NetPort:    8001,
+		Net:        true,
 	}
 
-	stalePath := cfg.Vsock.HostSocket + "_8001"
+	stalePath := cfg.Vsock.HostSocket + "_9500"
 	stale, err := net.Listen("unix", stalePath)
 	if err != nil {
 		t.Fatalf("preseed listener: %v", err)
@@ -150,13 +150,13 @@ func TestStartVsockNetReceiverStopUnblocksConnectedGuest(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: filepath.Join(dir, "v.sock"),
 		GuestCID:   3,
-		NetPort:    8001,
+		Net:        true,
 	}
 	stop, _, err := startVsockNetReceiver(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("startVsockNetReceiver: %v", err)
 	}
-	conn, err := net.Dial("unix", cfg.Vsock.HostSocket+"_8001")
+	conn, err := net.Dial("unix", cfg.Vsock.HostSocket+"_9500")
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestStartVsockNetReceiverSurfacesListenError(t *testing.T) {
 	cfg.Vsock = &VsockConfig{
 		HostSocket: "/no/such/directory/v.sock",
 		GuestCID:   3,
-		NetPort:    8001,
+		Net:        true,
 	}
 	stop, _, err := startVsockNetReceiver(context.Background(), cfg)
 	if err == nil {
