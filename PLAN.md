@@ -1990,12 +1990,19 @@ the user-host or in CI today.
               closing it cleanly is a separate task (delegate a cgroup
               subtree into the container, or run the dogfood workspace
               with a delegated scope).
-         3. **(next) One e2e VM-boot test** — deliver the artefact set +
-            fixture tarballs into the container, set the `DAFT_*` env +
-            `DAFT_DISABLE_USERNS=1`, and run a single `internal/sandbox`
-            integration test that boots a VM. This is where the
-            artefact-delivery image/mount work (the daft-check-image-style
-            payload) gets built.
+         3. **(landed — GREEN, 2026-06-04)** `TestClusterNestedSandboxE2E`
+            (internal/testdaemons): runs the project's own
+            `internal/sandbox` `TestHelloIntegrationBootsVM` **nested**.
+            Delivery model proven = the cheap one: a **pre-compiled,
+            static (CGO=0) integration-test binary** + the **raw VM
+            artefacts** (CH / kernel / initramfs / virtiofsd) bind-mounted
+            into the container, run with the `DAFT_*` env pointing at them
+            (a stub `go.mod` two dirs up satisfies the test's
+            `repoRootFromTest`). **No Go toolchain, source tree, vendor, or
+            eBPF/kernel-build closure is needed inside** — confirming the
+            slice-2 decoupling empirically. The inner test passed
+            (`--- PASS: TestHelloIntegrationBootsVM`), with the same
+            non-fatal cgroup-creation gap as step 2 (boots regardless).
          4. **Full `make integration` subset** — the gated
             `TestClusterWorkspaceDaftIntegration` (mirror of
             `TestClusterWorkspaceDaftSelfBuild`): 10–12 GiB workspace,
