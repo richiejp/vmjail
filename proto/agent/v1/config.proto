@@ -1,0 +1,57 @@
+// Wire format for the in-VM daft-agent's per-VM config fetch. Right
+// after printing its banner the agent dials the host's config server
+// on a fixed AF_VSOCK port (agent.DefaultConfigVsockPort), writes one
+// length-prefixed GuestConfigRequest handshake, and reads back one
+// length-prefixed GuestConfig response carrying the operational
+// settings this VM should apply (shares to mount, container bundle to
+// run, …). The server then closes — it's a single request→response.
+//
+// This replaces hand-serializing those settings as `daft.*` tokens on
+// the kernel cmdline, which is world-readable and un-namespaceable (a
+// nested container reads the *outer* VM's line). The per-VM identity is
+// implicit in the hybrid-vsock socket the connection arrives on, so the
+// request carries no identity — only the agent version for
+// forward-compatibility.
+//
+// Framing is the same 4-byte big-endian length prefix the trace stream
+// and attach channel use — see internal/trace/stream.go for the
+// precedent. Inner mTLS is NOT layered on top: vsock dials are pinned
+// to a single VM by the hypervisor; the agent process inside is the
+// trust boundary.
+syntax = "proto3";
+
+package daft.agent.v1;
+
+option go_package = "github.com/localai-org/darkaifactory/internal/genpb/agent/v1;agentv1";
+
+// GuestConfigRequest is the handshake the agent sends on a fresh
+// config connection. Identity is implicit in the per-VM socket, so the
+// only field is the agent's version string — the server may use it to
+// decide which config schema variant to send as the protocol evolves.
+message GuestConfigRequest {
+  string agent_version = 1;
+}
+
+// GuestConfig is the host's response: the per-VM operational settings
+// the agent applies. Slice 1 carries the container bundle + virtio-fs
+// shares (the coupled minimum to start a workload — a bundle path lives
+// on a share mount); later slices fold in overlays, port-forwards,
+// observe-gadget paths, and the trace port, after which the kernel
+// cmdline drops to zero daft.* tokens.
+message GuestConfig {
+  // Absolute guest path of the OCI bundle to crun-run. Empty means "no
+  // container" (the bare-boot / share-only path). Mirrors the old
+  // daft.bundle= token.
+  string bundle = 1;
+
+  // Virtio-fs shares to mount, in order. Mirrors the repeatable
+  // daft.share=<tag>:<mountpoint> tokens.
+  repeated Share shares = 2;
+
+  // Share is one virtio-fs mount: device tag → absolute guest
+  // mountpoint.
+  message Share {
+    string tag = 1;
+    string mountpoint = 2;
+  }
+}

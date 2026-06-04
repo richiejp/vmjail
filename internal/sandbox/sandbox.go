@@ -1158,6 +1158,12 @@ func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	td.funcStops = append(td.funcStops, stopVsock)
 
+	stopConfig, err := startVsockConfigServer(ctx, cfg)
+	if err != nil {
+		return trace.RecordError(ctx, err)
+	}
+	td.funcStops = append(td.funcStops, stopConfig)
+
 	stopNet, collectNet, err := startVsockNetReceiver(ctx, cfg)
 	if err != nil {
 		return trace.RecordError(ctx, err)
@@ -1229,6 +1235,12 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 		return trace.RecordError(ctx, err)
 	}
 	td.funcStops = append(td.funcStops, stopVsock)
+
+	stopConfig, err := startVsockConfigServer(ctx, cfg)
+	if err != nil {
+		return trace.RecordError(ctx, err)
+	}
+	td.funcStops = append(td.funcStops, stopConfig)
 
 	stopNet, collectNet, err := startVsockNetReceiver(ctx, cfg)
 	if err != nil {

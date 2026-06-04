@@ -19,9 +19,11 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/localai-org/darkaifactory/internal/component"
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	"github.com/localai-org/darkaifactory/internal/oops"
 	"github.com/localai-org/darkaifactory/internal/trace"
 )
@@ -77,6 +79,9 @@ const BundleCmdlineKey = "daft.bundle"
 func Run(ctx context.Context, w io.Writer) error {
 	return runWith(ctx, w, runDeps{
 		readCmdline: readKernelCmdline,
+		fetchConfig: func(ctx context.Context) (*agentv1.GuestConfig, error) {
+			return FetchGuestConfig(ctx, DialHostVsock)
+		},
 		share:       defaultShareDeps(),
 		container:   defaultContainerDeps(),
 		dialVsock:   DialHostVsock,
@@ -97,6 +102,14 @@ func Run(ctx context.Context, w io.Writer) error {
 // implementations via Run.
 type runDeps struct {
 	readCmdline func() (string, error)
+	// fetchConfig dials the host's per-VM config server and returns
+	// this VM's GuestConfig. A non-nil error means the channel was
+	// unreachable (no vsock device, AF_VSOCK seccomp-denied, wedged
+	// listener) or the handshake failed; the agent then degrades to a
+	// cmdline/banner-only boot. Zero value (nil) skips the fetch
+	// entirely — tests that exercise only cmdline behaviour leave it
+	// unset.
+	fetchConfig func(context.Context) (*agentv1.GuestConfig, error)
 	share       ShareDeps
 	container   ContainerDeps
 	// dialVsock dials the host on the given AF_VSOCK port. Returned
@@ -141,12 +154,22 @@ type runDeps struct {
 
 func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	cmdline, _ := d.readCmdline()
+	// Fetch this VM's settings over the vsock control channel. On any
+	// failure the agent degrades: cfg is nil and each setting falls
+	// back to the cmdline (slice-1 transition — see fetchGuestConfig).
+	//
+	// The banner is still printed last for now, as the host's
+	// scanForBanner sentinel; slice 2 moves VM-status signalling onto
+	// the vsock channel as events and demotes the banner to a plain
+	// liveness print (console-scan surviving only as the
+	// vsock-unreachable fallback).
+	cfg := fetchGuestConfig(ctx, w, d)
 	tracer, ctx := startTracer(ctx, w, d, cmdline)
 
 	ctx, bootSpan := trace.Start(ctx, "agent.boot",
 		trace.WithAttributes(trace.KV{Key: "cmdline.len", Value: fmt.Sprintf("%d", len(cmdline))}))
-	bundle, _, _ := ParseBundleCmdline(cmdline)
-	applySharesFromCmdline(w, d, cmdline, bundle != "")
+	bundle := resolveBundle(w, cfg, cmdline)
+	applyShares(w, d, cfg, cmdline, bundle != "")
 	// Port-forwarders and the attach listener must come up
 	// BEFORE the container so a long-running workload like
 	// `bash` doesn't block the agent's main goroutine forever
@@ -167,8 +190,8 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 		ensureCgroupV2(w)
 	}
 	// Dump the guest kernel's available syscall list to the observe state
-	// folder (one-shot; the share was mounted by applySharesFromCmdline above)
-	// so a user can always discover what is traceable inside the microvm.
+	// folder (one-shot; the share was mounted by applyShares above) so a
+	// user can always discover what is traceable inside the microvm.
 	startSyscallDumpFromCmdline(w, d, cmdline)
 	// Attach the open-snoop + exec-snoop + sleep-snoop + io-snoop gadgets
 	// before the container so their tracepoints are live for the workload's
@@ -179,13 +202,14 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	slAgg := startSleepsnoopFromCmdline(ctx, w, d, cmdline)
 	ioAgg := startIosnoopFromCmdline(ctx, w, d, cmdline)
 	startSummaryWriter(ctx, w, d, cmdline, osAgg, exAgg, slAgg, ioAgg)
-	runContainerFromCmdline(ctx, w, d, cmdline)
+	runContainer(ctx, w, d, bundle)
 	bootSpan.End()
 
 	// Flush spans *before* the banner: the host's banner-scan is
 	// what tells the VMM supervisor "tear down safe", so flushing
 	// afterwards would race the agent's last vsock write against
-	// VM shutdown.
+	// VM shutdown. (Slice 2 replaces this banner sentinel with a
+	// vsock boot-complete event.)
 	shutdownTracer(ctx, tracer, w)
 
 	if _, err := fmt.Fprintln(w, Banner); err != nil {
@@ -193,6 +217,58 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	}
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+// fetchGuestConfig calls d.fetchConfig (when wired) and reports any
+// failure on the console. A nil return — no dep wired, or a fetch error
+// — means "no config delivered"; every setting then falls back to the
+// cmdline. This is the slice-1 transition: a VM with no vsock device
+// can't be reached over the channel and must still boot from its
+// cmdline, so a fetch failure is a degrade, not a fatal.
+func fetchGuestConfig(ctx context.Context, w io.Writer, d runDeps) *agentv1.GuestConfig {
+	if d.fetchConfig == nil {
+		return nil
+	}
+	cfg, err := d.fetchConfig(ctx)
+	if err != nil {
+		// Best-effort report — unlike writeReport's fatal oops.Must,
+		// a config-fetch failure is already a graceful degrade (the VM
+		// may simply have no vsock device, the off-VM unit-test case),
+		// so a broken console here must not escalate to a fatal exit.
+		_, _ = fmt.Fprintf(w, "%s%s\n", ConfigReportPrefix, err.Error())
+		return nil
+	}
+	return cfg
+}
+
+// resolveBundle picks the OCI bundle path to run: the GuestConfig's
+// bundle when the config channel delivered one, else the daft.bundle
+// cmdline token. Returns "" (no container) when neither is set, or when
+// the value is malformed (reported on the console). cfg may be nil.
+func resolveBundle(w io.Writer, cfg *agentv1.GuestConfig, cmdline string) string {
+	if b := cfg.GetBundle(); b != "" {
+		if !strings.HasPrefix(b, "/") {
+			writeReport(w, ContainerReportPrefix, "config: bundle path "+b+" must be absolute")
+			return ""
+		}
+		return b
+	}
+	bundle, _, err := ParseBundleCmdline(cmdline)
+	if err != nil {
+		writeReport(w, ContainerReportPrefix, "cmdline: "+err.Error())
+		return ""
+	}
+	return bundle
+}
+
+// runContainer crun-runs the resolved bundle, forwarding the container's
+// stdout via ContainerReportPrefix. A "" bundle (no container requested)
+// is silently skipped so a share-only boot keeps working.
+func runContainer(ctx context.Context, w io.Writer, d runDeps, bundle string) {
+	if bundle == "" {
+		return
+	}
+	RunContainer(ctx, w, d.container, bundle)
 }
 
 // tracerShutdownTimeout caps how long Shutdown's final Flush can
@@ -237,19 +313,20 @@ func shutdownTracer(parent context.Context, tr *trace.Tracer, w io.Writer) {
 	}
 }
 
-// applySharesFromCmdline parses every daft.share= token and mounts
-// each share. When haveBundle is false (the v0 marker-demo path),
-// the first share is mounted via ApplyShare so its hello.txt marker
-// gets read and reported. When haveBundle is true (the run-with-
-// image path), every share is mount-only — container output is the
-// proof, and reading a non-existent marker would just spam noise.
+// applyShares mounts each configured virtio-fs share. The share list
+// comes from the GuestConfig when the config channel delivered one,
+// else from the daft.share= cmdline tokens (slice-1 fallback). Overlay
+// mountpoints are still read from the cmdline this slice.
+//
+// When haveBundle is false (the v0 marker-demo path), the first share
+// is mounted via ApplyShare so its hello.txt marker gets read and
+// reported. When haveBundle is true (the run-with-image path), every
+// share is mount-only — container output is the proof, and reading a
+// non-existent marker would just spam noise.
 //
 // All failure paths print a single ShareReportPrefix line so the
 // host scanner sees one prefix per failure mode.
-func applySharesFromCmdline(w io.Writer, d runDeps, cmdline string, haveBundle bool) {
-	if cmdline == "" {
-		return
-	}
+func applyShares(w io.Writer, d runDeps, cfg *agentv1.GuestConfig, cmdline string, haveBundle bool) {
 	overlays, err := ParseWorkspaceOverlayCmdlines(cmdline)
 	if err != nil {
 		writeReport(w, OverlayReportPrefix, "cmdline: "+err.Error())
@@ -260,10 +337,13 @@ func applySharesFromCmdline(w io.Writer, d runDeps, cmdline string, haveBundle b
 		overlaySet[mp] = true
 	}
 
-	specs, err := ParseShareCmdlines(cmdline)
-	if err != nil {
-		writeReport(w, ShareReportPrefix, "cmdline: "+err.Error())
-		return
+	specs := configShareSpecs(cfg)
+	if specs == nil {
+		specs, err = ParseShareCmdlines(cmdline)
+		if err != nil {
+			writeReport(w, ShareReportPrefix, "cmdline: "+err.Error())
+			return
+		}
 	}
 	for i, spec := range specs {
 		target := spec
@@ -283,25 +363,6 @@ func applySharesFromCmdline(w io.Writer, d runDeps, cmdline string, haveBundle b
 			writeReport(w, OverlayReportPrefix, err.Error())
 		}
 	}
-}
-
-// runContainerFromCmdline parses any daft.bundle token and execs crun
-// against it. Failures are reported via ContainerReportPrefix; absence
-// of the token is silently skipped so plain `daft sandbox hello` keeps
-// working unchanged.
-func runContainerFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdline string) {
-	if cmdline == "" {
-		return
-	}
-	bundle, ok, err := ParseBundleCmdline(cmdline)
-	if err != nil {
-		writeReport(w, ContainerReportPrefix, "cmdline: "+err.Error())
-		return
-	}
-	if !ok {
-		return
-	}
-	RunContainer(ctx, w, d.container, bundle)
 }
 
 // Main is the agent's process entry point, factored out of cmd/daft-agent

@@ -1687,6 +1687,78 @@ the user-host or in CI today.
        userns-scoped facsimile — real within the guest, with only the
        VM beneath it. The `DevFuse` design doc must say so plainly.
 
+       **Per-VM config over the vsock control channel — design +
+       slicing (2026-06-03).** Closes the agent-blocker's "deeper fix"
+       above: the kernel cmdline is today a hand-rolled string
+       *serialization of a subset of the per-VM config* — each feature
+       is a `daft.*` quadruple (`XxxCmdlineKey` + `FormatXxxCmdline`
+       host-side + `ParseXxxCmdline` agent-side + `startXxxFromCmdline`)
+       and `buildKernelCmdline` concatenates them. The cmdline is
+       **world-readable and un-namespaceable** (a nested container reads
+       the *outer* VM's line — the exact bug that made the agent banner
+       test non-deterministic), so operational settings don't belong
+       there. Replace the serialization with delivering the structured
+       config over vsock.
+         - **Direction: pull (agent dials host).** The host endpoint is
+           already per-VM (`VsockDir` holds one hybrid-vsock UDS per
+           Sandbox), so **identity is implicit in the socket** — no
+           token needed. Matches the trace exporter's direction; lets
+           the agent connect when *it* is ready (no host→guest readiness
+           race).
+         - **Boot sequence (agent):** read cmdline, then dial a fixed
+           `DefaultConfigVsockPort` with a **short deadline** (VMs boot
+           fast), send a `GuestConfigRequest` handshake, read the
+           `GuestConfig` response, then apply (shares -> bundle -> ...).
+           On dial/handshake timeout or error (no server, `AF_VSOCK`
+           seccomp-denied in a nested check container, wedged listener)
+           -> **degrade**: each setting falls back to the cmdline, no
+           fatal. Wire format reuses the trace/attach 4-byte-length-prefix
+           + proto framing (no connect/HTTP-2 over vsock for a single
+           request->response).
+         - **Host:** an always-on `startVsockConfigServer` beside
+           `startVsockTraceReceiver` in `serveWith`/`helloWith`, building
+           a `GuestConfig` from `Config` and writing it to each accepted
+           conn.
+         - **Banner is not a status channel.** The banner is overloaded
+           today: it means both "agent is alive" *and* "boot complete,
+           host may stop scanning" — the whole `make integration` suite
+           boots via `Hello()` and asserts on console text that
+           `scanForBanner` mirrors *up to* the (last-printed) banner. That
+           coupling is wrong: **VM status belongs on the vsock protocol
+           as events the host/tests wait for**, the banner should be a
+           plain console liveness print read only by a banner-specific
+           test, and console-scan-for-banner should survive *only* as the
+           fallback when the agent can't reach vsock. Untangling that is
+           slice 2, so slice 1 deliberately leaves the banner where it is
+           (printed last, still the `scanForBanner` sentinel) to avoid
+           regressing the integration suite.
+         - **Slice 1 (config pull, zero regression):** stand up the
+           channel + handshake + short-timeout/degrade and deliver
+           `bundle` + `shares` over it **with the cmdline kept as
+           fallback** (config wins when present; cmdline used when the VM
+           has no vsock device / fetch fails / degrades). The banner's
+           role is unchanged. Proves the mechanism on the orchestrated
+           path while nothing regresses — a no-`Vsock` `Serve`/`Hello`
+           has no vsock device at all, so the agent *can't* dial and must
+           fall back.
+         - **Slice 2 (status via events + banner decouple):** the agent
+           emits status events over the vsock control channel
+           (boot-complete + the milestones the integration tests assert
+           on); `Hello()` and the tests wait for **events** while a
+           background goroutine continuously mirrors the console to the
+           buffer (so existing `Contains` asserts still see banner +
+           markers regardless of order); the banner becomes a plain
+           liveness print tested only for itself; `scanForBanner` is
+           demoted to the vsock-unreachable fallback.
+         - **Slice 3 (cmdline cutover):** make vsock always-on for every
+           sandbox VM, then delete the `daft.*` bundle/share assembly and
+           migrate the remaining tokens (overlays, ports, gadgets, trace
+           port — the per-forward port table is the one genuinely
+           per-workspace field that *must* travel in the payload), so the
+           cmdline goes to **zero `daft.*` tokens**. Fixed protocol ports
+           (config/attach/trace/forward-base) stay constants, not cmdline
+           data.
+
        **Gadget observe wired as the debugging surface
        (2026-06-03).** The self-build test now attaches
        `attachWorkspaceObserve` (host-side `daft sandbox observe

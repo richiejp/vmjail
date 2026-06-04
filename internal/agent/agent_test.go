@@ -5,11 +5,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 )
 
 // TestMain doubles the test binary as a "fake crun" when invoked with
@@ -25,6 +28,11 @@ func TestMain(m *testing.M) {
 		runFakeCrun(v)
 		return
 	}
+	// Shrink the config-fetch deadline so the production-path tests
+	// (which call the real Run and dial a vsock host that doesn't
+	// exist off-VM) degrade quickly instead of waiting the full
+	// production timeout.
+	configFetchTimeout = 200 * time.Millisecond
 	os.Exit(m.Run())
 }
 
@@ -63,6 +71,83 @@ func TestRunPrintsBannerAndBlocksUntilContextCancelled(t *testing.T) {
 	}
 	if got := strings.TrimRight(buf.String(), "\n"); got != Banner {
 		t.Fatalf("banner = %q, want %q", got, Banner)
+	}
+}
+
+// TestRunDegradesToBannerWhenConfigFetchFails asserts the failure
+// contract: when the config channel can't be reached (the fetch errors
+// — no vsock device, AF_VSOCK seccomp-denied, wedged listener), the
+// agent reports it, runs no container, and blocks until ctx fires.
+// With an empty cmdline there's nothing to fall back to, so a clean
+// banner-only boot is the result.
+func TestRunDegradesToBannerWhenConfigFetchFails(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	var buf bytes.Buffer
+	containerRan := false
+	err := runWith(ctx, &buf, runDeps{
+		readCmdline: func() (string, error) { return "", nil },
+		fetchConfig: func(context.Context) (*agentv1.GuestConfig, error) {
+			return nil, errors.New("dial config port: no vsock device")
+		},
+		container: ContainerDeps{
+			Exec: func(context.Context, io.Writer, string) error {
+				containerRan = true
+				return nil
+			},
+		},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runWith returned %v, want DeadlineExceeded", err)
+	}
+	if containerRan {
+		t.Error("container ran despite config-fetch failure")
+	}
+	out := buf.String()
+	if !strings.Contains(out, ConfigReportPrefix) {
+		t.Errorf("missing config report line in %q", out)
+	}
+	if !strings.Contains(out, Banner) {
+		t.Errorf("missing banner in %q", out)
+	}
+}
+
+// TestRunAppliesConfigBundleAndShares asserts the happy path: settings
+// delivered over the config channel (not the cmdline — which is empty
+// here) are what the agent mounts and runs.
+func TestRunAppliesConfigBundleAndShares(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	var buf bytes.Buffer
+	var mountedTargets []string
+	var ranBundle string
+	err := runWith(ctx, &buf, runDeps{
+		readCmdline: func() (string, error) { return "", nil },
+		fetchConfig: func(context.Context) (*agentv1.GuestConfig, error) {
+			return &agentv1.GuestConfig{
+				Bundle: testBundlePath,
+				Shares: []*agentv1.GuestConfig_Share{{Tag: testTag, Mountpoint: testMountpoint}},
+			}, nil
+		},
+		share: ShareDeps{
+			Mount:    func(_, target, _, _ string) error { mountedTargets = append(mountedTargets, target); return nil },
+			MkdirAll: func(string, os.FileMode) error { return nil },
+			ReadFile: func(string) ([]byte, error) { return nil, nil },
+		},
+		container: ContainerDeps{
+			Exec: func(_ context.Context, _ io.Writer, bundle string) error { ranBundle = bundle; return nil },
+		},
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runWith returned %v, want DeadlineExceeded", err)
+	}
+	if ranBundle != testBundlePath {
+		t.Errorf("ran bundle %q, want %q", ranBundle, testBundlePath)
+	}
+	if len(mountedTargets) != 1 || mountedTargets[0] != testMountpoint {
+		t.Errorf("mounted %v, want [%q]", mountedTargets, testMountpoint)
 	}
 }
 
