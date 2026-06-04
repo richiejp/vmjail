@@ -1767,7 +1767,28 @@ the user-host or in CI today.
            per-workspace field that *must* travel in the payload), so the
            cmdline goes to **zero `daft.*` tokens**. Fixed protocol ports
            (config/attach/trace/forward-base) stay constants, not cmdline
-           data.
+           data. Split into two verified commits:
+           - **Slice 3a (payload-carry the per-workspace settings) — in
+             progress.** Extend `GuestConfig` with the per-share `overlay`
+             flag, the `port_forwards` table, and the `observe` gadget
+             paths; project them in `buildGuestConfig`; have the agent
+             **prefer config, fall back to the cmdline** for each (same
+             pattern slice 1 used for bundle/shares). Zero-regression — the
+             cmdline tokens stay as the fallback — so the payload path is
+             exercised e2e *before* the net is pulled. Trace/attach/net
+             ports stay on the cmdline this commit.
+           - **Slice 3b (always-on + cutover).** Every launch path
+             (`sandboxexec.resolveBootConfig`, the `daft sandbox` demo)
+             assigns a `Vsock` device unconditionally; trace/attach/net
+             collapse to fixed-port constants gated by `GuestConfig`
+             enable-bits (the port numbers leave `VsockConfig`);
+             `buildKernelCmdline` drops to the base line (zero `daft.*`);
+             and the now-dead `Format*Cmdline` host funcs +
+             `Parse*Cmdline`/`startXxxFromCmdline` agent fallbacks are
+             deleted. The vsock-unreachable degrade (nested check-container,
+             AF_VSOCK seccomp-denied) then yields a bare banner-only agent,
+             which is correct — a nested workload must not inherit the outer
+             VM's settings.
 
        **Gadget observe wired as the debugging surface
        (2026-06-03).** The self-build test now attaches

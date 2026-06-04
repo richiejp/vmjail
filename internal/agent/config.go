@@ -206,3 +206,58 @@ func configShareSpecs(cfg *agentv1.GuestConfig) []ShareSpec {
 	}
 	return specs
 }
+
+// configOverlays returns the mountpoints of the GuestConfig shares whose
+// overlay bit is set, in share order. The parallel-to-cmdline form of
+// ParseWorkspaceOverlayCmdlines, consumed by the agent's applyShares to
+// redirect those shares through a tmpfs overlay. Returns nil when no
+// share requests an overlay.
+func configOverlays(cfg *agentv1.GuestConfig) []string {
+	var mps []string
+	for _, s := range cfg.GetShares() {
+		if s.GetOverlay() {
+			mps = append(mps, s.GetMountpoint())
+		}
+	}
+	return mps
+}
+
+// resolveObservePath returns the effective Tier-2 gadget output path:
+// the GuestConfig's Observe value when set (sel extracts the field), else
+// the result of parsing the cmdline daft.observe.* token. The
+// (path, ok, err) shape matches the ParseXxxCmdline helpers so each gadget
+// starter keeps its existing absent/malformed switch unchanged. cfg may
+// be nil (GetObserve is nil-safe), which falls straight through to the
+// cmdline parse.
+func resolveObservePath(
+	cfg *agentv1.GuestConfig,
+	sel func(*agentv1.GuestConfig_Observe) string,
+	parse func(string) (string, bool, error),
+	cmdline string,
+) (path string, ok bool, err error) {
+	if obs := cfg.GetObserve(); obs != nil {
+		if p := sel(obs); p != "" {
+			return p, true, nil
+		}
+	}
+	return parse(cmdline)
+}
+
+// configPortForwards converts the port-forward table carried in a
+// GuestConfig to the agent's PortForwardSpec form. Returns nil when cfg
+// is nil or carries none, which the caller treats as "fall back to the
+// cmdline daft.port tokens" during the slice-3a transition.
+func configPortForwards(cfg *agentv1.GuestConfig) []PortForwardSpec {
+	protoPFs := cfg.GetPortForwards()
+	if len(protoPFs) == 0 {
+		return nil
+	}
+	specs := make([]PortForwardSpec, 0, len(protoPFs))
+	for _, pf := range protoPFs {
+		specs = append(specs, PortForwardSpec{
+			VsockPort:     pf.GetVsockPort(),
+			ContainerPort: pf.GetContainerPort(),
+		})
+	}
+	return specs
+}

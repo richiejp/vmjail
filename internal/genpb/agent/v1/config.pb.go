@@ -156,7 +156,15 @@ type GuestConfig struct {
 	Bundle string `protobuf:"bytes,1,opt,name=bundle,proto3" json:"bundle,omitempty"`
 	// Virtio-fs shares to mount, in order. Mirrors the repeatable
 	// daft.share=<tag>:<mountpoint> tokens.
-	Shares        []*GuestConfig_Share `protobuf:"bytes,2,rep,name=shares,proto3" json:"shares,omitempty"`
+	Shares []*GuestConfig_Share `protobuf:"bytes,2,rep,name=shares,proto3" json:"shares,omitempty"`
+	// Guest-side ports the agent vsock-forwards to the container. Mirrors
+	// the repeatable daft.port=<vsockPort>:<containerPort> tokens. This is
+	// the one genuinely per-workspace table (it comes straight from the
+	// SandboxSpec's exposed ports), so it must travel in the payload.
+	PortForwards []*GuestConfig_PortForward `protobuf:"bytes,3,rep,name=port_forwards,json=portForwards,proto3" json:"port_forwards,omitempty"`
+	// observe carries the Tier-2 gadget output paths. Absent (nil) leaves
+	// every gadget off. Mirrors the daft.observe.* tokens.
+	Observe       *GuestConfig_Observe `protobuf:"bytes,4,opt,name=observe,proto3" json:"observe,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -201,6 +209,20 @@ func (x *GuestConfig) GetBundle() string {
 func (x *GuestConfig) GetShares() []*GuestConfig_Share {
 	if x != nil {
 		return x.Shares
+	}
+	return nil
+}
+
+func (x *GuestConfig) GetPortForwards() []*GuestConfig_PortForward {
+	if x != nil {
+		return x.PortForwards
+	}
+	return nil
+}
+
+func (x *GuestConfig) GetObserve() *GuestConfig_Observe {
+	if x != nil {
+		return x.Observe
 	}
 	return nil
 }
@@ -259,9 +281,15 @@ func (x *AgentEvent) GetKind() AgentEvent_Kind {
 // Share is one virtio-fs mount: device tag → absolute guest
 // mountpoint.
 type GuestConfig_Share struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Tag           string                 `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
-	Mountpoint    string                 `protobuf:"bytes,2,opt,name=mountpoint,proto3" json:"mountpoint,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	Tag        string                 `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
+	Mountpoint string                 `protobuf:"bytes,2,opt,name=mountpoint,proto3" json:"mountpoint,omitempty"`
+	// overlay, when true, wraps the share in a tmpfs-backed overlay so
+	// the guest's writes don't reach the host backing dir. Mirrors the
+	// old daft.workspace_overlay=<mountpoint> token (which keyed the
+	// overlay to a share by its mountpoint); carrying it on the Share
+	// itself drops that indirection.
+	Overlay       bool `protobuf:"varint,3,opt,name=overlay,proto3" json:"overlay,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -310,21 +338,186 @@ func (x *GuestConfig_Share) GetMountpoint() string {
 	return ""
 }
 
+func (x *GuestConfig_Share) GetOverlay() bool {
+	if x != nil {
+		return x.Overlay
+	}
+	return false
+}
+
+// PortForward maps an AF_VSOCK port the agent listens on to the TCP
+// port the container is bound to on loopback inside the VM.
+type GuestConfig_PortForward struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	VsockPort     uint32                 `protobuf:"varint,1,opt,name=vsock_port,json=vsockPort,proto3" json:"vsock_port,omitempty"`
+	ContainerPort uint32                 `protobuf:"varint,2,opt,name=container_port,json=containerPort,proto3" json:"container_port,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GuestConfig_PortForward) Reset() {
+	*x = GuestConfig_PortForward{}
+	mi := &file_agent_v1_config_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GuestConfig_PortForward) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GuestConfig_PortForward) ProtoMessage() {}
+
+func (x *GuestConfig_PortForward) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_config_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GuestConfig_PortForward.ProtoReflect.Descriptor instead.
+func (*GuestConfig_PortForward) Descriptor() ([]byte, []int) {
+	return file_agent_v1_config_proto_rawDescGZIP(), []int{1, 1}
+}
+
+func (x *GuestConfig_PortForward) GetVsockPort() uint32 {
+	if x != nil {
+		return x.VsockPort
+	}
+	return 0
+}
+
+func (x *GuestConfig_PortForward) GetContainerPort() uint32 {
+	if x != nil {
+		return x.ContainerPort
+	}
+	return 0
+}
+
+// Observe is the set of in-guest absolute paths the Tier-2 gadgets
+// write to (usually on a writable virtiofs share the host reads back).
+// An empty field leaves that gadget off, matching the old per-token
+// "absent ⇒ disabled" contract.
+type GuestConfig_Observe struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Opensnoop     string                 `protobuf:"bytes,1,opt,name=opensnoop,proto3" json:"opensnoop,omitempty"`
+	Execsnoop     string                 `protobuf:"bytes,2,opt,name=execsnoop,proto3" json:"execsnoop,omitempty"`
+	Sleepsnoop    string                 `protobuf:"bytes,3,opt,name=sleepsnoop,proto3" json:"sleepsnoop,omitempty"`
+	Iosnoop       string                 `protobuf:"bytes,4,opt,name=iosnoop,proto3" json:"iosnoop,omitempty"`
+	Syscalls      string                 `protobuf:"bytes,5,opt,name=syscalls,proto3" json:"syscalls,omitempty"`
+	Summary       string                 `protobuf:"bytes,6,opt,name=summary,proto3" json:"summary,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GuestConfig_Observe) Reset() {
+	*x = GuestConfig_Observe{}
+	mi := &file_agent_v1_config_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GuestConfig_Observe) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GuestConfig_Observe) ProtoMessage() {}
+
+func (x *GuestConfig_Observe) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_config_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GuestConfig_Observe.ProtoReflect.Descriptor instead.
+func (*GuestConfig_Observe) Descriptor() ([]byte, []int) {
+	return file_agent_v1_config_proto_rawDescGZIP(), []int{1, 2}
+}
+
+func (x *GuestConfig_Observe) GetOpensnoop() string {
+	if x != nil {
+		return x.Opensnoop
+	}
+	return ""
+}
+
+func (x *GuestConfig_Observe) GetExecsnoop() string {
+	if x != nil {
+		return x.Execsnoop
+	}
+	return ""
+}
+
+func (x *GuestConfig_Observe) GetSleepsnoop() string {
+	if x != nil {
+		return x.Sleepsnoop
+	}
+	return ""
+}
+
+func (x *GuestConfig_Observe) GetIosnoop() string {
+	if x != nil {
+		return x.Iosnoop
+	}
+	return ""
+}
+
+func (x *GuestConfig_Observe) GetSyscalls() string {
+	if x != nil {
+		return x.Syscalls
+	}
+	return ""
+}
+
+func (x *GuestConfig_Observe) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
 var File_agent_v1_config_proto protoreflect.FileDescriptor
 
 const file_agent_v1_config_proto_rawDesc = "" +
 	"\n" +
 	"\x15agent/v1/config.proto\x12\rdaft.agent.v1\"9\n" +
 	"\x12GuestConfigRequest\x12#\n" +
-	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\x9a\x01\n" +
+	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xcc\x04\n" +
 	"\vGuestConfig\x12\x16\n" +
 	"\x06bundle\x18\x01 \x01(\tR\x06bundle\x128\n" +
-	"\x06shares\x18\x02 \x03(\v2 .daft.agent.v1.GuestConfig.ShareR\x06shares\x1a9\n" +
+	"\x06shares\x18\x02 \x03(\v2 .daft.agent.v1.GuestConfig.ShareR\x06shares\x12K\n" +
+	"\rport_forwards\x18\x03 \x03(\v2&.daft.agent.v1.GuestConfig.PortForwardR\fportForwards\x12<\n" +
+	"\aobserve\x18\x04 \x01(\v2\".daft.agent.v1.GuestConfig.ObserveR\aobserve\x1aS\n" +
 	"\x05Share\x12\x10\n" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x1e\n" +
 	"\n" +
 	"mountpoint\x18\x02 \x01(\tR\n" +
-	"mountpoint\"q\n" +
+	"mountpoint\x12\x18\n" +
+	"\aoverlay\x18\x03 \x01(\bR\aoverlay\x1aS\n" +
+	"\vPortForward\x12\x1d\n" +
+	"\n" +
+	"vsock_port\x18\x01 \x01(\rR\tvsockPort\x12%\n" +
+	"\x0econtainer_port\x18\x02 \x01(\rR\rcontainerPort\x1a\xb5\x01\n" +
+	"\aObserve\x12\x1c\n" +
+	"\topensnoop\x18\x01 \x01(\tR\topensnoop\x12\x1c\n" +
+	"\texecsnoop\x18\x02 \x01(\tR\texecsnoop\x12\x1e\n" +
+	"\n" +
+	"sleepsnoop\x18\x03 \x01(\tR\n" +
+	"sleepsnoop\x12\x18\n" +
+	"\aiosnoop\x18\x04 \x01(\tR\aiosnoop\x12\x1a\n" +
+	"\bsyscalls\x18\x05 \x01(\tR\bsyscalls\x12\x18\n" +
+	"\asummary\x18\x06 \x01(\tR\asummary\"q\n" +
 	"\n" +
 	"AgentEvent\x122\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1e.daft.agent.v1.AgentEvent.KindR\x04kind\"/\n" +
@@ -345,22 +538,26 @@ func file_agent_v1_config_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_v1_config_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_agent_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_agent_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_agent_v1_config_proto_goTypes = []any{
-	(AgentEvent_Kind)(0),       // 0: daft.agent.v1.AgentEvent.Kind
-	(*GuestConfigRequest)(nil), // 1: daft.agent.v1.GuestConfigRequest
-	(*GuestConfig)(nil),        // 2: daft.agent.v1.GuestConfig
-	(*AgentEvent)(nil),         // 3: daft.agent.v1.AgentEvent
-	(*GuestConfig_Share)(nil),  // 4: daft.agent.v1.GuestConfig.Share
+	(AgentEvent_Kind)(0),            // 0: daft.agent.v1.AgentEvent.Kind
+	(*GuestConfigRequest)(nil),      // 1: daft.agent.v1.GuestConfigRequest
+	(*GuestConfig)(nil),             // 2: daft.agent.v1.GuestConfig
+	(*AgentEvent)(nil),              // 3: daft.agent.v1.AgentEvent
+	(*GuestConfig_Share)(nil),       // 4: daft.agent.v1.GuestConfig.Share
+	(*GuestConfig_PortForward)(nil), // 5: daft.agent.v1.GuestConfig.PortForward
+	(*GuestConfig_Observe)(nil),     // 6: daft.agent.v1.GuestConfig.Observe
 }
 var file_agent_v1_config_proto_depIdxs = []int32{
 	4, // 0: daft.agent.v1.GuestConfig.shares:type_name -> daft.agent.v1.GuestConfig.Share
-	0, // 1: daft.agent.v1.AgentEvent.kind:type_name -> daft.agent.v1.AgentEvent.Kind
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	5, // 1: daft.agent.v1.GuestConfig.port_forwards:type_name -> daft.agent.v1.GuestConfig.PortForward
+	6, // 2: daft.agent.v1.GuestConfig.observe:type_name -> daft.agent.v1.GuestConfig.Observe
+	0, // 3: daft.agent.v1.AgentEvent.kind:type_name -> daft.agent.v1.AgentEvent.Kind
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_config_proto_init() }
@@ -374,7 +571,7 @@ func file_agent_v1_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_config_proto_rawDesc), len(file_agent_v1_config_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

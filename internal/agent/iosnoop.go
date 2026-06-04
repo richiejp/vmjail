@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/iosnoop"
 )
 
@@ -46,7 +47,9 @@ func defaultIosnoopDeps() iosnoopDeps {
 	}
 }
 
-// startIosnoopFromCmdline parses daft.observe.iosnoop and, when set, opens the
+// startIosnoopFromCmdline resolves the io-snoop log path (the GuestConfig's
+// observe.iosnoop, else the daft.observe.iosnoop cmdline token) and, when
+// set, opens the
 // guest-side trace file and spawns the gadget's drain loop for the agent's
 // lifetime. It returns the live aggregator so the caller can fold it into the
 // build-progress summary alongside the other gadgets', or nil when the gadget
@@ -62,7 +65,7 @@ func startIosnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdlin
 	if d.iosnoop.run == nil {
 		return nil
 	}
-	path, ok, err := ParseIosnoopCmdline(cmdline)
+	path, ok, err := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetIosnoop, ParseIosnoopCmdline, cmdline)
 	switch {
 	case err != nil:
 		writeReport(w, IosnoopReportPrefix, "cmdline: "+err.Error())

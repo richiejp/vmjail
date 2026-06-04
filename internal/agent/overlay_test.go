@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 )
 
 const (
 	overlayMergedTest = "/workspace"
 	fstypeOverlay     = "overlay"
+	fstypeVirtiofs    = "virtiofs"
 )
 
 func TestParseWorkspaceOverlayCmdlinesHappyPath(t *testing.T) {
@@ -155,7 +158,40 @@ func TestApplySharesFromCmdlineRedirectsToLowerWhenOverlaid(t *testing.T) {
 	if len(f.mounts) != 3 {
 		t.Fatalf("mounts = %+v, want 3 (virtiofs+tmpfs+overlay)", f.mounts)
 	}
-	if f.mounts[0].fstype != "virtiofs" || f.mounts[0].target != overlayMergedTest+".lower" {
+	if f.mounts[0].fstype != fstypeVirtiofs || f.mounts[0].target != overlayMergedTest+".lower" {
+		t.Errorf("share mount = %+v, want virtiofs at %q.lower", f.mounts[0], overlayMergedTest)
+	}
+	if f.mounts[2].fstype != fstypeOverlay || f.mounts[2].target != overlayMergedTest {
+		t.Errorf("overlay mount = %+v, want overlay at %q", f.mounts[2], overlayMergedTest)
+	}
+}
+
+// TestApplySharesFromConfigRedirectsToLowerWhenOverlaid is the
+// config-payload twin of the cmdline test above: a GuestConfig share with
+// its overlay bit set must drive the same .lower + overlayfs handoff,
+// with the cmdline empty.
+func TestApplySharesFromConfigRedirectsToLowerWhenOverlaid(t *testing.T) {
+	f := newFakeShareDeps()
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{
+		Shares: []*agentv1.GuestConfig_Share{
+			{Tag: "workspace", Mountpoint: overlayMergedTest, Overlay: true},
+		},
+	}}
+	deps := runDeps{
+		readCmdline: func() (string, error) { return "", nil },
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       f.toShareDeps(),
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	var buf bytes.Buffer
+	_ = runWith(ctx, &buf, deps)
+
+	if len(f.mounts) != 3 {
+		t.Fatalf("mounts = %+v, want 3 (virtiofs+tmpfs+overlay)", f.mounts)
+	}
+	if f.mounts[0].fstype != fstypeVirtiofs || f.mounts[0].target != overlayMergedTest+".lower" {
 		t.Errorf("share mount = %+v, want virtiofs at %q.lower", f.mounts[0], overlayMergedTest)
 	}
 	if f.mounts[2].fstype != fstypeOverlay || f.mounts[2].target != overlayMergedTest {

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/sleepsnoop"
 )
 
@@ -46,7 +47,9 @@ func defaultSleepsnoopDeps() sleepsnoopDeps {
 	}
 }
 
-// startSleepsnoopFromCmdline parses daft.observe.sleepsnoop and, when set,
+// startSleepsnoopFromCmdline resolves the sleep-snoop log path (the
+// GuestConfig's observe.sleepsnoop, else the daft.observe.sleepsnoop
+// cmdline token) and, when set,
 // opens the guest-side trace file and spawns the gadget's drain loop for the
 // agent's lifetime. It returns the live aggregator so the caller can fold it
 // into the build-progress summary alongside the other gadgets', or nil when the
@@ -62,7 +65,7 @@ func startSleepsnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmd
 	if d.sleepsnoop.run == nil {
 		return nil
 	}
-	path, ok, err := ParseSleepsnoopCmdline(cmdline)
+	path, ok, err := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetSleepsnoop, ParseSleepsnoopCmdline, cmdline)
 	switch {
 	case err != nil:
 		writeReport(w, SleepsnoopReportPrefix, "cmdline: "+err.Error())

@@ -227,6 +227,8 @@ func TestControlChannelConfigNil(t *testing.T) {
 
 // TestConfigShareSpecs covers the proto→ShareSpec projection and its
 // nil / empty fallbacks.
+//
+//nolint:dupl // structurally parallel to TestConfigPortForwards by design.
 func TestConfigShareSpecs(t *testing.T) {
 	if got := configShareSpecs(nil); got != nil {
 		t.Errorf("configShareSpecs(nil) = %v, want nil", got)
@@ -239,5 +241,67 @@ func TestConfigShareSpecs(t *testing.T) {
 	})
 	if len(specs) != 1 || specs[0].Tag != "t" || specs[0].Mountpoint != "/m" {
 		t.Errorf("specs = %v, want one t:/m", specs)
+	}
+}
+
+// TestConfigOverlays covers the overlay-mountpoint projection: only
+// shares with the overlay bit set, in share order, nil otherwise.
+func TestConfigOverlays(t *testing.T) {
+	if got := configOverlays(nil); got != nil {
+		t.Errorf("configOverlays(nil) = %v, want nil", got)
+	}
+	cfg := &agentv1.GuestConfig{Shares: []*agentv1.GuestConfig_Share{
+		{Tag: "a", Mountpoint: "/a"},
+		{Tag: "b", Mountpoint: "/b", Overlay: true},
+		{Tag: "c", Mountpoint: "/c", Overlay: true},
+	}}
+	got := configOverlays(cfg)
+	if len(got) != 2 || got[0] != "/b" || got[1] != "/c" {
+		t.Errorf("configOverlays = %v, want [/b /c]", got)
+	}
+}
+
+// TestConfigPortForwards covers the port-forward table projection and
+// its nil / empty fallbacks.
+//
+//nolint:dupl // structurally parallel to TestConfigShareSpecs by design.
+func TestConfigPortForwards(t *testing.T) {
+	if got := configPortForwards(nil); got != nil {
+		t.Errorf("configPortForwards(nil) = %v, want nil", got)
+	}
+	if got := configPortForwards(&agentv1.GuestConfig{}); got != nil {
+		t.Errorf("configPortForwards(empty) = %v, want nil", got)
+	}
+	specs := configPortForwards(&agentv1.GuestConfig{
+		PortForwards: []*agentv1.GuestConfig_PortForward{{VsockPort: 10001, ContainerPort: 8080}},
+	})
+	if len(specs) != 1 || specs[0].VsockPort != 10001 || specs[0].ContainerPort != 8080 {
+		t.Errorf("specs = %v, want one 10001->8080", specs)
+	}
+}
+
+// TestResolveObservePath covers all three branches: config hit (cmdline
+// ignored), config miss → cmdline, and nil cfg → cmdline.
+func TestResolveObservePath(t *testing.T) {
+	sel := (*agentv1.GuestConfig_Observe).GetOpensnoop
+
+	// Config carries the path: cmdline is not consulted.
+	cfg := &agentv1.GuestConfig{Observe: &agentv1.GuestConfig_Observe{Opensnoop: "/cfg.log"}}
+	p, ok, err := resolveObservePath(cfg, sel, ParseOpensnoopCmdline, "daft.observe.opensnoop=/cmd.log")
+	if err != nil || !ok || p != "/cfg.log" {
+		t.Fatalf("config-hit: got (%q,%v,%v), want (/cfg.log,true,nil)", p, ok, err)
+	}
+
+	// Observe present but this field empty: fall back to the cmdline.
+	cfg = &agentv1.GuestConfig{Observe: &agentv1.GuestConfig_Observe{Execsnoop: "/other.log"}}
+	p, ok, err = resolveObservePath(cfg, sel, ParseOpensnoopCmdline, "daft.observe.opensnoop=/cmd.log")
+	if err != nil || !ok || p != "/cmd.log" {
+		t.Fatalf("config-miss: got (%q,%v,%v), want (/cmd.log,true,nil)", p, ok, err)
+	}
+
+	// nil cfg: straight to the cmdline (here absent → ok=false).
+	p, ok, err = resolveObservePath(nil, sel, ParseOpensnoopCmdline, "console=ttyS0")
+	if err != nil || ok || p != "" {
+		t.Fatalf("nil-cfg: got (%q,%v,%v), want (\"\",false,nil)", p, ok, err)
 	}
 }

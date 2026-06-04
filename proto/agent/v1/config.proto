@@ -53,6 +53,42 @@ message GuestConfig {
   message Share {
     string tag = 1;
     string mountpoint = 2;
+    // overlay, when true, wraps the share in a tmpfs-backed overlay so
+    // the guest's writes don't reach the host backing dir. Mirrors the
+    // old daft.workspace_overlay=<mountpoint> token (which keyed the
+    // overlay to a share by its mountpoint); carrying it on the Share
+    // itself drops that indirection.
+    bool overlay = 3;
+  }
+
+  // Guest-side ports the agent vsock-forwards to the container. Mirrors
+  // the repeatable daft.port=<vsockPort>:<containerPort> tokens. This is
+  // the one genuinely per-workspace table (it comes straight from the
+  // SandboxSpec's exposed ports), so it must travel in the payload.
+  repeated PortForward port_forwards = 3;
+
+  // PortForward maps an AF_VSOCK port the agent listens on to the TCP
+  // port the container is bound to on loopback inside the VM.
+  message PortForward {
+    uint32 vsock_port = 1;
+    uint32 container_port = 2;
+  }
+
+  // observe carries the Tier-2 gadget output paths. Absent (nil) leaves
+  // every gadget off. Mirrors the daft.observe.* tokens.
+  Observe observe = 4;
+
+  // Observe is the set of in-guest absolute paths the Tier-2 gadgets
+  // write to (usually on a writable virtiofs share the host reads back).
+  // An empty field leaves that gadget off, matching the old per-token
+  // "absent ⇒ disabled" contract.
+  message Observe {
+    string opensnoop = 1;
+    string execsnoop = 2;
+    string sleepsnoop = 3;
+    string iosnoop = 4;
+    string syscalls = 5;
+    string summary = 6;
   }
 }
 

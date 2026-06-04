@@ -127,17 +127,47 @@ func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootC
 }
 
 // buildGuestConfig projects the boot Config into the GuestConfig wire
-// message the agent applies: the container bundle plus each virtio-fs
-// share. Mirrors the bundle/share half of buildKernelCmdline.
+// message the agent applies: the container bundle, each virtio-fs share
+// (with its overlay flag), the per-workspace port-forward table, and the
+// Tier-2 observe-gadget paths. Mirrors the per-workspace half of
+// buildKernelCmdline; trace/attach/net ports still ride the cmdline until
+// slice 3b collapses them to fixed constants.
 func buildGuestConfig(cfg Config) *agentv1.GuestConfig {
 	gc := &agentv1.GuestConfig{Bundle: cfg.Bundle}
 	for _, s := range cfg.Shares {
 		gc.Shares = append(gc.Shares, &agentv1.GuestConfig_Share{
 			Tag:        s.Tag,
 			Mountpoint: s.Mountpoint,
+			Overlay:    s.Overlay,
 		})
 	}
+	for _, pf := range cfg.PortForwards {
+		gc.PortForwards = append(gc.PortForwards, &agentv1.GuestConfig_PortForward{
+			VsockPort:     pf.VsockPort,
+			ContainerPort: pf.ContainerPort,
+		})
+	}
+	gc.Observe = buildObserveConfig(cfg)
 	return gc
+}
+
+// buildObserveConfig projects the boot Config's Tier-2 gadget output
+// paths into the wire message, or nil when none are set (so a VM with no
+// observe share carries no Observe block at all).
+func buildObserveConfig(cfg Config) *agentv1.GuestConfig_Observe {
+	if cfg.OpensnoopLogPath == "" && cfg.ExecsnoopLogPath == "" &&
+		cfg.SleepsnoopLogPath == "" && cfg.IosnoopLogPath == "" &&
+		cfg.SyscallListPath == "" && cfg.ObserveSummaryPath == "" {
+		return nil
+	}
+	return &agentv1.GuestConfig_Observe{
+		Opensnoop:  cfg.OpensnoopLogPath,
+		Execsnoop:  cfg.ExecsnoopLogPath,
+		Sleepsnoop: cfg.SleepsnoopLogPath,
+		Iosnoop:    cfg.IosnoopLogPath,
+		Syscalls:   cfg.SyscallListPath,
+		Summary:    cfg.ObserveSummaryPath,
+	}
 }
 
 // serveControl accepts connections until the listener is closed, driving

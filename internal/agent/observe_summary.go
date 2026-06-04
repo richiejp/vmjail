@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/execsnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/iosnoop"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/opensnoop"
@@ -39,7 +40,9 @@ func defaultSummaryDeps() summaryDeps {
 	}
 }
 
-// startSummaryWriter parses daft.observe.summary and, when set, spawns a
+// startSummaryWriter resolves the summary path (the GuestConfig's
+// observe.summary, else the daft.observe.summary cmdline token) and, when
+// set, spawns a
 // goroutine that rewrites the summary file every d.summary.interval until ctx
 // is cancelled (a final write captures the end state). Like the gadget start
 // it reports one line and never fails the boot. osAgg/exAgg are the live
@@ -53,7 +56,7 @@ func startSummaryWriter(ctx context.Context, w io.Writer, d runDeps, cmdline str
 	if d.summary.write == nil || (osAgg == nil && exAgg == nil && slAgg == nil && ioAgg == nil) {
 		return
 	}
-	path, ok, err := ParseSummaryCmdline(cmdline)
+	path, ok, err := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetSummary, ParseSummaryCmdline, cmdline)
 	switch {
 	case err != nil:
 		writeReport(w, SummaryReportPrefix, "cmdline: "+err.Error())

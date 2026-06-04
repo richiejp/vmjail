@@ -50,15 +50,20 @@ func dialLoopbackTCP(ctx context.Context, port uint32) (net.Conn, error) {
 	return d.DialContext(ctx, "tcp", "127.0.0.1:"+strconv.FormatUint(uint64(port), 10))
 }
 
-// startPortForwardersFromCmdline parses the cmdline, reports
-// errors to the agent console, and kicks off runPortForwarders on
-// a detached goroutine. The agent's main loop blocks on ctx; this
-// helper must not block.
-func startPortForwardersFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdline string) {
-	specs, err := ParsePortForwardCmdlines(cmdline)
-	if err != nil {
-		writeReport(w, portForwardReportPrefix, "cmdline: "+err.Error())
-		return
+// startPortForwarders resolves the port-forward table — preferring the
+// config payload, falling back to the cmdline daft.port tokens — reports
+// any cmdline parse error to the agent console, and kicks off
+// runPortForwarders on a detached goroutine. The agent's main loop blocks
+// on ctx; this helper must not block.
+func startPortForwarders(ctx context.Context, w io.Writer, d runDeps, cmdline string) {
+	specs := configPortForwards(d.cfg)
+	if specs == nil {
+		var err error
+		specs, err = ParsePortForwardCmdlines(cmdline)
+		if err != nil {
+			writeReport(w, portForwardReportPrefix, "cmdline: "+err.Error())
+			return
+		}
 	}
 	if len(specs) == 0 {
 		return

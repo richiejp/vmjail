@@ -159,14 +159,33 @@ func TestBuildGuestConfigProjectsConfig(t *testing.T) {
 		t.Errorf("empty cfg → %v, want zero-valued GuestConfig", empty)
 	}
 
+	// An observe-free cfg carries no Observe block at all.
+	if empty.GetObserve() != nil {
+		t.Errorf("empty cfg → Observe %v, want nil", empty.GetObserve())
+	}
+
 	cfg := validCfg()
 	cfg.Bundle = "/b"
-	cfg.Shares = []*ShareConfig{{Tag: "t", Mountpoint: "/m"}}
+	cfg.Shares = []*ShareConfig{{Tag: "t", Mountpoint: "/m", Overlay: true}}
+	cfg.PortForwards = []PortForward{{VsockPort: 10001, ContainerPort: 8080}}
+	cfg.OpensnoopLogPath = "/run/daft/observe/opensnoop.log"
+	cfg.ObserveSummaryPath = "/run/daft/observe/progress.json"
 	gc := buildGuestConfig(cfg)
 	if gc.GetBundle() != "/b" {
 		t.Errorf("bundle = %q, want /b", gc.GetBundle())
 	}
-	if len(gc.GetShares()) != 1 || gc.GetShares()[0].GetTag() != "t" {
-		t.Errorf("shares = %v, want one t:/m", gc.GetShares())
+	if len(gc.GetShares()) != 1 || gc.GetShares()[0].GetTag() != "t" || !gc.GetShares()[0].GetOverlay() {
+		t.Errorf("shares = %v, want one t:/m overlay", gc.GetShares())
+	}
+	if pfs := gc.GetPortForwards(); len(pfs) != 1 || pfs[0].GetVsockPort() != 10001 || pfs[0].GetContainerPort() != 8080 {
+		t.Errorf("port_forwards = %v, want one 10001->8080", pfs)
+	}
+	obs := gc.GetObserve()
+	if obs.GetOpensnoop() != "/run/daft/observe/opensnoop.log" || obs.GetSummary() != "/run/daft/observe/progress.json" {
+		t.Errorf("observe = %v, want opensnoop+summary set", obs)
+	}
+	// Paths left unset stay empty rather than echoing another gadget's.
+	if obs.GetExecsnoop() != "" || obs.GetIosnoop() != "" {
+		t.Errorf("observe = %v, want exec/io unset", obs)
 	}
 }

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 )
 
 // fakeVsockListener is an in-process net.Listener that accepts
@@ -187,7 +189,7 @@ func TestStartPortForwardersReportsBadCmdline(t *testing.T) {
 	var buf bytes.Buffer
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	startPortForwardersFromCmdline(ctx, &buf, runDeps{
+	startPortForwarders(ctx, &buf, runDeps{
 		portForward: portForwardDeps{
 			listenVsock: func(uint32) (net.Listener, error) {
 				t.Fatal("listenVsock should not be called for a malformed cmdline")
@@ -205,7 +207,7 @@ func TestStartPortForwardersReportsBadCmdline(t *testing.T) {
 func TestStartPortForwardersEmptyIsNoOp(t *testing.T) {
 	var buf bytes.Buffer
 	called := false
-	startPortForwardersFromCmdline(context.Background(), &buf, runDeps{
+	startPortForwarders(context.Background(), &buf, runDeps{
 		portForward: portForwardDeps{
 			listenVsock: func(uint32) (net.Listener, error) {
 				called = true
@@ -215,6 +217,35 @@ func TestStartPortForwardersEmptyIsNoOp(t *testing.T) {
 	}, "console=ttyS0")
 	if called {
 		t.Error("listenVsock was called for empty cmdline")
+	}
+}
+
+// TestStartPortForwardersPrefersConfig pins the config-preferred path:
+// when the GuestConfig carries a port-forward table, the dispatcher uses
+// it (and ignores the cmdline daft.port token entirely).
+func TestStartPortForwardersPrefersConfig(t *testing.T) {
+	var buf bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	gotPort := make(chan uint32, 1)
+	startPortForwarders(ctx, &buf, runDeps{
+		cfg: &agentv1.GuestConfig{PortForwards: []*agentv1.GuestConfig_PortForward{
+			{VsockPort: 10001, ContainerPort: 8080},
+		}},
+		portForward: portForwardDeps{
+			listenVsock: func(port uint32) (net.Listener, error) {
+				gotPort <- port
+				return newFakeVsockListener(port), nil
+			},
+		},
+	}, "daft.port=10009:9999")
+	select {
+	case p := <-gotPort:
+		if p != 10001 {
+			t.Errorf("listened on vsock %d, want 10001 (config, not cmdline)", p)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("listenVsock never called for config port-forward")
 	}
 }
 

@@ -117,6 +117,12 @@ type controlChannel interface {
 // implementations via Run.
 type runDeps struct {
 	readCmdline func() (string, error)
+	// cfg is the GuestConfig fetched over the control channel, set by
+	// runWith after the handshake. The start* helpers prefer it over the
+	// cmdline for the settings it carries (port-forwards, observe paths,
+	// …), falling back to the cmdline token when it is nil or the field is
+	// unset (the slice-3a transition, and the vsock-unreachable degrade).
+	cfg *agentv1.GuestConfig
 	// openControl dials the host's per-VM config/event server, performs
 	// the handshake, and returns the open control channel (config +
 	// event writer). A non-nil error means the channel was unreachable
@@ -179,6 +185,7 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	var cfg *agentv1.GuestConfig
 	if ctrl != nil {
 		cfg = ctrl.Config()
+		d.cfg = cfg
 		defer func() { _ = ctrl.Close() }()
 	}
 	tracer, ctx := startTracer(ctx, w, d, cmdline)
@@ -193,7 +200,7 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	// before any listener is ready. Each helper spawns its own
 	// goroutines and returns immediately; the listeners live for
 	// the agent's lifetime.
-	startPortForwardersFromCmdline(ctx, w, d, cmdline)
+	startPortForwarders(ctx, w, d, cmdline)
 	startAttachListenerFromCmdline(ctx, w, d, cmdline)
 	if startNetBridgeFromCmdline(ctx, w, d, cmdline) != nil && bundle != "" {
 		// The container shares the VM's init netns, so it inherits
@@ -357,23 +364,29 @@ func shutdownTracer(parent context.Context, tr *trace.Tracer, w io.Writer) {
 // All failure paths print a single ShareReportPrefix line so the
 // host scanner sees one prefix per failure mode.
 func applyShares(w io.Writer, d runDeps, cfg *agentv1.GuestConfig, cmdline string, haveBundle bool) {
-	overlays, err := ParseWorkspaceOverlayCmdlines(cmdline)
-	if err != nil {
-		writeReport(w, OverlayReportPrefix, "cmdline: "+err.Error())
-		overlays = nil
-	}
-	overlaySet := make(map[string]bool, len(overlays))
-	for _, mp := range overlays {
-		overlaySet[mp] = true
-	}
-
+	// Shares and their overlay flags travel together: when the config
+	// payload carried shares, the overlays come from each Share's overlay
+	// bit; otherwise both fall back to the cmdline tokens.
 	specs := configShareSpecs(cfg)
-	if specs == nil {
+	var overlays []string
+	if specs != nil {
+		overlays = configOverlays(cfg)
+	} else {
+		var err error
 		specs, err = ParseShareCmdlines(cmdline)
 		if err != nil {
 			writeReport(w, ShareReportPrefix, "cmdline: "+err.Error())
 			return
 		}
+		overlays, err = ParseWorkspaceOverlayCmdlines(cmdline)
+		if err != nil {
+			writeReport(w, OverlayReportPrefix, "cmdline: "+err.Error())
+			overlays = nil
+		}
+	}
+	overlaySet := make(map[string]bool, len(overlays))
+	for _, mp := range overlays {
+		overlaySet[mp] = true
 	}
 	for i, spec := range specs {
 		target := spec

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	"github.com/localai-org/darkaifactory/internal/observability/ebpf/opensnoop"
 )
 
@@ -76,7 +77,9 @@ func resolveSelfPIDNS(w io.Writer, prefix string, fn func() (uint32, error)) (se
 	return selfPidns, scope
 }
 
-// startOpensnoopFromCmdline parses daft.observe.opensnoop and, when set,
+// startOpensnoopFromCmdline resolves the open-snoop log path (the
+// GuestConfig's observe.opensnoop, else the daft.observe.opensnoop cmdline
+// token) and, when set,
 // opens the guest-side trace file and spawns the gadget's drain loop for
 // the agent's lifetime (ctx cancel stops it and closes the file). It returns
 // the live aggregator so the caller can fold it into the build-progress
@@ -94,7 +97,7 @@ func startOpensnoopFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdl
 	if d.opensnoop.run == nil {
 		return nil
 	}
-	path, ok, err := ParseOpensnoopCmdline(cmdline)
+	path, ok, err := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetOpensnoop, ParseOpensnoopCmdline, cmdline)
 	switch {
 	case err != nil:
 		writeReport(w, OpensnoopReportPrefix, "cmdline: "+err.Error())
