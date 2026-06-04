@@ -2011,6 +2011,41 @@ the user-host or in CI today.
             Likely start with a curated subset (timeout budget) before the
             full 20-minute suite.
 
+       - *In-VM cgroup mount (landed 2026-06-04).* Steps 2–3 surfaced the
+         per-VM `createVMCgroup` failing. An in-container probe pinned the
+         cause: the container has **no cgroup-v2 hierarchy** — it gets a
+         cgroup namespace (`/proc/self/cgroup` = `0::/`), but
+         `defaultRuntimeMounts` gave it only **read-only sysfs** at `/sys`
+         with no cgroup2 mount, so `/sys/fs/cgroup` is an empty dir
+         (`cgroup.controllers` → ENOENT, `mkdir` → ENOENT). Fix
+         (default-on, `runtimespec.go`): add a **rw cgroup-v2 mount** at
+         `/sys/fs/cgroup` (`type: cgroup`, cgroupns-relative). Verified:
+         the inner sandboxd's `createVMCgroup` now succeeds nested (the
+         `mkdir … no such file` oops is gone; banner still prints), and a
+         plain non-nested container still boots.
+
+         This is **purely in-guest** — and the key correction to an earlier
+         note here: the host cgroup (where the cloud-hypervisor *process*
+         sits) has **nothing to do** with the cgroup hierarchy *inside* the
+         VM. They are two different kernels' cgroup trees, separated by the
+         VM boundary; crun inside the VM delegates freely because the agent
+         is namespace-root there. No host delegation, `Delegate=yes` scope,
+         or harness change is needed for the in-VM cgroup to work.
+
+         *Separate, lower-priority item — host-side VM-process accounting
+         (the outer EPERM):* the host sandboxd creating a per-VM cgroup for
+         the cloud-hypervisor *process on the host* fails when sandboxd runs
+         rootless in a non-delegated `session.scope` (the dev-cluster
+         harness, user 1000). This is best-effort observability of the VM
+         as a host process and is **independent** of the in-VM work above.
+         The rootless fix needs no special perms: launch sandboxd under
+         `systemd-run --user --scope -p Delegate=yes` — the user's own
+         `user@<uid>.service` is already a delegated cgroup subtree, so a
+         scope beneath it can `mkdir` sub-cgroups (caveats: needs an active
+         user systemd/D-Bus session or `loginctl enable-linger`, and an
+         unprivileged user only gets the delegated controllers — `memory` +
+         `pids` reliably, `cpu` usually, `io` often not).
+
        - *Future / nice-to-have (not on the integration critical path):*
          carrying the **kernel-build toolchain** inside the sandbox
          (clang/lld/llvm + kernel source — the slice-2 `make dev`

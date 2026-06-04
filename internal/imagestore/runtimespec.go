@@ -345,7 +345,7 @@ func defaultRuntimeLinuxConfig() runtimeLinuxConfig {
 			{Type: "ipc"},
 			{Type: "uts"},
 			{Type: "mount"},
-			{Type: "cgroup"},
+			{Type: mountTypeCgroup},
 		},
 		// Resources (the /dev/kvm 10:232 device-allow) are added only
 		// for nested-virt workspaces — see applyNestedVirt. A plain
@@ -404,10 +404,12 @@ func defaultRuntimeSeccomp() *runtimeSeccomp {
 const (
 	mountOptNosuid  = "nosuid"
 	mountOptNodev   = "nodev"
+	mountOptNoexec  = "noexec"
 	mountTypeTmpfs  = "tmpfs"
 	mountTypeDevpts = "devpts"
 	mountTypeBind   = "bind"
 	mountOptBind    = "bind"
+	mountTypeCgroup = "cgroup"
 	// devKVMPath is the host hypervisor device bound into a
 	// nested-virt workload container (see applyNestedVirt).
 	devKVMPath = "/dev/kvm"
@@ -448,11 +450,29 @@ func defaultRuntimeMounts() []runtimeMount {
 		// the tty group need not exist in the container's gid map.
 		{
 			Destination: "/dev/pts", Type: mountTypeDevpts, Source: mountTypeDevpts,
-			Options: []string{mountOptNosuid, "noexec", "newinstance", "ptmxmode=0666", "mode=0620"},
+			Options: []string{mountOptNosuid, mountOptNoexec, "newinstance", "ptmxmode=0666", "mode=0620"},
 		},
 		{
 			Destination: "/sys", Type: "sysfs", Source: "sysfs",
-			Options: []string{mountOptNosuid, "noexec", mountOptNodev, "ro"},
+			Options: []string{mountOptNosuid, mountOptNoexec, mountOptNodev, "ro"},
+		},
+		// /sys/fs/cgroup is mounted rw as a cgroup-v2 hierarchy so a
+		// workload can manage its own cgroup subtree from inside the VM —
+		// most importantly a nested daft-sandboxd creating per-VM
+		// accounting cgroups (createVMCgroup). Without it the container
+		// sees only the read-only /sys sysfs, so /sys/fs/cgroup is an empty
+		// dir and the mkdir ENOENTs. The mount is cgroupns-relative (the
+		// container already gets a cgroup namespace), so crun exposes only
+		// the container's own subtree — never the host's, and never the
+		// guest's root hierarchy. Safe to delegate by default in a
+		// single-tenant VM: the container is already namespace-root in its
+		// own guest kernel, so a writable cgroup subtree grants nothing it
+		// couldn't otherwise reach. (This is purely in-guest; it has no
+		// dependence on whether the host process's cgroup is delegated —
+		// the VM boundary separates the two hierarchies entirely.)
+		{
+			Destination: "/sys/fs/cgroup", Type: mountTypeCgroup, Source: mountTypeCgroup,
+			Options: []string{mountOptNosuid, mountOptNoexec, mountOptNodev, "relatime", "rw"},
 		},
 		{
 			Destination: "/tmp", Type: mountTypeTmpfs, Source: mountTypeTmpfs,

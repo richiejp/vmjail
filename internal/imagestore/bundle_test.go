@@ -269,6 +269,40 @@ func TestDefaultRuntimeMountsIncludesDevPts(t *testing.T) {
 	}
 }
 
+// TestDefaultRuntimeMountsIncludesWritableCgroup pins the rw cgroup-v2
+// mount that lets a workload manage its own cgroup subtree from inside the
+// VM (a nested daft-sandboxd's per-VM createVMCgroup most of all). Without
+// it the container sees only the read-only /sys sysfs and the mkdir
+// ENOENTs. Default-on: safe in a single-tenant VM, and cgroupns-relative
+// so crun only ever exposes the container's own subtree.
+func TestDefaultRuntimeMountsIncludesWritableCgroup(t *testing.T) {
+	var cg *runtimeMount
+	for i, m := range defaultRuntimeMounts() {
+		if m.Destination == "/sys/fs/cgroup" {
+			cg = &defaultRuntimeMounts()[i]
+			break
+		}
+	}
+	if cg == nil {
+		t.Fatal("default mounts missing /sys/fs/cgroup")
+	}
+	if cg.Type != mountTypeCgroup {
+		t.Errorf("/sys/fs/cgroup type = %q, want %q", cg.Type, mountTypeCgroup)
+	}
+	hasRW := false
+	for _, o := range cg.Options {
+		if o == "rw" {
+			hasRW = true
+		}
+		if o == "ro" {
+			t.Errorf("/sys/fs/cgroup is read-only (options %v); the workload can't create sub-cgroups", cg.Options)
+		}
+	}
+	if !hasRW {
+		t.Errorf("/sys/fs/cgroup missing rw option (got %v)", cg.Options)
+	}
+}
+
 // TestDefaultRuntimeOmitsKVM pins that a plain (non-nested) workload
 // gets neither the /dev/kvm bind nor the 10:232 device-allow — the
 // privilege grant is opt-in, so the unprivileged default must carry
