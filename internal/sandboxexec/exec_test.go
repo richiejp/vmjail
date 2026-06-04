@@ -1265,6 +1265,38 @@ func TestHandleSandboxEventAssignsPerSandboxVsock(t *testing.T) {
 	}
 }
 
+// TestHandleSandboxEventAssignsVsockAlwaysOn pins the always-on flip: an
+// executor with a VsockDir assigns a vsock device on every dispatch, even
+// one with no bridger/attach/net feature and no ports, so the agent
+// always fetches its config over the control channel. The per-feature
+// ports stay zero when their feature is off.
+func TestHandleSandboxEventAssignsVsockAlwaysOn(t *testing.T) {
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	e, err := New(Config{
+		Stdout:   io.Discard,
+		Runner:   runner,
+		VsockDir: testVsockDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: "ws-bare"}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-bare", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if seen.Vsock == nil {
+		t.Fatal("cfg.Vsock not set for a featureless dispatch (always-on flip)")
+	}
+	if seen.Vsock.AttachPort != 0 || seen.Vsock.NetPort != 0 {
+		t.Errorf("ports = attach %d / net %d, want both 0 (features off)",
+			seen.Vsock.AttachPort, seen.Vsock.NetPort)
+	}
+}
+
 // TestHandleSandboxEventAssignsDistinctCIDsPerDispatch pins the
 // counter behaviour: two dispatches get different GuestCIDs so two
 // concurrent VMs don't collide on the AF_VSOCK ABI.

@@ -609,6 +609,16 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 		return sandbox.Config{}, nil, fmt.Errorf("daft-sandboxd: extract bundled artifacts: %w", err)
 	}
 
+	vsock, vsockCleanup, err := sandbox.NewStandaloneVsock()
+	if err != nil {
+		unlock()
+		return sandbox.Config{}, nil, err
+	}
+	// Compose the vsock-dir cleanup onto the bundle unlock so the caller's
+	// single deferred func releases both.
+	bundleUnlock := unlock
+	unlock = func() { vsockCleanup(); bundleUnlock() }
+
 	cfg := sandbox.Config{
 		CloudHypervisor: paths.CloudHypervisor,
 		Kernel:          paths.Kernel,
@@ -620,6 +630,7 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 			Mountpoint: bundlesMount,
 		}},
 		Bundle: filepath.Join(bundlesMount, filepath.Base(bundle.Path)),
+		Vsock:  vsock,
 	}
 	if workspaceDir != "" {
 		abs, err := filepath.Abs(workspaceDir)

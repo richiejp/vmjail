@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"net"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -14,6 +15,31 @@ import (
 	"github.com/localai-org/darkaifactory/internal/oops"
 	"github.com/localai-org/darkaifactory/internal/trace"
 )
+
+// standaloneGuestCID is the AF_VSOCK context ID handed to a standalone
+// single-VM boot. 3 is the lowest non-reserved CID (0-2 are reserved by
+// the vsock spec), and a standalone invocation boots exactly one VM, so
+// no per-VM counter is needed — unlike the orchestrated executor, which
+// mints a fresh CID per Sandbox.
+const standaloneGuestCID uint32 = 3
+
+// NewStandaloneVsock mints a hybrid-vsock device for the standalone CLI
+// boot paths (daft sandbox, daft-sandboxd) so they deliver per-VM config
+// and stream status events over the control channel like the orchestrated
+// executor, instead of the world-readable kernel cmdline. The socket
+// lives in a fresh temp dir that cleanup removes once the VM is gone;
+// callers defer it. Always-on means every boot path gets a device — see
+// the orchestrated counterpart, Executor.assignVsock.
+func NewStandaloneVsock() (cfg *VsockConfig, cleanup func(), err error) {
+	dir, err := os.MkdirTemp("", "daft-vsock-")
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("sandbox: vsock socket dir: %w", err)
+	}
+	return &VsockConfig{
+		HostSocket: filepath.Join(dir, "control.sock"),
+		GuestCID:   standaloneGuestCID,
+	}, func() { _ = os.RemoveAll(dir) }, nil
+}
 
 // startVsockTraceReceiver opens a UDS listener at
 // <HostSocket>_<TracePort> (the Cloud Hypervisor hybrid-vsock

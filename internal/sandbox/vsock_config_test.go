@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -187,5 +188,29 @@ func TestBuildGuestConfigProjectsConfig(t *testing.T) {
 	// Paths left unset stay empty rather than echoing another gadget's.
 	if obs.GetExecsnoop() != "" || obs.GetIosnoop() != "" {
 		t.Errorf("observe = %v, want exec/io unset", obs)
+	}
+}
+
+// TestNewStandaloneVsock covers the standalone CLI vsock minting: an
+// absolute socket path under a fresh dir, the lowest non-reserved CID,
+// and a cleanup that removes the dir.
+func TestNewStandaloneVsock(t *testing.T) {
+	vs, cleanup, err := NewStandaloneVsock()
+	if err != nil {
+		t.Fatalf("NewStandaloneVsock: %v", err)
+	}
+	if !filepath.IsAbs(vs.HostSocket) {
+		t.Errorf("HostSocket = %q, want absolute", vs.HostSocket)
+	}
+	if vs.GuestCID != standaloneGuestCID {
+		t.Errorf("GuestCID = %d, want %d", vs.GuestCID, standaloneGuestCID)
+	}
+	dir := filepath.Dir(vs.HostSocket)
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("socket dir not created: %v", err)
+	}
+	cleanup()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("cleanup left dir behind: stat err = %v", err)
 	}
 }

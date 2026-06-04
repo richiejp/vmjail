@@ -62,6 +62,15 @@ func resolveArtifacts(t testing.TB) Config {
 				"can actually run a sandbox.", err,
 		)
 	}
+	// Vsock is always-on: every real-VM boot gets a hybrid-vsock device so
+	// the agent fetches its config (shares, bundle, observe paths) and
+	// streams its BOOT_COMPLETE event over the control channel rather than
+	// the kernel cmdline. Tests that need specific protocol ports
+	// (trace/attach) override cfg.Vsock wholesale; the rest inherit this.
+	cfg.Vsock = &VsockConfig{
+		HostSocket: filepath.Join(t.TempDir(), "control.sock"),
+		GuestCID:   3,
+	}
 	return cfg
 }
 

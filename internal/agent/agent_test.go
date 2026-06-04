@@ -177,6 +177,41 @@ func TestRunReportsBootCompleteSendError(t *testing.T) {
 	}
 }
 
+// TestResolveBundle covers all four branches of bundle resolution:
+// config bundle (absolute), config bundle rejected (relative, reported),
+// cmdline fallback, and a malformed cmdline token (reported).
+func TestResolveBundle(t *testing.T) {
+	// Config bundle wins when absolute.
+	var buf bytes.Buffer
+	if got := resolveBundle(&buf, &agentv1.GuestConfig{Bundle: "/cfg/bundle"}, ""); got != "/cfg/bundle" {
+		t.Errorf("config-absolute = %q, want /cfg/bundle", got)
+	}
+
+	// A relative config bundle is rejected and reported, not run.
+	buf.Reset()
+	if got := resolveBundle(&buf, &agentv1.GuestConfig{Bundle: "rel/bundle"}, ""); got != "" {
+		t.Errorf("config-relative = %q, want \"\"", got)
+	}
+	if !strings.Contains(buf.String(), ContainerReportPrefix+"config: bundle path rel/bundle must be absolute") {
+		t.Errorf("missing relative-bundle report: %q", buf.String())
+	}
+
+	// No config bundle: fall back to the cmdline token.
+	buf.Reset()
+	if got := resolveBundle(&buf, nil, FormatBundleCmdline("/cmd/bundle")); got != "/cmd/bundle" {
+		t.Errorf("cmdline = %q, want /cmd/bundle", got)
+	}
+
+	// Malformed cmdline bundle is reported and yields no container.
+	buf.Reset()
+	if got := resolveBundle(&buf, nil, BundleCmdlineKey+"=rel"); got != "" {
+		t.Errorf("cmdline-malformed = %q, want \"\"", got)
+	}
+	if !strings.Contains(buf.String(), ContainerReportPrefix+"cmdline:") {
+		t.Errorf("missing malformed-cmdline report: %q", buf.String())
+	}
+}
+
 // fakeControl is a test controlChannel: it records the events sent and
 // whether it was closed, serves a fixed GuestConfig, and can fail sends.
 type fakeControl struct {

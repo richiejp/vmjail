@@ -147,6 +147,14 @@ func runHelloWith(ctx context.Context, w io.Writer, deps helloDeps) error {
 		Initramfs:       paths.Initramfs,
 		Virtiofsd:       paths.Virtiofsd,
 	}
+	// Always-on vsock: deliver config + status events over the control
+	// channel rather than the kernel cmdline.
+	vsock, cleanup, err := sandbox.NewStandaloneVsock()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	cfg.Vsock = vsock
 	applyObserverLog(w, &cfg, deps.observerLog)
 	return deps.boot(ctx, w, cfg)
 }

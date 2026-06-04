@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -131,6 +133,30 @@ func TestSandboxHelloRequiresArtifactEnv(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing required env vars") {
 		t.Errorf("error should mention missing env vars, got: %v", err)
+	}
+}
+
+// TestHelloConfigFromEnvMintsVsock covers the happy path of the hello
+// boot-config builder: with the artifact env set it returns a Config
+// carrying an always-on vsock device, and the cleanup removes the socket
+// dir. Booting the VM itself needs /dev/kvm and is exercised by the
+// integration suite, not here.
+func TestHelloConfigFromEnvMintsVsock(t *testing.T) {
+	t.Setenv(sandbox.EnvCloudHypervisor, "/bin/true")
+	t.Setenv(sandbox.EnvKernel, "/bin/true")
+	t.Setenv(sandbox.EnvInitramfs, "/bin/true")
+
+	cfg, cleanup, err := helloConfigFromEnv()
+	if err != nil {
+		t.Fatalf("helloConfigFromEnv: %v", err)
+	}
+	if cfg.Vsock == nil || !filepath.IsAbs(cfg.Vsock.HostSocket) {
+		t.Fatalf("Vsock = %+v, want a device with an absolute socket", cfg.Vsock)
+	}
+	dir := filepath.Dir(cfg.Vsock.HostSocket)
+	cleanup()
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("cleanup left vsock dir behind: stat err = %v", err)
 	}
 }
 

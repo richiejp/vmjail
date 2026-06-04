@@ -581,26 +581,31 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 	}
 	applyResourceSizing(&cfg, spec)
 	cfg.PortForwards = portForwardsFromSpec(spec.GetPorts())
-	wantVsockForPorts := e.bridger != nil && len(cfg.PortForwards) > 0
-	wantVsockForAttach := e.attachRegistry != nil
-	wantVsockForNet := e.netEnabled
-	if wantVsockForPorts || wantVsockForAttach || wantVsockForNet {
+	// Vsock is always-on: every dispatch gets a hybrid-vsock device so the
+	// in-VM agent fetches its config (and streams status events) over the
+	// control channel instead of the world-readable kernel cmdline. The
+	// only gate is a configured VsockDir — production sandboxd always sets
+	// it (the Bridger/AttachRegistry/NetEnabled paths require it in New),
+	// so this is unconditional there; a bare unit-test executor with no
+	// VsockDir uses a fake runner that never boots a real VM, so it needs
+	// no device. The per-feature ports stay gated on their feature flags.
+	if e.vsockDir != "" {
 		cfg.Vsock = e.assignVsock(uid)
-	}
-	if wantVsockForAttach {
-		cfg.Vsock.AttachPort = agent.DefaultAttachVsockPort
-	}
-	if wantVsockForNet {
-		cfg.Vsock.NetPort = agent.DefaultNetVsockPort
-		// With an egress proxy configured, serve it in-stack on the
-		// gateway and lock the netstack to default-deny: every
-		// legitimate egress is injected to route through the proxy
-		// (J6), so anything dialing elsewhere is a leak we want dropped
-		// + logged rather than silently sent.
-		if e.egressActive() {
-			cfg.DenyEgress = true
-			cfg.ProxyHandler = e.egressProxy.Handler
-			cfg.ProxyPort = e.proxyPort()
+		if e.attachRegistry != nil {
+			cfg.Vsock.AttachPort = agent.DefaultAttachVsockPort
+		}
+		if e.netEnabled {
+			cfg.Vsock.NetPort = agent.DefaultNetVsockPort
+			// With an egress proxy configured, serve it in-stack on the
+			// gateway and lock the netstack to default-deny: every
+			// legitimate egress is injected to route through the proxy
+			// (J6), so anything dialing elsewhere is a leak we want dropped
+			// + logged rather than silently sent.
+			if e.egressActive() {
+				cfg.DenyEgress = true
+				cfg.ProxyHandler = e.egressProxy.Handler
+				cfg.ProxyPort = e.proxyPort()
+			}
 		}
 	}
 	e.applyObserverLog(&cfg, uid)

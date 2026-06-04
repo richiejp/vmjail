@@ -1768,8 +1768,9 @@ the user-host or in CI today.
            cmdline goes to **zero `daft.*` tokens**. Fixed protocol ports
            (config/attach/trace/forward-base) stay constants, not cmdline
            data. Split into two verified commits:
-           - **Slice 3a (payload-carry the per-workspace settings) — in
-             progress.** Extend `GuestConfig` with the per-share `overlay`
+           - **Slice 3a (payload-carry the per-workspace settings) —
+             landed (2026-06-04, 8465a05).** Extend `GuestConfig` with the
+             per-share `overlay`
              flag, the `port_forwards` table, and the `observe` gadget
              paths; project them in `buildGuestConfig`; have the agent
              **prefer config, fall back to the cmdline** for each (same
@@ -1777,18 +1778,30 @@ the user-host or in CI today.
              cmdline tokens stay as the fallback — so the payload path is
              exercised e2e *before* the net is pulled. Trace/attach/net
              ports stay on the cmdline this commit.
-           - **Slice 3b (always-on + cutover).** Every launch path
-             (`sandboxexec.resolveBootConfig`, the `daft sandbox` demo)
-             assigns a `Vsock` device unconditionally; trace/attach/net
-             collapse to fixed-port constants gated by `GuestConfig`
-             enable-bits (the port numbers leave `VsockConfig`);
-             `buildKernelCmdline` drops to the base line (zero `daft.*`);
-             and the now-dead `Format*Cmdline` host funcs +
-             `Parse*Cmdline`/`startXxxFromCmdline` agent fallbacks are
-             deleted. The vsock-unreachable degrade (nested check-container,
-             AF_VSOCK seccomp-denied) then yields a bare banner-only agent,
-             which is correct — a nested workload must not inherit the outer
-             VM's settings.
+           - **Slice 3b-1 (vsock always-on, cmdline kept) — in progress.**
+             Every launch path mints a `Vsock` device:
+             `sandboxexec.resolveBootConfig` assigns one whenever a
+             `VsockDir` is configured (production sandboxd always sets it;
+             a bare fake-runner test executor with no `VsockDir` boots no
+             real VM, so it needs none), and the standalone CLI boots
+             (`daft sandbox hello`, `daft-sandboxd run`/smoke) mint one via
+             `sandbox.NewStandaloneVsock` (temp-dir socket + cleanup). The
+             real-VM integration harness (`resolveArtifacts`) gives every
+             `TestHelloIntegration*` a `Vsock` too, so the suite exercises
+             config delivery over the channel (config-preferred per 3a)
+             while the cmdline stays as the fallback — proving the vsock
+             path e2e before the cutover pulls the net. Per-feature ports
+             (attach/net) stay gated on their feature flags.
+           - **Slice 3b-2 (cutover).** trace/attach/net collapse to
+             fixed-port constants gated by `GuestConfig` enable-bits (the
+             port numbers leave `VsockConfig`); `buildKernelCmdline` drops
+             to the base line (zero `daft.*`); and the now-dead
+             `Format*Cmdline` host funcs + `Parse*Cmdline` /
+             `startXxxFromCmdline` agent fallbacks are deleted. The
+             vsock-unreachable degrade (nested check-container, AF_VSOCK
+             seccomp-denied) then yields a bare banner-only agent, which is
+             correct — a nested workload must not inherit the outer VM's
+             settings.
 
        **Gadget observe wired as the debugging surface
        (2026-06-03).** The self-build test now attaches

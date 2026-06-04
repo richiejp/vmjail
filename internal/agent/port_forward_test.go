@@ -220,6 +220,27 @@ func TestStartPortForwardersEmptyIsNoOp(t *testing.T) {
 	}
 }
 
+// TestDialLoopbackTCPConnects covers the production container dialer
+// against a real loopback listener: it must reach 127.0.0.1:<port>.
+func TestDialLoopbackTCPConnects(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener addr %T is not *net.TCPAddr", ln.Addr())
+	}
+	port := uint32(addr.Port) //nolint:gosec // G115: an ephemeral TCP port fits a uint32.
+
+	conn, err := dialLoopbackTCP(context.Background(), port)
+	if err != nil {
+		t.Fatalf("dialLoopbackTCP: %v", err)
+	}
+	_ = conn.Close()
+}
+
 // TestStartPortForwardersPrefersConfig pins the config-preferred path:
 // when the GuestConfig carries a port-forward table, the dispatcher uses
 // it (and ignores the cmdline daft.port token entirely).

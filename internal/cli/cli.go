@@ -145,13 +145,34 @@ func newSandboxHelloCmd() *cobra.Command {
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			cfg, err := sandbox.ConfigFromEnv()
+			cfg, cleanup, err := helloConfigFromEnv()
 			if err != nil {
 				return err
 			}
+			defer cleanup()
 			return sandbox.Hello(cmd.Context(), cmd.OutOrStdout(), cfg)
 		},
 	}
+}
+
+// helloConfigFromEnv builds the `daft sandbox hello` boot Config from the
+// environment and mints its always-on vsock device, returning a cleanup
+// the caller defers to remove the vsock socket dir. Split out of the
+// cobra RunE so the env + vsock wiring is unit-testable without booting a
+// VM. The returned cleanup is always safe to call, even on error.
+func helloConfigFromEnv() (sandbox.Config, func(), error) {
+	cfg, err := sandbox.ConfigFromEnv()
+	if err != nil {
+		return sandbox.Config{}, func() {}, err
+	}
+	// Always-on vsock: deliver config + status events over the control
+	// channel rather than the kernel cmdline.
+	vsock, cleanup, err := sandbox.NewStandaloneVsock()
+	if err != nil {
+		return sandbox.Config{}, func() {}, err
+	}
+	cfg.Vsock = vsock
+	return cfg, cleanup, nil
 }
 
 // newVersionCmd returns the `daft version` sub-command. Output goes to the
