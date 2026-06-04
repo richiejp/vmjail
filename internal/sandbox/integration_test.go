@@ -175,10 +175,10 @@ func TestHelloIntegrationBootsVMWithShare(t *testing.T) {
 }
 
 // TestHelloIntegrationBootsVMWithContainer is the e2e proof of the
-// container slice: the host shares a bundle dir over virtiofs, sets
-// daft.bundle on the cmdline, the agent mounts the share and execs
-// crun, and the host scanner sees the container's stdout (with the
-// container: prefix) before the agent banner.
+// container slice: the host shares a bundle dir over virtiofs, delivers
+// the bundle path over the vsock control channel, the agent mounts the
+// share and execs crun, and the host scanner sees the container's stdout
+// (with the container: prefix) before the agent banner.
 func TestHelloIntegrationBootsVMWithContainer(t *testing.T) {
 	cfg := resolveArtifacts(t)
 	bundleSrc := resolveBundle(t)

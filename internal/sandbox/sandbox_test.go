@@ -601,15 +601,31 @@ func TestShareConfigValidate(t *testing.T) {
 	}
 }
 
-func TestBuildKernelCmdlineIncludesShare(t *testing.T) {
+// TestBuildKernelCmdlineHasNoDaftTokens pins the slice-3 cutover: every
+// per-VM setting now travels over the vsock control channel, so the kernel
+// cmdline carries zero daft.* tokens no matter how richly the Config is
+// populated — only the static base remains. The settings themselves are
+// covered by TestBuildGuestConfigProjectsConfig.
+func TestBuildKernelCmdlineHasNoDaftTokens(t *testing.T) {
 	cfg := validCfg().withDefaults()
-	cfg.Shares = []*ShareConfig{{Tag: "ws", Mountpoint: testMountpoint}}
-	got := buildKernelCmdline(cfg)
-	if !strings.Contains(got, agent.ShareCmdlineKey+"=ws:/share") {
-		t.Errorf("cmdline %q missing share spec", got)
+	cfg.Bundle = testBundlePath
+	cfg.Shares = []*ShareConfig{{Tag: "ws", Mountpoint: testMountpoint, Overlay: true}}
+	cfg.PortForwards = []PortForward{{VsockPort: 10000, ContainerPort: 8080}}
+	cfg.OpensnoopLogPath = "/share/opensnoop.log"
+	cfg.ObserveSummaryPath = "/share/progress.json"
+	cfg.Vsock = &VsockConfig{
+		HostSocket: testHostSocketPath,
+		GuestCID:   3,
+		AttachPort: agent.DefaultAttachVsockPort,
+		NetPort:    agent.DefaultNetVsockPort,
+		TracePort:  agent.DefaultTraceVsockPort,
 	}
-	if !strings.Contains(got, "console=hvc0") {
-		t.Errorf("cmdline %q lost the base cmdline", got)
+	got := buildKernelCmdline(cfg)
+	if got != kernelCmdlineBase {
+		t.Errorf("cmdline = %q, want exactly the base %q (zero daft.* tokens)", got, kernelCmdlineBase)
+	}
+	if strings.Contains(got, "daft.") {
+		t.Errorf("cmdline %q still carries a daft.* token", got)
 	}
 }
 
@@ -618,153 +634,6 @@ func TestShareSocketArgFormat(t *testing.T) {
 	want := "tag=workspace,socket=/tmp/vhost.sock"
 	if got != want {
 		t.Errorf("shareSocketArg = %q, want %q", got, want)
-	}
-}
-
-func TestBuildKernelCmdlineIncludesBundle(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.Bundle = testBundlePath
-	got := buildKernelCmdline(cfg)
-	if !strings.Contains(got, agent.BundleCmdlineKey+"=/share/bundle") {
-		t.Errorf("cmdline %q missing bundle path", got)
-	}
-}
-
-func TestBuildKernelCmdlineIncludesOpensnoop(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.OpensnoopLogPath = "/share/opensnoop.log"
-	got := buildKernelCmdline(cfg)
-	if !strings.Contains(got, agent.OpensnoopCmdlineKey+"=/share/opensnoop.log") {
-		t.Errorf("cmdline %q missing opensnoop token", got)
-	}
-}
-
-func TestBuildKernelCmdlineOmitsOpensnoopWhenUnset(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	got := buildKernelCmdline(cfg)
-	if strings.Contains(got, agent.OpensnoopCmdlineKey) {
-		t.Errorf("cmdline %q should not contain opensnoop token when path empty", got)
-	}
-}
-
-func TestBuildKernelCmdlineIncludesExecsnoop(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.ExecsnoopLogPath = "/share/execsnoop.log"
-	got := buildKernelCmdline(cfg)
-	if !strings.Contains(got, agent.ExecsnoopCmdlineKey+"=/share/execsnoop.log") {
-		t.Errorf("cmdline %q missing execsnoop token", got)
-	}
-}
-
-func TestBuildKernelCmdlineOmitsExecsnoopWhenUnset(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	got := buildKernelCmdline(cfg)
-	if strings.Contains(got, agent.ExecsnoopCmdlineKey) {
-		t.Errorf("cmdline %q should not contain execsnoop token when path empty", got)
-	}
-}
-
-func TestBuildKernelCmdlineIncludesSleepsnoop(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.SleepsnoopLogPath = "/share/sleepsnoop.log"
-	got := buildKernelCmdline(cfg)
-	if !strings.Contains(got, agent.SleepsnoopCmdlineKey+"=/share/sleepsnoop.log") {
-		t.Errorf("cmdline %q missing sleepsnoop token", got)
-	}
-}
-
-func TestBuildKernelCmdlineOmitsSleepsnoopWhenUnset(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	got := buildKernelCmdline(cfg)
-	if strings.Contains(got, agent.SleepsnoopCmdlineKey) {
-		t.Errorf("cmdline %q should not contain sleepsnoop token when path empty", got)
-	}
-}
-
-func TestBuildKernelCmdlineIncludesIosnoop(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.IosnoopLogPath = "/share/iosnoop.log"
-	got := buildKernelCmdline(cfg)
-	if !strings.Contains(got, agent.IosnoopCmdlineKey+"=/share/iosnoop.log") {
-		t.Errorf("cmdline %q missing iosnoop token", got)
-	}
-}
-
-func TestBuildKernelCmdlineOmitsIosnoopWhenUnset(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	got := buildKernelCmdline(cfg)
-	if strings.Contains(got, agent.IosnoopCmdlineKey) {
-		t.Errorf("cmdline %q should not contain iosnoop token when path empty", got)
-	}
-}
-
-func TestBuildKernelCmdlineIncludesSyscalls(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.SyscallListPath = "/share/syscalls.txt"
-	got := buildKernelCmdline(cfg)
-	if !strings.Contains(got, agent.SyscallsCmdlineKey+"=/share/syscalls.txt") {
-		t.Errorf("cmdline %q missing syscalls token", got)
-	}
-}
-
-func TestBuildKernelCmdlineOmitsSyscallsWhenUnset(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	got := buildKernelCmdline(cfg)
-	if strings.Contains(got, agent.SyscallsCmdlineKey) {
-		t.Errorf("cmdline %q should not contain syscalls token when path empty", got)
-	}
-}
-
-func TestBuildKernelCmdlineIncludesObserveSummary(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.ObserveSummaryPath = "/share/progress.json"
-	got := buildKernelCmdline(cfg)
-	if !strings.Contains(got, agent.SummaryCmdlineKey+"=/share/progress.json") {
-		t.Errorf("cmdline %q missing observe-summary token", got)
-	}
-}
-
-func TestBuildKernelCmdlineOmitsObserveSummaryWhenUnset(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	got := buildKernelCmdline(cfg)
-	if strings.Contains(got, agent.SummaryCmdlineKey) {
-		t.Errorf("cmdline %q should not contain observe-summary token when path empty", got)
-	}
-}
-
-func TestBuildKernelCmdlineIncludesWorkspaceOverlay(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.Shares = []*ShareConfig{{Tag: "ws", Mountpoint: testMountpoint, Overlay: true}}
-	got := buildKernelCmdline(cfg)
-	if !strings.Contains(got, agent.WorkspaceOverlayCmdlineKey+"="+testMountpoint) {
-		t.Errorf("cmdline %q missing overlay token", got)
-	}
-}
-
-func TestBuildKernelCmdlineOmitsOverlayWhenFlagFalse(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.Shares = []*ShareConfig{{Tag: "ws", Mountpoint: testMountpoint}}
-	got := buildKernelCmdline(cfg)
-	if strings.Contains(got, agent.WorkspaceOverlayCmdlineKey) {
-		t.Errorf("cmdline %q should not contain overlay token when Overlay=false", got)
-	}
-}
-
-// TestBuildKernelCmdlineIncludesPortForwards pins the C1.2 wiring:
-// each PortForwards entry emits exactly one daft.port=<vsock>:<container>
-// token, in declaration order, so the in-VM agent sees the same shape
-// FormatPortForwardCmdline produces.
-func TestBuildKernelCmdlineIncludesPortForwards(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.PortForwards = []PortForward{
-		{VsockPort: 10000, ContainerPort: 8080},
-		{VsockPort: 10001, ContainerPort: 22},
-	}
-	got := buildKernelCmdline(cfg)
-	for _, want := range []string{"daft.port=10000:8080", "daft.port=10001:22"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("cmdline %q missing %q", got, want)
-		}
 	}
 }
 

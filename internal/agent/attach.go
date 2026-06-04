@@ -133,7 +133,7 @@ func (unavailableAttachExec) Start(context.Context, AttachExecRequest) (AttachPr
 // a detached goroutine. Like startPortForwardersFromCmdline it
 // must not block — the listener lives for the agent's lifetime.
 func startAttachListenerFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdline string) {
-	port, ok, err := ParseAttachPortCmdline(cmdline)
+	port, ok, err := resolveAttachPort(d.cfg, cmdline)
 	if err != nil {
 		writeReport(w, attachReportPrefix, "cmdline: "+err.Error())
 		return
@@ -141,9 +141,26 @@ func startAttachListenerFromCmdline(ctx context.Context, w io.Writer, d runDeps,
 	if !ok {
 		return
 	}
-	bundle, _, _ := ParseBundleCmdline(cmdline)
+	// The exec'd processes inherit the container's env, so the bundle path
+	// is resolved config-first (same precedence as the container launch),
+	// falling back to the cmdline token.
+	bundle := d.cfg.GetBundle()
+	if bundle == "" {
+		bundle, _, _ = ParseBundleCmdline(cmdline)
+	}
 	containerEnv := readContainerEnv(w, bundle)
 	go runAttachListener(ctx, w, port, d.attach, containerEnv)
+}
+
+// resolveAttachPort decides whether (and where) to run the exec-attach
+// listener: the GuestConfig's attach_enabled bit selects the fixed
+// DefaultAttachVsockPort; otherwise it falls back to the daft.attach_port
+// cmdline token. The (port, ok, err) shape matches ParseAttachPortCmdline.
+func resolveAttachPort(cfg *agentv1.GuestConfig, cmdline string) (port uint32, ok bool, err error) {
+	if cfg.GetAttachEnabled() {
+		return DefaultAttachVsockPort, true, nil
+	}
+	return ParseAttachPortCmdline(cmdline)
 }
 
 // readContainerEnv reads the container env from the bundle's

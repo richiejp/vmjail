@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/localai-org/darkaifactory/internal/agent"
 	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
 	"github.com/localai-org/darkaifactory/internal/trace"
 )
@@ -59,65 +60,32 @@ func TestBuildCloudHypervisorArgsOmitsVsockWhenAbsent(t *testing.T) {
 	}
 }
 
-// TestBuildKernelCmdlineEmitsVsockTracePort confirms the agent
-// will see daft.vsock.trace_port on the cmdline when TracePort is
-// set.
-func TestBuildKernelCmdlineEmitsVsockTracePort(t *testing.T) {
+// TestBuildGuestConfigProjectsFeatureToggles confirms the trace/attach/net
+// feature bits ride the vsock payload (a non-zero per-feature port in the
+// VsockConfig == that feature on), replacing the daft.vsock.trace_port /
+// daft.attach_port / daft.net_port cmdline tokens. The agent brings each up
+// on its fixed constant port, so only the bit travels.
+func TestBuildGuestConfigProjectsFeatureToggles(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	cfg.Vsock = &VsockConfig{
 		HostSocket: testHostSocketPath,
 		GuestCID:   3,
-		TracePort:  8000,
+		TracePort:  agent.DefaultTraceVsockPort,
+		AttachPort: agent.DefaultAttachVsockPort,
 	}
-	got := buildKernelCmdline(cfg)
-	if !strings.Contains(got, "daft.vsock.trace_port=8000") {
-		t.Errorf("cmdline %q missing trace port", got)
+	gc := buildGuestConfig(cfg)
+	if !gc.GetTraceEnabled() || !gc.GetAttachEnabled() {
+		t.Errorf("toggles = trace %v / attach %v, want both true", gc.GetTraceEnabled(), gc.GetAttachEnabled())
 	}
-}
+	if gc.GetNetEnabled() {
+		t.Errorf("net_enabled = true, want false (NetPort unset)")
+	}
 
-// TestBuildKernelCmdlineEmitsNetPort confirms the agent sees
-// daft.net_port on the cmdline when NetPort is set.
-func TestBuildKernelCmdlineEmitsNetPort(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.Vsock = &VsockConfig{
-		HostSocket: testHostSocketPath,
-		GuestCID:   3,
-		NetPort:    9100,
-	}
-	got := buildKernelCmdline(cfg)
-	if !strings.Contains(got, "daft.net_port=9100") {
-		t.Errorf("cmdline %q missing net_port", got)
-	}
-}
-
-// TestBuildKernelCmdlineSkipsNetPortWhenZero confirms a VsockConfig
-// with NetPort=0 leaves the cmdline clean.
-func TestBuildKernelCmdlineSkipsNetPortWhenZero(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.Vsock = &VsockConfig{
-		HostSocket: testHostSocketPath,
-		GuestCID:   3,
-		NetPort:    0,
-	}
-	got := buildKernelCmdline(cfg)
-	if strings.Contains(got, "daft.net_port") {
-		t.Errorf("cmdline %q has net_port despite zero", got)
-	}
-}
-
-// TestBuildKernelCmdlineSkipsVsockTracePortWhenZero confirms a
-// VsockConfig with TracePort=0 (channel exists but no trace
-// shipping wanted) doesn't pollute the cmdline.
-func TestBuildKernelCmdlineSkipsVsockTracePortWhenZero(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.Vsock = &VsockConfig{
-		HostSocket: testHostSocketPath,
-		GuestCID:   3,
-		TracePort:  0,
-	}
-	got := buildKernelCmdline(cfg)
-	if strings.Contains(got, "daft.vsock.trace_port") {
-		t.Errorf("cmdline %q has trace_port despite zero", got)
+	// No Vsock at all: every toggle off.
+	bare := buildGuestConfig(validCfg().withDefaults())
+	if bare.GetTraceEnabled() || bare.GetAttachEnabled() || bare.GetNetEnabled() {
+		t.Errorf("bare cfg toggles = %v/%v/%v, want all false",
+			bare.GetTraceEnabled(), bare.GetAttachEnabled(), bare.GetNetEnabled())
 	}
 }
 

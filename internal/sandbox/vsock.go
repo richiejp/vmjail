@@ -174,6 +174,15 @@ func buildGuestConfig(cfg Config) *agentv1.GuestConfig {
 		})
 	}
 	gc.Observe = buildObserveConfig(cfg)
+	// Protocol-feature toggles: the agent brings each up on its fixed
+	// constant port, so we send a bit, not the port number. Derived from
+	// the per-VM VsockConfig the executor set (a non-zero port == feature
+	// on); the port fields themselves stay host-side for the listeners.
+	if v := cfg.Vsock; v != nil {
+		gc.AttachEnabled = v.AttachPort != 0
+		gc.NetEnabled = v.NetPort != 0
+		gc.TraceEnabled = v.TracePort != 0
+	}
 	return gc
 }
 

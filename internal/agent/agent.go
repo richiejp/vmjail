@@ -320,7 +320,7 @@ const tracerShutdownTimeout = 2 * time.Second
 // on the console; span shipping is best-effort.
 func startTracer(ctx context.Context, w io.Writer, d runDeps, cmdline string) (*trace.Tracer, context.Context) {
 	tr := trace.New(component.Agent)
-	port, ok, err := ParseVsockTracePortCmdline(cmdline)
+	port, ok, err := resolveTracePort(d.cfg, cmdline)
 	switch {
 	case err != nil:
 		writeReport(w, TraceReportPrefix, "cmdline: "+err.Error())
@@ -331,6 +331,18 @@ func startTracer(ctx context.Context, w io.Writer, d runDeps, cmdline string) (*
 		}))
 	}
 	return tr, trace.ContextWithTracer(ctx, tr)
+}
+
+// resolveTracePort decides whether (and where) to ship spans: the
+// GuestConfig's trace_enabled bit selects the fixed DefaultTraceVsockPort;
+// otherwise it falls back to the daft.vsock.trace_port cmdline token. The
+// (port, ok, err) shape matches ParseVsockTracePortCmdline so startTracer's
+// switch is unchanged.
+func resolveTracePort(cfg *agentv1.GuestConfig, cmdline string) (port uint32, ok bool, err error) {
+	if cfg.GetTraceEnabled() {
+		return DefaultTraceVsockPort, true, nil
+	}
+	return ParseVsockTracePortCmdline(cmdline)
 }
 
 // shutdownTracer Flushes the tracer with a bounded timeout. The

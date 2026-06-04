@@ -596,60 +596,17 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 	}
 }
 
-// buildKernelCmdline returns the cmdline string CH boots with. Emits
-// one `daft.share=<tag>:<mp>` token per share plus `daft.bundle=
-// <path>` when Bundle is set, so the in-VM agent picks up the mount
-// + container-launch instructions.
-func buildKernelCmdline(cfg Config) string {
-	parts := []string{kernelCmdlineBase}
-	for _, s := range cfg.Shares {
-		parts = append(parts, agent.FormatShareCmdline(agent.ShareSpec{
-			Tag:        s.Tag,
-			Mountpoint: s.Mountpoint,
-		}))
-	}
-	if cfg.Bundle != "" {
-		parts = append(parts, agent.FormatBundleCmdline(cfg.Bundle))
-	}
-	if cfg.Vsock != nil && cfg.Vsock.TracePort != 0 {
-		parts = append(parts, agent.FormatVsockTracePortCmdline(cfg.Vsock.TracePort))
-	}
-	if cfg.Vsock != nil && cfg.Vsock.AttachPort != 0 {
-		parts = append(parts, agent.FormatAttachPortCmdline(cfg.Vsock.AttachPort))
-	}
-	if cfg.Vsock != nil && cfg.Vsock.NetPort != 0 {
-		parts = append(parts, agent.FormatNetPortCmdline(cfg.Vsock.NetPort))
-	}
-	for _, pf := range cfg.PortForwards {
-		parts = append(parts, agent.FormatPortForwardCmdline(agent.PortForwardSpec{
-			VsockPort:     pf.VsockPort,
-			ContainerPort: pf.ContainerPort,
-		}))
-	}
-	for _, s := range cfg.Shares {
-		if s.Overlay {
-			parts = append(parts, agent.FormatWorkspaceOverlayCmdline(s.Mountpoint))
-		}
-	}
-	if cfg.OpensnoopLogPath != "" {
-		parts = append(parts, agent.FormatOpensnoopCmdline(cfg.OpensnoopLogPath))
-	}
-	if cfg.ExecsnoopLogPath != "" {
-		parts = append(parts, agent.FormatExecsnoopCmdline(cfg.ExecsnoopLogPath))
-	}
-	if cfg.SleepsnoopLogPath != "" {
-		parts = append(parts, agent.FormatSleepsnoopCmdline(cfg.SleepsnoopLogPath))
-	}
-	if cfg.IosnoopLogPath != "" {
-		parts = append(parts, agent.FormatIosnoopCmdline(cfg.IosnoopLogPath))
-	}
-	if cfg.SyscallListPath != "" {
-		parts = append(parts, agent.FormatSyscallsCmdline(cfg.SyscallListPath))
-	}
-	if cfg.ObserveSummaryPath != "" {
-		parts = append(parts, agent.FormatSummaryCmdline(cfg.ObserveSummaryPath))
-	}
-	return strings.Join(parts, " ")
+// buildKernelCmdline returns the cmdline string CH boots with. As of the
+// slice-3 cutover it carries **zero `daft.*` tokens**: every per-VM
+// operational setting (shares, bundle, port-forwards, overlays, observe
+// paths, and the trace/attach/net feature toggles) now travels over the
+// vsock control channel as a GuestConfig (see buildGuestConfig), which —
+// unlike the world-readable, un-namespaceable kernel cmdline — a nested
+// container can't read. The cmdline is therefore just the static base
+// (console/init plumbing). Kept as a function (not inlined) so the boot
+// path has one obvious place to add a genuinely kernel-level parameter.
+func buildKernelCmdline(_ Config) string {
+	return kernelCmdlineBase
 }
 
 // buildMemoryArg returns the value for `--memory size=...`. virtio-fs

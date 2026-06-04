@@ -1165,9 +1165,9 @@ func TestMemoryArgFromBytesRoundsUp(t *testing.T) {
 	}
 }
 
-// TestPortForwardsFromSpecEmpty pins the no-ports path: the
-// spec carries nothing, the cmdline should carry no daft.port=
-// tokens, no allocation churn.
+// TestPortForwardsFromSpecEmpty pins the no-ports path: a spec with no
+// ports yields a nil PortForwards slice (so the GuestConfig carries no
+// port-forward table), with no allocation churn.
 func TestPortForwardsFromSpecEmpty(t *testing.T) {
 	if got := portForwardsFromSpec(nil); got != nil {
 		t.Errorf("got %+v, want nil", got)

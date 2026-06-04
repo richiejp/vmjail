@@ -1792,16 +1792,25 @@ the user-host or in CI today.
              while the cmdline stays as the fallback — proving the vsock
              path e2e before the cutover pulls the net. Per-feature ports
              (attach/net) stay gated on their feature flags.
-           - **Slice 3b-2 (cutover).** trace/attach/net collapse to
-             fixed-port constants gated by `GuestConfig` enable-bits (the
-             port numbers leave `VsockConfig`); `buildKernelCmdline` drops
-             to the base line (zero `daft.*`); and the now-dead
-             `Format*Cmdline` host funcs + `Parse*Cmdline` /
-             `startXxxFromCmdline` agent fallbacks are deleted. The
-             vsock-unreachable degrade (nested check-container, AF_VSOCK
-             seccomp-denied) then yields a bare banner-only agent, which is
-             correct — a nested workload must not inherit the outer VM's
-             settings.
+           - **Slice 3b-2 (cutover) — in progress.** trace/attach/net are
+             delivered as `GuestConfig` enable-bits; the agent brings each
+             up on its fixed constant port (`DefaultTraceVsockPort` 8000 /
+             `DefaultAttachVsockPort` 9000 / `DefaultNetVsockPort` 9500), so
+             the port number never travels as data. `buildKernelCmdline`
+             drops to the static base — **zero `daft.*` tokens** — and
+             `buildGuestConfig` carries everything. The vsock-unreachable
+             degrade (nested check-container, AF_VSOCK seccomp-denied) then
+             yields a bare banner-only agent, which is correct — a nested
+             workload must not inherit the outer VM's settings. The agent's
+             `Parse*Cmdline` fallbacks and the `VsockConfig` port fields are
+             left in place as now-unreachable scaffolding (the cmdline can
+             no longer carry the tokens), to be removed in 3b-3.
+           - **Slice 3b-3 (dead-code sweep).** Delete the now-uncalled
+             `Format*Cmdline` host funcs, the `Parse*Cmdline` /
+             `startXxxFromCmdline` cmdline fallbacks + their tests/fuzz
+             targets, and collapse `VsockConfig.{TracePort,AttachPort,
+             NetPort}` to the constants (host listeners use the constants
+             directly). Pure deletion, no behavior change.
 
        **Gadget observe wired as the debugging surface
        (2026-06-03).** The self-build test now attaches

@@ -225,6 +225,39 @@ func TestControlChannelConfigNil(t *testing.T) {
 	}
 }
 
+// TestResolveFeaturePorts covers the trace/attach/net resolvers: the
+// GuestConfig enable-bit selects the fixed constant port; otherwise the
+// cmdline token decides. One table since the three are structurally
+// identical.
+func TestResolveFeaturePorts(t *testing.T) {
+	cases := []struct {
+		name     string
+		resolve  func(*agentv1.GuestConfig, string) (uint32, bool, error)
+		enabled  *agentv1.GuestConfig
+		wantPort uint32
+		cmdline  string
+		cmdPort  uint32
+	}{
+		{"trace", resolveTracePort, &agentv1.GuestConfig{TraceEnabled: true}, DefaultTraceVsockPort, FormatVsockTracePortCmdline(8001), 8001},
+		{"attach", resolveAttachPort, &agentv1.GuestConfig{AttachEnabled: true}, DefaultAttachVsockPort, FormatAttachPortCmdline(9001), 9001},
+		{"net", resolveNetPort, &agentv1.GuestConfig{NetEnabled: true}, DefaultNetVsockPort, FormatNetPortCmdline(9501), 9501},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Config enable-bit wins with the constant port, cmdline ignored.
+			p, ok, err := tc.resolve(tc.enabled, tc.cmdline)
+			if err != nil || !ok || p != tc.wantPort {
+				t.Fatalf("enabled: got (%d,%v,%v), want (%d,true,nil)", p, ok, err, tc.wantPort)
+			}
+			// Disabled config: fall back to the cmdline token.
+			p, ok, err = tc.resolve(nil, tc.cmdline)
+			if err != nil || !ok || p != tc.cmdPort {
+				t.Fatalf("cmdline: got (%d,%v,%v), want (%d,true,nil)", p, ok, err, tc.cmdPort)
+			}
+		})
+	}
+}
+
 // TestConfigShareSpecs covers the proto→ShareSpec projection and its
 // nil / empty fallbacks.
 //

@@ -22,6 +22,13 @@ import (
 // and port-forward base (10000) ports since config is fetched first.
 const DefaultConfigVsockPort uint32 = 7000
 
+// DefaultTraceVsockPort is the fixed AF_VSOCK port the agent ships its
+// span buffer to (and the host's trace sink listens on). A protocol
+// constant like the config/attach/net ports — the GuestConfig's
+// trace_enabled bit decides whether to ship, never which port. Sits above
+// config (7000) and below attach (9000).
+const DefaultTraceVsockPort uint32 = 8000
+
 // ConfigReportPrefix tags console lines about the config fetch — dial
 // failures, handshake/read errors. Same separator convention as
 // ShareReportPrefix / ContainerReportPrefix so the host scanner's regex

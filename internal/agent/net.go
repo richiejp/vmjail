@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 	"github.com/localai-org/darkaifactory/internal/oops"
 )
 
@@ -146,6 +147,18 @@ func (b *NetBridge) Conn() net.Conn {
 // a byte stream, so net.Conn must remain io.ReadWriteCloser.
 var _ io.ReadWriteCloser = net.Conn(nil)
 
+// resolveNetPort decides whether (and where) to bridge to sandboxd's
+// netstack: the GuestConfig's net_enabled bit selects the fixed
+// DefaultNetVsockPort; otherwise it falls back to the daft.net_port
+// cmdline token. The (port, ok, err) shape matches ParseNetPortCmdline so
+// startNetBridgeFromCmdline's switch is unchanged.
+func resolveNetPort(cfg *agentv1.GuestConfig, cmdline string) (port uint32, ok bool, err error) {
+	if cfg.GetNetEnabled() {
+		return DefaultNetVsockPort, true, nil
+	}
+	return ParseNetPortCmdline(cmdline)
+}
+
 // startNetBridgeFromCmdline parses daft.net_port and, when set,
 // dials the sandboxd-side listener. Reports a one-line status on
 // w so the host's banner scan sees per-prefix output for this
@@ -160,7 +173,7 @@ var _ io.ReadWriteCloser = net.Conn(nil)
 // bridge is conn-only and the caller's ctx-cancel goroutine
 // owns teardown.
 func startNetBridgeFromCmdline(ctx context.Context, w io.Writer, d runDeps, cmdline string) *NetBridge {
-	port, ok, err := ParseNetPortCmdline(cmdline)
+	port, ok, err := resolveNetPort(d.cfg, cmdline)
 	switch {
 	case err != nil:
 		writeReport(w, NetReportPrefix, "cmdline: "+err.Error())

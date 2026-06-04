@@ -78,6 +78,17 @@ message GuestConfig {
   // every gadget off. Mirrors the daft.observe.* tokens.
   Observe observe = 4;
 
+  // Protocol-feature toggles. The host enables a feature; the agent brings
+  // it up on that feature's fixed AF_VSOCK port — a protocol constant (see
+  // agent.DefaultAttachVsockPort / DefaultNetVsockPort /
+  // DefaultTraceVsockPort), so the port number never travels as per-VM
+  // data. These replace the daft.attach_port / daft.net_port /
+  // daft.vsock.trace_port cmdline tokens (each of which only ever carried
+  // the constant anyway).
+  bool attach_enabled = 5; // run the exec-attach listener
+  bool net_enabled = 6;    // dial sandboxd's netstack + bring up tap0
+  bool trace_enabled = 7;  // ship the span buffer to the host trace sink
+
   // Observe is the set of in-guest absolute paths the Tier-2 gadgets
   // write to (usually on a writable virtiofs share the host reads back).
   // An empty field leaves that gadget off, matching the old per-token

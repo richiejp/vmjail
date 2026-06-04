@@ -164,7 +164,17 @@ type GuestConfig struct {
 	PortForwards []*GuestConfig_PortForward `protobuf:"bytes,3,rep,name=port_forwards,json=portForwards,proto3" json:"port_forwards,omitempty"`
 	// observe carries the Tier-2 gadget output paths. Absent (nil) leaves
 	// every gadget off. Mirrors the daft.observe.* tokens.
-	Observe       *GuestConfig_Observe `protobuf:"bytes,4,opt,name=observe,proto3" json:"observe,omitempty"`
+	Observe *GuestConfig_Observe `protobuf:"bytes,4,opt,name=observe,proto3" json:"observe,omitempty"`
+	// Protocol-feature toggles. The host enables a feature; the agent brings
+	// it up on that feature's fixed AF_VSOCK port — a protocol constant (see
+	// agent.DefaultAttachVsockPort / DefaultNetVsockPort /
+	// DefaultTraceVsockPort), so the port number never travels as per-VM
+	// data. These replace the daft.attach_port / daft.net_port /
+	// daft.vsock.trace_port cmdline tokens (each of which only ever carried
+	// the constant anyway).
+	AttachEnabled bool `protobuf:"varint,5,opt,name=attach_enabled,json=attachEnabled,proto3" json:"attach_enabled,omitempty"` // run the exec-attach listener
+	NetEnabled    bool `protobuf:"varint,6,opt,name=net_enabled,json=netEnabled,proto3" json:"net_enabled,omitempty"`          // dial sandboxd's netstack + bring up tap0
+	TraceEnabled  bool `protobuf:"varint,7,opt,name=trace_enabled,json=traceEnabled,proto3" json:"trace_enabled,omitempty"`    // ship the span buffer to the host trace sink
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -225,6 +235,27 @@ func (x *GuestConfig) GetObserve() *GuestConfig_Observe {
 		return x.Observe
 	}
 	return nil
+}
+
+func (x *GuestConfig) GetAttachEnabled() bool {
+	if x != nil {
+		return x.AttachEnabled
+	}
+	return false
+}
+
+func (x *GuestConfig) GetNetEnabled() bool {
+	if x != nil {
+		return x.NetEnabled
+	}
+	return false
+}
+
+func (x *GuestConfig) GetTraceEnabled() bool {
+	if x != nil {
+		return x.TraceEnabled
+	}
+	return false
 }
 
 // AgentEvent is a status milestone the agent streams to the host over
@@ -493,12 +524,16 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\n" +
 	"\x15agent/v1/config.proto\x12\rdaft.agent.v1\"9\n" +
 	"\x12GuestConfigRequest\x12#\n" +
-	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xcc\x04\n" +
+	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xb9\x05\n" +
 	"\vGuestConfig\x12\x16\n" +
 	"\x06bundle\x18\x01 \x01(\tR\x06bundle\x128\n" +
 	"\x06shares\x18\x02 \x03(\v2 .daft.agent.v1.GuestConfig.ShareR\x06shares\x12K\n" +
 	"\rport_forwards\x18\x03 \x03(\v2&.daft.agent.v1.GuestConfig.PortForwardR\fportForwards\x12<\n" +
-	"\aobserve\x18\x04 \x01(\v2\".daft.agent.v1.GuestConfig.ObserveR\aobserve\x1aS\n" +
+	"\aobserve\x18\x04 \x01(\v2\".daft.agent.v1.GuestConfig.ObserveR\aobserve\x12%\n" +
+	"\x0eattach_enabled\x18\x05 \x01(\bR\rattachEnabled\x12\x1f\n" +
+	"\vnet_enabled\x18\x06 \x01(\bR\n" +
+	"netEnabled\x12#\n" +
+	"\rtrace_enabled\x18\a \x01(\bR\ftraceEnabled\x1aS\n" +
 	"\x05Share\x12\x10\n" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x1e\n" +
 	"\n" +
