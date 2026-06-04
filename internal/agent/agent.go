@@ -79,8 +79,12 @@ const BundleCmdlineKey = "daft.bundle"
 func Run(ctx context.Context, w io.Writer) error {
 	return runWith(ctx, w, runDeps{
 		readCmdline: readKernelCmdline,
-		fetchConfig: func(ctx context.Context) (*agentv1.GuestConfig, error) {
-			return FetchGuestConfig(ctx, DialHostVsock)
+		openControl: func(ctx context.Context) (controlChannel, error) {
+			cc, err := OpenControlChannel(ctx, DialHostVsock)
+			if err != nil {
+				return nil, err
+			}
+			return cc, nil
 		},
 		share:       defaultShareDeps(),
 		container:   defaultContainerDeps(),
@@ -97,19 +101,30 @@ func Run(ctx context.Context, w io.Writer) error {
 	})
 }
 
+// controlChannel is the agent's open control connection to the host: it
+// carries the fetched GuestConfig and lets the agent stream status
+// events back. *ControlChannel is the production implementation; tests
+// inject a fake. Modelled as an interface so unit tests don't need a
+// real vsock conn.
+type controlChannel interface {
+	Config() *agentv1.GuestConfig
+	SendEvent(agentv1.AgentEvent_Kind) error
+	Close() error
+}
+
 // runDeps bundles the side-effect surfaces of Run so unit tests can
 // substitute in-memory fakes. Production wires the real Linux
 // implementations via Run.
 type runDeps struct {
 	readCmdline func() (string, error)
-	// fetchConfig dials the host's per-VM config server and returns
-	// this VM's GuestConfig. A non-nil error means the channel was
-	// unreachable (no vsock device, AF_VSOCK seccomp-denied, wedged
-	// listener) or the handshake failed; the agent then degrades to a
-	// cmdline/banner-only boot. Zero value (nil) skips the fetch
-	// entirely — tests that exercise only cmdline behaviour leave it
-	// unset.
-	fetchConfig func(context.Context) (*agentv1.GuestConfig, error)
+	// openControl dials the host's per-VM config/event server, performs
+	// the handshake, and returns the open control channel (config +
+	// event writer). A non-nil error means the channel was unreachable
+	// (no vsock device, AF_VSOCK seccomp-denied, wedged listener) or the
+	// handshake failed; the agent then degrades to a cmdline/banner-only
+	// boot. Zero value (nil) skips the channel entirely — tests that
+	// exercise only cmdline behaviour leave it unset.
+	openControl func(context.Context) (controlChannel, error)
 	share       ShareDeps
 	container   ContainerDeps
 	// dialVsock dials the host on the given AF_VSOCK port. Returned
@@ -154,16 +169,18 @@ type runDeps struct {
 
 func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	cmdline, _ := d.readCmdline()
-	// Fetch this VM's settings over the vsock control channel. On any
-	// failure the agent degrades: cfg is nil and each setting falls
-	// back to the cmdline (slice-1 transition — see fetchGuestConfig).
-	//
-	// The banner is still printed last for now, as the host's
-	// scanForBanner sentinel; slice 2 moves VM-status signalling onto
-	// the vsock channel as events and demotes the banner to a plain
-	// liveness print (console-scan surviving only as the
-	// vsock-unreachable fallback).
-	cfg := fetchGuestConfig(ctx, w, d)
+	// Open the vsock control channel: fetch this VM's settings and keep
+	// the connection for streaming status events back. On any failure
+	// the agent degrades — ctrl is nil, cfg is nil, and each setting
+	// falls back to the cmdline; the console banner then doubles as the
+	// host's only completion signal (the sanctioned vsock-unreachable
+	// fallback).
+	ctrl := openControlChannel(ctx, w, d)
+	var cfg *agentv1.GuestConfig
+	if ctrl != nil {
+		cfg = ctrl.Config()
+		defer func() { _ = ctrl.Close() }()
+	}
 	tracer, ctx := startTracer(ctx, w, d, cmdline)
 
 	ctx, bootSpan := trace.Start(ctx, "agent.boot",
@@ -205,40 +222,53 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	runContainer(ctx, w, d, bundle)
 	bootSpan.End()
 
-	// Flush spans *before* the banner: the host's banner-scan is
-	// what tells the VMM supervisor "tear down safe", so flushing
-	// afterwards would race the agent's last vsock write against
-	// VM shutdown. (Slice 2 replaces this banner sentinel with a
-	// vsock boot-complete event.)
+	// Flush spans before signalling completion so the host has the boot
+	// trace in hand when it tears the VM down on the boot-complete event.
 	shutdownTracer(ctx, tracer, w)
 
+	// The banner is now a plain console liveness print (and the
+	// degrade-fallback sentinel for a host with no control channel) —
+	// VM status flows over the control channel as a boot-complete event.
 	if _, err := fmt.Fprintln(w, Banner); err != nil {
 		return fmt.Errorf("agent: write banner: %w", err)
 	}
+	signalBootComplete(w, ctrl)
 	<-ctx.Done()
 	return ctx.Err()
 }
 
-// fetchGuestConfig calls d.fetchConfig (when wired) and reports any
-// failure on the console. A nil return — no dep wired, or a fetch error
-// — means "no config delivered"; every setting then falls back to the
-// cmdline. This is the slice-1 transition: a VM with no vsock device
-// can't be reached over the channel and must still boot from its
-// cmdline, so a fetch failure is a degrade, not a fatal.
-func fetchGuestConfig(ctx context.Context, w io.Writer, d runDeps) *agentv1.GuestConfig {
-	if d.fetchConfig == nil {
+// openControlChannel opens the control channel via d.openControl (when
+// wired) and reports any failure on the console best-effort. A nil
+// return — no dep wired, or a handshake failure — means "no channel";
+// every setting then falls back to the cmdline and the banner becomes
+// the host's only completion signal. The report is deliberately not
+// fatal (unlike writeReport's oops.Must): a channel failure is already a
+// graceful degrade (the VM may simply have no vsock device, the off-VM
+// unit-test case), so a broken console must not escalate to an exit.
+func openControlChannel(ctx context.Context, w io.Writer, d runDeps) controlChannel {
+	if d.openControl == nil {
 		return nil
 	}
-	cfg, err := d.fetchConfig(ctx)
+	ctrl, err := d.openControl(ctx)
 	if err != nil {
-		// Best-effort report — unlike writeReport's fatal oops.Must,
-		// a config-fetch failure is already a graceful degrade (the VM
-		// may simply have no vsock device, the off-VM unit-test case),
-		// so a broken console here must not escalate to a fatal exit.
 		_, _ = fmt.Fprintf(w, "%s%s\n", ConfigReportPrefix, err.Error())
 		return nil
 	}
-	return cfg
+	return ctrl
+}
+
+// signalBootComplete sends the boot-complete event over the control
+// channel so the host's one-shot harness can return without scanning the
+// console. No-op when the channel is absent (degraded boot). A send
+// failure is reported best-effort — the agent is past its work and must
+// not abort.
+func signalBootComplete(w io.Writer, ctrl controlChannel) {
+	if ctrl == nil {
+		return
+	}
+	if err := ctrl.SendEvent(agentv1.AgentEvent_BOOT_COMPLETE); err != nil {
+		_, _ = fmt.Fprintf(w, "%ssend boot-complete: %s\n", ConfigReportPrefix, err.Error())
+	}
 }
 
 // resolveBundle picks the OCI bundle path to run: the GuestConfig's

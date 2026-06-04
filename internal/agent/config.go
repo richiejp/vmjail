@@ -43,24 +43,42 @@ const configHandshakeVersion = "1"
 //nolint:gochecknoglobals // test-hook timeout; mutated only in tests.
 var configFetchTimeout = 2 * time.Second
 
-// FetchGuestConfig dials the host config port via dial, sends a
-// GuestConfigRequest handshake, and reads back the single GuestConfig
-// response. The whole exchange is bounded by configFetchTimeout. Any
-// failure (dial, write, read, unmarshal) returns an error — the caller
-// degrades to a cmdline/banner-only boot rather than blocking.
-func FetchGuestConfig(
+// ControlChannel is the agent's open control connection to the host: the
+// GuestConfig fetched at handshake plus a writer for status events. The
+// agent holds it for the boot's duration and Closes it on shutdown,
+// which the host reads as EOF. Status events (boot-complete, …) are sent
+// on this same connection — VM status belongs on the protocol, not the
+// serial console banner.
+type ControlChannel struct {
+	conn net.Conn
+	cfg  *agentv1.GuestConfig
+}
+
+// OpenControlChannel dials the host config port via dial, sends a
+// GuestConfigRequest handshake, reads back the GuestConfig response, and
+// returns the channel with the connection still open for later event
+// sends. The handshake + config read are bounded by configFetchTimeout;
+// the deadline is then cleared because events are sent much later (after
+// the boot sequence). Any failure (dial, write, read) returns an error —
+// the caller degrades to a cmdline/banner-only boot rather than blocking.
+func OpenControlChannel(
 	ctx context.Context,
 	dial func(ctx context.Context, port uint32) (net.Conn, error),
-) (*agentv1.GuestConfig, error) {
-	ctx, cancel := context.WithTimeout(ctx, configFetchTimeout)
+) (*ControlChannel, error) {
+	hsCtx, cancel := context.WithTimeout(ctx, configFetchTimeout)
 	defer cancel()
 
-	conn, err := dial(ctx, DefaultConfigVsockPort)
+	conn, err := dial(hsCtx, DefaultConfigVsockPort)
 	if err != nil {
 		return nil, fmt.Errorf("agent: dial config port: %w", err)
 	}
-	defer func() { _ = conn.Close() }()
-	if deadline, ok := ctx.Deadline(); ok {
+	ok := false
+	defer func() {
+		if !ok {
+			_ = conn.Close()
+		}
+	}()
+	if deadline, has := hsCtx.Deadline(); has {
 		_ = conn.SetDeadline(deadline)
 	}
 
@@ -72,7 +90,29 @@ func FetchGuestConfig(
 	if err != nil {
 		return nil, fmt.Errorf("agent: read config: %w", err)
 	}
-	return cfg, nil
+	// Config is in hand; clear the handshake deadline so a later event
+	// send isn't tripped by the elapsed boot time.
+	_ = conn.SetDeadline(time.Time{})
+	ok = true
+	return &ControlChannel{conn: conn, cfg: cfg}, nil
+}
+
+// Config returns the GuestConfig delivered at handshake. Nil-safe.
+func (c *ControlChannel) Config() *agentv1.GuestConfig {
+	if c == nil {
+		return nil
+	}
+	return c.cfg
+}
+
+// SendEvent writes one status event frame to the host.
+func (c *ControlChannel) SendEvent(kind agentv1.AgentEvent_Kind) error {
+	return WriteAgentEvent(c.conn, &agentv1.AgentEvent{Kind: kind})
+}
+
+// Close closes the underlying connection; the host sees EOF.
+func (c *ControlChannel) Close() error {
+	return c.conn.Close()
 }
 
 // WriteGuestConfigRequest marshals + length-prefixes the handshake onto
@@ -124,6 +164,31 @@ func ReadGuestConfig(r io.Reader) (*agentv1.GuestConfig, error) {
 		return nil, fmt.Errorf("agent: unmarshal GuestConfig: %w", err)
 	}
 	return &cfg, nil
+}
+
+// WriteAgentEvent marshals + length-prefixes an event onto w (the
+// agent's side of the control channel).
+func WriteAgentEvent(w io.Writer, ev *agentv1.AgentEvent) error {
+	payload, err := proto.Marshal(ev)
+	if err != nil {
+		return fmt.Errorf("agent: marshal AgentEvent: %w", err)
+	}
+	return writeAttachLenPrefixed(w, payload)
+}
+
+// ReadAgentEvent reads one length-prefixed AgentEvent off r (the host's
+// side of the control channel). Returns the framing error (io.EOF when
+// the agent closed the connection) so the host's read loop can stop.
+func ReadAgentEvent(r io.Reader) (*agentv1.AgentEvent, error) {
+	payload, err := readAttachPayload(r)
+	if err != nil {
+		return nil, err
+	}
+	var ev agentv1.AgentEvent
+	if err := proto.Unmarshal(payload, &ev); err != nil {
+		return nil, fmt.Errorf("agent: unmarshal AgentEvent: %w", err)
+	}
+	return &ev, nil
 }
 
 // configShareSpecs converts the shares carried in a GuestConfig to the

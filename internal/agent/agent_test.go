@@ -88,7 +88,7 @@ func TestRunDegradesToBannerWhenConfigFetchFails(t *testing.T) {
 	containerRan := false
 	err := runWith(ctx, &buf, runDeps{
 		readCmdline: func() (string, error) { return "", nil },
-		fetchConfig: func(context.Context) (*agentv1.GuestConfig, error) {
+		openControl: func(context.Context) (controlChannel, error) {
 			return nil, errors.New("dial config port: no vsock device")
 		},
 		container: ContainerDeps{
@@ -123,14 +123,13 @@ func TestRunAppliesConfigBundleAndShares(t *testing.T) {
 	var buf bytes.Buffer
 	var mountedTargets []string
 	var ranBundle string
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{
+		Bundle: testBundlePath,
+		Shares: []*agentv1.GuestConfig_Share{{Tag: testTag, Mountpoint: testMountpoint}},
+	}}
 	err := runWith(ctx, &buf, runDeps{
 		readCmdline: func() (string, error) { return "", nil },
-		fetchConfig: func(context.Context) (*agentv1.GuestConfig, error) {
-			return &agentv1.GuestConfig{
-				Bundle: testBundlePath,
-				Shares: []*agentv1.GuestConfig_Share{{Tag: testTag, Mountpoint: testMountpoint}},
-			}, nil
-		},
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
 		share: ShareDeps{
 			Mount:    func(_, target, _, _ string) error { mountedTargets = append(mountedTargets, target); return nil },
 			MkdirAll: func(string, os.FileMode) error { return nil },
@@ -149,6 +148,54 @@ func TestRunAppliesConfigBundleAndShares(t *testing.T) {
 	if len(mountedTargets) != 1 || mountedTargets[0] != testMountpoint {
 		t.Errorf("mounted %v, want [%q]", mountedTargets, testMountpoint)
 	}
+	if len(ctrl.events) != 1 || ctrl.events[0] != agentv1.AgentEvent_BOOT_COMPLETE {
+		t.Errorf("events = %v, want one BOOT_COMPLETE", ctrl.events)
+	}
+	if !ctrl.closed {
+		t.Error("control channel not closed")
+	}
+}
+
+// TestRunReportsBootCompleteSendError covers the best-effort error path
+// when streaming the boot-complete event fails (a half-open channel):
+// the agent reports it and keeps running, not aborting.
+func TestRunReportsBootCompleteSendError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	var buf bytes.Buffer
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{}, sendErr: errors.New("send boom")}
+	err := runWith(ctx, &buf, runDeps{
+		readCmdline: func() (string, error) { return "", nil },
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("runWith returned %v, want DeadlineExceeded", err)
+	}
+	if !strings.Contains(buf.String(), ConfigReportPrefix+"send boot-complete:") {
+		t.Errorf("missing boot-complete send-error report in %q", buf.String())
+	}
+}
+
+// fakeControl is a test controlChannel: it records the events sent and
+// whether it was closed, serves a fixed GuestConfig, and can fail sends.
+type fakeControl struct {
+	cfg     *agentv1.GuestConfig
+	events  []agentv1.AgentEvent_Kind
+	closed  bool
+	sendErr error
+}
+
+func (f *fakeControl) Config() *agentv1.GuestConfig { return f.cfg }
+
+func (f *fakeControl) SendEvent(k agentv1.AgentEvent_Kind) error {
+	f.events = append(f.events, k)
+	return f.sendErr
+}
+
+func (f *fakeControl) Close() error {
+	f.closed = true
+	return nil
 }
 
 func TestRunReturnsImmediatelyIfContextAlreadyDone(t *testing.T) {

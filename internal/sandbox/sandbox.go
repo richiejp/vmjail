@@ -1158,7 +1158,11 @@ func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	td.funcStops = append(td.funcStops, stopVsock)
 
-	stopConfig, err := startVsockConfigServer(ctx, cfg)
+	// serveWith runs until ctx/VMM-exit, so it doesn't wait on the
+	// boot-complete signal (that's the one-shot Hello harness's job);
+	// the config/event server still runs so the agent gets its config
+	// and the event read loop drains cleanly.
+	stopConfig, _, err := startVsockConfigServer(ctx, cfg)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
@@ -1236,7 +1240,7 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	td.funcStops = append(td.funcStops, stopVsock)
 
-	stopConfig, err := startVsockConfigServer(ctx, cfg)
+	stopConfig, bootComplete, err := startVsockConfigServer(ctx, cfg)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
@@ -1254,12 +1258,57 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	td.procStops = append(td.procStops, stop)
 
+	// Wait for the agent to report boot-complete over the vsock control
+	// channel (bootComplete != nil means the VM has one). Fall back to
+	// scanning the console banner only when there's no channel — the
+	// banner is no longer a status signal except in that degraded case.
+	if bootComplete != nil {
+		waitCtx, waitSpan := trace.Start(runCtx, "sandbox.wait_boot_complete")
+		defer waitSpan.End()
+		return waitForBootComplete(waitCtx, cancel, w, stdout, bootComplete)
+	}
 	bannerCtx, bannerSpan := trace.Start(runCtx, "sandbox.scan_for_banner")
 	defer bannerSpan.End()
 	if err := scanForBanner(w, stdout); err != nil {
 		return trace.RecordError(bannerCtx, err)
 	}
 	return nil
+}
+
+// waitForBootComplete waits for the agent to report boot-complete over
+// the vsock control channel — the VM-status signal — then mirrors the
+// console up to the banner so w holds the whole boot output before the
+// caller tears the VM down. The two channels are independent: the agent
+// prints the banner (slow virtio-console path) just before sending the
+// event (fast vsock path), so killing the VM on the bare event would
+// race the banner off the console. Instead scanForBanner is the single
+// console reader; on the event we let it finish draining to the banner.
+//
+// If the banner arrives first (the agent printed it but the control
+// channel never delivered — a degraded boot) that completes the wait as
+// a fallback. On ctx timeout it kills the VM to unblock the scan and
+// returns the ctx error.
+func waitForBootComplete(ctx context.Context, cancelVM context.CancelFunc, w io.Writer, stdout io.Reader, bootComplete <-chan struct{}) error {
+	scanned := make(chan error, 1)
+	go func() { scanned <- scanForBanner(w, stdout) }()
+
+	select {
+	case <-bootComplete:
+		select {
+		case err := <-scanned:
+			return err
+		case <-ctx.Done():
+			cancelVM()
+			<-scanned
+			return ctx.Err()
+		}
+	case err := <-scanned:
+		return err
+	case <-ctx.Done():
+		cancelVM()
+		<-scanned
+		return ctx.Err()
+	}
 }
 
 // startShares spawns virtiofsd for every share in cfg. Returns a

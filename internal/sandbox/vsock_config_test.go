@@ -6,6 +6,7 @@ import (
 	"net"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/localai-org/darkaifactory/internal/agent"
 	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
@@ -30,7 +31,7 @@ func TestStartVsockConfigServerServesBundleAndShares(t *testing.T) {
 	}
 	cfg.Vsock = &VsockConfig{HostSocket: filepath.Join(dir, "v.sock"), GuestCID: 3}
 
-	stop, err := startVsockConfigServer(context.Background(), cfg)
+	stop, bootComplete, err := startVsockConfigServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("startVsockConfigServer: %v", err)
 	}
@@ -63,15 +64,55 @@ func TestStartVsockConfigServerServesBundleAndShares(t *testing.T) {
 	if shares[1].GetTag() != "observe" || shares[1].GetMountpoint() != "/run/observe" {
 		t.Errorf("share[1] = %v, want observe:/run/observe", shares[1])
 	}
+
+	// Streaming a BOOT_COMPLETE event back closes the bootComplete chan.
+	if err := agent.WriteAgentEvent(conn, &agentv1.AgentEvent{Kind: agentv1.AgentEvent_BOOT_COMPLETE}); err != nil {
+		t.Fatalf("write boot-complete: %v", err)
+	}
+	select {
+	case <-bootComplete:
+	case <-time.After(2 * time.Second):
+		t.Fatal("bootComplete not signalled after BOOT_COMPLETE event")
+	}
+}
+
+// TestStartVsockConfigServerDropsEarlyClose covers the handler's
+// handshake-read error branch: a client that connects and closes before
+// sending its handshake is dropped without signalling boot-complete.
+func TestStartVsockConfigServerDropsEarlyClose(t *testing.T) {
+	dir := t.TempDir()
+	cfg := validCfg()
+	cfg.Vsock = &VsockConfig{HostSocket: filepath.Join(dir, "v.sock"), GuestCID: 3}
+
+	stop, bootComplete, err := startVsockConfigServer(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("startVsockConfigServer: %v", err)
+	}
+	t.Cleanup(stop)
+
+	conn, err := net.Dial("unix", configSockPath(cfg))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	_ = conn.Close() // close before handshake
+
+	select {
+	case <-bootComplete:
+		t.Fatal("boot-complete signalled for a client that never handshook")
+	case <-time.After(100 * time.Millisecond):
+	}
 }
 
 // TestStartVsockConfigServerNoVsockIsNoop confirms a VM with no vsock
 // device gets a do-nothing stop and no listener (the agent will fall
 // back to the cmdline).
 func TestStartVsockConfigServerNoVsockIsNoop(t *testing.T) {
-	stop, err := startVsockConfigServer(context.Background(), validCfg())
+	stop, bootComplete, err := startVsockConfigServer(context.Background(), validCfg())
 	if err != nil {
 		t.Fatalf("startVsockConfigServer with no Vsock: %v", err)
+	}
+	if bootComplete != nil {
+		t.Error("expected nil bootComplete channel when no vsock device")
 	}
 	stop() // must be safe to call
 }
@@ -82,7 +123,7 @@ func TestStartVsockConfigServerNoVsockIsNoop(t *testing.T) {
 func TestStartVsockConfigServerSurfacesListenError(t *testing.T) {
 	cfg := validCfg()
 	cfg.Vsock = &VsockConfig{HostSocket: "/no/such/dir/config.sock", GuestCID: 3}
-	stop, err := startVsockConfigServer(context.Background(), cfg)
+	stop, _, err := startVsockConfigServer(context.Background(), cfg)
 	if err == nil {
 		t.Fatal("expected error from Listen on bad path")
 	}
@@ -103,7 +144,7 @@ func TestStartVsockConfigServerPreCleansStaleSocket(t *testing.T) {
 	}
 	_ = stale.Close() // leaves the socket file behind
 
-	stop, err := startVsockConfigServer(context.Background(), cfg)
+	stop, _, err := startVsockConfigServer(context.Background(), cfg)
 	if err != nil {
 		t.Fatalf("startVsockConfigServer against stale socket: %v", err)
 	}

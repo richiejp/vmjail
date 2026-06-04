@@ -42,6 +42,58 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Kind enumerates the milestones. New kinds append; KIND_UNSPECIFIED
+// (the zero value) is never sent by a correct agent and lets the host
+// distinguish "no event" from a real one.
+type AgentEvent_Kind int32
+
+const (
+	AgentEvent_KIND_UNSPECIFIED AgentEvent_Kind = 0
+	// BOOT_COMPLETE: the agent finished its boot sequence — shares
+	// mounted, container (if any) launched and, for a short-lived
+	// workload, run to completion. The Hello harness returns on this.
+	AgentEvent_BOOT_COMPLETE AgentEvent_Kind = 1
+)
+
+// Enum value maps for AgentEvent_Kind.
+var (
+	AgentEvent_Kind_name = map[int32]string{
+		0: "KIND_UNSPECIFIED",
+		1: "BOOT_COMPLETE",
+	}
+	AgentEvent_Kind_value = map[string]int32{
+		"KIND_UNSPECIFIED": 0,
+		"BOOT_COMPLETE":    1,
+	}
+)
+
+func (x AgentEvent_Kind) Enum() *AgentEvent_Kind {
+	p := new(AgentEvent_Kind)
+	*p = x
+	return p
+}
+
+func (x AgentEvent_Kind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AgentEvent_Kind) Descriptor() protoreflect.EnumDescriptor {
+	return file_agent_v1_config_proto_enumTypes[0].Descriptor()
+}
+
+func (AgentEvent_Kind) Type() protoreflect.EnumType {
+	return &file_agent_v1_config_proto_enumTypes[0]
+}
+
+func (x AgentEvent_Kind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AgentEvent_Kind.Descriptor instead.
+func (AgentEvent_Kind) EnumDescriptor() ([]byte, []int) {
+	return file_agent_v1_config_proto_rawDescGZIP(), []int{2, 0}
+}
+
 // GuestConfigRequest is the handshake the agent sends on a fresh
 // config connection. Identity is implicit in the per-VM socket, so the
 // only field is the agent's version string — the server may use it to
@@ -153,6 +205,57 @@ func (x *GuestConfig) GetShares() []*GuestConfig_Share {
 	return nil
 }
 
+// AgentEvent is a status milestone the agent streams to the host over
+// the same control connection, after it has received its GuestConfig.
+// The host (and the one-shot Hello harness / integration tests) wait
+// for these instead of scanning the console banner — VM status belongs
+// on the protocol, not the serial console. The agent may send several
+// events on the one connection; the host reads framed AgentEvents until
+// the agent closes the conn (VM teardown).
+type AgentEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Kind          AgentEvent_Kind        `protobuf:"varint,1,opt,name=kind,proto3,enum=daft.agent.v1.AgentEvent_Kind" json:"kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentEvent) Reset() {
+	*x = AgentEvent{}
+	mi := &file_agent_v1_config_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentEvent) ProtoMessage() {}
+
+func (x *AgentEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_config_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentEvent.ProtoReflect.Descriptor instead.
+func (*AgentEvent) Descriptor() ([]byte, []int) {
+	return file_agent_v1_config_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *AgentEvent) GetKind() AgentEvent_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return AgentEvent_KIND_UNSPECIFIED
+}
+
 // Share is one virtio-fs mount: device tag → absolute guest
 // mountpoint.
 type GuestConfig_Share struct {
@@ -165,7 +268,7 @@ type GuestConfig_Share struct {
 
 func (x *GuestConfig_Share) Reset() {
 	*x = GuestConfig_Share{}
-	mi := &file_agent_v1_config_proto_msgTypes[2]
+	mi := &file_agent_v1_config_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -177,7 +280,7 @@ func (x *GuestConfig_Share) String() string {
 func (*GuestConfig_Share) ProtoMessage() {}
 
 func (x *GuestConfig_Share) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_config_proto_msgTypes[2]
+	mi := &file_agent_v1_config_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -221,7 +324,13 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x1e\n" +
 	"\n" +
 	"mountpoint\x18\x02 \x01(\tR\n" +
-	"mountpointBFZDgithub.com/localai-org/darkaifactory/internal/genpb/agent/v1;agentv1b\x06proto3"
+	"mountpoint\"q\n" +
+	"\n" +
+	"AgentEvent\x122\n" +
+	"\x04kind\x18\x01 \x01(\x0e2\x1e.daft.agent.v1.AgentEvent.KindR\x04kind\"/\n" +
+	"\x04Kind\x12\x14\n" +
+	"\x10KIND_UNSPECIFIED\x10\x00\x12\x11\n" +
+	"\rBOOT_COMPLETE\x10\x01BFZDgithub.com/localai-org/darkaifactory/internal/genpb/agent/v1;agentv1b\x06proto3"
 
 var (
 	file_agent_v1_config_proto_rawDescOnce sync.Once
@@ -235,19 +344,23 @@ func file_agent_v1_config_proto_rawDescGZIP() []byte {
 	return file_agent_v1_config_proto_rawDescData
 }
 
-var file_agent_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_agent_v1_config_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_agent_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_agent_v1_config_proto_goTypes = []any{
-	(*GuestConfigRequest)(nil), // 0: daft.agent.v1.GuestConfigRequest
-	(*GuestConfig)(nil),        // 1: daft.agent.v1.GuestConfig
-	(*GuestConfig_Share)(nil),  // 2: daft.agent.v1.GuestConfig.Share
+	(AgentEvent_Kind)(0),       // 0: daft.agent.v1.AgentEvent.Kind
+	(*GuestConfigRequest)(nil), // 1: daft.agent.v1.GuestConfigRequest
+	(*GuestConfig)(nil),        // 2: daft.agent.v1.GuestConfig
+	(*AgentEvent)(nil),         // 3: daft.agent.v1.AgentEvent
+	(*GuestConfig_Share)(nil),  // 4: daft.agent.v1.GuestConfig.Share
 }
 var file_agent_v1_config_proto_depIdxs = []int32{
-	2, // 0: daft.agent.v1.GuestConfig.shares:type_name -> daft.agent.v1.GuestConfig.Share
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	4, // 0: daft.agent.v1.GuestConfig.shares:type_name -> daft.agent.v1.GuestConfig.Share
+	0, // 1: daft.agent.v1.AgentEvent.kind:type_name -> daft.agent.v1.AgentEvent.Kind
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_config_proto_init() }
@@ -260,13 +373,14 @@ func file_agent_v1_config_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_config_proto_rawDesc), len(file_agent_v1_config_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   3,
+			NumEnums:      1,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_agent_v1_config_proto_goTypes,
 		DependencyIndexes: file_agent_v1_config_proto_depIdxs,
+		EnumInfos:         file_agent_v1_config_proto_enumTypes,
 		MessageInfos:      file_agent_v1_config_proto_msgTypes,
 	}.Build()
 	File_agent_v1_config_proto = out.File

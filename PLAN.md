@@ -1741,15 +1741,25 @@ the user-host or in CI today.
            path while nothing regresses — a no-`Vsock` `Serve`/`Hello`
            has no vsock device at all, so the agent *can't* dial and must
            fall back.
-         - **Slice 2 (status via events + banner decouple):** the agent
-           emits status events over the vsock control channel
-           (boot-complete + the milestones the integration tests assert
-           on); `Hello()` and the tests wait for **events** while a
-           background goroutine continuously mirrors the console to the
-           buffer (so existing `Contains` asserts still see banner +
-           markers regardless of order); the banner becomes a plain
-           liveness print tested only for itself; `scanForBanner` is
-           demoted to the vsock-unreachable fallback.
+         - **Slice 2 (status via events + banner decouple) — landed
+           (2026-06-04).** The agent keeps the control connection open
+           after the handshake (`OpenControlChannel`/`ControlChannel`)
+           and streams `AgentEvent` frames; today the one milestone is
+           `BOOT_COMPLETE`, sent after the boot sequence. The host's
+           control server (`startVsockConfigServer`, now returning a
+           `bootComplete` channel) reads those events; `Hello()` waits on
+           that channel via `waitForBootComplete`, which mirrors the
+           console to the buffer in the background and, on the event,
+           kills the VM (cancels runCtx → CH exits → console EOFs) then
+           drains the mirror so the buffer holds the whole console
+           regardless of banner order. The banner is now a plain liveness
+           print — `scanForBanner` survives only as the fallback when the
+           VM has no vsock device (the agent can't dial, so it degrades
+           and the banner is the host's only signal). `serveWith` runs
+           the same server but ignores the channel (it lives until
+           ctx/VMM-exit). Not yet universal: VMs without `Vsock` set
+           still use the banner-scan fallback — slice 3 makes vsock
+           always-on so events are the sole path.
          - **Slice 3 (cmdline cutover):** make vsock always-on for every
            sandbox VM, then delete the `daft.*` bundle/share assembly and
            migrate the remaining tokens (overlays, ports, gadgets, trace

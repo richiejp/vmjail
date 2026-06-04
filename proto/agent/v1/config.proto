@@ -55,3 +55,25 @@ message GuestConfig {
     string mountpoint = 2;
   }
 }
+
+// AgentEvent is a status milestone the agent streams to the host over
+// the same control connection, after it has received its GuestConfig.
+// The host (and the one-shot Hello harness / integration tests) wait
+// for these instead of scanning the console banner — VM status belongs
+// on the protocol, not the serial console. The agent may send several
+// events on the one connection; the host reads framed AgentEvents until
+// the agent closes the conn (VM teardown).
+message AgentEvent {
+  Kind kind = 1;
+
+  // Kind enumerates the milestones. New kinds append; KIND_UNSPECIFIED
+  // (the zero value) is never sent by a correct agent and lets the host
+  // distinguish "no event" from a real one.
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    // BOOT_COMPLETE: the agent finished its boot sequence — shares
+    // mounted, container (if any) launched and, for a short-lived
+    // workload, run to completion. The Hello harness returns on this.
+    BOOT_COMPLETE = 1;
+  }
+}

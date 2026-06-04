@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"testing"
+	"time"
 
 	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 )
@@ -58,22 +60,34 @@ func TestGuestConfigFramingRoundTrip(t *testing.T) {
 	}
 }
 
-// TestFetchGuestConfigRoundTrip drives the agent's fetch against an
-// in-process server over net.Pipe: dial → handshake → response.
-func TestFetchGuestConfigRoundTrip(t *testing.T) {
+// TestOpenControlChannelRoundTripAndEvent drives the full control
+// channel against an in-process server over net.Pipe: dial → handshake →
+// config response → boot-complete event read back by the host side.
+func TestOpenControlChannelRoundTripAndEvent(t *testing.T) {
 	client, server := net.Pipe()
 	want := &agentv1.GuestConfig{
 		Bundle: testBundlePath,
 		Shares: []*agentv1.GuestConfig_Share{{Tag: testTag, Mountpoint: testMountpoint}},
 	}
 	srvErr := make(chan error, 1)
+	gotEvent := make(chan *agentv1.AgentEvent, 1)
 	go func() {
 		defer func() { _ = server.Close() }()
 		if _, err := ReadGuestConfigRequest(server); err != nil {
 			srvErr <- err
 			return
 		}
-		srvErr <- WriteGuestConfig(server, want)
+		if err := WriteGuestConfig(server, want); err != nil {
+			srvErr <- err
+			return
+		}
+		ev, err := ReadAgentEvent(server)
+		if err != nil {
+			srvErr <- err
+			return
+		}
+		gotEvent <- ev
+		srvErr <- nil
 	}()
 
 	var dialedPort uint32
@@ -81,44 +95,72 @@ func TestFetchGuestConfigRoundTrip(t *testing.T) {
 		dialedPort = port
 		return client, nil
 	}
-	got, err := FetchGuestConfig(context.Background(), dial)
+	cc, err := OpenControlChannel(context.Background(), dial)
 	if err != nil {
-		t.Fatalf("FetchGuestConfig: %v", err)
+		t.Fatalf("OpenControlChannel: %v", err)
 	}
 	if dialedPort != DefaultConfigVsockPort {
 		t.Errorf("dialed port %d, want %d", dialedPort, DefaultConfigVsockPort)
 	}
-	if got.GetBundle() != testBundlePath || len(got.GetShares()) != 1 {
-		t.Errorf("config = %v, want bundle + 1 share", got)
+	if cc.Config().GetBundle() != testBundlePath || len(cc.Config().GetShares()) != 1 {
+		t.Errorf("config = %v, want bundle + 1 share", cc.Config())
+	}
+	if err := cc.SendEvent(agentv1.AgentEvent_BOOT_COMPLETE); err != nil {
+		t.Fatalf("SendEvent: %v", err)
+	}
+	if ev := <-gotEvent; ev.GetKind() != agentv1.AgentEvent_BOOT_COMPLETE {
+		t.Errorf("event kind = %v, want BOOT_COMPLETE", ev.GetKind())
+	}
+	if err := cc.Close(); err != nil {
+		t.Errorf("Close: %v", err)
 	}
 	if err := <-srvErr; err != nil {
 		t.Fatalf("server side: %v", err)
 	}
 }
 
-// TestFetchGuestConfigDialError surfaces a dial failure (the no-vsock /
+// TestOpenControlChannelDialError surfaces a dial failure (the no-vsock /
 // seccomp-denied case) as an error so the caller degrades.
-func TestFetchGuestConfigDialError(t *testing.T) {
+func TestOpenControlChannelDialError(t *testing.T) {
 	dial := func(context.Context, uint32) (net.Conn, error) {
 		return nil, errors.New("no vsock device")
 	}
-	_, err := FetchGuestConfig(context.Background(), dial)
-	if err == nil {
-		t.Fatal("FetchGuestConfig with failing dial returned nil error")
+	if _, err := OpenControlChannel(context.Background(), dial); err == nil {
+		t.Fatal("OpenControlChannel with failing dial returned nil error")
 	}
 }
 
-// TestFetchGuestConfigReadError covers a server that accepts + reads the
-// handshake but closes before replying — the read must surface an error.
-func TestFetchGuestConfigReadError(t *testing.T) {
+// TestOpenControlChannelReadError covers a server that accepts + reads
+// the handshake but closes before replying — the read must surface an
+// error (and the conn must be closed, not leaked).
+func TestOpenControlChannelReadError(t *testing.T) {
 	client, server := net.Pipe()
 	go func() {
 		_, _ = ReadGuestConfigRequest(server)
 		_ = server.Close()
 	}()
 	dial := func(context.Context, uint32) (net.Conn, error) { return client, nil }
-	if _, err := FetchGuestConfig(context.Background(), dial); err == nil {
-		t.Fatal("FetchGuestConfig with closed server returned nil error")
+	if _, err := OpenControlChannel(context.Background(), dial); err == nil {
+		t.Fatal("OpenControlChannel with closed server returned nil error")
+	}
+}
+
+// TestAgentEventFramingRoundTrip covers the event marshal/frame/unmarshal
+// path plus the malformed-read error branch.
+func TestAgentEventFramingRoundTrip(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteAgentEvent(&buf, &agentv1.AgentEvent{Kind: agentv1.AgentEvent_BOOT_COMPLETE}); err != nil {
+		t.Fatalf("WriteAgentEvent: %v", err)
+	}
+	got, err := ReadAgentEvent(&buf)
+	if err != nil {
+		t.Fatalf("ReadAgentEvent: %v", err)
+	}
+	if got.GetKind() != agentv1.AgentEvent_BOOT_COMPLETE {
+		t.Errorf("kind = %v, want BOOT_COMPLETE", got.GetKind())
+	}
+	if _, err := ReadAgentEvent(bytes.NewReader(framedPayload([]byte{0x0a, 0x05, 0x61}))); err == nil {
+		t.Error("ReadAgentEvent(malformed) returned nil error")
 	}
 }
 
@@ -149,6 +191,37 @@ func TestReadGuestConfigErrors(t *testing.T) {
 	}
 	if _, err := ReadGuestConfig(bytes.NewReader(malformed)); err == nil {
 		t.Error("ReadGuestConfig(malformed) returned nil error")
+	}
+}
+
+// writeErrConn is a net.Conn whose Write always fails — used to exercise
+// the handshake-write error branch without a real transport.
+type writeErrConn struct{}
+
+func (writeErrConn) Read([]byte) (int, error)         { return 0, io.EOF }
+func (writeErrConn) Write([]byte) (int, error)        { return 0, errors.New("write boom") }
+func (writeErrConn) Close() error                     { return nil }
+func (writeErrConn) LocalAddr() net.Addr              { return nil }
+func (writeErrConn) RemoteAddr() net.Addr             { return nil }
+func (writeErrConn) SetDeadline(time.Time) error      { return nil }
+func (writeErrConn) SetReadDeadline(time.Time) error  { return nil }
+func (writeErrConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestOpenControlChannelWriteError covers the handshake-send error branch
+// (and the not-ok defer-close): a conn whose Write fails must surface an
+// error rather than returning a half-open channel.
+func TestOpenControlChannelWriteError(t *testing.T) {
+	dial := func(context.Context, uint32) (net.Conn, error) { return writeErrConn{}, nil }
+	if _, err := OpenControlChannel(context.Background(), dial); err == nil {
+		t.Fatal("OpenControlChannel with failing write returned nil error")
+	}
+}
+
+// TestControlChannelConfigNil covers the nil-receiver guard on Config.
+func TestControlChannelConfigNil(t *testing.T) {
+	var c *ControlChannel
+	if c.Config() != nil {
+		t.Error("nil ControlChannel.Config() should be nil")
 	}
 }
 
