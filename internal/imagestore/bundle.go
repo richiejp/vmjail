@@ -122,7 +122,7 @@ func (s *Store) Bundle(ctx context.Context, digest string, opts BundleOptions) (
 		}
 	}
 
-	cfg, err := buildRuntimeConfig(img, opts)
+	cfg, err := buildRuntimeConfig(img, opts, rootfs)
 	if err != nil {
 		return nil, trace.RecordError(ctx, err)
 	}

@@ -3,8 +3,11 @@ package imagestore
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -123,7 +126,7 @@ type runtimeNamespace struct {
 // from opts applied. The image's Entrypoint+Cmd, Env, and WorkingDir
 // are honoured by default; opts.{Args,Env,Cwd,Hostname,ExtraMounts}
 // replace / extend each.
-func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
+func buildRuntimeConfig(img v1.Image, opts BundleOptions, rootfs string) (runtimeSpec, error) {
 	cfgFile, err := img.ConfigFile()
 	if err != nil {
 		return runtimeSpec{}, fmt.Errorf("imagestore: image config: %w", err)
@@ -142,7 +145,7 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions) (runtimeSpec, error) {
 		mounts = append(mounts, runtimeMount(m))
 	}
 
-	user, err := parseImageUser(imgCfg.User)
+	user, err := resolveImageUser(imgCfg.User, rootfs)
 	if err != nil {
 		return runtimeSpec{}, err
 	}
@@ -291,35 +294,117 @@ func firstNonEmpty(primary, secondary, fallback string) string {
 	return fallback
 }
 
-// parseImageUser projects the OCI image-config `User` field onto
-// the runtime spec's numeric uid/gid pair. Empty string defaults
-// to 0:0 (root) which matches the historical pre-image behaviour.
-// Only numeric uid[:gid] is supported — symbolic names would
-// require /etc/passwd lookups inside the image, which we don't
-// stage. Returns an error on a name-form User or a malformed
-// integer; the bundler surfaces it before any disk write.
-func parseImageUser(u string) (runtimeUser, error) {
+// resolveImageUser projects the OCI image-config `User` field onto the
+// runtime spec's numeric uid/gid pair, resolving symbolic names against the
+// UNPACKED rootfs's /etc/passwd and /etc/group — never the host's, matching
+// the Docker/OCI rule that a container username is meaningful relative to the
+// image (every image ships its own passwd db, so the same `USER nonroot` is
+// portable across hosts). Empty string → 0:0 (root), matching the historical
+// pre-image behaviour. Pure-numeric forms need no rootfs lookup, so a
+// `scratch` image with `USER 1000` still resolves with no /etc/passwd present.
+//
+// Supported forms (a uid or a name on either side of the colon):
+//
+//	"" | "uid" | "uid:gid" | "name" | "name:group" | "uid:group" | "name:gid"
+//
+// A numeric user with no group defaults the gid to 0 (unchanged from the
+// numeric-only predecessor); a symbolic user with no group takes that user's
+// primary gid from /etc/passwd. Errors (missing passwd/group, unknown name,
+// malformed record) surface here, before any disk write.
+func resolveImageUser(u, rootfs string) (runtimeUser, error) {
 	if u == "" {
 		return runtimeUser{UID: 0, GID: 0}, nil
 	}
-	uidStr, gidStr, _ := strings.Cut(u, ":")
-	uid, uerr := strconv.Atoi(uidStr)
-	if uerr != nil {
-		return runtimeUser{}, fmt.Errorf(
-			"imagestore: image User %q: only numeric uid[:gid] supported", u,
-		)
+	userPart, groupPart, hasGroup := strings.Cut(u, ":")
+	uid, primaryGID, err := resolveUserField(userPart, rootfs)
+	if err != nil {
+		return runtimeUser{}, err
 	}
-	gid := 0
-	if gidStr != "" {
-		g, gerr := strconv.Atoi(gidStr)
-		if gerr != nil {
-			return runtimeUser{}, fmt.Errorf(
-				"imagestore: image User %q gid not numeric", u,
-			)
+	gid := primaryGID
+	if hasGroup {
+		gid, err = resolveGroupField(groupPart, rootfs)
+		if err != nil {
+			return runtimeUser{}, err
 		}
-		gid = g
 	}
 	return runtimeUser{UID: uid, GID: gid}, nil
+}
+
+// resolveUserField turns the user side of a `User` string into a uid plus the
+// primary gid to use when no group is given. Numeric → (n, 0). A name is
+// looked up in <rootfs>/etc/passwd, yielding its uid and primary gid.
+func resolveUserField(s, rootfs string) (uid, primaryGID int, err error) {
+	if s == "" {
+		return 0, 0, fmt.Errorf("imagestore: image User: empty uid")
+	}
+	if n, derr := strconv.Atoi(s); derr == nil {
+		return n, 0, nil
+	}
+	// passwd record: name:passwd:uid:gid:gecos:home:shell
+	rec, lerr := lookupColonRecord(filepath.Join(rootfs, "etc", "passwd"), s, 4)
+	if lerr != nil {
+		return 0, 0, fmt.Errorf("imagestore: image User %q: %w", s, lerr)
+	}
+	uid, err = strconv.Atoi(rec[2])
+	if err != nil {
+		return 0, 0, fmt.Errorf("imagestore: image User %q: passwd uid %q not numeric", s, rec[2])
+	}
+	primaryGID, err = strconv.Atoi(rec[3])
+	if err != nil {
+		return 0, 0, fmt.Errorf("imagestore: image User %q: passwd gid %q not numeric", s, rec[3])
+	}
+	return uid, primaryGID, nil
+}
+
+// resolveGroupField turns the group side of a `User` string into a gid.
+// Numeric → n. A name is looked up in <rootfs>/etc/group.
+func resolveGroupField(s, rootfs string) (int, error) {
+	if s == "" {
+		return 0, fmt.Errorf("imagestore: image User: empty group")
+	}
+	if n, err := strconv.Atoi(s); err == nil {
+		return n, nil
+	}
+	// group record: name:passwd:gid:members
+	rec, err := lookupColonRecord(filepath.Join(rootfs, "etc", "group"), s, 3)
+	if err != nil {
+		return 0, fmt.Errorf("imagestore: image User group %q: %w", s, err)
+	}
+	gid, err := strconv.Atoi(rec[2])
+	if err != nil {
+		return 0, fmt.Errorf("imagestore: image User group %q: gid %q not numeric", s, rec[2])
+	}
+	return gid, nil
+}
+
+// lookupColonRecord scans a colon-separated database file in the
+// /etc/passwd or /etc/group format for the record whose first field equals
+// name, returning its split fields. minFields drops malformed short lines.
+// Comments (#…) and blank lines are skipped.
+func lookupColonRecord(path, name string, minFields int) ([]string, error) {
+	// #nosec G304 — path is <rootfs>/etc/{passwd,group}; the rootfs is the
+	// image's own unpacked tree, trusted to the same degree as its argv.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("no %s in image (a symbolic User needs it)", filepath.Base(path))
+		}
+		return nil, fmt.Errorf("read %s: %w", filepath.Base(path), err)
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Split(line, ":")
+		if len(fields) < minFields {
+			continue
+		}
+		if fields[0] == name {
+			return fields, nil
+		}
+	}
+	return nil, fmt.Errorf("name %q not found", name)
 }
 
 func emptyCapabilities() runtimeCapabilities {

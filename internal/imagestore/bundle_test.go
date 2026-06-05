@@ -169,8 +169,9 @@ func TestBundleAppliesExtraMounts(t *testing.T) {
 	}
 }
 
-// TestParseImageUserHappy covers the empty/uid-only/uid:gid forms.
-func TestParseImageUserHappy(t *testing.T) {
+// TestResolveImageUserNumeric covers the empty/uid-only/uid:gid forms,
+// which need no rootfs lookup (rootfs="" exercises the numeric fast paths).
+func TestResolveImageUserNumeric(t *testing.T) {
 	cases := map[string]struct {
 		in      string
 		wantUID int
@@ -182,7 +183,7 @@ func TestParseImageUserHappy(t *testing.T) {
 		"root":    {"0:0", 0, 0},
 	}
 	for name, c := range cases {
-		got, err := parseImageUser(c.in)
+		got, err := resolveImageUser(c.in, "")
 		if err != nil {
 			t.Errorf("%s: err = %v, want nil", name, err)
 			continue
@@ -194,21 +195,92 @@ func TestParseImageUserHappy(t *testing.T) {
 	}
 }
 
-// TestParseImageUserErrors pins the failure paths: name-form users
-// and non-numeric gids both have to surface before any disk write.
-func TestParseImageUserErrors(t *testing.T) {
+// TestResolveImageUserErrors pins the failure paths. With no rootfs (so no
+// /etc/passwd), a symbolic name is unresolvable and must surface as an error
+// before any disk write — alongside the malformed-field cases.
+func TestResolveImageUserErrors(t *testing.T) {
 	cases := map[string]string{
-		"name form":   "nobody",
-		"name:group":  "nobody:nogroup",
-		"empty uid":   ":100",
-		"bad gid":     "1000:abc",
-		"trailing ws": "1000 ",
+		"name no passwd": "nobody",
+		"name:group":     "nobody:nogroup",
+		"empty uid":      ":100",
+		"bad group name": "1000:abc",
+		"trailing ws":    "1000 ",
 	}
 	for name, in := range cases {
-		_, err := parseImageUser(in)
+		_, err := resolveImageUser(in, "")
 		if err == nil {
-			t.Errorf("%s: parseImageUser(%q) returned nil error", name, in)
+			t.Errorf("%s: resolveImageUser(%q, \"\") returned nil error", name, in)
 		}
+	}
+}
+
+// TestResolveImageUserSymbolic resolves names against an image's own
+// /etc/passwd + /etc/group, the Docker/OCI rule. A temp dir stands in for the
+// unpacked rootfs.
+func TestResolveImageUserSymbolic(t *testing.T) {
+	rootfs := t.TempDir()
+	etc := filepath.Join(rootfs, "etc")
+	if err := os.MkdirAll(etc, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	// distroless-style: a curated passwd/group with a non-root user, plus
+	// deliberately-malformed records to exercise the parse-error branches.
+	passwd := "root:x:0:0:root:/root:/sbin/nologin\n" +
+		"# a comment line\n" +
+		"nonroot:x:65532:65532:nonroot:/home/nonroot:/sbin/nologin\n" +
+		"baduid:x:notanum:5:::\n" +
+		"badgid:x:1001:notanum:::\n"
+	group := "root:x:0:\nnonroot:x:65532:\nappgroup:x:2000:\nbadgrp:x:notanum:\n"
+	if err := os.WriteFile(filepath.Join(etc, "passwd"), []byte(passwd), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(etc, "group"), []byte(group), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	good := map[string]struct {
+		in      string
+		wantUID int
+		wantGID int
+	}{
+		"name only takes primary gid": {"nonroot", 65532, 65532},
+		"name:group name":             {"nonroot:appgroup", 65532, 2000},
+		"name:gid numeric":            {"nonroot:100", 65532, 100},
+		"uid:group name":              {"1000:appgroup", 1000, 2000},
+	}
+	for name, c := range good {
+		got, err := resolveImageUser(c.in, rootfs)
+		if err != nil {
+			t.Errorf("%s: resolveImageUser(%q) err = %v", name, c.in, err)
+			continue
+		}
+		if got.UID != c.wantUID || got.GID != c.wantGID {
+			t.Errorf("%s: got %+v, want uid=%d gid=%d", name, got, c.wantUID, c.wantGID)
+		}
+	}
+
+	bad := map[string]string{
+		"unknown user":      "ghost",
+		"unknown group":     "nonroot:ghosts",
+		"passwd uid NaN":    "baduid",
+		"passwd gid NaN":    "badgid",
+		"group gid NaN":     "nonroot:badgrp",
+		"empty group field": "1000:",
+	}
+	for name, in := range bad {
+		if _, err := resolveImageUser(in, rootfs); err == nil {
+			t.Errorf("%s: resolveImageUser(%q) returned nil error", name, in)
+		}
+	}
+
+	// A non-ErrNotExist read error (here /etc/passwd is a directory) takes
+	// the distinct "read" branch of lookupColonRecord.
+	dirRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dirRoot, "etc", "passwd"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolveImageUser("nonroot", dirRoot); err == nil {
+		t.Error("resolveImageUser with /etc/passwd as a dir: want error, got nil")
 	}
 }
 
@@ -553,9 +625,10 @@ func TestBuildRuntimeConfigHonoursImageUser(t *testing.T) {
 	}
 }
 
-// TestBuildRuntimeConfigRejectsNameFormUser covers the failure
-// surface: a non-numeric User shouldn't silently default to root.
-func TestBuildRuntimeConfigRejectsNameFormUser(t *testing.T) {
+// TestBuildRuntimeConfigRejectsNameFormUserWithoutPasswd covers the failure
+// surface: a symbolic User in an image that ships no /etc/passwd is
+// unresolvable and must error, not silently default to root.
+func TestBuildRuntimeConfigRejectsNameFormUserWithoutPasswd(t *testing.T) {
 	host := localRegistry(t)
 	ref := host + "/test/user-name:v1"
 	layer := helloLayer(t, "x\n")
@@ -573,6 +646,48 @@ func TestBuildRuntimeConfigRejectsNameFormUser(t *testing.T) {
 	_, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{})
 	if err == nil || !strings.Contains(err.Error(), "User") {
 		t.Errorf("Bundle: err = %v, want error mentioning User", err)
+	}
+}
+
+// TestBuildRuntimeConfigResolvesSymbolicUser proves the end-to-end path: a
+// symbolic `USER nonroot` resolves against the image's OWN /etc/passwd +
+// /etc/group (staged in the layer), flowing through Bundle to
+// process.user.{uid,gid}. This is what makes distroless-style best-practice
+// images run on daft.
+func TestBuildRuntimeConfigResolvesSymbolicUser(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/user-symbolic:v1"
+
+	var buf bytes.Buffer
+	tw := newTarGzWriter(&buf)
+	tw.addFile("hello", "x\n", 0o755)
+	tw.addFile("etc/passwd", "root:x:0:0:root:/root:/sbin/nologin\n"+
+		"nonroot:x:65532:65532:nonroot:/home/nonroot:/sbin/nologin\n", 0o644)
+	tw.addFile("etc/group", "root:x:0:\nnonroot:x:65532:\n", 0o644)
+	tw.close()
+	layer, err := tarballLayerFromBytes(buf.Bytes())
+	if err != nil {
+		t.Fatalf("layer: %v", err)
+	}
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{
+		Entrypoint: []string{testEntrypoint},
+		User:       "nonroot",
+	})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+	bundle, err := store.Bundle(context.Background(), pulled.Digest, BundleOptions{})
+	if err != nil {
+		t.Fatalf("Bundle: %v", err)
+	}
+	cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+	if !strings.Contains(string(cfg), `"uid": 65532`) ||
+		!strings.Contains(string(cfg), `"gid": 65532`) {
+		t.Errorf("expected uid:65532 gid:65532 in config.json:\n%s", cfg)
 	}
 }
 
