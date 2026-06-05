@@ -317,6 +317,20 @@ func TestDefaultAttachCmdBuildsCrunArgs(t *testing.T) {
 				ContainerID, "run", "x",
 			},
 		},
+		{
+			name: "user-forwarded-before-container-id",
+			req:  AttachExecRequest{Command: []string{"id"}, User: testExecUser},
+			want: []string{
+				ContainerRuntime, crunExecSubcommand,
+				"--user", testExecUser,
+				ContainerID, "id",
+			},
+		},
+		{
+			name: "empty-user-omits-the-flag",
+			req:  AttachExecRequest{Command: []string{"id"}},
+			want: []string{ContainerRuntime, crunExecSubcommand, ContainerID, "id"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -370,7 +384,7 @@ func TestPtyAttachExecHelloEndToEnd(t *testing.T) {
 	go runAttachListener(ctx, io.Discard, 9100, attachDeps{
 		listenVsock: func(uint32) (net.Listener, error) { return ln, nil },
 		exec:        ex,
-	}, nil)
+	}, containerProcess{})
 
 	client, serverSide := pipeForAttach(t)
 	ln.push(serverSide)

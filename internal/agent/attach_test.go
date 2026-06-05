@@ -18,32 +18,45 @@ import (
 	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
 )
 
-func TestReadContainerEnv(t *testing.T) {
-	if env := readContainerEnv(io.Discard, ""); env != nil {
-		t.Fatalf("empty bundle: env = %v, want nil", env)
+// testExecUser is the non-root uid:gid used across the exec-user tests,
+// shared so goconst doesn't flag the repeated literal.
+const testExecUser = "1000:2000"
+
+func TestReadContainerProcess(t *testing.T) {
+	if p := readContainerProcess(io.Discard, ""); p.Env != nil || p.User != "" {
+		t.Fatalf("empty bundle: proc = %+v, want zero", p)
 	}
 
 	var missingW bytes.Buffer
-	if env := readContainerEnv(&missingW, t.TempDir()); env != nil {
-		t.Fatalf("missing config.json: env = %v, want nil", env)
+	if p := readContainerProcess(&missingW, t.TempDir()); p.Env != nil || p.User != "" {
+		t.Fatalf("missing config.json: proc = %+v, want zero", p)
 	}
-	if !strings.Contains(missingW.String(), "read container env") {
+	if !strings.Contains(missingW.String(), "read container process") {
 		t.Errorf("missing config.json not reported: %q", missingW.String())
 	}
 
+	// Env + a non-root user resolve together; the user renders as uid:gid.
 	okDir := t.TempDir()
-	writeConfigJSON(t, okDir, `{"process":{"env":["A=1","B=2"]}}`)
-	if env := readContainerEnv(io.Discard, okDir); !slices.Equal(env, []string{"A=1", "B=2"}) {
-		t.Fatalf("valid config: env = %v, want [A=1 B=2]", env)
+	writeConfigJSON(t, okDir, `{"process":{"env":["A=1","B=2"],"user":{"uid":1000,"gid":2000}}}`)
+	if p := readContainerProcess(io.Discard, okDir); !slices.Equal(p.Env, []string{"A=1", "B=2"}) || p.User != testExecUser {
+		t.Fatalf("valid config: proc = %+v, want env [A=1 B=2] user 1000:2000", p)
+	}
+
+	// A root container (uid 0, gid 0) yields an empty User — crun's default
+	// is already root, so there's no --user to pass.
+	rootDir := t.TempDir()
+	writeConfigJSON(t, rootDir, `{"process":{"env":["X=1"],"user":{"uid":0,"gid":0}}}`)
+	if p := readContainerProcess(io.Discard, rootDir); p.User != "" {
+		t.Fatalf("root config: user = %q, want empty", p.User)
 	}
 
 	badDir := t.TempDir()
 	writeConfigJSON(t, badDir, "not json")
 	var badW bytes.Buffer
-	if env := readContainerEnv(&badW, badDir); env != nil {
-		t.Fatalf("malformed config: env = %v, want nil", env)
+	if p := readContainerProcess(&badW, badDir); p.Env != nil || p.User != "" {
+		t.Fatalf("malformed config: proc = %+v, want zero", p)
 	}
-	if !strings.Contains(badW.String(), "parse container env") {
+	if !strings.Contains(badW.String(), "parse container process") {
 		t.Errorf("malformed config not reported: %q", badW.String())
 	}
 }
@@ -268,7 +281,7 @@ func TestHandleAttachSplicesBothWays(t *testing.T) {
 	go func() {
 		defer close(done)
 		var w bytes.Buffer
-		handleAttach(ctx, &w, server, exec, nil)
+		handleAttach(ctx, &w, server, exec, containerProcess{})
 	}()
 
 	hello := &agentv1.AgentAttachHello{
@@ -346,7 +359,7 @@ func TestHandleAttachForwardsResize(t *testing.T) {
 	go func() {
 		defer close(done)
 		var w bytes.Buffer
-		handleAttach(ctx, &w, server, exec, nil)
+		handleAttach(ctx, &w, server, exec, containerProcess{})
 	}()
 
 	if err := WriteAttachHello(client, &agentv1.AgentAttachHello{Tty: true, Cols: 80, Rows: 24}); err != nil {
@@ -388,7 +401,7 @@ func TestHandleAttachReportsExecStartError(t *testing.T) {
 	go func() {
 		defer close(done)
 		var w bytes.Buffer
-		handleAttach(ctx, &w, server, exec, nil)
+		handleAttach(ctx, &w, server, exec, containerProcess{})
 	}()
 
 	if err := WriteAttachHello(client, &agentv1.AgentAttachHello{}); err != nil {
@@ -428,7 +441,7 @@ func TestHandleAttachReportsResizeError(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		handleAttach(context.Background(), &w, server, exec, nil)
+		handleAttach(context.Background(), &w, server, exec, containerProcess{})
 	}()
 
 	if err := WriteAttachHello(client, &agentv1.AgentAttachHello{Tty: true, Cols: 80, Rows: 24}); err != nil {
@@ -475,7 +488,7 @@ func TestHandleAttachClientExitFrameTreatedAsEOF(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		handleAttach(context.Background(), &w, server, exec, nil)
+		handleAttach(context.Background(), &w, server, exec, containerProcess{})
 	}()
 
 	if err := WriteAttachHello(client, &agentv1.AgentAttachHello{Tty: true, Cols: 80, Rows: 24}); err != nil {
@@ -512,7 +525,7 @@ func TestHandleAttachWaitErrorSurfacedToClient(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		handleAttach(context.Background(), &w, server, exec, nil)
+		handleAttach(context.Background(), &w, server, exec, containerProcess{})
 	}()
 
 	if err := WriteAttachHello(client, &agentv1.AgentAttachHello{Tty: true, Cols: 80, Rows: 24}); err != nil {
@@ -546,7 +559,7 @@ func TestHandleAttachReportsHelloReadError(t *testing.T) {
 	go func() {
 		defer close(done)
 		var w bytes.Buffer
-		handleAttach(context.Background(), &w, server, &fakeAttachExec{}, nil)
+		handleAttach(context.Background(), &w, server, &fakeAttachExec{}, containerProcess{})
 	}()
 	select {
 	case <-done:
@@ -642,7 +655,7 @@ func TestRunAttachListenerReportsListenError(t *testing.T) {
 		listenVsock: func(uint32) (net.Listener, error) {
 			return nil, errors.New("bind: address in use")
 		},
-	}, nil)
+	}, containerProcess{})
 	if !strings.Contains(w.String(), "bind: address in use") {
 		t.Errorf("console output %q missing bind error", w.String())
 	}
@@ -659,7 +672,7 @@ func TestHandleAttachUnmarshalHelloError(t *testing.T) {
 	go func() {
 		defer close(done)
 		var w bytes.Buffer
-		handleAttach(context.Background(), &w, server, &fakeAttachExec{}, nil)
+		handleAttach(context.Background(), &w, server, &fakeAttachExec{}, containerProcess{})
 	}()
 
 	// 0xff bytes are invalid as a proto wire format.
@@ -797,7 +810,7 @@ func TestAttachAcceptLoopReportsNonClosedError(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		attachAcceptLoop(context.Background(), &w, ln, &fakeAttachExec{}, nil)
+		attachAcceptLoop(context.Background(), &w, ln, &fakeAttachExec{}, containerProcess{})
 	}()
 	select {
 	case <-done:

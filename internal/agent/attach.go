@@ -92,6 +92,20 @@ type AttachExecRequest struct {
 	// as the container's entrypoint — including the Phase-J egress
 	// proxy vars. crun exec otherwise starts with a bare env.
 	Env []string
+	// User is the "uid:gid" the exec'd process runs as, read from the
+	// bundle's config.json process.user. Empty means crun's default
+	// (root) — so a root container is unchanged, while a non-root image
+	// gets exec'd as its declared user instead of silently as root.
+	User string
+}
+
+// containerProcess is the per-container exec context read once from the
+// bundle's config.json: the env every exec inherits and the user it runs as.
+// Bundling them keeps the listener-chain signatures from sprouting a second
+// parallel parameter.
+type containerProcess struct {
+	Env  []string
+	User string
 }
 
 // attachDeps factors the side-effect surfaces of the attach
@@ -123,38 +137,48 @@ func startAttachListener(ctx context.Context, w io.Writer, d runDeps) {
 	if !d.cfg.GetAttachEnabled() {
 		return
 	}
-	// The exec'd processes inherit the container's env, so the bundle path
-	// comes from the same config the container launch uses.
-	containerEnv := readContainerEnv(w, d.cfg.GetBundle())
-	go runAttachListener(ctx, w, DefaultAttachVsockPort, d.attach, containerEnv)
+	// The exec'd processes inherit the container's env + user, so the
+	// bundle path comes from the same config the container launch uses.
+	proc := readContainerProcess(w, d.cfg.GetBundle())
+	go runAttachListener(ctx, w, DefaultAttachVsockPort, d.attach, proc)
 }
 
-// readContainerEnv reads the container env from the bundle's
-// config.json so exec'd processes inherit it. Best-effort: a missing
-// or malformed config (e.g. the bare hello-bundle, or no bundle at
-// all) reports on the console and yields nil — exec then runs with
-// crun's default env, the pre-J behaviour.
-func readContainerEnv(w io.Writer, bundle string) []string {
+// readContainerProcess reads the container env + user from the bundle's
+// config.json so exec'd processes inherit both. Best-effort: a missing or
+// malformed config (e.g. the bare hello-bundle, or no bundle at all) reports
+// on the console and yields the zero value — exec then runs with crun's
+// default env and user (root), the pre-existing behaviour. A root container
+// (uid 0, gid 0) also yields an empty User, since crun already defaults to
+// root and there's no need to pass --user.
+func readContainerProcess(w io.Writer, bundle string) containerProcess {
 	if bundle == "" {
-		return nil
+		return containerProcess{}
 	}
 	path := filepath.Join(bundle, "config.json")
 	//nolint:gosec // G304: bundle path is kernel-cmdline-supplied in a single-tenant VM.
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		writeReport(w, attachReportPrefix, "read container env: "+err.Error())
-		return nil
+		writeReport(w, attachReportPrefix, "read container process: "+err.Error())
+		return containerProcess{}
 	}
 	var spec struct {
 		Process struct {
-			Env []string `json:"env"`
+			Env  []string `json:"env"`
+			User struct {
+				UID int `json:"uid"`
+				GID int `json:"gid"`
+			} `json:"user"`
 		} `json:"process"`
 	}
 	if err := json.Unmarshal(raw, &spec); err != nil {
-		writeReport(w, attachReportPrefix, "parse container env: "+err.Error())
-		return nil
+		writeReport(w, attachReportPrefix, "parse container process: "+err.Error())
+		return containerProcess{}
 	}
-	return spec.Process.Env
+	user := ""
+	if spec.Process.User.UID != 0 || spec.Process.User.GID != 0 {
+		user = fmt.Sprintf("%d:%d", spec.Process.User.UID, spec.Process.User.GID)
+	}
+	return containerProcess{Env: spec.Process.Env, User: user}
 }
 
 // runAttachListener vsock-listens on port and serves each accepted
@@ -162,7 +186,7 @@ func readContainerEnv(w io.Writer, bundle string) []string {
 // on the console and the goroutine exits — there's nothing
 // useful to do otherwise. ctx.Done triggers a Close on the
 // listener so Accept returns net.ErrClosed.
-func runAttachListener(ctx context.Context, w io.Writer, port uint32, d attachDeps, containerEnv []string) {
+func runAttachListener(ctx context.Context, w io.Writer, port uint32, d attachDeps, proc containerProcess) {
 	_, span := trace.Start(ctx, "agent.attach.listener.start",
 		trace.WithAttributes(trace.KV{Key: "vsock_port", Value: strconv.FormatUint(uint64(port), 10)}))
 	defer span.End()
@@ -177,13 +201,13 @@ func runAttachListener(ctx context.Context, w io.Writer, port uint32, d attachDe
 		<-ctx.Done()
 		oops.Skip("agent: close attach listener", ln.Close(), net.ErrClosed)
 	}()
-	attachAcceptLoop(ctx, w, ln, d.exec, containerEnv)
+	attachAcceptLoop(ctx, w, ln, d.exec, proc)
 }
 
 // attachAcceptLoop accepts connections on ln and spawns
 // handleAttach per connection. Returns on ErrClosed (ctx-driven
 // listener close) or any non-temporary error.
-func attachAcceptLoop(ctx context.Context, w io.Writer, ln net.Listener, exec ExecAttach, containerEnv []string) {
+func attachAcceptLoop(ctx context.Context, w io.Writer, ln net.Listener, exec ExecAttach, proc containerProcess) {
 	//daft:lint:disable=forloopbound reason="bounded by ln.Accept returning ErrClosed when ctx.Done closes the listener"
 	for {
 		conn, err := ln.Accept()
@@ -194,7 +218,7 @@ func attachAcceptLoop(ctx context.Context, w io.Writer, ln net.Listener, exec Ex
 			writeReport(w, attachReportPrefix, fmt.Sprintf("accept: %v", err))
 			return
 		}
-		go handleAttach(ctx, w, conn, exec, containerEnv)
+		go handleAttach(ctx, w, conn, exec, proc)
 	}
 }
 
@@ -205,7 +229,7 @@ func attachAcceptLoop(ctx context.Context, w io.Writer, ln net.Listener, exec Ex
 // All error paths surface to the client as an Exit frame with a
 // non-empty error string so the attaching `daft workspace attach`
 // session sees the failure rather than a silent EOF.
-func handleAttach(ctx context.Context, w io.Writer, conn net.Conn, exec ExecAttach, containerEnv []string) {
+func handleAttach(ctx context.Context, w io.Writer, conn net.Conn, exec ExecAttach, proc containerProcess) {
 	defer func() { oops.Skip("agent: close attach conn", conn.Close(), net.ErrClosed) }()
 	hello, err := ReadAttachHello(conn)
 	if err != nil {
@@ -218,7 +242,8 @@ func handleAttach(ctx context.Context, w io.Writer, conn net.Conn, exec ExecAtta
 		TTY:     hello.GetTty(),
 		Cols:    hello.GetCols(),
 		Rows:    hello.GetRows(),
-		Env:     containerEnv,
+		Env:     proc.Env,
+		User:    proc.User,
 	}
 	pumpAttachProcess(ctx, w, conn, exec, req)
 }

@@ -76,6 +76,13 @@ func defaultAttachCmd(ctx context.Context, req AttachExecRequest) *exec.Cmd {
 	for _, e := range req.Env {
 		argv = append(argv, "--env", e)
 	}
+	// Run the exec'd process as the container's declared user (read from
+	// config.json), not crun exec's default of root — so a non-root image
+	// is exec'd as its own uid:gid. Empty (root container) keeps the bare
+	// default. Like --env, it's a flag and must precede the container id.
+	if req.User != "" {
+		argv = append(argv, "--user", req.User)
+	}
 	argv = append(argv, ContainerID)
 	if len(req.Command) == 0 {
 		argv = append(argv, defaultAttachShell, "-l")
