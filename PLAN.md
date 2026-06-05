@@ -2019,28 +2019,53 @@ the user-host or in CI today.
             VM against the nested `/dev/kvm` — i.e. the real developer
             `make integration` loop (compile-inside + nested-boot)
             dogfooded end-to-end. Empirical findings from the first run:
-            - **Curated subset** = `^TestHelloIntegrationBootsVM$` for the
-              first landing (the basic VM-boot case step 3 already proved
-              nested, now compiled-inside). The `-run` pattern is the knob
-              to widen toward the full suite once the timeout budget is
-              shown to hold for the heavier container/share/opensnoop cases
-              (those also need `DAFT_BUNDLE` staged).
-            - **Fast, not slow:** the whole test ran in **~35 s** (outer VM
-              boot + image push + cold-GOCACHE offline compile of
-              `internal/sandbox` + nested L3 boot + inner test). The 12-min
-              inner / 13-min outer timeouts are conservative ceilings, not
-              the observed cost — a warm-GOCACHE follow-up (slice 1) would
-              cut even the compile.
+            - **Subset = the nested-feasible VM-boot tests** (no virtio-fs
+              share): `TestHelloIntegrationBootsVM` (bare boot + banner) and
+              `TestHelloIntegrationShipsAgentSpansOverVsock` (boot + agent
+              trace spans over vsock). The `-run` pattern is the knob; both
+              boot paths pass nested.
+            - **Known nested gap — virtio-fs shares don't boot (2026-06-05).**
+              Widening to the *whole* `internal/sandbox` package was tried and
+              localised a real limitation: every test that attaches a
+              virtio-fs share — `…BootsVMWithShare`, `…WithContainer`,
+              `…OpensnoopCapturesOpenat`, `…WithImagestoreBundle`,
+              `WorkspaceOverlayE2E`, `WorkspaceRoundTripE2E`, `AttachExecE2E`
+              — hangs the full 30 s `wait_boot_complete`. The trace shows
+              `start_virtiofsd` OK + `run_cloud_hypervisor` OK but the inner
+              guest emits **zero console** and never signals boot-complete;
+              the share-less boots in the same run pass. Root cause: virtio-fs
+              needs CH to back guest RAM with **shared memory**
+              (`--memory …,shared=on`, `buildMemoryArg`) so virtiofsd can mmap
+              the guest's buffers, and that shared guest-memory path is what
+              the hardened nested container withholds. This is **not** a
+              `DAFT_DISABLE_USERNS` artefact (the `internal/sandbox` TestMain
+              does no userns re-exec) and **not** a test bug — the identical
+              code boots these shares on the L0 host. It is a
+              **capability-grant item**, the same class as the
+              `NestedVirtualization` section that unblocked `/dev/kvm`; a
+              `virtio-fs`/shared-memory grant for the dogfood workspace is the
+              follow-up that would let the `-run` filter drop and stage
+              `DAFT_BUNDLE` for the container/opensnoop/imagestore/attach
+              cases.
+            - **Fast, not slow:** the share-less subset ran in **~35 s** (outer
+              VM boot + image push + cold-GOCACHE offline compile of
+              `internal/sandbox` + nested L3 boots + inner tests). The 12-min
+              inner / 13-min outer timeouts are conservative ceilings, not the
+              observed cost — a warm-GOCACHE follow-up (slice 1) would cut even
+              the compile.
             - **No new caps / no in-VM cgroup regression:** the inner per-VM
               `createVMCgroup` succeeded nested (the in-VM cgroup mount fix
               below held — zero `permission denied` / oops in the inner
               log), and the outer profiler read real cgroup accounting
               (memory.peak ~0.95 GiB, pids 42, cpu.stat populated). The
               `NestedVirtualization` grant + `DAFT_DISABLE_USERNS=1` recipe
-              from steps 2–3 was sufficient; nothing else was needed.
-            - **The dogfood ladder is complete** — steps 1–4 all GREEN. The
-              one remaining open item is accounting *depth* (per-VM
-              memory/io/pids via subtree_control), deferred below.
+              from steps 2–3 was sufficient for the share-less boots; nothing
+              else was needed.
+            - **The dogfood ladder is complete** — steps 1–4 all GREEN. Two
+              open follow-ups remain, both capability/accounting depth rather
+              than boot blockers: (a) the **virtio-fs shared-memory grant**
+              above, to widen step 4 to the full suite; (b) accounting *depth*
+              (per-VM memory/io/pids via subtree_control), deferred below.
 
        - *In-VM cgroup mount (landed 2026-06-04).* Steps 2–3 surfaced the
          per-VM `createVMCgroup` failing. An in-container probe pinned the

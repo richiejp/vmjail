@@ -14,28 +14,44 @@ import (
 )
 
 // daftNestedIntegrationSentinel is printed by the wrapper shell when the
-// curated `go test -tags=integration` exits 0 inside the sandbox. Distinct
+// nested `go test -tags=integration` exits 0 inside the sandbox. Distinct
 // from the readiness sentinel (daft-check ready) so a successful run is not
 // confused with the container merely having booted.
 const daftNestedIntegrationSentinel = "DAFT-NESTED-INTEGRATION-OK"
 
-// daftNestedIntegrationRun is the curated subset run nested for the first
-// landing: just the basic VM-boot integration test, which step 3
-// (TestClusterNestedSandboxE2E) already proved boots an inner VM nested —
-// here it is COMPILED inside the sandbox by the in-image Go toolchain
-// against the vendored deps, not delivered as a pre-built binary. That is
-// the difference that makes this the real `make integration` dogfood loop.
-// Widen this pattern (or drop -run entirely) once the timeout budget below
-// is shown to hold for the heavier container/share/opensnoop cases.
-const daftNestedIntegrationRun = "^TestHelloIntegrationBootsVM$"
+// daftNestedIntegrationRun is the nested-feasible subset of the
+// internal/sandbox e2e suite: the integration tests that boot an inner L3 VM
+// WITHOUT attaching a virtio-fs share. Two distinct boot paths —
+// TestHelloIntegrationBootsVM (the bare boot + agent banner) and
+// TestHelloIntegrationShipsAgentSpansOverVsock (boot + agent trace spans
+// streamed back over vsock).
+//
+// The remaining VM-boot tests (…WithShare / …WithContainer / …Opensnoop /
+// …WithImagestoreBundle / WorkspaceOverlayE2E / WorkspaceRoundTripE2E /
+// AttachExecE2E) are EXCLUDED on purpose: every one attaches a virtio-fs
+// share, and virtio-fs does not boot in the current hardened nested
+// container. Empirically (2026-06-05) virtiofsd starts and CH launches, but
+// the inner guest produces zero console output and never signals
+// boot-complete — it hangs the full 30 s `wait_boot_complete`. virtio-fs
+// requires CH to back guest RAM with shared memory (`--memory …,shared=on`,
+// see buildMemoryArg) so virtiofsd can mmap the guest's buffers; that shared
+// guest-memory path is what the hardened container withholds nested. This is
+// a capability-grant item (the same class as the NestedVirtualization
+// section that unblocked /dev/kvm), NOT a test bug — the identical code boots
+// these shares fine on the L0 host. Widening to them once that capability
+// lands is a one-line change here: drop this filter and stage DAFT_BUNDLE
+// (the container/opensnoop/imagestore/attach cases resolve it) into the
+// /workspace mount. See PLAN.md D6c.4 slice 3.
+const daftNestedIntegrationRun = "^TestHelloIntegrationBootsVM$|^TestHelloIntegrationShipsAgentSpansOverVsock$"
 
 // daftNestedIntegrationInnerTimeout caps the inner pipeline: a cold-GOCACHE
-// offline compile of `internal/sandbox` (+tags=integration) plus one nested
-// L3 VM boot. The compile is the dominant, mostly-serial cost; the boot is
-// seconds. GNU `timeout` SIGKILLs on overrun, the wrapper shell exits, `daft
-// workspace exec` propagates non-zero, and waitForFileContains fails-fast on
-// proc.exited() rather than waiting out the outer cap. Provisional 12 min;
-// tightens once the warm-GOCACHE follow-up (PLAN.md D6c.4 slice 1) lands.
+// offline compile of `internal/sandbox` (+tags=integration) plus the subset's
+// nested L3 VM boots. The compile is the dominant, mostly-serial cost; the
+// boots are ~sub-second each nested. GNU `timeout` SIGKILLs on overrun, the
+// wrapper shell exits, `daft workspace exec` propagates non-zero, and
+// waitForFileContains fails-fast on proc.exited() rather than waiting out the
+// outer cap. Provisional 12 min; tightens once the warm-GOCACHE follow-up
+// (PLAN.md D6c.4 slice 1) lands.
 const daftNestedIntegrationInnerTimeout = 720 // seconds, formatted into the wrapper
 
 // daftNestedIntegrationSlowBoot is the outer cap for waitForFileContains:
@@ -46,13 +62,18 @@ const daftNestedIntegrationInnerTimeout = 720 // seconds, formatted into the wra
 const daftNestedIntegrationSlowBoot = 780 * time.Second
 
 // TestClusterWorkspaceDaftIntegration is ladder step 4 of the D6c.4 slice-3
-// dogfood (see PLAN.md): the full `make integration` flow, nested. Where
-// step 3 ran a PRE-BUILT integration-test binary nested, this drops the daft
-// source tree + vendored deps into a workspace and runs `go test
-// -tags=integration` INSIDE it — the in-image Go toolchain compiles the
-// integration suite offline and the resulting binary boots an inner L3 VM
-// against the nested /dev/kvm. That is the real developer `make integration`
-// loop dogfooded end-to-end: compile-inside + nested-boot, not a baked binary.
+// dogfood (see PLAN.md): the `make integration` flow, nested. Where step 3
+// ran a PRE-BUILT integration-test binary nested, this drops the daft source
+// tree + vendored deps into a workspace and runs `go test -tags=integration
+// ./internal/sandbox/` INSIDE it — the in-image Go toolchain compiles the
+// suite offline and the resulting binary boots an inner L3 VM against the
+// nested /dev/kvm. That is the real developer `make integration` loop
+// dogfooded end-to-end: compile-inside + nested-boot, not a baked binary.
+//
+// Scope: the nested-feasible subset (daftNestedIntegrationRun) — the
+// VM-boot integration tests that do not attach a virtio-fs share. The
+// share-based cases are a known nested capability gap, documented on that
+// const.
 //
 // Delivery model (deliver, don't rebuild — same as self-build step 1 and
 // nested step 3): one host-backed /workspace mount carries the tracked-HEAD
@@ -150,17 +171,17 @@ func TestClusterWorkspaceDaftIntegration(t *testing.T) {
 	// /workspace/vendor, GOCACHE/GOTMPDIR on host-backed /workspace because
 	// each exceeds the 256 MiB /tmp tmpfs) and adds:
 	//   * DAFT_* pointing at the bind-mounted raw artefacts, so the inner
-	//     integration test's resolveArtifacts uses them (its repoRootFromTest
-	//     resolves /workspace naturally — the real go.mod is right there).
+	//     suite's resolveArtifacts uses them (its repoRootFromTest resolves
+	//     /workspace naturally — the real go.mod is right there).
 	//   * GOTMPDIR=/workspace/.gotmp doubles as the test binary's TMPDIR (go
 	//     test sets it), keeping the per-VM hybrid-vsock UDS path short
 	//     (os.MkdirTemp("") and t.TempDir() both land there; sockaddr_un < 108).
 	//   * DAFT_DISABLE_USERNS=1: the sandbox boot path doesn't re-exec, but
 	//     set for parity with the bundled/nested cases.
-	//   * `timeout --signal=KILL Ns` bounds the inner pipeline; the trailing
+	//   * -run selects the nested-feasible subset (no virtio-fs shares);
+	//     `timeout --signal=KILL Ns` bounds the inner pipeline; the trailing
 	//     `&& echo <sentinel>` lets waitForFileContains detect success without
-	//     relying on the absence of go-test output (which is voluminous even
-	//     on a pass).
+	//     relying on the absence of go-test output (voluminous even on a pass).
 	execShell := fmt.Sprintf(
 		"exec env HOME=/workspace/.home USER=root PATH=/bin "+
 			"CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=vendor GOPROXY=off "+
@@ -171,7 +192,7 @@ func TestClusterWorkspaceDaftIntegration(t *testing.T) {
 			"DAFT_VIRTIOFSD=/workspace/.artefacts/virtiofsd "+
 			"DAFT_DISABLE_USERNS=1 "+
 			"/bin/sh -c 'mkdir -p /workspace/.home /workspace/.gotmp && cd /workspace && "+
-			"timeout --signal=KILL %ds go test -tags=integration -count=1 -run %s -v ./internal/sandbox/ "+
+			"timeout --signal=KILL %ds go test -tags=integration -count=1 -run %q -v ./internal/sandbox/ "+
 			"&& echo %s'",
 		daftNestedIntegrationInnerTimeout, daftNestedIntegrationRun, daftNestedIntegrationSentinel,
 	)
