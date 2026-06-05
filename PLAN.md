@@ -2053,20 +2053,46 @@ the user-host or in CI today.
          headless/CI), and the delegated controller set can be narrower on
          other hosts (`memory`+`pids` reliable, `io` sometimes withheld).
 
-         **Accounting depth — open refinement.** Delegation removes the
-         EPERM and the per-VM cgroup gets `cpu.stat` (CPU time) + PSI
-         pressure, but the controller *interface* files (`memory.peak`,
-         `io.stat`, `pids.current`) are **absent**, because the delegated
-         scope's `cgroup.subtree_control` is empty and daft never enables
-         it. Populating them needs the standard delegation-consumer dance:
-         create a leaf, move sandboxd's own process into it (the
-         no-internal-process rule forbids writing `subtree_control` on a
-         cgroup that holds processes), then `+memory +io +pids` on the
-         delegated root so per-VM sibling cgroups inherit the controllers.
-         That touches the cgroup setup path that also runs in production
-         (where sandboxd may be root in a differently-arranged cgroup), so
-         it's deferred as a separate refinement — the EPERM clearing + CPU
-         accounting is the win landed here.
+         **Accounting depth — DEFERRED refinement (revisit later).**
+         Delegation removes the EPERM and the per-VM cgroup gets `cpu.stat`
+         (real per-VM CPU time) + PSI pressure for free, but the controller
+         *interface* files (`memory.peak`, `io.stat`, `pids.current`) are
+         **absent**: they require the controller enabled in the parent's
+         `cgroup.subtree_control`, and the delegated scope's
+         `subtree_control` is empty.
+
+         *Can systemd populate it for us? No — checked empirically
+         (systemd 258).* systemd already enables `subtree_control` on the
+         cgroups it owns (the slices above), so the controllers are
+         *available* at the scope (`cgroup.controllers` = `cpu io memory
+         pids`). But it cannot enable `subtree_control` on the scope cgroup
+         itself because our payload runs directly in it — the kernel
+         **no-internal-process rule**, which systemd obeys. The systemd
+         feature designed for this, **`DelegateSubgroup=`** (moves the
+         payload to a leaf so the root goes process-free), applies only to
+         systemd-*started services*, **not** adopted `--scope` processes:
+         probed `-p Delegate=yes -p DelegateSubgroup=supervisor` on a
+         `--scope` and it was identical to plain `Delegate=yes` (process
+         still in the bare `.scope`, `subtree_control` still empty). And
+         even a service+`DelegateSubgroup` wouldn't be enough on its own,
+         because `createVMCgroup` makes the per-VM cgroup a *child of
+         sandboxd's own* cgroup (the leaf), not a sibling under the
+         delegation root — so daft has to change either way.
+
+         *The fix (when we revisit): the standard delegation-consumer dance
+         inside daft*, portable across the `--scope` wrap and plain-root:
+         (1) `R` = sandboxd's current (delegated) cgroup; (2) create
+         `R/_supervisor`, move sandboxd's own PID into it (frees `R` of
+         processes); (3) write `+cpu +io +memory +pids` to
+         `R/cgroup.subtree_control`; (4) `createVMCgroup` creates
+         `R/daft-vm-*` as siblings of `_supervisor`, inheriting the
+         controllers. ~20–30 lines in `observability/cgroup_linux.go` +
+         wiring sandboxd to remember `R`, **guarded to no-op when the
+         cgroup isn't writable/delegated** (degrades to today's behavior).
+         Caution: this runs on the production cgroup path too (sandboxd may
+         be root in a differently-arranged cgroup), so the guard must be
+         conservative. Deferred by decision — the EPERM clearing + per-VM
+         CPU accounting is the win already landed.
 
        - *Future / nice-to-have (not on the integration critical path):*
          carrying the **kernel-build toolchain** inside the sandbox
