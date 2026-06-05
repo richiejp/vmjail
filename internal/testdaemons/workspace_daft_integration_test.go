@@ -30,18 +30,20 @@ const daftNestedIntegrationSentinel = "DAFT-NESTED-INTEGRATION-OK"
 // …WithImagestoreBundle / WorkspaceOverlayE2E / WorkspaceRoundTripE2E /
 // AttachExecE2E) are EXCLUDED on purpose: every one attaches a virtio-fs
 // share, and virtio-fs does not boot in the current hardened nested
-// container. Empirically (2026-06-05) virtiofsd starts and CH launches, but
-// the inner guest produces zero console output and never signals
-// boot-complete — it hangs the full 30 s `wait_boot_complete`. virtio-fs
-// requires CH to back guest RAM with shared memory (`--memory …,shared=on`,
-// see buildMemoryArg) so virtiofsd can mmap the guest's buffers; that shared
-// guest-memory path is what the hardened container withholds nested. This is
-// a capability-grant item (the same class as the NestedVirtualization
-// section that unblocked /dev/kvm), NOT a test bug — the identical code boots
-// these shares fine on the L0 host. Widening to them once that capability
-// lands is a one-line change here: drop this filter and stage DAFT_BUNDLE
-// (the container/opensnoop/imagestore/attach cases resolve it) into the
-// /workspace mount. See PLAN.md D6c.4 slice 3.
+// container. Root cause (PROVEN 2026-06-05 by a stderr-capturing probe, since
+// production discards both CH and virtiofsd stderr): virtiofsd aborts with
+// "can't apply the child capabilities: failed to sync capabilities with the
+// kernel" — even at --sandbox=none it drops to its keep-list cap set via
+// libcap-ng, which needs CAP_SETPCAP to edit the bounding set, and the
+// hardened rootless container withholds it. virtiofsd then exits, its
+// vhost-user socket dies, and CH fails with ConnectionRefused →
+// CreateVirtioFs → the guest never boots. It is NOT a shared-memory issue
+// (the no-share control boots fine; the shared=on THP warning is harmless and
+// present in both) and NOT a test bug — the same code boots shares on the L0
+// host. This is a capability-grant item (same class as NestedVirtualization);
+// widening once it lands is a one-line change here: drop this filter and
+// stage DAFT_BUNDLE (the container/opensnoop/imagestore/attach cases resolve
+// it) into the /workspace mount. See PLAN.md D6c.4 slice 3.
 const daftNestedIntegrationRun = "^TestHelloIntegrationBootsVM$|^TestHelloIntegrationShipsAgentSpansOverVsock$"
 
 // daftNestedIntegrationInnerTimeout caps the inner pipeline: a cold-GOCACHE

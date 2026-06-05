@@ -2024,29 +2024,46 @@ the user-host or in CI today.
               `TestHelloIntegrationShipsAgentSpansOverVsock` (boot + agent
               trace spans over vsock). The `-run` pattern is the knob; both
               boot paths pass nested.
-            - **Known nested gap — virtio-fs shares don't boot (2026-06-05).**
-              Widening to the *whole* `internal/sandbox` package was tried and
-              localised a real limitation: every test that attaches a
-              virtio-fs share — `…BootsVMWithShare`, `…WithContainer`,
+            - **Known nested gap — virtio-fs shares don't boot: virtiofsd
+              capability drop (2026-06-05, root cause PROVEN by probe).**
+              Widening to the *whole* `internal/sandbox` package localised a
+              real limitation: every test that attaches a virtio-fs share —
+              `…BootsVMWithShare`, `…WithContainer`,
               `…OpensnoopCapturesOpenat`, `…WithImagestoreBundle`,
               `WorkspaceOverlayE2E`, `WorkspaceRoundTripE2E`, `AttachExecE2E`
-              — hangs the full 30 s `wait_boot_complete`. The trace shows
-              `start_virtiofsd` OK + `run_cloud_hypervisor` OK but the inner
-              guest emits **zero console** and never signals boot-complete;
-              the share-less boots in the same run pass. Root cause: virtio-fs
-              needs CH to back guest RAM with **shared memory**
-              (`--memory …,shared=on`, `buildMemoryArg`) so virtiofsd can mmap
-              the guest's buffers, and that shared guest-memory path is what
-              the hardened nested container withholds. This is **not** a
-              `DAFT_DISABLE_USERNS` artefact (the `internal/sandbox` TestMain
-              does no userns re-exec) and **not** a test bug — the identical
-              code boots these shares on the L0 host. It is a
-              **capability-grant item**, the same class as the
-              `NestedVirtualization` section that unblocked `/dev/kvm`; a
-              `virtio-fs`/shared-memory grant for the dogfood workspace is the
-              follow-up that would let the `-run` filter drop and stage
-              `DAFT_BUNDLE` for the container/opensnoop/imagestore/attach
-              cases.
+              — hangs the full 30 s `wait_boot_complete` (zero inner console),
+              while the share-less boots pass. A throwaway probe that ran CH +
+              virtiofsd by hand inside the nested container with stderr
+              captured (production discards CH stderr at `sandbox.go:955` and
+              virtiofsd stderr at the sidecar) pinned the chain exactly:
+                - **virtiofsd aborts**: `can't apply the child capabilities:
+                  failed to sync capabilities with the kernel`. Even with
+                  `--sandbox=none`, virtiofsd still drops to its keep-list
+                  capability set via libcap-ng (`capng_apply`), which needs
+                  `CAP_SETPCAP` to modify the bounding set. The hardened
+                  rootless container's restricted capability bounding set
+                  doesn't satisfy it, so virtiofsd exits and its vhost-user
+                  socket dies.
+                - **CH then can't connect**: `Failed connecting the backend …
+                  ConnectionRefused` → `Cannot create virtio-fs device →
+                  Connection to socket failed`. The guest never boots.
+                - **It is NOT shared memory** (an earlier wrong guess): the
+                  no-share *control* boots fine, and the `--memory …,shared=on`
+                  THP warning (`Failed to mark pages as THP eligible: Invalid
+                  argument`) appears in BOTH the share and the working
+                  plain-boot run — harmless. It is also NOT a
+                  `DAFT_DISABLE_USERNS` artefact (the `internal/sandbox`
+                  TestMain does no userns re-exec) and NOT a test bug — the
+                  same code boots shares on the L0 host, where virtiofsd runs
+                  unprivileged (or, for sandboxd, inside its userns) and skips
+                  the cap drop.
+              **Follow-up (capability-grant slice, same class as
+              `NestedVirtualization`):** give the nested dogfood container what
+              virtiofsd's cap drop needs (`CAP_SETPCAP` + the fs keep-list
+              caps), or run virtiofsd in a mode that skips the drop
+              (`--modcaps`) / inside a userns. Then widen step 4: drop the
+              `daftNestedIntegrationRun` `-run` filter and stage `DAFT_BUNDLE`
+              for the container/opensnoop/imagestore/attach cases.
             - **Fast, not slow:** the share-less subset ran in **~35 s** (outer
               VM boot + image push + cold-GOCACHE offline compile of
               `internal/sandbox` + nested L3 boots + inner tests). The 12-min
