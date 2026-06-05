@@ -2003,13 +2003,44 @@ the user-host or in CI today.
             slice-2 decoupling empirically. The inner test passed
             (`--- PASS: TestHelloIntegrationBootsVM`), with the same
             non-fatal cgroup-creation gap as step 2 (boots regardless).
-         4. **Full `make integration` subset** — the gated
-            `TestClusterWorkspaceDaftIntegration` (mirror of
-            `TestClusterWorkspaceDaftSelfBuild`): 10–12 GiB workspace,
-            `nested --enable`, artefacts delivered over the mount,
-            `go test -tags=integration` run offline against a sentinel.
-            Likely start with a curated subset (timeout budget) before the
-            full 20-minute suite.
+         4. **(landed — GREEN, 2026-06-05)** `make integration` flow
+            nested — the gated `TestClusterWorkspaceDaftIntegration`
+            (`DAFT_RUN_NESTED_INTEGRATION=1`, mirror of
+            `TestClusterWorkspaceDaftSelfBuild`): a 12 GiB / 6-vCPU
+            workspace on the nix-less daft-check-image, `nested --enable`,
+            the tracked-HEAD source + vendored deps + raw VM artefacts
+            (CH / kernel / initramfs / virtiofsd) all delivered over one
+            `/workspace` mount, then `go test -tags=integration` run
+            **offline** (`-mod=vendor`, `GOPROXY=off`) against the
+            `DAFT-NESTED-INTEGRATION-OK` sentinel. The difference from
+            step 3: the integration suite is **compiled inside** the
+            sandbox by the in-image Go toolchain (not delivered as a
+            pre-built binary), then the resulting binary boots an inner L3
+            VM against the nested `/dev/kvm` — i.e. the real developer
+            `make integration` loop (compile-inside + nested-boot)
+            dogfooded end-to-end. Empirical findings from the first run:
+            - **Curated subset** = `^TestHelloIntegrationBootsVM$` for the
+              first landing (the basic VM-boot case step 3 already proved
+              nested, now compiled-inside). The `-run` pattern is the knob
+              to widen toward the full suite once the timeout budget is
+              shown to hold for the heavier container/share/opensnoop cases
+              (those also need `DAFT_BUNDLE` staged).
+            - **Fast, not slow:** the whole test ran in **~35 s** (outer VM
+              boot + image push + cold-GOCACHE offline compile of
+              `internal/sandbox` + nested L3 boot + inner test). The 12-min
+              inner / 13-min outer timeouts are conservative ceilings, not
+              the observed cost — a warm-GOCACHE follow-up (slice 1) would
+              cut even the compile.
+            - **No new caps / no in-VM cgroup regression:** the inner per-VM
+              `createVMCgroup` succeeded nested (the in-VM cgroup mount fix
+              below held — zero `permission denied` / oops in the inner
+              log), and the outer profiler read real cgroup accounting
+              (memory.peak ~0.95 GiB, pids 42, cpu.stat populated). The
+              `NestedVirtualization` grant + `DAFT_DISABLE_USERNS=1` recipe
+              from steps 2–3 was sufficient; nothing else was needed.
+            - **The dogfood ladder is complete** — steps 1–4 all GREEN. The
+              one remaining open item is accounting *depth* (per-VM
+              memory/io/pids via subtree_control), deferred below.
 
        - *In-VM cgroup mount (landed 2026-06-04).* Steps 2–3 surfaced the
          per-VM `createVMCgroup` failing. An in-container probe pinned the
