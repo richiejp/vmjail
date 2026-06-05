@@ -2032,19 +2032,41 @@ the user-host or in CI today.
          is namespace-root there. No host delegation, `Delegate=yes` scope,
          or harness change is needed for the in-VM cgroup to work.
 
-         *Separate, lower-priority item — host-side VM-process accounting
-         (the outer EPERM):* the host sandboxd creating a per-VM cgroup for
-         the cloud-hypervisor *process on the host* fails when sandboxd runs
+         *Host-side VM-process accounting — the outer EPERM (landed
+         2026-06-04).* The host sandboxd creating a per-VM cgroup for the
+         cloud-hypervisor *process on the host* failed when sandboxd ran
          rootless in a non-delegated `session.scope` (the dev-cluster
          harness, user 1000). This is best-effort observability of the VM
          as a host process and is **independent** of the in-VM work above.
-         The rootless fix needs no special perms: launch sandboxd under
-         `systemd-run --user --scope -p Delegate=yes` — the user's own
-         `user@<uid>.service` is already a delegated cgroup subtree, so a
-         scope beneath it can `mkdir` sub-cgroups (caveats: needs an active
-         user systemd/D-Bus session or `loginctl enable-linger`, and an
-         unprivileged user only gets the delegated controllers — `memory` +
-         `pids` reliably, `cpu` usually, `io` often not).
+         Fixed rootless, no special perms: `make integration` now wraps its
+         `go test` in `systemd-run --user --scope -p Delegate=yes` when a
+         user systemd session is available (the user's own
+         `user@<uid>.service` is already a delegated subtree, so a scope
+         beneath it can `mkdir` sub-cgroups), and degrades to an undelegated
+         run otherwise (per-VM cgroups → /proc fallback). Verified: under
+         the wrap the host `createVMCgroup` EPERM is gone for both the
+         in-process `internal/sandbox` tests and the child dev-cluster
+         sandboxd (which inherits the scope's cgroup). Probed delegated
+         controllers on this host: **`cpu io memory pids`** — all four,
+         including `io`. Caveats elsewhere: needs an active user
+         systemd/D-Bus session (or `loginctl enable-linger` for
+         headless/CI), and the delegated controller set can be narrower on
+         other hosts (`memory`+`pids` reliable, `io` sometimes withheld).
+
+         **Accounting depth — open refinement.** Delegation removes the
+         EPERM and the per-VM cgroup gets `cpu.stat` (CPU time) + PSI
+         pressure, but the controller *interface* files (`memory.peak`,
+         `io.stat`, `pids.current`) are **absent**, because the delegated
+         scope's `cgroup.subtree_control` is empty and daft never enables
+         it. Populating them needs the standard delegation-consumer dance:
+         create a leaf, move sandboxd's own process into it (the
+         no-internal-process rule forbids writing `subtree_control` on a
+         cgroup that holds processes), then `+memory +io +pids` on the
+         delegated root so per-VM sibling cgroups inherit the controllers.
+         That touches the cgroup setup path that also runs in production
+         (where sandboxd may be root in a differently-arranged cgroup), so
+         it's deferred as a separate refinement — the EPERM clearing + CPU
+         accounting is the win landed here.
 
        - *Future / nice-to-have (not on the integration critical path):*
          carrying the **kernel-build toolchain** inside the sandbox

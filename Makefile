@@ -306,6 +306,13 @@ integration: integration-build
 			exit 1; \
 		}; \
 		echo "[e2e] booting real VMs against /dev/kvm..."; \
+		delegate=""; \
+		if systemd-run --user --scope -p Delegate=yes --quiet -- true >/dev/null 2>&1; then \
+			delegate="systemd-run --user --scope -p Delegate=yes --quiet --"; \
+			echo "[e2e] cgroup delegation on — per-VM accounting cgroups enabled"; \
+		else \
+			echo "[e2e] cgroup delegation off — no delegated user scope; per-VM cgroups fall back to /proc"; \
+		fi; \
 		DAFT_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT) \
 			DAFT_BUNDLE=$(CURDIR)/$(BUNDLE_OUT) \
 			DAFT_KERNEL=$(CURDIR)/$(NIX_KERNEL_OUT)/bzImage \
@@ -317,7 +324,7 @@ integration: integration-build
 			DAFT_CHECK_IMAGE=$$(realpath $(NIX_CHECK_IMAGE_OUT)) \
 			DAFT_CHECK_VENDOR=$$(realpath $(NIX_CHECK_VENDOR_OUT)) \
 			DAFT_NIX_FLAKE_FIXTURE=$$(realpath $(NIX_FLAKE_FIXTURE_OUT)) \
-			go test -v -tags=integration -count=1 -timeout 20m ./internal/sandbox/ ./internal/testdaemons/; \
+			$$delegate go test -v -tags=integration -count=1 -timeout 20m ./internal/sandbox/ ./internal/testdaemons/; \
 	)
 
 ## Git hooks -----------------------------------------------------------------
