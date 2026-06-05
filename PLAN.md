@@ -2057,13 +2057,39 @@ the user-host or in CI today.
                   same code boots shares on the L0 host, where virtiofsd runs
                   unprivileged (or, for sandboxd, inside its userns) and skips
                   the cap drop.
-              **Follow-up (capability-grant slice, same class as
-              `NestedVirtualization`):** give the nested dogfood container what
-              virtiofsd's cap drop needs (`CAP_SETPCAP` + the fs keep-list
-              caps), or run virtiofsd in a mode that skips the drop
-              (`--modcaps`) / inside a userns. Then widen step 4: drop the
-              `daftNestedIntegrationRun` `-run` filter and stage `DAFT_BUNDLE`
-              for the container/opensnoop/imagestore/attach cases.
+              **Follow-up — the cleaner fix is a NON-ROOT container, not a cap
+              grant (probe-proven 2026-06-05).** A second probe mutated the
+              image to `User=1000:1000` and ran virtiofsd as the entrypoint
+              (uid 1000): virtiofsd started clean (`VFSD-SOCK=yes`, the
+              "can't apply child capabilities" error GONE — as non-root it
+              skips the cap drop, exactly as it does as unprivileged `rich` on
+              the host). So the root cause is really "we run containers as
+              real uid 0 with an empty cap set," which lies to privilege-aware
+              software. The fix is to run the container as the (non-root) User
+              the image declares — for which our own images need to actually
+              SET a User (both `daft-check-image` and `nix-tooling-image` ship
+              empty `User` → default 0:0). This is the daft-container "uid 0 +
+              empty caps + no userns" model; see the devcontainer-compat work
+              queued off it.
+                - *But non-root is necessary, not sufficient, for the NESTED
+                  dogfood:* the same probe then hit CH `VmCreate(Permission
+                  denied)` on `/dev/kvm` (the bound node isn't accessible to
+                  uid 1000) and a `createVMCgroup` EPERM under
+                  `user-1000.slice`. So a non-root *nested* run also needs the
+                  `NestedVirtualization` grant to expose `/dev/kvm` to the
+                  container uid (0666 / kvm-gid) and per-VM cgroup delegation
+                  to that uid. For ordinary non-nested workloads, just setting
+                  the User is the whole fix.
+                - *`crun exec` caveat:* `defaultAttachCmd` runs `crun exec`
+                  with no `--user`, so the dogfood's exec'd `go test` may run
+                  as root regardless of the image User — exec must be wired to
+                  the container User too.
+                - A `CAP_SETPCAP` grant (let root virtiofsd drop) or
+                  `--modcaps` remains a fallback only if a workload insists on
+                  running virtiofsd as root.
+              Then widen step 4: drop the `daftNestedIntegrationRun` `-run`
+              filter and stage `DAFT_BUNDLE` for the
+              container/opensnoop/imagestore/attach cases.
             - **Fast, not slow:** the share-less subset ran in **~35 s** (outer
               VM boot + image push + cold-GOCACHE offline compile of
               `internal/sandbox` + nested L3 boots + inner tests). The 12-min
