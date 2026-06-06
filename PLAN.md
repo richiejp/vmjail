@@ -2072,18 +2072,41 @@ the user-host or in CI today.
               empty caps + no userns" model; see the devcontainer-compat work
               queued off it.
                 - *But non-root is necessary, not sufficient, for the NESTED
-                  dogfood:* the same probe then hit CH `VmCreate(Permission
-                  denied)` on `/dev/kvm` (the bound node isn't accessible to
-                  uid 1000) and a `createVMCgroup` EPERM under
-                  `user-1000.slice`. So a non-root *nested* run also needs the
-                  `NestedVirtualization` grant to expose `/dev/kvm` to the
-                  container uid (0666 / kvm-gid) and per-VM cgroup delegation
-                  to that uid. For ordinary non-nested workloads, just setting
+                  dogfood (re-proven end-to-end 2026-06-06 in the real cluster:
+                  mutate check-image `User=1000:100`, nested-enabled L1, capture
+                  the exact node facts inside the container):* TWO new gates,
+                  both now characterised precisely (not guessed):
+                    - **#99 `/dev/kvm`** in L1 is `crw------- 0 0` — **mode 0600
+                      root:root**. The u-root initramfs has no udev, so the
+                      guest kernel's `misc_register` default mode stands; the
+                      root container opens it only because uid 0 == node owner.
+                      A non-root uid + empty caps (no `CAP_DAC_OVERRIDE`) gets
+                      `Permission denied`. Fix: chmod `/dev/kvm` to 0666 in the
+                      L1 guest when nested is enabled (agent-side, before crun
+                      bind-mounts it — the bind preserves node perms). The
+                      device-cgroup `rwm` rule (`applyNestedVirt`) is already
+                      present and is necessary-not-sufficient; node DAC still
+                      applies. (The per-VM cgroup is a *separate* concern, not
+                      this DAC gate — and per CONTRIBUTING "Probe preconditions
+                      at startup; no silent fallbacks" it is being made a hard
+                      precondition, not the current best-effort degrade; see the
+                      cgroup section below.)
+                    - **#100 `/workspace`** in the container is `drwxr-xr-x 0 0`
+                      (**root:root 0755**) over `virtiofs rw`, even though the
+                      host source dir is `rich(1000:100)` — the OUTER
+                      (sandboxd-run) virtiofsd **squashes the share to
+                      root:root**, so a non-root container uid lands in `other`
+                      (r-x) and writes EPERM. Fix is a design choice: virtiofsd
+                      uid/gid-map, present-as-host-uid (no squash), or chown the
+                      share root to the container uid — coupled to a workspace
+                      uid/gid override so the container User and mount owner
+                      agree.
+                  For ordinary non-nested, share-less workloads, just setting
                   the User is the whole fix.
-                - *`crun exec` caveat:* `defaultAttachCmd` runs `crun exec`
-                  with no `--user`, so the dogfood's exec'd `go test` may run
-                  as root regardless of the image User — exec must be wired to
-                  the container User too.
+                - *`crun exec` caveat — RESOLVED (#98, commit 0747cbf):*
+                  `defaultAttachCmd` now forwards `--user` from the container's
+                  `process.user`, so an exec'd `go test` runs as the container
+                  User, not root.
                 - A `CAP_SETPCAP` grant (let root virtiofsd drop) or
                   `--modcaps` remains a fallback only if a workload insists on
                   running virtiofsd as root.
@@ -2152,6 +2175,29 @@ the user-host or in CI today.
          headless/CI), and the delegated controller set can be narrower on
          other hosts (`memory`+`pids` reliable, `io` sometimes withheld).
 
+         **STRICT POSTURE (2026-06-06, supersedes the "degrades otherwise"
+         design above).** Per CONTRIBUTING "Probe preconditions at startup; no
+         silent fallbacks": the per-VM cgroup is no longer best-effort. It is a
+         **required precondition** — `createVMCgroup` failing must abort the VM
+         boot, loudly and with diagnostics, NOT return `""` and fall back to
+         /proc-only. We satisfy the precondition rather than degrade past it:
+         because we are systemd-only for now, daft **guarantees** a delegated
+         cgroup by wrapping the sandbox process in its own `systemd-run`
+         scope (creating + delegating the cgroup, then placing the process in
+         it) instead of best-effort `mkdir`-ing in whatever cgroup it happens
+         to inherit. The wrapper stays alive as the scope owner (clone-and-exit
+         was considered and rejected — it complicates lifecycle/reparenting for
+         no gain). If `systemd-run` itself is unavailable or the delegation
+         probe fails, that is a hard startup failure with a fix-it message
+         (`loginctl enable-linger` for headless/CI), not a silent downgrade. No
+         "disable cgroups" knob is added yet — when we are no longer
+         systemd-only, the required-unless-explicitly-disabled config section
+         (the `enable`-style idiom) is the escape hatch. This moves the
+         `make integration` `systemd-run` wrap *into daft itself* so production
+         and tests share one guaranteed path; the Makefile wrap then only needs
+         to cover the in-process `internal/sandbox` test binary (which mkdir's
+         cgroups directly rather than via a daft subprocess).
+
          **Accounting depth — DEFERRED refinement (revisit later).**
          Delegation removes the EPERM and the per-VM cgroup gets `cpu.stat`
          (real per-VM CPU time) + PSI pressure for free, but the controller
@@ -2186,12 +2232,14 @@ the user-host or in CI today.
          `R/cgroup.subtree_control`; (4) `createVMCgroup` creates
          `R/daft-vm-*` as siblings of `_supervisor`, inheriting the
          controllers. ~20–30 lines in `observability/cgroup_linux.go` +
-         wiring sandboxd to remember `R`, **guarded to no-op when the
-         cgroup isn't writable/delegated** (degrades to today's behavior).
-         Caution: this runs on the production cgroup path too (sandboxd may
-         be root in a differently-arranged cgroup), so the guard must be
-         conservative. Deferred by decision — the EPERM clearing + per-VM
-         CPU accounting is the win already landed.
+         wiring sandboxd to remember `R`. Under the STRICT POSTURE above this
+         is part of guaranteeing the cgroup, not a no-op-on-failure guard: if
+         the supervisor/subtree-control dance can't be performed where it is
+         required, that is a startup failure, not a degrade. Caution: this runs
+         on the production cgroup path too (sandboxd may be root in a
+         differently-arranged cgroup), so the setup must be correct across both
+         the `--scope` wrap and plain-root. Deferred by decision — the EPERM
+         clearing + per-VM CPU accounting is the win already landed.
 
        - *Future / nice-to-have (not on the integration critical path):*
          carrying the **kernel-build toolchain** inside the sandbox

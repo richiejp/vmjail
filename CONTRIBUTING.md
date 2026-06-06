@@ -29,6 +29,34 @@ A broken environment fails the build, not the next user. Anything
 that defers a problem to "later" is a future bug report waiting to
 happen.
 
+### Probe preconditions at startup; no silent fallbacks
+
+Before a workload starts, the sandbox, harness, and orchestrator
+verify every resource they are configured to depend on — files
+exist and are accessible to the uid that will use them, devices
+are openable, the network is reachable, required cgroup
+controllers are delegated — and refuse to start, loudly and with
+diagnostics, the moment a precondition is unmet. Probe for the
+weakness adversarially at startup; do not let the workload
+discover it mid-run, when the cause is buried and the run is
+already wasted.
+
+A configured capability is either **required** (absent → fail at
+startup) or **explicitly disabled** by configuration (absent →
+fine). There is no implicit third "best-effort" state: if the
+config asks for something that cannot be provided, that is a
+failure, not a downgrade, even when a degraded mode technically
+exists. The only exception is preventing data loss, and only for
+data that warrants it — and note that infrastructure which bounds
+blast radius or collects diagnostics (cgroup limits and
+accounting, seccomp) is itself a data-loss guard: silently
+dropping it removes exactly the protection you want when something
+later goes wrong. Such infrastructure is required-unless-disabled,
+never best-effort. Where the environment can be made to satisfy a
+precondition rather than fail it — e.g. wrapping ourselves in a
+`systemd-run` scope so the cgroup we need always exists — prefer
+guaranteeing the resource over degrading without it.
+
 ### Reduce scope, never correctness
 
 If a feature is too big, cut it in half and ship the half that's
