@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/localai-org/darkaifactory/internal/cgroupwrap"
 	"github.com/localai-org/darkaifactory/internal/sandboxdcli"
 	"github.com/localai-org/darkaifactory/internal/userns"
 )
@@ -17,9 +18,26 @@ import (
 var (
 	osExit       = os.Exit
 	usernsReexec = userns.Reexec
+	cgroupReexec = cgroupwrap.EnsureDelegated
 )
 
 func main() {
+	// Guarantee a delegated cgroup v2 subtree BEFORE anything else: if
+	// our inherited cgroup isn't delegated, re-exec under a systemd-run
+	// scope (which hands back a delegated subtree) so the per-VM
+	// accounting cgroups every boot requires can be created. This must
+	// precede the userns re-exec below so the systemd-run wrap is the
+	// outermost layer and owns the scope for our whole lifetime. On the
+	// wrap path this never returns; a host that can't be made to
+	// delegate is a hard startup failure, not a /proc-only degrade (see
+	// internal/cgroupwrap + CONTRIBUTING "Probe preconditions at
+	// startup").
+	if err := cgroupReexec(os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "daft-sandboxd: cgroup:", err)
+		osExit(1)
+		return
+	}
+
 	// Re-exec ourselves inside a user namespace populated from
 	// the calling user's /etc/subuid + /etc/subgid before any
 	// sandboxd work begins. Past this point the process has

@@ -57,6 +57,16 @@ func TestMain(m *testing.M) {
 		runFakeVirtiofsd(os.Args)
 		return
 	}
+	if cgroupStubInUnitTests {
+		// Unit tests run on hosts without cgroup delegation and use fake
+		// VMM runners that need no real per-VM accounting. Stub the
+		// cgroup constructor to skip creation so the hard precondition
+		// (which would correctly fail on a non-delegated host) doesn't
+		// abort every boot-orchestration test. Integration tests build
+		// with cgroupStubInUnitTests=false, run delegated (the make
+		// integration systemd-run wrap), and exercise the real path.
+		createVMCgroupFn = func(string) (string, error) { return "", nil }
+	}
 	os.Exit(m.Run())
 }
 
@@ -367,6 +377,13 @@ func TestCloudHypervisorRunner_ObserverHappyPath(t *testing.T) {
 // errors — that's the test's *point*: it exercises the failure-
 // path cleanup (close fd, remove cgroup, surface the start error).
 func TestCloudHypervisorRunner_ObserverAndCgroupTeardown(t *testing.T) {
+	// This test's whole point is the real createVMCgroup + placeInCgroup
+	// failure path, so opt back out of the unit-build stub (TestMain) for
+	// its duration.
+	prevFn := createVMCgroupFn
+	createVMCgroupFn = createVMCgroup
+	t.Cleanup(func() { createVMCgroupFn = prevFn })
+
 	fakeRoot := t.TempDir()
 	prev := observability.SwapCgroupRoot(fakeRoot)
 	t.Cleanup(func() { observability.SwapCgroupRoot(prev) })
@@ -750,24 +767,30 @@ func TestVMCgroupName_HandlesEmptyLogPath(t *testing.T) {
 	}
 }
 
-// TestSetupVMCgroup_GracefulOnNoDelegation: on stock systemd
-// hosts the user session scope doesn't have Delegate=yes, so
-// CreateSubCgroup returns EACCES. The helper must return ""
-// rather than aborting — observability is best-effort and the
-// sandbox must boot anyway. This is the most-common-in-CI /
-// on-laptop scenario for the wrap.
-func TestCreateVMCgroup_GracefulOnNoDelegation(t *testing.T) {
-	// We don't try to predict whether THIS test host has
-	// delegation. Both outcomes are valid: "" on no delegation,
-	// non-empty path on delegated. We just verify the function
-	// doesn't panic.
-	name := vmCgroupName(Config{ObserverLogPath: "/tmp/setup-test"})
-	path := createVMCgroup(name)
-	t.Cleanup(func() {
-		if path != "" {
-			_ = observability.RemoveCgroup(path)
-		}
-	})
+// TestCreateVMCgroup_ErrorsWithoutDelegation: per the strict posture
+// (CONTRIBUTING "Probe preconditions at startup; no silent fallbacks")
+// createVMCgroup is a hard precondition — when the parent cgroup can't
+// host a child it returns an error, NOT "" with a silent /proc-only
+// degrade. We force that deterministically with a fake cgroup root
+// whose parent path is left unseeded, so CreateSubCgroup's mkdir fails
+// ENOENT regardless of whether this host happens to have real
+// delegation. (Delegation itself is guaranteed earlier, at process
+// startup, by the cgroupwrap systemd-run self-wrap.)
+func TestCreateVMCgroup_ErrorsWithoutDelegation(t *testing.T) {
+	fakeRoot := t.TempDir()
+	prev := observability.SwapCgroupRoot(fakeRoot)
+	t.Cleanup(func() { observability.SwapCgroupRoot(prev) })
+
+	// Deliberately do NOT seed the session-scope parent under fakeRoot,
+	// so the child mkdir has no parent directory to create into.
+	path, err := createVMCgroup(vmCgroupName(Config{ObserverLogPath: "/tmp/setup-test"}))
+	if err == nil {
+		_ = observability.RemoveCgroup(path)
+		t.Fatal("createVMCgroup succeeded against an unseeded fake root; want a hard error")
+	}
+	if path != "" {
+		t.Errorf("createVMCgroup returned path %q alongside its error; want empty", path)
+	}
 }
 
 // TestCreateVMCgroup_SuccessUnderFakeRoot drives the create path
@@ -791,14 +814,14 @@ func TestCreateVMCgroup_SuccessUnderFakeRoot(t *testing.T) {
 		t.Fatalf("seed fake parent %s: %v", realParent, err)
 	}
 
-	path := createVMCgroup(vmCgroupName(Config{ObserverLogPath: "/tmp/setup-success-test"}))
+	path, err := createVMCgroup(vmCgroupName(Config{ObserverLogPath: "/tmp/setup-success-test"}))
 	t.Cleanup(func() {
 		if path != "" {
 			_ = observability.RemoveCgroup(path)
 		}
 	})
-	if path == "" {
-		t.Fatal("createVMCgroup returned \"\" under fake root")
+	if err != nil {
+		t.Fatalf("createVMCgroup under fake root: %v", err)
 	}
 	if info, err := os.Stat(path); err != nil || !info.IsDir() {
 		t.Errorf("cgroup dir not created at %s: err=%v info=%v", path, err, info)
@@ -834,9 +857,9 @@ func TestPlaceInCgroup_OpensFD(t *testing.T) {
 	if err := os.MkdirAll(realParent, 0o750); err != nil {
 		t.Fatalf("seed fake parent: %v", err)
 	}
-	dir := createVMCgroup(vmCgroupName(Config{ObserverLogPath: "/tmp/place-fd-test"}))
-	if dir == "" {
-		t.Fatal("createVMCgroup returned \"\" under fake root")
+	dir, err := createVMCgroup(vmCgroupName(Config{ObserverLogPath: "/tmp/place-fd-test"}))
+	if err != nil {
+		t.Fatalf("createVMCgroup under fake root: %v", err)
 	}
 	t.Cleanup(func() { _ = observability.RemoveCgroup(dir) })
 

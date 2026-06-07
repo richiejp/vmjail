@@ -701,13 +701,26 @@ func removeVMCgroupBestEffort(path string) {
 	}
 }
 
+// createVMCgroupFn is the per-VM cgroup constructor as a package var so
+// the package's unit tests — which run without cgroup delegation and
+// with fake VMM runners — can substitute a stub that skips real cgroup
+// creation. In production and in the (delegated) integration tests it is
+// the real createVMCgroup.
+//
+//nolint:gochecknoglobals // test seam.
+var createVMCgroupFn = createVMCgroup
+
 // createVMCgroup creates a per-VM cgroup v2 sub-directory and
-// returns its absolute path. Best-effort: any failure (no cgroup
-// v2, no delegation, the typical "Permission denied" on
-// un-delegated user sessions) is reported via oops.Log and the
-// function returns "" — callers proceed without the wrap, the
-// observer falls back to /proc-only sampling, and the sandbox
-// still boots.
+// returns its absolute path. It is a HARD precondition: any failure
+// (no cgroup v2, no delegation, "Permission denied" on an
+// un-delegated session) returns an error and the caller aborts the
+// boot. Per CONTRIBUTING "Probe preconditions at startup; no silent
+// fallbacks", the per-VM cgroup — which bounds a runaway VM's blast
+// radius and collects its resource trace — is required infrastructure,
+// not a best-effort optimisation, so we never boot a VM we can't
+// account for. Delegation itself is guaranteed earlier, at process
+// startup, by the systemd-run self-wrap (internal/cgroupwrap); by the
+// time we reach here a failure means a genuinely broken environment.
 //
 // `name` should be a unique identifier for this VM; the caller is
 // responsible for ensuring uniqueness within the parent cgroup.
@@ -724,30 +737,27 @@ func removeVMCgroupBestEffort(path string) {
 // fd can actually be opened on the new directory and closes it
 // immediately. This keeps the all-or-nothing precondition the old
 // single-shot setupVMCgroup enforced: either every spawn-helper
-// can place into the cgroup, or we fall back to /proc-only
-// sampling for all of them. Without the probe, a cgroup that's
-// creatable-but-not-openable would let some processes place and
-// others not, silently corrupting the cgroup accounting view
-// (memory.peak / io.stat missing whichever helper failed to open).
-func createVMCgroup(name string) string {
+// can place into the cgroup, or the boot aborts. Without the probe,
+// a cgroup that's creatable-but-not-openable would let some
+// processes place and others not, silently corrupting the cgroup
+// accounting view (memory.peak / io.stat missing whichever helper
+// failed to open).
+func createVMCgroup(name string) (string, error) {
 	parent, err := observability.CurrentCgroup()
 	if err != nil {
-		oops.Log("observability.CurrentCgroup", err)
-		return ""
+		return "", fmt.Errorf("sandbox: locate own cgroup for per-VM accounting: %w", err)
 	}
 	dir, err := observability.CreateSubCgroup(parent, name)
 	if err != nil {
-		oops.Log("observability.CreateSubCgroup", err)
-		return ""
+		return "", fmt.Errorf("sandbox: create per-VM cgroup: %w", err)
 	}
 	fd, err := observability.OpenCgroupFD(dir)
 	if err != nil {
-		oops.Log("observability.OpenCgroupFD probe", err)
 		removeVMCgroupBestEffort(dir)
-		return ""
+		return "", fmt.Errorf("sandbox: open per-VM cgroup for placement: %w", err)
 	}
 	oops.Skip("close cgroup probe fd", syscall.Close(fd), nil)
-	return dir
+	return dir, nil
 }
 
 // placeInCgroup wires cmd.SysProcAttr so cmd.Start fork-places the
@@ -1079,13 +1089,17 @@ func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	cfg = cfg.withDefaults()
 
 	// Create the per-VM cgroup BEFORE startShares so virtiofsd
-	// fork-places into it alongside cloud-hypervisor. Best-effort:
-	// returns "" on hosts without delegation; the rest of the chain
-	// becomes a no-op cgroup-wise but boots normally. A single
-	// vmTeardown orders shutdown (pure-Go receivers, then processes
-	// reaped concurrently, then the cgroup last) on every return path,
-	// including the early error returns below.
-	cgroupDir := createVMCgroup(vmCgroupName(cfg))
+	// fork-places into it alongside cloud-hypervisor. HARD precondition:
+	// a failure aborts the boot rather than degrading to /proc-only —
+	// delegation is guaranteed at process startup (cgroupwrap), so a
+	// failure here is a broken environment, not an expected condition. A
+	// single vmTeardown orders shutdown (pure-Go receivers, then
+	// processes reaped concurrently, then the cgroup last) on every
+	// return path, including the early error returns below.
+	cgroupDir, err := createVMCgroupFn(vmCgroupName(cfg))
+	if err != nil {
+		return trace.RecordError(ctx, err)
+	}
 	td := &vmTeardown{cgroupDir: cgroupDir}
 	defer td.run()
 
@@ -1166,8 +1180,11 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	defer cancel()
 
 	// Same cgroup + teardown choreography as serveWith — see the long
-	// comment there.
-	cgroupDir := createVMCgroup(vmCgroupName(cfg))
+	// comment there. Hard precondition: a failure aborts the boot.
+	cgroupDir, err := createVMCgroupFn(vmCgroupName(cfg))
+	if err != nil {
+		return trace.RecordError(ctx, err)
+	}
 	td := &vmTeardown{cgroupDir: cgroupDir}
 	defer td.run()
 

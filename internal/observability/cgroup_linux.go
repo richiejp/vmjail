@@ -117,6 +117,34 @@ func RemoveCgroup(path string) error {
 	return nil
 }
 
+// DelegationOK reports whether the caller can create child cgroups
+// under its own cgroup v2 directory — i.e. whether its cgroup subtree
+// is delegated and writable. It creates a uniquely-named probe
+// sub-cgroup and immediately removes it; any failure (not cgroup v2,
+// no delegation, the EPERM on an un-delegated `session.scope`) means
+// the subtree cannot host the per-VM accounting cgroups the sandbox
+// requires.
+//
+// Used as a startup precondition: the sandbox host self-wraps in a
+// `systemd-run` scope (which delegates a fresh subtree) when this
+// returns false, then re-checks. Per CONTRIBUTING "Probe preconditions
+// at startup; no silent fallbacks", a host that still can't delegate
+// after the wrap is a hard startup failure, not a /proc-only degrade.
+func DelegationOK() bool {
+	parent, err := CurrentCgroup()
+	if err != nil {
+		return false
+	}
+	dir, err := CreateSubCgroup(parent, fmt.Sprintf("daft-delegation-probe-%d", os.Getpid()))
+	if err != nil {
+		return false
+	}
+	// A leaked empty probe cgroup is harmless, but remove it so repeated
+	// probes (e.g. the pre- and post-wrap checks) don't accumulate.
+	_ = RemoveCgroup(dir)
+	return true
+}
+
 // OpenCgroupFD returns an O_PATH fd for a cgroup directory,
 // suitable for passing into syscall.SysProcAttr{UseCgroupFD: true,
 // CgroupFD: fd} so the child is placed in the cgroup at the

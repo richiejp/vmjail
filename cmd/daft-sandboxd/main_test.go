@@ -13,6 +13,37 @@ import (
 // const so goconst doesn't flag it across three call sites.
 const versionSubcommand = "version"
 
+// binName is argv[0] for the main() tests, in a const for goconst.
+const binName = "daft-sandboxd"
+
+// runMainCapturingStderr runs main() with argv [binName, version],
+// os.Exit and os.Stderr redirected, and returns the captured exit code
+// and stderr. Restores the globals via Cleanup. Shared by the
+// startup-precondition failure tests so each only has to install its
+// own failing seam and assert the message.
+func runMainCapturingStderr(t *testing.T) (code int, stderr string) {
+	t.Helper()
+	oldArgs, oldExit := os.Args, osExit
+	t.Cleanup(func() { os.Args, osExit = oldArgs, oldExit })
+	os.Args = []string{binName, versionSubcommand}
+	code = -1
+	osExit = func(c int) { code = c }
+
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	oldStderr := os.Stderr
+	os.Stderr = w
+	t.Cleanup(func() { os.Stderr = oldStderr; _ = r.Close() })
+
+	main()
+	_ = w.Close()
+	var buf bytes.Buffer
+	_, _ = io.Copy(&buf, r)
+	return code, buf.String()
+}
+
 // disableUsernsReexec installs a no-op userns stub on the test
 // seam for the duration of the test, restoring the previous
 // value on cleanup. Without this, main() would try to re-exec
@@ -23,6 +54,16 @@ func disableUsernsReexec(t *testing.T) {
 	prev := usernsReexec
 	usernsReexec = func(io.Writer) error { return nil }
 	t.Cleanup(func() { usernsReexec = prev })
+}
+
+// disableCgroupReexec installs a no-op cgroup-delegation stub on the
+// test seam so main() doesn't probe the real cgroup and — on a
+// non-delegated host — re-exec the test binary under systemd-run.
+func disableCgroupReexec(t *testing.T) {
+	t.Helper()
+	prev := cgroupReexec
+	cgroupReexec = func(io.Writer) error { return nil }
+	t.Cleanup(func() { cgroupReexec = prev })
 }
 
 type failingWriter struct{}
@@ -56,9 +97,10 @@ func TestRunReturns2WhenStderrWriteFails(t *testing.T) {
 
 func TestMainPassesArgvAndCallsOsExit(t *testing.T) {
 	disableUsernsReexec(t)
+	disableCgroupReexec(t)
 	oldArgs, oldExit := os.Args, osExit
 	defer func() { os.Args, osExit = oldArgs, oldExit }()
-	os.Args = []string{"daft-sandboxd", versionSubcommand}
+	os.Args = []string{binName, versionSubcommand}
 	code := -1
 	osExit = func(c int) { code = c }
 
@@ -76,37 +118,36 @@ func TestMainPassesArgvAndCallsOsExit(t *testing.T) {
 // running outside the userns and discovering the missing caps
 // far downstream.
 func TestMainExitsOnUsernsFailure(t *testing.T) {
+	disableCgroupReexec(t)
 	prev := usernsReexec
 	usernsReexec = func(io.Writer) error { return errors.New("synthetic") }
 	t.Cleanup(func() { usernsReexec = prev })
 
-	oldArgs, oldExit := os.Args, osExit
-	defer func() { os.Args, osExit = oldArgs, oldExit }()
-	os.Args = []string{"daft-sandboxd", versionSubcommand}
-	code := -1
-	osExit = func(c int) { code = c }
-
-	// Redirect stderr so the test doesn't pollute output.
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe: %v", err)
-	}
-	oldStderr := os.Stderr
-	os.Stderr = w
-	defer func() {
-		os.Stderr = oldStderr
-		_ = r.Close()
-	}()
-
-	main()
-	_ = w.Close()
-
-	var buf bytes.Buffer
-	_, _ = io.Copy(&buf, r)
+	code, stderr := runMainCapturingStderr(t)
 	if code != 1 {
 		t.Errorf("osExit code = %d, want 1", code)
 	}
-	if !strings.Contains(buf.String(), "userns: synthetic") {
-		t.Errorf("stderr = %q, want it to mention 'userns: synthetic'", buf.String())
+	if !strings.Contains(stderr, "userns: synthetic") {
+		t.Errorf("stderr = %q, want it to mention 'userns: synthetic'", stderr)
+	}
+}
+
+// TestMainExitsOnCgroupFailure pins the strict-precondition path: if
+// the cgroup-delegation wrap can't guarantee a delegated subtree it
+// returns an error, and main() reports it on stderr and exits 1 — it
+// must never proceed to boot VMs it can't account for. The cgroup
+// check runs before the userns re-exec, so this fires first.
+func TestMainExitsOnCgroupFailure(t *testing.T) {
+	disableUsernsReexec(t)
+	prev := cgroupReexec
+	cgroupReexec = func(io.Writer) error { return errors.New("synthetic-cgroup") }
+	t.Cleanup(func() { cgroupReexec = prev })
+
+	code, stderr := runMainCapturingStderr(t)
+	if code != 1 {
+		t.Errorf("osExit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "cgroup: synthetic-cgroup") {
+		t.Errorf("stderr = %q, want it to mention 'cgroup: synthetic-cgroup'", stderr)
 	}
 }

@@ -421,6 +421,38 @@ func TestCreateSubCgroup_MkdirFails(t *testing.T) {
 	}
 }
 
+func TestDelegationOK_TrueWhenParentWritable(t *testing.T) {
+	withFakeCgroupRoot(t)
+	// Seed the session-scope parent so the probe child can be created.
+	parent, err := CurrentCgroup()
+	if err != nil {
+		t.Fatalf("CurrentCgroup: %v", err)
+	}
+	if err := os.MkdirAll(parent, 0o750); err != nil {
+		t.Fatalf("seed parent: %v", err)
+	}
+	if !DelegationOK() {
+		t.Error("DelegationOK = false with a writable seeded parent; want true")
+	}
+	// The probe must clean up after itself — no leftover probe cgroup.
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatalf("readdir parent: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("DelegationOK left %d entries under parent; want 0 (probe not removed)", len(entries))
+	}
+}
+
+func TestDelegationOK_FalseWhenParentMissing(t *testing.T) {
+	withFakeCgroupRoot(t)
+	// Parent path deliberately left unseeded → the probe child's mkdir
+	// fails ENOENT, which DelegationOK reports as "not delegated".
+	if DelegationOK() {
+		t.Error("DelegationOK = true with an unseeded parent; want false")
+	}
+}
+
 func TestRemoveCgroup_Success(t *testing.T) {
 	root := withFakeCgroupRoot(t)
 	path, err := CreateSubCgroup(root, "remove-me")
