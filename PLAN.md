@@ -2076,21 +2076,26 @@ the user-host or in CI today.
                   mutate check-image `User=1000:100`, nested-enabled L1, capture
                   the exact node facts inside the container):* TWO new gates,
                   both now characterised precisely (not guessed):
-                    - **#99 `/dev/kvm`** in L1 is `crw------- 0 0` — **mode 0600
-                      root:root**. The u-root initramfs has no udev, so the
-                      guest kernel's `misc_register` default mode stands; the
-                      root container opens it only because uid 0 == node owner.
-                      A non-root uid + empty caps (no `CAP_DAC_OVERRIDE`) gets
-                      `Permission denied`. Fix: chmod `/dev/kvm` to 0666 in the
-                      L1 guest when nested is enabled (agent-side, before crun
-                      bind-mounts it — the bind preserves node perms). The
-                      device-cgroup `rwm` rule (`applyNestedVirt`) is already
-                      present and is necessary-not-sufficient; node DAC still
-                      applies. (The per-VM cgroup is a *separate* concern, not
-                      this DAC gate — and per CONTRIBUTING "Probe preconditions
-                      at startup; no silent fallbacks" it is being made a hard
-                      precondition, not the current best-effort degrade; see the
-                      cgroup section below.)
+                    - **#99 `/dev/kvm` — FIXED (LANDED 2026-06-07).** The gate:
+                      L1's `/dev/kvm` was `crw------- 0 0` (**0600 root:root** —
+                      the u-root initramfs has no udev, so the guest kernel's
+                      `misc_register` default mode stands), and `applyNestedVirt`
+                      **bind-mounted** that node into the container, preserving
+                      0600; the root container opened it only because uid 0 ==
+                      owner, a non-root uid + empty caps (no `CAP_DAC_OVERRIDE`)
+                      got `Permission denied`. **Fix:** stop bind-mounting and
+                      instead add an OCI `linux.devices` entry so crun
+                      **mknods** `/dev/kvm` INSIDE the container with
+                      `fileMode 0666` (the same mechanism `docker --device`
+                      uses) — host-side only, no agent/proto change, no guest
+                      chmod. The node still routes to the kvm driver by its
+                      10:232 identity (mknod vs bind is indistinguishable to the
+                      kernel once opened), and the 10:232 cgroup device-allow
+                      still travels with it. PROVEN: non-root probe showed
+                      `KVM-LS: crw-rw-rw- 0 0` + `KVM-OPEN: ok` (was
+                      `crw-------`), and the root nested integration still boots
+                      inner VMs. (The per-VM cgroup is a *separate* concern —
+                      hard precondition via #102, see the cgroup section.)
                     - **#100 `/workspace`** in the container is `drwxr-xr-x 0 0`
                       (**root:root 0755**) over `virtiofs rw`, even though the
                       host source dir is `rich(1000:100)` — the OUTER
@@ -2175,12 +2180,14 @@ the user-host or in CI today.
          headless/CI), and the delegated controller set can be narrower on
          other hosts (`memory`+`pids` reliable, `io` sometimes withheld).
 
-         **STRICT POSTURE (2026-06-06, supersedes the "degrades otherwise"
-         design above).** Per CONTRIBUTING "Probe preconditions at startup; no
-         silent fallbacks": the per-VM cgroup is no longer best-effort. It is a
-         **required precondition** — `createVMCgroup` failing must abort the VM
-         boot, loudly and with diagnostics, NOT return `""` and fall back to
-         /proc-only. We satisfy the precondition rather than degrade past it:
+         **STRICT POSTURE (LANDED 2026-06-07, commit 2183150; supersedes the
+         "degrades otherwise" design above).** Per CONTRIBUTING "Probe
+         preconditions at startup; no silent fallbacks": the per-VM cgroup is
+         no longer best-effort. It is a **required precondition** —
+         `createVMCgroup` now returns an error (not `""`) and
+         `serveWith`/`helloWith` abort the boot, loudly and with diagnostics,
+         rather than falling back to /proc-only. We satisfy the precondition
+         rather than degrade past it:
          because we are systemd-only for now, daft **guarantees** a delegated
          cgroup by wrapping the sandbox process in its own `systemd-run`
          scope (creating + delegating the cgroup, then placing the process in
@@ -2192,54 +2199,93 @@ the user-host or in CI today.
          (`loginctl enable-linger` for headless/CI), not a silent downgrade. No
          "disable cgroups" knob is added yet — when we are no longer
          systemd-only, the required-unless-explicitly-disabled config section
-         (the `enable`-style idiom) is the escape hatch. This moves the
-         `make integration` `systemd-run` wrap *into daft itself* so production
-         and tests share one guaranteed path; the Makefile wrap then only needs
-         to cover the in-process `internal/sandbox` test binary (which mkdir's
-         cgroups directly rather than via a daft subprocess).
+         (the `enable`-style idiom) is the escape hatch. Implementation:
+         `internal/cgroupwrap.EnsureDelegated`, called from
+         `cmd/daft-sandboxd/main.go` before the userns re-exec;
+         `observability.DelegationOK` is the probe. The `make integration`
+         `systemd-run` wrap is RETAINED (not removed): it delegates the
+         go-test process so the in-process `internal/sandbox` integration tests
+         — which `mkdir` cgroups directly rather than via a daft subprocess —
+         get a delegated parent, and the child dev-cluster sandboxd inherits
+         that delegation (so its self-wrap stays dormant, verified 2026-06-07).
+         The daft self-wrap covers the standalone-sandboxd case the Makefile
+         wrap can't reach. Unit tests (`make check`, no delegation) stub the
+         cgroup constructor via a build-tag-gated `TestMain` seam
+         (`cgroupStubInUnitTests`), so the hard precondition doesn't abort
+         fake-runner boot tests.
 
-         **Accounting depth — DEFERRED refinement (revisit later).**
-         Delegation removes the EPERM and the per-VM cgroup gets `cpu.stat`
-         (real per-VM CPU time) + PSI pressure for free, but the controller
-         *interface* files (`memory.peak`, `io.stat`, `pids.current`) are
-         **absent**: they require the controller enabled in the parent's
-         `cgroup.subtree_control`, and the delegated scope's
-         `subtree_control` is empty.
+         **Per-VM resource LIMITS + balloon-based reclaim — TRACKED (task
+         #103, not yet started).** Today the per-VM cgroup is accounting-only:
+         `createVMCgroup` does a bare `mkdir` and writes NO limit files, so
+         `memory.max`/`pids.max`/`io.max`/`cpu.max` all sit at inherited
+         `max`. The only real per-VM bound is CH's own `--memory`/`--cpus` at
+         the VM boundary; the host cgroup adds accounting + an atomic
+         `cgroup.kill` unit, not a cap. Enabling real limits is the logical
+         completion of the strict posture (cgroup as a blast-radius *limiter*,
+         not just a meter).
 
-         *Can systemd populate it for us? No — checked empirically
-         (systemd 258).* systemd already enables `subtree_control` on the
-         cgroups it owns (the slices above), so the controllers are
-         *available* at the scope (`cgroup.controllers` = `cpu io memory
-         pids`). But it cannot enable `subtree_control` on the scope cgroup
-         itself because our payload runs directly in it — the kernel
-         **no-internal-process rule**, which systemd obeys. The systemd
-         feature designed for this, **`DelegateSubgroup=`** (moves the
-         payload to a leaf so the root goes process-free), applies only to
-         systemd-*started services*, **not** adopted `--scope` processes:
-         probed `-p Delegate=yes -p DelegateSubgroup=supervisor` on a
-         `--scope` and it was identical to plain `Delegate=yes` (process
-         still in the bare `.scope`, `subtree_control` still empty). And
-         even a service+`DelegateSubgroup` wouldn't be enough on its own,
-         because `createVMCgroup` makes the per-VM cgroup a *child of
-         sandboxd's own* cgroup (the leaf), not a sibling under the
-         delegation root — so daft has to change either way.
+         *Mechanics — VERIFIED empirically 2026-06-07 on this host (systemd
+         258, kernel 6.12), correcting the earlier "complicated dance /
+         DelegateSubgroup" framing:* the limit files for a child live on the
+         child, which needs the controller enabled in the PARENT's
+         `cgroup.subtree_control`. You CANNOT write `subtree_control` while a
+         process sits in that cgroup — proven twice, the write returns
+         **EBUSY** (kernel no-internal-process rule). The fix is NOT a saga: it
+         is exactly one extra step. Verified 6-line sequence (Python
+         `os.write` of the real PID; the bash `EINVAL` seen first was a
+         shell-builtin artifact, not a kernel limit):
+           1. `R` = the delegated root (sandboxd's own cgroup after the
+              cgroupwrap systemd-run wrap);
+           2. `mkdir R/_supervisor`; move sandboxd's PID into it (vacates
+              `R` of processes);
+           3. `echo +memory +pids +io > R/cgroup.subtree_control` → now
+              succeeds (confirmed: `subtree_control = io memory pids`);
+           4. `createVMCgroup` makes `R/daft-vm-N` as a SIBLING of
+              `_supervisor` (so it must create under the remembered `R`, NOT
+              under `CurrentCgroup()` which is now `_supervisor`);
+           5. write `memory.max` / `pids.max` on the child → sticks (read
+              back 512 MiB / 512). `io.max`, `io.weight` etc. all present.
+         So ~10 lines in cgroupwrap/observability + having sandboxd remember
+         `R`. Under the STRICT POSTURE this is part of guaranteeing the
+         cgroup: if it can't be performed where required, that's a startup
+         failure, not a degrade.
 
-         *The fix (when we revisit): the standard delegation-consumer dance
-         inside daft*, portable across the `--scope` wrap and plain-root:
-         (1) `R` = sandboxd's current (delegated) cgroup; (2) create
-         `R/_supervisor`, move sandboxd's own PID into it (frees `R` of
-         processes); (3) write `+cpu +io +memory +pids` to
-         `R/cgroup.subtree_control`; (4) `createVMCgroup` creates
-         `R/daft-vm-*` as siblings of `_supervisor`, inheriting the
-         controllers. ~20–30 lines in `observability/cgroup_linux.go` +
-         wiring sandboxd to remember `R`. Under the STRICT POSTURE above this
-         is part of guaranteeing the cgroup, not a no-op-on-failure guard: if
-         the supervisor/subtree-control dance can't be performed where it is
-         required, that is a startup failure, not a degrade. Caution: this runs
-         on the production cgroup path too (sandboxd may be root in a
-         differently-arranged cgroup), so the setup must be correct across both
-         the `--scope` wrap and plain-root. Deferred by decision — the EPERM
-         clearing + per-VM CPU accounting is the win already landed.
+         *`memory.max` is a HARD limit* — on breach (after failed reclaim) the
+         cgroup OOM-killer fires, which for a VM means SIGKILL to CH = abrupt
+         VM death. `memory.high` is the soft/throttle counterpart (reclaim
+         pressure, never kills). The wrinkle: most of a VM cgroup's memory is
+         the guest's **anonymous RAM, unreclaimable from the host**, so
+         `memory.high`'s reclaim has little to bite on — for VMs the real bound
+         is `memory.max`.
+
+         *Balloon makes guest RAM reclaimable* (the key enabler). CH v51.1
+         ships `--balloon "size=…,deflate_on_oom=on|off,free_page_reporting=
+         on|off"`, and our `linux-daft` guest kernel already has
+         `CONFIG_VIRTIO_BALLOON=y` + `CONFIG_PAGE_REPORTING=y` +
+         `CONFIG_BALLOON=y` (config-micro + third_party/kernel-config/
+         daft.config), so no kernel change is needed. Layered policy:
+           - `free_page_reporting=on` — PASSIVE: guest continuously reports
+             freed pages, host `MADV_DONTNEED`s them → cgroup footprint
+             shrinks on its own. One device flag, no control loop.
+           - `memory.max` = guest RAM + headroom (proposed `+ max(512 MiB,
+             25%)`) + `memory.swap.max = 0` (OOM rather than thrash host
+             swap) — HARD backstop.
+           - `pids.max` — fork-bomb cap (e.g. 512).
+           - `deflate_on_oom=on` — balloon auto-deflates on guest OOM so it
+             never wedges the guest.
+           - ACTIVE control loop (DEFERRED, slice 2): watch the per-VM
+             `memory.current`/PSI (already sampled by the observer) and
+             inflate the balloon via CH's API on host pressure → guest
+             reclaims before hitting the hard cap. Real feedback work
+             (hysteresis; balloon reclaim is cooperative/slow).
+
+         *Slice 1 (task #103):* balloon device with
+         `free_page_reporting=on,deflate_on_oom=on` + the `_supervisor`
+         move + `subtree_control` + `memory.max`/`swap.max=0`/`pids.max`.
+         Caution: the setup runs on the production cgroup path too (sandboxd
+         may be root in a differently-arranged cgroup), so it must be correct
+         across both the `--scope` wrap and plain-root. Decisions still open:
+         exact headroom number; whether to also set `memory.high`.
 
        - *Future / nice-to-have (not on the integration critical path):*
          carrying the **kernel-build toolchain** inside the sandbox

@@ -376,7 +376,7 @@ func TestDefaultRuntimeMountsIncludesWritableCgroup(t *testing.T) {
 }
 
 // TestDefaultRuntimeOmitsKVM pins that a plain (non-nested) workload
-// gets neither the /dev/kvm bind nor the 10:232 device-allow — the
+// gets neither a /dev/kvm device node nor the 10:232 device-allow — the
 // privilege grant is opt-in, so the unprivileged default must carry
 // no hypervisor hole.
 func TestDefaultRuntimeOmitsKVM(t *testing.T) {
@@ -385,29 +385,46 @@ func TestDefaultRuntimeOmitsKVM(t *testing.T) {
 			t.Errorf("default mounts unexpectedly bind /dev/kvm: %+v", m)
 		}
 	}
-	if r := defaultRuntimeLinuxConfig().Resources; r != nil {
+	cfg := defaultRuntimeLinuxConfig()
+	if r := cfg.Resources; r != nil {
 		t.Errorf("default linux config has Resources (device-allow) set: %+v", r)
+	}
+	for _, d := range cfg.Devices {
+		if d.Path == devKVMPath {
+			t.Errorf("default linux config unexpectedly mknods /dev/kvm: %+v", d)
+		}
 	}
 }
 
-// TestApplyNestedVirtAddsKVM pins the opt-in path: applyNestedVirt
-// appends the /dev/kvm bind and the 10:232 cgroup device-allow that
-// must travel together — the bind without the allow EPERMs, the
-// allow without the bind has nothing to open.
+// TestApplyNestedVirtAddsKVM pins the opt-in path: applyNestedVirt adds
+// a /dev/kvm linux.devices entry (crun mknods it in-container at 0666 so
+// a non-root container can open it) and the 10:232 cgroup device-allow.
+// The two must travel together — the device without the allow EPERMs,
+// the allow without the device has nothing to open. It must NOT bind the
+// VM's own node (that would preserve its 0600 mode and lock out non-root).
 func TestApplyNestedVirtAddsKVM(t *testing.T) {
 	mounts, linux := applyNestedVirt(defaultRuntimeMounts(), defaultRuntimeLinuxConfig())
 
-	var kvm *runtimeMount
-	for i := range mounts {
-		if mounts[i].Destination == devKVMPath {
-			kvm = &mounts[i]
+	for _, m := range mounts {
+		if m.Destination == devKVMPath {
+			t.Errorf("nested must mknod /dev/kvm, not bind it: %+v", m)
+		}
+	}
+
+	var kvm *runtimeDevice
+	for i := range linux.Devices {
+		if linux.Devices[i].Path == devKVMPath {
+			kvm = &linux.Devices[i]
 		}
 	}
 	if kvm == nil {
-		t.Fatal("nested mounts missing /dev/kvm bind")
+		t.Fatal("nested linux.devices missing /dev/kvm mknod entry")
 	}
-	if kvm.Type != mountTypeBind || kvm.Source != devKVMPath {
-		t.Errorf("/dev/kvm mount = %+v, want bind of /dev/kvm", *kvm)
+	if kvm.Type != "c" || kvm.Major != 10 || kvm.Minor != 232 {
+		t.Errorf("/dev/kvm device = %+v, want char 10:232", *kvm)
+	}
+	if kvm.FileMode == nil || *kvm.FileMode != 0o666 {
+		t.Errorf("/dev/kvm FileMode = %v, want 0666 (non-root must be able to open it)", kvm.FileMode)
 	}
 
 	if linux.Resources == nil {
@@ -533,8 +550,8 @@ func TestBundlePrivilegedFuseGatesFuse(t *testing.T) {
 }
 
 // TestBundleNestedVirtGatesKVM proves the BundleOptions.Nested flag
-// is what flips the /dev/kvm bind in the emitted config.json: off by
-// default, present when set.
+// is what flips the /dev/kvm device node in the emitted config.json:
+// off by default, present (as a linux.devices mknod entry) when set.
 func TestBundleNestedVirtGatesKVM(t *testing.T) {
 	host := localRegistry(t)
 	ref := host + "/test/nestedvirt:v1"

@@ -67,9 +67,27 @@ type runtimeMount struct {
 type runtimeLinuxConfig struct {
 	Namespaces    []runtimeNamespace `json:"namespaces"`
 	Resources     *runtimeResources  `json:"resources,omitempty"`
+	Devices       []runtimeDevice    `json:"devices,omitempty"`
 	Seccomp       *runtimeSeccomp    `json:"seccomp,omitempty"`
 	MaskedPaths   []string           `json:"maskedPaths"`
 	ReadonlyPaths []string           `json:"readonlyPaths"`
+}
+
+// runtimeDevice is one OCI `linux.devices` entry: it tells the runtime
+// to mknod the device node INSIDE the container (in its /dev tmpfs)
+// with the given FileMode/UID/GID, rather than bind-mounting the host's
+// node. Used to expose /dev/kvm with a 0666 FileMode so a non-root
+// container can open it — the VM's own node is 0600 root:root (no udev
+// in the initramfs) and a bind would preserve that. FileMode/UID/GID
+// are pointers so the OCI default (inherit) is expressed by omission.
+type runtimeDevice struct {
+	Type     string  `json:"type"`
+	Path     string  `json:"path"`
+	Major    int64   `json:"major"`
+	Minor    int64   `json:"minor"`
+	FileMode *uint32 `json:"fileMode,omitempty"`
+	UID      *uint32 `json:"uid,omitempty"`
+	GID      *uint32 `json:"gid,omitempty"`
 }
 
 // runtimeSeccomp is the container's syscall filter. v0 uses it for one
@@ -185,18 +203,24 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions, rootfs string) (runtim
 }
 
 // applyNestedVirt grants the container nested-virtualisation access:
-// it binds the VM's /dev/kvm into the container and adds the 10:232
-// cgroup device-allow so crun's default eBPF device filter permits
-// the open. devtmpfs in the VM exposes /dev/kvm once the guest kernel
-// has CONFIG_KVM built in; the container's /dev is a fresh tmpfs, so
-// without the bind the node is absent. The two must travel together —
-// the bind without the allow EPERMs, the allow without the bind has
-// nothing to open. Returns fresh slices so the unconditional defaults
-// stay unprivileged for every non-nested workload.
+// it has the runtime mknod /dev/kvm INSIDE the container (an OCI
+// linux.devices entry) with a 0666 FileMode, and adds the 10:232
+// cgroup device-allow so crun's default eBPF device filter permits the
+// open. The two must travel together — the device without the allow
+// EPERMs, the allow without the device has nothing to open.
+//
+// We mknod rather than bind-mount the VM's own /dev/kvm: that node is
+// 0600 root:root (devtmpfs default — the initramfs has no udev to widen
+// it), and a bind preserves the source mode, locking out any container
+// that runs as a non-root user. mknod lets us set 0666 so the image's
+// declared uid can open it; the node still routes to the same kvm
+// driver by its 10:232 identity. Returns fresh slices so the
+// unconditional defaults stay unprivileged for every non-nested
+// workload.
 func applyNestedVirt(mounts []runtimeMount, linux runtimeLinuxConfig) ([]runtimeMount, runtimeLinuxConfig) {
-	mounts = append(mounts, runtimeMount{
-		Destination: devKVMPath, Type: mountTypeBind, Source: devKVMPath,
-		Options: []string{mountOptBind, "rw"},
+	kvmMode := uint32(0o666)
+	linux.Devices = append(linux.Devices, runtimeDevice{
+		Type: "c", Path: devKVMPath, Major: 10, Minor: 232, FileMode: &kvmMode,
 	})
 	if linux.Resources == nil {
 		linux.Resources = &runtimeResources{}
