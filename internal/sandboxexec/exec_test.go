@@ -485,6 +485,10 @@ type fakeMaterializer struct {
 	applied bool
 	err     error
 	mkdir   bool
+	// seed, when set, populates the freshly-materialised dest dir — used
+	// to drop a devcontainer.json into the workspace content for the
+	// node-side overlay test. Implies mkdir.
+	seed    func(dest string) error
 	liveSet map[string]string
 	cleared []string
 }
@@ -494,8 +498,13 @@ func (f *fakeMaterializer) MaterializeMount(_ context.Context, key, dest string)
 	if f.err != nil {
 		return false, f.err
 	}
-	if f.mkdir {
+	if f.mkdir || f.seed != nil {
 		if err := os.MkdirAll(dest, 0o700); err != nil {
+			return false, err
+		}
+	}
+	if f.seed != nil {
+		if err := f.seed(dest); err != nil {
 			return false, err
 		}
 	}
@@ -511,6 +520,145 @@ func (f *fakeMaterializer) SetLiveMount(key, dir string) {
 
 func (f *fakeMaterializer) ClearLiveMount(key string) {
 	f.cleared = append(f.cleared, key)
+}
+
+// TestHandleSandboxEventDevcontainerOverlay pins the node-side slice-2d
+// resolve+overlay: a devcontainer-only spec (no explicit image_ref) boots
+// the image the devcontainer names, read from the materialised workspace
+// content, with the workspace's explicit env overlaid on top.
+func TestHandleSandboxEventDevcontainerOverlay(t *testing.T) {
+	mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
+		dir := filepath.Join(dest, ".devcontainer")
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "devcontainer.json"),
+			[]byte(`{"image":"ghcr.io/acme/dev:1","containerEnv":{"FOO":"bar"}}`), 0o644)
+	}}
+	var gotRef string
+	var gotOpts sandboxboot.BootOptions
+	asm := func(_ context.Context, ref string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		gotRef, gotOpts = ref, opts
+		return sandbox.Config{}, func() {}, nil
+	}
+	e, err := New(Config{
+		Stdout: io.Discard, Runner: noopRunner(), Assembler: asm,
+		MountMaterializer: mat, MountBackingDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{
+		WorkspaceUuid:    testWSUUID,
+		DevcontainerPath: ".devcontainer/devcontainer.json",
+		// Empty Source ⇒ CAS-materialised content mount.
+		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}},
+		Env:    []*sandboxv1.EnvVar{{Name: "OVERRIDE", Value: "ws"}},
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-dc", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if gotRef != "ghcr.io/acme/dev:1" {
+		t.Errorf("assembler image ref = %q, want the devcontainer's image", gotRef)
+	}
+	if !slices.Contains(gotOpts.Env, "FOO=bar") {
+		t.Errorf("env = %v, want FOO=bar from the devcontainer", gotOpts.Env)
+	}
+	if !slices.Contains(gotOpts.Env, "OVERRIDE=ws") {
+		t.Errorf("env = %v, want the workspace's explicit OVERRIDE preserved", gotOpts.Env)
+	}
+}
+
+// TestDevcontainerMissingFileFailsDispatch pins that a devcontainer_path
+// pointing at a file absent from the materialised content fails the
+// dispatch loudly rather than booting something unexpected.
+func TestDevcontainerMissingFileFailsDispatch(t *testing.T) {
+	mat := &fakeMaterializer{applied: true, mkdir: true} // materialises an empty dir
+	asm := func(_ context.Context, _ string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		t.Error("assembler must not run when the devcontainer is missing")
+		return sandbox.Config{}, func() {}, nil
+	}
+	e, err := New(Config{
+		Stdout: io.Discard, Runner: noopRunner(), Assembler: asm,
+		MountMaterializer: mat, MountBackingDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{
+		WorkspaceUuid:    testWSUUID,
+		DevcontainerPath: ".devcontainer/devcontainer.json",
+		Mounts:           []*sandboxv1.Mount{{Target: "/workspace"}},
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-miss", spec)); err == nil {
+		t.Error("expected dispatch to fail when the devcontainer file is absent")
+	}
+}
+
+// TestDevcontainerInvalidConfigFailsDispatch pins that a present but
+// unusable devcontainer (malformed JSON, or build-based which daft can't
+// build yet) fails the dispatch rather than booting the fallback.
+func TestDevcontainerInvalidConfigFailsDispatch(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"malformed", `{not json`},
+		{"build-based", `{"build":{"dockerfile":"Dockerfile"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
+				return os.WriteFile(filepath.Join(dest, "devcontainer.json"), []byte(tc.body), 0o644)
+			}}
+			asm := func(_ context.Context, _ string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+				t.Error("assembler must not run for an invalid devcontainer")
+				return sandbox.Config{}, func() {}, nil
+			}
+			e, err := New(Config{
+				Stdout: io.Discard, Runner: noopRunner(), Assembler: asm,
+				MountMaterializer: mat, MountBackingDir: t.TempDir(),
+			})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			spec := &sandboxv1.SandboxSpec{
+				WorkspaceUuid:    testWSUUID,
+				DevcontainerPath: "devcontainer.json",
+				Mounts:           []*sandboxv1.Mount{{Target: "/workspace"}},
+			}
+			if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-bad", spec)); err == nil {
+				t.Error("expected dispatch to fail for an invalid devcontainer")
+			}
+		})
+	}
+}
+
+func TestFindDevcontainerFile(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".devcontainer"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, ".devcontainer", "devcontainer.json")
+	if err := os.WriteFile(want, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mounts := []sandboxboot.Mount{{Source: ""}, {Source: root}} // empty source skipped
+
+	got, err := findDevcontainerFile(mounts, ".devcontainer/devcontainer.json")
+	if err != nil || got != want {
+		t.Errorf("findDevcontainerFile = %q, %v; want %q", got, err, want)
+	}
+	// A "../" escape is rooted-and-cleaned away, so it resolves within the
+	// mount (here: not found) rather than reaching outside it.
+	if _, err := findDevcontainerFile(mounts, "../../etc/passwd"); err == nil {
+		t.Error("expected not-found for an escaping path, got nil")
+	}
+	// Degenerate paths are rejected.
+	for _, bad := range []string{"", ".", "/"} {
+		if _, err := findDevcontainerFile(mounts, bad); err == nil {
+			t.Errorf("findDevcontainerFile(%q): want error", bad)
+		}
+	}
 }
 
 func TestNewRejectsMaterializerWithoutBackingDir(t *testing.T) {

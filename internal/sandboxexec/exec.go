@@ -722,16 +722,33 @@ func (e *Executor) assignVsock(uid string) *sandbox.VsockConfig {
 // which branch produced the cfg.
 func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) (sandbox.Config, func(), error) {
 	imageRef := spec.GetImageRef()
-	if imageRef == "" || e.assembler == nil {
+	hasDevcontainer := spec.GetDevcontainerPath() != ""
+	// A devcontainer-only workspace carries no explicit image_ref — the
+	// image comes from the devcontainer, which we can only read once the
+	// content is materialised below. So take the image path when either
+	// an image_ref or a devcontainer_path is set.
+	if (imageRef == "" && !hasDevcontainer) || e.assembler == nil {
 		return e.base, func() {}, nil
 	}
 	mounts, err := e.resolveMounts(ctx, uid, spec)
 	if err != nil {
 		return sandbox.Config{}, func() {}, err
 	}
+	env := envFromSpec(spec.GetEnv())
+	if hasDevcontainer {
+		// Read the devcontainer from the just-materialised content and
+		// overlay the explicit spec on top (explicit wins). The effective
+		// env already folds in the explicit env, so it replaces (not
+		// appends to) the spec env here.
+		effImage, effEnv, derr := resolveDevcontainerOverlay(spec, mounts)
+		if derr != nil {
+			return sandbox.Config{}, func() {}, derr
+		}
+		imageRef, env = effImage, effEnv
+	}
 	opts := sandboxboot.BootOptions{
 		Mounts:               mounts,
-		Env:                  envFromSpec(spec.GetEnv()),
+		Env:                  env,
 		Nested:               spec.GetNestedVirtualization().GetEnable(),
 		PrivilegedFuseMounts: spec.GetPrivilegedFuseMounts().GetEnable(),
 	}

@@ -2464,13 +2464,21 @@ the user-host or in CI today.
       node can read the real image/mount, so the orchestrator trusts it
       and the node validates at dispatch — a broken devcontainer fails
       loudly there). `target` still required. Tests for both; gate 94.30%.
-    - **Slice 2d-ii (next) — executor resolve+overlay.** After the
-      executor materialises the workspace-content mount, read
-      `<materialised>/<devcontainer_path>`, `devcontainer.Resolve` →
-      `ToWorkspaceSpec` (base) → `Overlay(base, explicit-from-SandboxSpec)`
-      → apply onto the boot config (image ref, env, mounts, ports). The
-      `SandboxSpec` ↔ `workspacecatalog.Spec` conversion for the overlay is
-      mechanical. Unblocks an `image:`-based devcontainer end-to-end.
+    - **Slice 2d-ii (landed 2026-06-08) — executor resolve+overlay.**
+      `internal/sandboxexec/devcontainer.go`: in `baseBootConfig`, take the
+      image path when `image_ref` OR `devcontainer_path` is set; after
+      `resolveMounts` materialises the content, `resolveDevcontainerOverlay`
+      reads `<materialised-mount>/<devcontainer_path>` (rooted-and-cleaned
+      so a `../` can't escape the mount), `devcontainer.Resolve` →
+      `ToWorkspaceSpec` (base) → `Overlay(base, explicitSpec(SandboxSpec))`
+      → effective **image_ref + env** handed to the assembler. A
+      devcontainer-only workspace (no explicit image) now boots the image
+      the devcontainer names; a missing/malformed/build-based devcontainer
+      fails the dispatch loudly. **This cut overlays image_ref + env**;
+      ports are a follow-up (consumed in `resolveBootConfig`, and optional
+      for the e2e). An `image:`-based devcontainer now boots end-to-end.
+      Tests: overlay happy-path + missing-file + malformed/build-based +
+      `findDevcontainerFile` traversal. gate 94.30%.
   - **PostCreate** still needs a post-boot-exec mechanism (proto field +
     executor/agent sequencing) — its own slice, after 2d.
   - **Slice 3 — image builder (the gap).** Build `build.dockerfile`.
