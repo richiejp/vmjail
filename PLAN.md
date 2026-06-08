@@ -1610,6 +1610,44 @@ the user-host or in CI today.
        is neither a grant nor a kernel knob. So most of the work was
        *not* relaxing the sandbox.
 
+       **GREEN end-to-end 2026-06-08** (commits fc20792, f8bbd67,
+       357f2fb): the full `make check` now passes in-sandbox in **~244 s**
+       at **94.29 %** coverage (above baseline — the gadget tests cover
+       *more* in the privileged sandbox). Five further things the
+       end-to-end run surfaced, none of them I/O or capabilities — a
+       long, rigorous virtiofs-latency hunt (host-disk falsified via
+       `pgpgin≈0`; 143 µs cold per-op; a thread-pool gave 3.9× read
+       concurrency but **zero** build speedup) **exonerated I/O**; the
+       per-VM CPU timeline (compile saturates 4 cores ~90 s, then a
+       ~500 s near-idle tail) revealed a **hung test**, named by
+       `go test -timeout`:
+       (i) the check scripts' `#!/usr/bin/env bash` ENOENT'd — the
+       nix-less image had `/bin/env` but no **`/usr/bin/env`** (kernel
+       BINFMT_SCRIPT was fine); added the shim.
+       (ii) on the **Linux 7.0 guest, iomap-ised FUSE buffered reads
+       collapse a read-handler errno to EIO**, so daftfuse's policy
+       Deny/Freeze surfaced as EIO not EACCES/EAGAIN. Fixed by opening
+       FOPEN_DIRECT_IO + negotiating CAP_DIRECT_IO_ALLOW_MMAP (direct
+       reads return the errno verbatim; mmap/exec preserved).
+       (iii) the cgroup tests (observability `TestDelegationOK`, sandbox
+       `TestCreateVMCgroup`) assumed a deep `/proc/self/cgroup`; in the
+       container's **cgroup-ns it is `0::/`**, so the fake root resolved
+       to an existing dir → point it at a missing subdir.
+       (iv) **the hang**: the 4 `observability/ebpf/* TestRun*Unprivileged`
+       tests pass `context.Background()` expecting the BPF *load* to fail
+       (unprivileged). But `PrivilegedFuseMounts` grants CAP_SYS_ADMIN, so
+       the load **succeeds** and `Run` blocks forever on `ringbuf.Read`.
+       Fix: a pre-cancelled context so `Run` returns whether the load
+       fails (host) or succeeds (sandbox → skip).
+       (v) that cgroup test's timing shift tipped a flaky
+       `vsock.go:249` (WriteGuestConfig-error) coverage block → covered
+       deterministically. The cold-GOCACHE perf worry was a red herring
+       (the compile is ~90 s); kept `/tmp` = 50 % guest RAM (was a fixed
+       256 MiB wart) + GOCACHE/GOTMPDIR on RAM as genuine wins. The
+       warm-GOCACHE follow-up is no longer on the critical path. The test
+       stays gated behind `DAFT_RUN_SELFBUILD=1`; it is now fast/green
+       enough to ungate.
+
        **`PrivilegedFuseMounts` grant landed (2026-06-03).** The first
        of those grants: a `PrivilegedFuseMounts` config section (proto
        → spec → `BootOptions` → `BundleOptions` →
