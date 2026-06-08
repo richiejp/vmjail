@@ -182,6 +182,23 @@ func (h *WorkspaceCatalogHandler) SetImage(
 		})
 }
 
+// SetDevcontainer records the path to a devcontainer.json within the
+// workspace content, or clears it when empty. Setting it makes the
+// workspace launchable (it provisionally satisfies the image+mount
+// requirement, see missingFields); the node reads and overlays it from
+// the materialised content at dispatch (slice 2d).
+func (h *WorkspaceCatalogHandler) SetDevcontainer(
+	_ context.Context,
+	req *connect.Request[workspacev1.SetDevcontainerRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	path := req.Msg.GetDevcontainerPath()
+	return h.mutate(req.Header(), req.Msg.GetHandle(),
+		func(w *workspacecatalog.Workspace) error {
+			w.Spec.DevcontainerPath = path
+			return nil
+		})
+}
+
 // SetTarget pins the workspace to a sandbox-host fingerprint, or
 // clears the pin when the value is empty.
 func (h *WorkspaceCatalogHandler) SetTarget(
@@ -797,14 +814,15 @@ func (h *WorkspaceCatalogHandler) Release(
 // resource (with metadata + status) via workspaceToSandbox.
 func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Fingerprint) *sandboxv1.SandboxSpec {
 	return &sandboxv1.SandboxSpec{
-		ImageRef:      ws.Spec.ImageRef,
-		WorkspaceUuid: ws.Metadata.UUID,
-		Node:          &sandboxv1.NodeRef{Fingerprint: nodeFP.String()},
-		Mounts:        mountsToProto(ws.Spec.Mounts),
-		Env:           envToProto(ws.Spec.Env),
-		Ports:         portsToProto(ws.Spec.Ports),
-		MemoryBytes:   ws.Spec.MemoryBytes,
-		CpuCores:      ws.Spec.CPUCores,
+		ImageRef:         ws.Spec.ImageRef,
+		DevcontainerPath: ws.Spec.DevcontainerPath,
+		WorkspaceUuid:    ws.Metadata.UUID,
+		Node:             &sandboxv1.NodeRef{Fingerprint: nodeFP.String()},
+		Mounts:           mountsToProto(ws.Spec.Mounts),
+		Env:              envToProto(ws.Spec.Env),
+		Ports:            portsToProto(ws.Spec.Ports),
+		MemoryBytes:      ws.Spec.MemoryBytes,
+		CpuCores:         ws.Spec.CPUCores,
 		NestedVirtualization: &sandboxv1.NestedVirtualization{
 			Enable: ws.Spec.NestedVirt,
 		},
@@ -943,6 +961,7 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 		Spec: &workspacev1.WorkspaceSpec{
 			ImageRef:                 ws.Spec.ImageRef,
 			PendingBuildId:           ws.Spec.PendingBuildID,
+			DevcontainerPath:         ws.Spec.DevcontainerPath,
 			Mounts:                   mountsToProto(ws.Spec.Mounts),
 			Env:                      envToProto(ws.Spec.Env),
 			Ports:                    portsToProto(ws.Spec.Ports),

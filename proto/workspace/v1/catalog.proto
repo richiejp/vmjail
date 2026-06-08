@@ -100,6 +100,13 @@ message WorkspaceSpec {
   // disabled. Projected directly onto
   // SandboxSpec.privileged_fuse_mounts at Launch.
   daft.sandbox.v1.PrivilegedFuseMounts privileged_fuse_mounts = 12;
+
+  // Path to a devcontainer.json WITHIN the workspace content (e.g.
+  // ".devcontainer/devcontainer.json"), not a host path. At Launch the
+  // orchestrator reads it from the pushed content, resolves it to a base
+  // spec, and overlays these explicit spec fields on top (the explicit
+  // fields win). Empty ⇒ no devcontainer base. See PLAN.md D6c.5.
+  string devcontainer_path = 13;
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.

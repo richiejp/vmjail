@@ -438,8 +438,15 @@ type SandboxSpec struct {
 	// PrivilegedFuseMounts message — the name foregrounds the danger
 	// (it hands the workload CAP_SYS_ADMIN, near-root inside the VM).
 	PrivilegedFuseMounts *PrivilegedFuseMounts `protobuf:"bytes,12,opt,name=privileged_fuse_mounts,json=privilegedFuseMounts,proto3" json:"privileged_fuse_mounts,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Path to a devcontainer.json WITHIN the workspace content (e.g.
+	// ".devcontainer/devcontainer.json"), not a host path. When set, the
+	// node executor reads it from the materialised workspace content at
+	// dispatch, projects it to a base spec, and overlays the explicit
+	// spec fields above (image_ref/env/mounts/ports) on top — the explicit
+	// fields win. Empty ⇒ no devcontainer base. See PLAN.md D6c.5.
+	DevcontainerPath string `protobuf:"bytes,13,opt,name=devcontainer_path,json=devcontainerPath,proto3" json:"devcontainer_path,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *SandboxSpec) Reset() {
@@ -554,6 +561,13 @@ func (x *SandboxSpec) GetPrivilegedFuseMounts() *PrivilegedFuseMounts {
 		return x.PrivilegedFuseMounts
 	}
 	return nil
+}
+
+func (x *SandboxSpec) GetDevcontainerPath() string {
+	if x != nil {
+		return x.DevcontainerPath
+	}
+	return ""
 }
 
 // SandboxStatus is the orchestrator's observed runtime state.
@@ -1259,7 +1273,7 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\tworkspace\x18\x02 \x01(\v2\x1d.daft.sandbox.v1.WorkspaceRefR\tworkspace\x129\n" +
 	"\n" +
 	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12I\n" +
-	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xff\x04\n" +
+	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xac\x05\n" +
 	"\vSandboxSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12.\n" +
 	"\x06mounts\x18\x02 \x03(\v2\x16.daft.sandbox.v1.MountR\x06mounts\x12)\n" +
@@ -1274,7 +1288,8 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\tcpu_cores\x18\n" +
 	" \x01(\rR\bcpuCores\x12Z\n" +
 	"\x15nested_virtualization\x18\v \x01(\v2%.daft.sandbox.v1.NestedVirtualizationR\x14nestedVirtualization\x12[\n" +
-	"\x16privileged_fuse_mounts\x18\f \x01(\v2%.daft.sandbox.v1.PrivilegedFuseMountsR\x14privilegedFuseMounts\"\xcc\x01\n" +
+	"\x16privileged_fuse_mounts\x18\f \x01(\v2%.daft.sandbox.v1.PrivilegedFuseMountsR\x14privilegedFuseMounts\x12+\n" +
+	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\"\xcc\x01\n" +
 	"\rSandboxStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12\x1b\n" +
 	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12:\n" +

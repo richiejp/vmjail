@@ -245,8 +245,14 @@ type WorkspaceSpec struct {
 	// disabled. Projected directly onto
 	// SandboxSpec.privileged_fuse_mounts at Launch.
 	PrivilegedFuseMounts *v1.PrivilegedFuseMounts `protobuf:"bytes,12,opt,name=privileged_fuse_mounts,json=privilegedFuseMounts,proto3" json:"privileged_fuse_mounts,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Path to a devcontainer.json WITHIN the workspace content (e.g.
+	// ".devcontainer/devcontainer.json"), not a host path. At Launch the
+	// orchestrator reads it from the pushed content, resolves it to a base
+	// spec, and overlays these explicit spec fields on top (the explicit
+	// fields win). Empty ⇒ no devcontainer base. See PLAN.md D6c.5.
+	DevcontainerPath string `protobuf:"bytes,13,opt,name=devcontainer_path,json=devcontainerPath,proto3" json:"devcontainer_path,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *WorkspaceSpec) Reset() {
@@ -361,6 +367,13 @@ func (x *WorkspaceSpec) GetPrivilegedFuseMounts() *v1.PrivilegedFuseMounts {
 		return x.PrivilegedFuseMounts
 	}
 	return nil
+}
+
+func (x *WorkspaceSpec) GetDevcontainerPath() string {
+	if x != nil {
+		return x.DevcontainerPath
+	}
+	return ""
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.
@@ -542,7 +555,7 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x94\x05\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xc1\x05\n" +
 	"\rWorkspaceSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12(\n" +
 	"\x10pending_build_id\x18\x02 \x01(\tR\x0ependingBuildId\x12.\n" +
@@ -557,7 +570,8 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\tcpu_cores\x18\n" +
 	" \x01(\rR\bcpuCores\x12Z\n" +
 	"\x15nested_virtualization\x18\v \x01(\v2%.daft.sandbox.v1.NestedVirtualizationR\x14nestedVirtualization\x12[\n" +
-	"\x16privileged_fuse_mounts\x18\f \x01(\v2%.daft.sandbox.v1.PrivilegedFuseMountsR\x14privilegedFuseMounts\"\x8b\x02\n" +
+	"\x16privileged_fuse_mounts\x18\f \x01(\v2%.daft.sandbox.v1.PrivilegedFuseMountsR\x14privilegedFuseMounts\x12+\n" +
+	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\"\x8b\x02\n" +
 	"\x0fWorkspaceStatus\x12/\n" +
 	"\x13observed_generation\x18\x01 \x01(\x04R\x12observedGeneration\x12:\n" +
 	"\n" +

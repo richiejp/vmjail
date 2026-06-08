@@ -89,6 +89,14 @@ message SandboxSpec {
   // PrivilegedFuseMounts message — the name foregrounds the danger
   // (it hands the workload CAP_SYS_ADMIN, near-root inside the VM).
   PrivilegedFuseMounts privileged_fuse_mounts = 12;
+
+  // Path to a devcontainer.json WITHIN the workspace content (e.g.
+  // ".devcontainer/devcontainer.json"), not a host path. When set, the
+  // node executor reads it from the materialised workspace content at
+  // dispatch, projects it to a base spec, and overlays the explicit
+  // spec fields above (image_ref/env/mounts/ports) on top — the explicit
+  // fields win. Empty ⇒ no devcontainer base. See PLAN.md D6c.5.
+  string devcontainer_path = 13;
 }
 
 // SandboxStatus is the orchestrator's observed runtime state.

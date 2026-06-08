@@ -11,6 +11,8 @@ import (
 const (
 	uuidA = "11111111-1111-4111-8111-111111111111"
 	uuidB = "22222222-2222-4222-8222-222222222222"
+
+	missingTarget = "target"
 )
 
 // fixedClock returns a deterministic now() so timestamp assertions
@@ -49,6 +51,26 @@ func TestNewStoreDefaultsClock(t *testing.T) {
 	}
 	if ws.Metadata.CreatedAt.IsZero() {
 		t.Error("default clock did not produce a non-zero CreatedAt")
+	}
+}
+
+func TestMissingFieldsDevcontainerSatisfiesImageAndMount(t *testing.T) {
+	// A devcontainer provides the image and the workspace-content mount,
+	// so a spec with only DevcontainerPath + target is complete; the node
+	// resolves the actual image/mount at dispatch.
+	dc := Spec{DevcontainerPath: ".devcontainer/devcontainer.json", TargetSandboxFingerprint: "fp"}
+	if got := missingFields(dc); len(got) != 0 {
+		t.Errorf("missingFields(devcontainer spec) = %v, want none", got)
+	}
+	// Without a target it's still incomplete — only the target check fires.
+	dcNoTarget := Spec{DevcontainerPath: ".devcontainer/devcontainer.json"}
+	if got := missingFields(dcNoTarget); len(got) != 1 || got[0] != missingTarget {
+		t.Errorf("missingFields(no target) = %v, want [target]", got)
+	}
+	// No devcontainer, no image/mount: the original behaviour is intact.
+	bare := Spec{}
+	if got := missingFields(bare); len(got) != 3 {
+		t.Errorf("missingFields(bare) = %v, want mount/image/target", got)
 	}
 }
 

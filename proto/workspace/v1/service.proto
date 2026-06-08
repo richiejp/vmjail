@@ -57,6 +57,12 @@ service WorkspaceCatalogService {
   // field (reverts to DRAFT if no other image source set).
   rpc SetImage(SetImageRequest) returns (WorkspaceResponse) {}
 
+  // SetDevcontainer records the path to a devcontainer.json within the
+  // workspace content. At Launch the orchestrator reads it from the
+  // pushed content, projects it to a base spec, and overlays the
+  // explicit spec fields on top. Empty clears it.
+  rpc SetDevcontainer(SetDevcontainerRequest) returns (WorkspaceResponse) {}
+
   // SetTarget pins the workspace to a specific sandbox-host by
   // mTLS fingerprint. Empty fingerprint clears the pin (scheduler
   // will pick at Launch time, once Launch lands in B2c).
@@ -354,6 +360,13 @@ message SetImageRequest {
   WorkspaceHandle handle = 1;
   // OCI image reference. Empty clears the field.
   string image_ref = 2;
+}
+
+message SetDevcontainerRequest {
+  WorkspaceHandle handle = 1;
+  // Path to a devcontainer.json within the workspace content (e.g.
+  // ".devcontainer/devcontainer.json"). Empty clears it.
+  string devcontainer_path = 2;
 }
 
 message SetTargetRequest {

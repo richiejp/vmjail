@@ -40,21 +40,22 @@ const (
 // Subcommand verb names. Promoted to constants so the cobra Use
 // fields, span names, and tests reference the same string.
 const (
-	createSubName    = "create"
-	statusSubName    = "status"
-	imageSubName     = "image"
-	targetSubName    = "target"
-	mountSubName     = "mount"
-	envSubName       = "env"
-	portSubName      = "port"
-	validateSubName  = "validate"
-	launchSubName    = "launch"
-	stopSubName      = "stop"
-	addSubName       = "add"
-	rmSubName        = "rm"
-	resourcesSubName = "resources"
-	nestedSubName    = "nested"
-	fuseSubName      = "privileged-fuse"
+	createSubName       = "create"
+	statusSubName       = "status"
+	imageSubName        = "image"
+	devcontainerSubName = "devcontainer"
+	targetSubName       = "target"
+	mountSubName        = "mount"
+	envSubName          = "env"
+	portSubName         = "port"
+	validateSubName     = "validate"
+	launchSubName       = "launch"
+	stopSubName         = "stop"
+	addSubName          = "add"
+	rmSubName           = "rm"
+	resourcesSubName    = "resources"
+	nestedSubName       = "nested"
+	fuseSubName         = "privileged-fuse"
 )
 
 // workspaceClientOpts is the shared flag set every catalog
@@ -227,6 +228,7 @@ func newWorkspaceCatalogSubcommands() []*cobra.Command {
 		newWorkspaceStatusCmd(),
 		newWorkspaceListCmd(),
 		newWorkspaceImageCmd(),
+		newWorkspaceDevcontainerCmd(),
 		newWorkspaceTargetCmd(),
 		newWorkspaceResourcesCmd(),
 		newWorkspaceNestedCmd(),
@@ -353,6 +355,39 @@ func newWorkspaceImageCmd() *cobra.Command {
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.SetImage(ctx, connect.NewRequest(
 						&workspacev1.SetImageRequest{Handle: h, ImageRef: ref},
+					))
+					if err != nil {
+						return err
+					}
+					return writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace())
+				})
+		},
+	}
+	bindWorkspaceClientFlags(cmd, &opts)
+	return cmd
+}
+
+//nolint:dupl // catalog subcommands are structurally parallel by design — runCatalogCmd factors the body.
+func newWorkspaceDevcontainerCmd() *cobra.Command {
+	var opts workspaceClientOpts
+	cmd := &cobra.Command{
+		Use:   devcontainerSubName + " <path>",
+		Short: "Set the path to a devcontainer.json within the workspace content (no arg clears it)",
+		Long: "The path is relative to the workspace content root (e.g.\n" +
+			".devcontainer/devcontainer.json), not a host path. At launch the\n" +
+			"orchestrator reads it from the pushed content as a base spec and\n" +
+			"overlays the workspace's explicit image/mounts/env/ports on top.",
+		Args:          cobra.MaximumNArgs(1),
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var path string
+			if len(args) > 0 {
+				path = args[0]
+			}
+			return runCatalogCmd(cmd, opts, devcontainerSubName,
+				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
+					resp, err := c.SetDevcontainer(ctx, connect.NewRequest(
+						&workspacev1.SetDevcontainerRequest{Handle: h, DevcontainerPath: path},
 					))
 					if err != nil {
 						return err

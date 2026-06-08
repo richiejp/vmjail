@@ -699,6 +699,35 @@ func TestSetImageClearsField(t *testing.T) {
 	}
 }
 
+func TestSetDevcontainerRoundTripsAndClears(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "dc"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
+
+	const wantPath = ".devcontainer/devcontainer.json"
+	set, err := rig.client.SetDevcontainer(t.Context(), connect.NewRequest(
+		&workspacev1.SetDevcontainerRequest{Handle: handle, DevcontainerPath: wantPath},
+	))
+	if err != nil {
+		t.Fatalf("SetDevcontainer: %v", err)
+	}
+	if got := set.Msg.GetWorkspace().GetSpec().GetDevcontainerPath(); got != wantPath {
+		t.Errorf("devcontainer_path = %q, want %q", got, wantPath)
+	}
+
+	cleared, err := rig.client.SetDevcontainer(t.Context(), connect.NewRequest(
+		&workspacev1.SetDevcontainerRequest{Handle: handle, DevcontainerPath: ""},
+	))
+	if err != nil {
+		t.Fatalf("SetDevcontainer clear: %v", err)
+	}
+	if got := cleared.Msg.GetWorkspace().GetSpec().GetDevcontainerPath(); got != "" {
+		t.Errorf("devcontainer_path = %q, want empty after clear", got)
+	}
+}
+
 func TestSetResourcesRoundTripsAndClears(t *testing.T) {
 	rig := newWorkspaceCatalogRig(t)
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
@@ -1171,6 +1200,11 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	)); err != nil {
 		t.Fatalf("SetNestedVirtualization: %v", err)
 	}
+	if _, err := rig.client.SetDevcontainer(t.Context(), connect.NewRequest(
+		&workspacev1.SetDevcontainerRequest{Handle: uuidHandle(uuid), DevcontainerPath: ".devcontainer/devcontainer.json"},
+	)); err != nil {
+		t.Fatalf("SetDevcontainer: %v", err)
+	}
 	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(
 		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
 	)); err != nil {
@@ -1204,6 +1238,9 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	}
 	if call.sandbox.GetSpec().GetWorkspaceUuid() != uuid {
 		t.Errorf("spec.workspace_uuid = %q, want %q", call.sandbox.GetSpec().GetWorkspaceUuid(), uuid)
+	}
+	if got := call.sandbox.GetSpec().GetDevcontainerPath(); got != ".devcontainer/devcontainer.json" {
+		t.Errorf("spec.devcontainer_path = %q, want it projected to the node", got)
 	}
 	if len(call.sandbox.GetSpec().GetMounts()) != 1 || call.sandbox.GetSpec().GetMounts()[0].GetTarget() != testMountTarget {
 		t.Errorf("spec.mounts = %v, want [%s]", call.sandbox.GetSpec().GetMounts(), testMountTarget)

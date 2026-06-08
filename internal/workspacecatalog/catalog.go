@@ -173,8 +173,15 @@ type Metadata struct {
 // Spec is the user-declared workspace state. Editing any field bumps
 // Metadata.Generation.
 type Spec struct {
-	ImageRef                 string
-	PendingBuildID           string
+	ImageRef       string
+	PendingBuildID string
+	// DevcontainerPath is a path to a devcontainer.json WITHIN the
+	// workspace content (e.g. ".devcontainer/devcontainer.json"), not a
+	// host path. At Launch the orchestrator reads it from the pushed
+	// content, projects it to a base spec, and overlays these explicit
+	// spec fields on top (explicit wins). Empty ⇒ no devcontainer base.
+	// See PLAN.md D6c.5 and internal/devcontainerspec.
+	DevcontainerPath         string
 	Mounts                   []Mount
 	Env                      []EnvVar
 	Ports                    []PortMapping
@@ -459,12 +466,20 @@ func (s *Store) List(keep func(*Workspace) bool) []Workspace {
 // The required set: at least one Mount, exactly one of ImageRef or
 // PendingBuildID, and a target (TargetSandboxFingerprint). The CLI
 // uses this list verbatim, so the strings are user-facing.
+//
+// A DevcontainerPath provides the image and the workspace-content mount
+// itself — but only the node can read it (the content lives there), so
+// the orchestrator trusts it provisionally here and lets the node
+// resolve for real at dispatch. Hence a devcontainer satisfies both the
+// "image" and "mount" requirements; "target" is still required (it's the
+// node the content must be read on).
 func missingFields(spec Spec) []string {
 	var out []string
-	if len(spec.Mounts) == 0 {
+	hasDevcontainer := spec.DevcontainerPath != ""
+	if len(spec.Mounts) == 0 && !hasDevcontainer {
 		out = append(out, "mount")
 	}
-	if spec.ImageRef == "" && spec.PendingBuildID == "" {
+	if spec.ImageRef == "" && spec.PendingBuildID == "" && !hasDevcontainer {
 		out = append(out, "image")
 	}
 	if spec.TargetSandboxFingerprint == "" {

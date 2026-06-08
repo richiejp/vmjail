@@ -2442,13 +2442,35 @@ the user-host or in CI today.
     precedence". Fix `ToWorkspaceSpec` so the **workspace-content mount
     has an empty Source** (model B), leaving extra absolute-Source mounts
     as direct binds. Both pure + table-tested; no proto/RPC churn yet.
-  - **Slice 2c — `devcontainer_path` field + setter + CLI.** proto field
-    on the workspace spec, catalog plumbing, `daft workspace devcontainer
-    <path>` setter (mirrors `image`).
-  - **Slice 2d — server-side read+overlay at Launch.** Read
-    `devcontainer_path` from the pushed CAS content, `Resolve` →
-    `ToWorkspaceSpec` → `Overlay(base, explicit)` → effective SandboxSpec.
-    Unblocks an `image:`-based devcontainer end-to-end.
+  - **Slice 2c (landed 2026-06-08) — `devcontainer_path` field + setter +
+    CLI.** `WorkspaceSpec.devcontainer_path` (proto field 13) +
+    `SetDevcontainer` RPC + `workspacecatalog.Spec.DevcontainerPath` +
+    handler (mirrors `SetImage`, projected through `workspaceToProto`) +
+    `daft workspace devcontainer <path>` CLI (no arg clears). Documented
+    as a content-relative path read+overlaid at Launch. Inert until 2d.
+    Handler round-trip test; total gate 94.30%.
+  - **Slice 2d — node-side read+overlay at dispatch.** *Design
+    correction (2026-06-08, user: "why does the orchestrator need to read
+    the workspace?").* Pushed content lives on the **node**
+    (`workspace.Server` CAS in sandboxdcli), never the orchestrator — and
+    the node executor already materialises that content + pulls the image
+    + boots. So the orchestrator stays **content-blind**: it forwards
+    `devcontainer_path` and the node does the resolve+overlay where the
+    content already is. No orchestrator→node content fetch.
+    - **Slice 2d-i (landed 2026-06-08) — carry it + relax Ready.**
+      `SandboxSpec.devcontainer_path` (proto field 13) projected in
+      `workspaceToSandboxSpec`; `missingFields` now treats a
+      `DevcontainerPath` as provisionally satisfying image+mount (only the
+      node can read the real image/mount, so the orchestrator trusts it
+      and the node validates at dispatch — a broken devcontainer fails
+      loudly there). `target` still required. Tests for both; gate 94.30%.
+    - **Slice 2d-ii (next) — executor resolve+overlay.** After the
+      executor materialises the workspace-content mount, read
+      `<materialised>/<devcontainer_path>`, `devcontainer.Resolve` →
+      `ToWorkspaceSpec` (base) → `Overlay(base, explicit-from-SandboxSpec)`
+      → apply onto the boot config (image ref, env, mounts, ports). The
+      `SandboxSpec` ↔ `workspacecatalog.Spec` conversion for the overlay is
+      mechanical. Unblocks an `image:`-based devcontainer end-to-end.
   - **PostCreate** still needs a post-boot-exec mechanism (proto field +
     executor/agent sequencing) — its own slice, after 2d.
   - **Slice 3 — image builder (the gap).** Build `build.dockerfile`.

@@ -73,6 +73,9 @@ const (
 	// WorkspaceCatalogServiceSetImageProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's SetImage RPC.
 	WorkspaceCatalogServiceSetImageProcedure = "/daft.workspace.v1.WorkspaceCatalogService/SetImage"
+	// WorkspaceCatalogServiceSetDevcontainerProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's SetDevcontainer RPC.
+	WorkspaceCatalogServiceSetDevcontainerProcedure = "/daft.workspace.v1.WorkspaceCatalogService/SetDevcontainer"
 	// WorkspaceCatalogServiceSetTargetProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's SetTarget RPC.
 	WorkspaceCatalogServiceSetTargetProcedure = "/daft.workspace.v1.WorkspaceCatalogService/SetTarget"
@@ -152,6 +155,11 @@ type WorkspaceCatalogServiceClient interface {
 	// image_ref or pending_build_id. Empty image_ref clears the
 	// field (reverts to DRAFT if no other image source set).
 	SetImage(context.Context, *connect.Request[v1.SetImageRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// SetDevcontainer records the path to a devcontainer.json within the
+	// workspace content. At Launch the orchestrator reads it from the
+	// pushed content, projects it to a base spec, and overlays the
+	// explicit spec fields on top. Empty clears it.
+	SetDevcontainer(context.Context, *connect.Request[v1.SetDevcontainerRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 	// SetTarget pins the workspace to a specific sandbox-host by
 	// mTLS fingerprint. Empty fingerprint clears the pin (scheduler
 	// will pick at Launch time, once Launch lands in B2c).
@@ -334,6 +342,12 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetImage")),
 			connect.WithClientOptions(opts...),
 		),
+		setDevcontainer: connect.NewClient[v1.SetDevcontainerRequest, v1.WorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceSetDevcontainerProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetDevcontainer")),
+			connect.WithClientOptions(opts...),
+		),
 		setTarget: connect.NewClient[v1.SetTargetRequest, v1.WorkspaceResponse](
 			httpClient,
 			baseURL+WorkspaceCatalogServiceSetTargetProcedure,
@@ -457,6 +471,7 @@ type workspaceCatalogServiceClient struct {
 	get                     *connect.Client[v1.GetWorkspaceRequest, v1.WorkspaceResponse]
 	list                    *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
 	setImage                *connect.Client[v1.SetImageRequest, v1.WorkspaceResponse]
+	setDevcontainer         *connect.Client[v1.SetDevcontainerRequest, v1.WorkspaceResponse]
 	setTarget               *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
 	setResources            *connect.Client[v1.SetResourcesRequest, v1.WorkspaceResponse]
 	setNestedVirtualization *connect.Client[v1.SetNestedVirtualizationRequest, v1.WorkspaceResponse]
@@ -496,6 +511,11 @@ func (c *workspaceCatalogServiceClient) List(ctx context.Context, req *connect.R
 // SetImage calls daft.workspace.v1.WorkspaceCatalogService.SetImage.
 func (c *workspaceCatalogServiceClient) SetImage(ctx context.Context, req *connect.Request[v1.SetImageRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return c.setImage.CallUnary(ctx, req)
+}
+
+// SetDevcontainer calls daft.workspace.v1.WorkspaceCatalogService.SetDevcontainer.
+func (c *workspaceCatalogServiceClient) SetDevcontainer(ctx context.Context, req *connect.Request[v1.SetDevcontainerRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return c.setDevcontainer.CallUnary(ctx, req)
 }
 
 // SetTarget calls daft.workspace.v1.WorkspaceCatalogService.SetTarget.
@@ -613,6 +633,11 @@ type WorkspaceCatalogServiceHandler interface {
 	// image_ref or pending_build_id. Empty image_ref clears the
 	// field (reverts to DRAFT if no other image source set).
 	SetImage(context.Context, *connect.Request[v1.SetImageRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// SetDevcontainer records the path to a devcontainer.json within the
+	// workspace content. At Launch the orchestrator reads it from the
+	// pushed content, projects it to a base spec, and overlays the
+	// explicit spec fields on top. Empty clears it.
+	SetDevcontainer(context.Context, *connect.Request[v1.SetDevcontainerRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 	// SetTarget pins the workspace to a specific sandbox-host by
 	// mTLS fingerprint. Empty fingerprint clears the pin (scheduler
 	// will pick at Launch time, once Launch lands in B2c).
@@ -791,6 +816,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetImage")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceSetDevcontainerHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceSetDevcontainerProcedure,
+		svc.SetDevcontainer,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("SetDevcontainer")),
+		connect.WithHandlerOptions(opts...),
+	)
 	workspaceCatalogServiceSetTargetHandler := connect.NewUnaryHandler(
 		WorkspaceCatalogServiceSetTargetProcedure,
 		svc.SetTarget,
@@ -915,6 +946,8 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceListHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceSetImageProcedure:
 			workspaceCatalogServiceSetImageHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceSetDevcontainerProcedure:
+			workspaceCatalogServiceSetDevcontainerHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceSetTargetProcedure:
 			workspaceCatalogServiceSetTargetHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceSetResourcesProcedure:
@@ -976,6 +1009,10 @@ func (UnimplementedWorkspaceCatalogServiceHandler) List(context.Context, *connec
 
 func (UnimplementedWorkspaceCatalogServiceHandler) SetImage(context.Context, *connect.Request[v1.SetImageRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.SetImage is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) SetDevcontainer(context.Context, *connect.Request[v1.SetDevcontainerRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.SetDevcontainer is not implemented"))
 }
 
 func (UnimplementedWorkspaceCatalogServiceHandler) SetTarget(context.Context, *connect.Request[v1.SetTargetRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
