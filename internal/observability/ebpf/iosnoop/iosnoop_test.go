@@ -433,10 +433,16 @@ func TestCollectSample(t *testing.T) {
 // load path, mirroring the sibling gadgets' coverage seam. The real attach +
 // map reads run only in the guest under the e2e.
 func TestRunRealLoadFails(t *testing.T) {
-	if err := Run(context.Background(), io.Discard, 0); err == nil {
+	// Pre-cancelled context: a privileged env (e.g. the daft self-build
+	// sandbox with CAP_SYS_ADMIN) lets the load succeed, and without a
+	// cancelled ctx Run would block forever on the ring-buffer read. The
+	// unprivileged path returns the load error before the read loop.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := Run(ctx, io.Discard, 0); err == nil {
 		t.Skip("BPF load unexpectedly succeeded (running privileged); nothing to assert")
 	}
-	if err := RunAggregating(context.Background(), io.Discard, NewAggregator(), 0); err == nil {
+	if err := RunAggregating(ctx, io.Discard, NewAggregator(), 0); err == nil {
 		t.Skip("BPF load unexpectedly succeeded (running privileged)")
 	}
 }

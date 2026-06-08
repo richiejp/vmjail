@@ -169,13 +169,17 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 	//     try to fetch the exact toolchain over the network).
 	//   * GOFLAGS=-mod=vendor + GOPROXY=off force the offline build
 	//     from /workspace/vendor (symlinked to the image's baked
-	//     /opt/daft/vendor). GOCACHE + GOTMPDIR both go to
-	//     host-backed /workspace: the compile temp (golangci-lint
-	//     export data, link objects) and the cumulative build cache
-	//     each exceed the 256 MiB /tmp tmpfs. GOTMPDIR doubles as
-	//     the test binary's TMPDIR (go test sets it), so the short
-	//     /workspace/.gotmp prefix keeps unix-socket test paths under
-	//     the 108-byte sockaddr_un limit.
+	//     /opt/daft/vendor). GOCACHE + GOTMPDIR go to the RAM-backed
+	//     /tmp tmpfs (sized 50% of guest RAM, see defaultRuntimeMounts),
+	//     NOT host-backed /workspace: Go's build cache is thousands of
+	//     tiny file ops and a cold compile over virtiofs is
+	//     I/O-latency-bound (the host profiler showed ~92% idle CPU).
+	//     A RAM tmpfs removes the per-op virtiofs round-trip and is what
+	//     lets the cold `make check` finish inside the budget. GOPATH
+	//     stays on /workspace (low traffic with -mod=vendor) so it isn't
+	//     re-created each boot. GOTMPDIR doubles as the test binary's
+	//     TMPDIR (go test sets it); the short /tmp/gotmp prefix keeps
+	//     unix-socket test paths under the 108-byte sockaddr_un limit.
 	//   * `make check` exits 0 on success; the trailing
 	//     `&& echo DAFT-SELFBUILD-OK` lets waitForFileContains
 	//     detect success without relying on the absence of error
@@ -188,8 +192,8 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 	execShell := fmt.Sprintf(
 		"exec env HOME=/workspace/.home USER=root PATH=/bin "+
 			"CGO_ENABLED=0 GOTOOLCHAIN=local GOFLAGS=-mod=vendor GOPROXY=off "+
-			"GOCACHE=/workspace/.gocache GOPATH=/workspace/.gopath GOTMPDIR=/workspace/.gotmp "+
-			"/bin/sh -c 'mkdir -p /workspace/.home /workspace/.gotmp && cd /workspace && "+
+			"GOCACHE=/tmp/gocache GOPATH=/workspace/.gopath GOTMPDIR=/tmp/gotmp "+
+			"/bin/sh -c 'mkdir -p /workspace/.home /tmp/gocache /tmp/gotmp && cd /workspace && "+
 			"timeout --signal=KILL %ds make check && echo %s'",
 		daftSelfBuildInnerTimeout, daftSelfBuildSentinel,
 	)

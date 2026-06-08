@@ -429,7 +429,13 @@ func TestDefaultBPFDeps(t *testing.T) {
 // rather than panic — and this covers openSource's load + error path.
 // The success path is exercised by the e2e gadget test inside a VM.
 func TestRunWithRealOpenSourceFailsUnprivileged(t *testing.T) {
-	err := Run(context.Background(), io.Discard, 4026531836)
+	// Pre-cancelled context: a privileged env (e.g. the daft self-build
+	// sandbox, CAP_SYS_ADMIN) lets the load succeed, and without a cancelled
+	// ctx Run blocks forever on the ring-buffer read. The unprivileged path
+	// returns the load error before the read loop.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := Run(ctx, io.Discard, 4026531836)
 	if err == nil {
 		t.Skip("environment unexpectedly allowed BPF load; success path is covered by the VM e2e test")
 	}
@@ -442,7 +448,9 @@ func TestRunWithRealOpenSourceFailsUnprivileged(t *testing.T) {
 // entry the agent actually calls: like Run, the real load must fail cleanly
 // without CAP_BPF rather than panic. The success path is the VM e2e.
 func TestRunAggregatingFailsUnprivileged(t *testing.T) {
-	err := RunAggregating(context.Background(), io.Discard, NewAggregator(), 4026531836)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := RunAggregating(ctx, io.Discard, NewAggregator(), 4026531836)
 	if err == nil {
 		t.Skip("environment unexpectedly allowed BPF load; success path is covered by the VM e2e test")
 	}

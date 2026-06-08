@@ -584,8 +584,14 @@ func defaultRuntimeMounts() []runtimeMount {
 			Options: []string{mountOptNosuid, mountOptNoexec, mountOptNodev, "relatime", "rw"},
 		},
 		{
+			// size=50% matches the Linux default for a no-size tmpfs:
+			// /tmp scales with guest RAM rather than a fixed 256 MiB cap
+			// that throttles a build's GOCACHE/GOTMPDIR on a large VM yet
+			// still bounds blast radius on a small one. A 256 MiB /tmp on
+			// an 8 GiB VM is exactly the kind of surprising wart workloads
+			// trip over.
 			Destination: "/tmp", Type: mountTypeTmpfs, Source: mountTypeTmpfs,
-			Options: []string{mountOptNosuid, mountOptNodev, "mode=1777", "size=268435456"},
+			Options: []string{mountOptNosuid, mountOptNodev, "mode=1777", "size=50%"},
 		},
 		// /nix/store/.links is a tmpfs because nix's LocalStore
 		// unconditionally mkdirs this on first run, and the

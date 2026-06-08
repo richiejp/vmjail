@@ -344,12 +344,20 @@ func TestDefaultBPFDeps(t *testing.T) {
 // without CAP_BPF, so the real load must fail cleanly rather than panic. The
 // success path is exercised by the e2e gadget test inside a VM.
 func TestRunFailsUnprivileged(t *testing.T) {
+	// Pre-cancelled context so a *successful* load (a privileged env such
+	// as the daft self-build sandbox) returns promptly instead of blocking
+	// forever on the ring-buffer read. The unprivileged path returns the
+	// load error before the read loop. A privileged env legitimately allows
+	// the load, so that is a skip, not a failure (mirrors the sibling
+	// gadgets).
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	for _, err := range []error{
-		Run(context.Background(), io.Discard, 4026531836),
-		RunAggregating(context.Background(), io.Discard, NewAggregator(), 4026531836),
+		Run(ctx, io.Discard, 4026531836),
+		RunAggregating(ctx, io.Discard, NewAggregator(), 4026531836),
 	} {
 		if err == nil {
-			t.Error("expected a load failure without CAP_BPF")
+			t.Skip("environment unexpectedly allowed BPF load; success path is covered by the VM e2e test")
 		}
 	}
 }
