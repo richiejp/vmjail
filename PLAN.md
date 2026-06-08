@@ -2348,6 +2348,86 @@ the user-host or in CI today.
          from inside the sandbox. Tracked here as a deliberate later
          option, decoupled from the dogfood integration run.
 
+- D6c.5: **devcontainer support (#101)** — consume an existing
+  `devcontainer.json` (the containers.dev spec) so daft can boot a
+  workspace from a repo's own dev-container config. **Framing: absorb
+  good ideas + take free leverage, NOT strict spec compliance**
+  (compatibility is a nice-to-have for a personal tool).
+
+  *Why it's worth doing (investigation 2026-06-08).* Real, multi-vendor
+  install base: GitHub code search indexes **~75k** `devcontainer.json`
+  files; the spec is supported by ~13 tools (VS Code, JetBrains, Zed,
+  Codespaces, **CodeSandbox-on-microVMs**, DevPod, Gitpod). Docker's
+  2025 survey: 64 % of devs now use non-local/cloud dev envs. The #1
+  complaint is **cold-start latency** (feature install ~8 min; "overkill
+  if the project already starts in one command") — which is exactly the
+  axis daft's microVM/boot path is strong on (CodeSandbox runs the same
+  spec on microVMs and competes purely on snapshot/resume). So the
+  spec's worst weakness is daft's structural strength → real
+  differentiation, not just compatibility.
+
+  *Field-frequency survey (n=79 real files sampled from GitHub).* The
+  spec has ~40 fields; real configs cluster on a handful, and daft
+  already owns the runtime half. Hot fields and their daft mapping:
+  `name` 68 %, `image` 59 % (→ imagestore Pull ✅), `customizations`
+  59 % (editor-only → **ignore**), `postCreateCommand` 44 % (the one
+  hook that matters; the other 5 lifecycle hooks are 2–12 % → exec after
+  boot ⚠️ wire), `remoteUser`/`containerUser` 29 % (→ uid model
+  #97/#98/#100 ✅), `features` 29 % (OCI install units → later slice),
+  `build` (Dockerfile) 27 % (→ **the one true gap**: daft only *pulls*,
+  `imagestore/pull.go` go-containerregistry; no builder anywhere),
+  `forwardPorts` 22 % (→ PortForward ✅), `mounts`/`workspaceMount`/
+  `workspaceFolder` 15–18 % (→ virtio-fs share + translate ✅,
+  `buildShares`). `image` beats `build` ~2:1. So 7 of ~10 IR rows map
+  onto machinery already shipped; #101 is "add an image builder + wire
+  postCreate", not "build a devcontainer engine".
+
+  *Prior art to copy.* DevPod's split — a backend-agnostic spec layer
+  (it delegates to the MIT `devcontainers/cli`: `read-configuration`
+  emits normalised JSON; `build`/`up`/`run-user-commands`/`exec` are
+  separable) over a **provider** abstraction (local/VM/k8s). daft is
+  "another provider". Free option: don't reimplement the JSONC
+  parse/feature-merge/metadata-label-merge — shell out to / vendor (MIT)
+  the resolution layer. The good idea to absorb beyond that: do
+  feature+postCreate work at build time, then **VM-snapshot** the
+  post-build state (turn the cold-start weakness into daft's win); do
+  NOT install at attach time the way container-based devcontainers do.
+
+  Slices:
+  - **Slice 1 (landed 2026-06-08) — `devcontainer.json` → IR resolver.**
+    New pure package `internal/devcontainer` (no new infra): `Parse`
+    (string-aware jsonc: comments + trailing commas) → `Config`
+    (polymorphic fields decoded — image|build, the --mount string AND
+    object forms, int|"host:port" ports, string|argv|object lifecycle
+    commands, scalar-coerced build args) → `Resolve` → `Spec`, the
+    daft-shaped IR. `Resolve` validates exactly-one-of image/build
+    (compose → `ErrComposeUnsupported`), expands `${…}` variables
+    (localWorkspaceFolder[+Basename], containerWorkspaceFolder[+Basename],
+    localEnv:/containerEnv: with `:default`, devcontainerId; unknown vars
+    left verbatim so typos stay visible), and normalises the hooks.
+    Headline test fixture is PyTorch's real `.devcontainer/cpu/
+    devcontainer.json` verbatim. 96.6 % coverage, lint clean.
+  - **Slice 2 (next) — IR → sandboxboot.** Map `Spec` onto `BootOptions`
+    (Env, Mounts/Workspace → shares + translate, ForwardPorts) and wire
+    `PostCreate` as a post-boot exec. Image-based configs only (no
+    builder yet) — unblocks any `image:`-based devcontainer end-to-end.
+  - **Slice 3 — image builder (the gap).** Build `build.dockerfile`.
+    First host-side (buildah/buildkit → push to the embedded registry →
+    daft pulls) to de-risk; then in-sandbox as the real product feature.
+  - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
+    **features** (OCI install units) as build steps.
+
+  *e2e target — PyTorch (CPU variant: no GPU/`--gpus`).* Tiered like the
+  self-build: **Tier 1 (loop proof, cheap):** resolve the CPU config →
+  image (host-built first) → mount the checkout via virtio-fs → run
+  `postCreateCommand` → a **mock code agent** rewrites text in a
+  *pure-Python* file in the share → re-import asserts the edit took
+  (also re-tests the #100 uid-translate path) — no 45-min C++ compile.
+  **Tier 2 (gated, heavy):** full `setup.py develop`, agent edits a
+  `.cpp`/`.cu`, incremental `ninja` rebuild; size via `hostRequirements`
+  → per-VM cgroup. Resource caveat: a from-scratch PyTorch build wants
+  ~16 GiB RAM + many cores for 30–60 min, hence Tier 1 first.
+
 - D7: **Rootless storage translation** — bridge the
   CAP_CHOWN gap between the sandbox-host process and the
   container's view of the bundle / workspace.
