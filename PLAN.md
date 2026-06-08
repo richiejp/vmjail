@@ -2479,6 +2479,15 @@ the user-host or in CI today.
       for the e2e). An `image:`-based devcontainer now boots end-to-end.
       Tests: overlay happy-path + missing-file + malformed/build-based +
       `findDevcontainerFile` traversal. gate 94.30%.
+    - **E2E proof (landed 2026-06-08).** `TestClusterWorkspaceDevcontainerBoots`
+      (testdaemons, real VM): a workspace with NO explicit image, only a
+      `.devcontainer/devcontainer.json` in its content, boots the image the
+      devcontainer names with its `containerEnv` applied. The image
+      entrypoint echoes `$DC_MARKER` — set only by the devcontainer's env —
+      and the sandboxd log shows `DC_MARKER=dc-e2e-overlay-7f3a`, so the one
+      waited-for line covers read-content → resolve-image → overlay-env →
+      boot. PASS in 6.74s. **An image-based devcontainer boots end-to-end,
+      validated against /dev/kvm — not just unit fakes.**
   - **PostCreate** still needs a post-boot-exec mechanism (proto field +
     executor/agent sequencing) — its own slice, after 2d.
   - **Slice 3 — image builder (the gap).** Build `build.dockerfile`.
