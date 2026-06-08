@@ -104,6 +104,27 @@ func TestStartVsockConfigServerDropsEarlyClose(t *testing.T) {
 	}
 }
 
+// TestHandleControlConnWriteError covers handleControlConn's config-write
+// error branch deterministically: the client completes the handshake then
+// closes, so the server's WriteGuestConfig writes into a dead pipe, errors,
+// and the handler returns. The socket-server tests cover this branch only
+// flakily — when a disconnect happens to race the write — which leaves it at
+// the mercy of unrelated timing changes (see vsock.go:handleControlConn).
+func TestHandleControlConnWriteError(t *testing.T) {
+	server, client := net.Pipe()
+	go func() {
+		// Valid handshake so ReadGuestConfigRequest succeeds, then close so
+		// the server's WriteGuestConfig hits the dead pipe.
+		_ = agent.WriteGuestConfigRequest(client, &agentv1.GuestConfigRequest{AgentVersion: "1"})
+		_ = client.Close()
+	}()
+	// Returns once WriteGuestConfig errors; a hang would trip the package
+	// test timeout. signalBoot must not fire on the write-error path.
+	handleControlConn(context.Background(), server, buildGuestConfig(validCfg()), func() {
+		t.Error("signalBoot called despite a failed config write")
+	})
+}
+
 // TestStartVsockConfigServerNoVsockIsNoop confirms a VM with no vsock
 // device gets a do-nothing stop and no listener (the agent will fall
 // back to the cmdline).

@@ -805,8 +805,16 @@ func TestVMCgroupName_HandlesEmptyLogPath(t *testing.T) {
 // ENOENT regardless of whether this host happens to have real
 // delegation. (Delegation itself is guaranteed earlier, at process
 // startup, by the cgroupwrap systemd-run self-wrap.)
+//
+// The fake root must be a path that does NOT exist: a bare t.TempDir()
+// is not enough because inside a cgroup namespace (the dogfood
+// self-build container) /proc/self/cgroup is `0::/`, so CurrentCgroup
+// resolves to the root itself — which exists — and the create would
+// succeed. Joining under a missing subdir keeps the parent absent
+// whether the ambient cgroup path is the container's `/` or a deep host
+// path.
 func TestCreateVMCgroup_ErrorsWithoutDelegation(t *testing.T) {
-	fakeRoot := t.TempDir()
+	fakeRoot := filepath.Join(t.TempDir(), "missing")
 	prev := observability.SwapCgroupRoot(fakeRoot)
 	t.Cleanup(func() { observability.SwapCgroupRoot(prev) })
 
