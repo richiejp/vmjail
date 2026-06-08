@@ -57,6 +57,20 @@ func (m *Mount) Serve(_ context.Context, mountpoint string) (*Server, error) {
 			// syscall succeeds there too, and the fusermount
 			// fallback covers any environment that lacks it.
 			DirectMount: true,
+			// Files are opened FOPEN_DIRECT_IO (see Open) so a
+			// read-policy errno reaches the workload verbatim.
+			// Linux >= 7.0 routes buffered FUSE reads through iomap,
+			// whose completion carries only an uptodate bool — any
+			// read-handler errno collapses to a not-uptodate folio and
+			// surfaces as EIO, so a Deny/Freeze would look like
+			// EIO/corruption instead of EACCES/EAGAIN. The direct path
+			// (fuse_direct_read_iter) returns the errno as-is.
+			// CAP_DIRECT_IO_ALLOW_MMAP keeps MAP_SHARED mmap — hence
+			// exec of a binary served from the mount — working under
+			// direct I/O (the kernel otherwise refuses shared mmap on
+			// FOPEN_DIRECT_IO files). The CAS already caches content,
+			// so dropping the kernel page cache is largely redundant.
+			ExtraCapabilities: fuse.CAP_DIRECT_IO_ALLOW_MMAP,
 		},
 	}
 	srv, err := gofuse.Mount(mountpoint, root, opts)
@@ -141,9 +155,11 @@ func (f *fuseNode) Open(_ context.Context, _ uint32) (gofuse.FileHandle, uint32,
 	if f.node.kind != workspacev1.EntryKind_ENTRY_KIND_FILE {
 		return nil, 0, syscall.EISDIR
 	}
-	// nil file handle: Read forwards to NodeReader.Read on the
-	// node itself, which is what we want.
-	return nil, 0, 0
+	// nil file handle: Read forwards to NodeReader.Read on the node.
+	// FOPEN_DIRECT_IO bypasses the kernel buffered-read (iomap) path so a
+	// read-policy Deny/Freeze surfaces as EACCES/EAGAIN rather than the
+	// EIO that iomap collapses every read error into (see Serve).
+	return nil, fuse.FOPEN_DIRECT_IO, 0
 }
 
 func (f *fuseNode) Read(ctx context.Context, _ gofuse.FileHandle, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {

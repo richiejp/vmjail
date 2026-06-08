@@ -471,17 +471,26 @@
                   tmux
                 ];
               };
-              # `make` runs recipes via /bin/sh and the self-build
-              # wrapper execs /bin/sh; buildEnv ships dash as
-              # /bin/dash, so alias /bin/sh → dash.
-              binSh = pkgs.runCommand "daft-check-binsh" { } ''
-                mkdir -p $out/bin
+              # buildEnv only populates /bin, but the conventional
+              # interpreter paths a normal container ships also live
+              # under /usr/bin and as /bin/sh. Provide them as shims:
+              #   * /bin/sh → dash (make runs recipes via /bin/sh; the
+              #     self-build wrapper execs /bin/sh).
+              #   * /usr/bin/env → coreutils env. The check scripts
+              #     (check-submodule-revs.sh, cover-check.sh) start with
+              #     `#!/usr/bin/env bash`; without /usr/bin/env the
+              #     kernel's binfmt-script handler can't resolve the
+              #     shebang and every script exec fails ENOENT (Error
+              #     127), aborting `make check` at the first gate.
+              pathShims = pkgs.runCommand "daft-check-path-shims" { } ''
+                mkdir -p $out/bin $out/usr/bin
                 ln -s ${pkgs.dash}/bin/dash $out/bin/sh
+                ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
               '';
             in pkgs.dockerTools.buildLayeredImage {
               name = "daft-check";
               tag = "v1";
-              contents = [ checkToolchain binSh ];
+              contents = [ checkToolchain pathShims ];
               config = {
                 # Entrypoint sentinel mirrors the other fixtures so the
                 # test can WaitForSandboxdOutput on a stable string.

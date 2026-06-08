@@ -129,6 +129,14 @@ func TestClusterWorkspaceDaftSelfBuild(t *testing.T) {
 			"%s workspace mount add /workspace --source %s --name %s %s",
 			prefix, srcDir, wsName, orch,
 		)},
+		// `make check` runs internal/daftfuse's suite, which mounts a
+		// go-fuse filesystem via DirectMount (mount(2)) — needs /dev/fuse
+		// + CAP_SYS_ADMIN. privileged-fuse grants exactly that. Without
+		// it the 10 daftfuse tests fatal on `stat /dev/fuse`.
+		{Label: "fuse", Cmd: fmt.Sprintf(
+			"%s workspace privileged-fuse --enable --name %s %s",
+			prefix, wsName, orch,
+		)},
 		// `go test ./...` compiling + running every package in
 		// parallel is well past the 256 MiB default. 8 GiB / 4 CPUs
 		// mirrors the envelope a developer actually uses on the host.

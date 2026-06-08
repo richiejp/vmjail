@@ -445,11 +445,19 @@ func TestDelegationOK_TrueWhenParentWritable(t *testing.T) {
 }
 
 func TestDelegationOK_FalseWhenParentMissing(t *testing.T) {
-	withFakeCgroupRoot(t)
-	// Parent path deliberately left unseeded → the probe child's mkdir
-	// fails ENOENT, which DelegationOK reports as "not delegated".
+	// Point the cgroup root at a path that does NOT exist, so the probe
+	// child's mkdir fails ENOENT and DelegationOK reports "not
+	// delegated". A bare t.TempDir() is not enough: inside a cgroup
+	// namespace (e.g. the dogfood self-build container) /proc/self/cgroup
+	// is `0::/`, so CurrentCgroup() joins to the root itself — which
+	// exists — and the probe would succeed. Joining under a missing
+	// subdir keeps the parent absent whether the ambient cgroup path is
+	// the container's `/` or a deep host path.
+	orig := cgroupV2Root
+	cgroupV2Root = filepath.Join(t.TempDir(), "missing")
+	t.Cleanup(func() { cgroupV2Root = orig })
 	if DelegationOK() {
-		t.Error("DelegationOK = true with an unseeded parent; want false")
+		t.Error("DelegationOK = true with a missing cgroup root; want false")
 	}
 }
 
