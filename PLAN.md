@@ -2407,10 +2407,27 @@ the user-host or in CI today.
     left verbatim so typos stay visible), and normalises the hooks.
     Headline test fixture is PyTorch's real `.devcontainer/cpu/
     devcontainer.json` verbatim. 96.6 % coverage, lint clean.
-  - **Slice 2 (next) — IR → sandboxboot.** Map `Spec` onto `BootOptions`
-    (Env, Mounts/Workspace → shares + translate, ForwardPorts) and wire
-    `PostCreate` as a post-boot exec. Image-based configs only (no
-    builder yet) — unblocks any `image:`-based devcontainer end-to-end.
+  - **Slice 2 (landed 2026-06-08) — IR → workspace spec.** New package
+    `internal/devcontainerspec`: `ToWorkspaceSpec(*devcontainer.Spec) →
+    workspacecatalog.Spec`, the catalog domain type the orchestrator
+    already projects to `sandbox.v1.SandboxSpec` and the node executor
+    turns into virtio-fs shares (with the #100 uid-translation), env, and
+    port forwards. So once a devcontainer is a `workspacecatalog.Spec` it
+    flows through the **entire existing pipeline unchanged** — no new boot
+    surface. Maps image_ref, workspace mount + extra mounts (abs-target +
+    dup-target validated), containerEnv, forwardPorts (→ TCP). Image-based
+    only: a build stanza returns `ErrBuildUnsupported` (the slice-3 gap),
+    never a silent drop. `postCreateCommand` and `remoteUser` have no home
+    in the domain type, so they stay on the `devcontainer.Spec` for slices
+    2b/4 rather than being dropped. 100 % coverage; total gate
+    94.27 % → 94.35 %.
+  - **Slice 2b (next) — wire it to a user entry point.** The catalog is
+    field-setter RPCs (SetImage/AddMount/…), so a devcontainer needs a
+    `daft workspace from-devcontainer <path>` command (or a bulk
+    apply-spec RPC) that reads the json, calls `ToWorkspaceSpec`, and
+    issues the setters. Then an `image:`-based devcontainer boots
+    end-to-end. **PostCreate** still needs a post-boot-exec mechanism
+    (proto field + executor/agent sequencing) — its own slice.
   - **Slice 3 — image builder (the gap).** Build `build.dockerfile`.
     First host-side (buildah/buildkit → push to the embedded registry →
     daft pulls) to de-risk; then in-sandbox as the real product feature.
