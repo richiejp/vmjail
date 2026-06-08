@@ -2421,13 +2421,36 @@ the user-host or in CI today.
     in the domain type, so they stay on the `devcontainer.Spec` for slices
     2b/4 rather than being dropped. 100 % coverage; total gate
     94.27 % → 94.35 %.
-  - **Slice 2b (next) — wire it to a user entry point.** The catalog is
-    field-setter RPCs (SetImage/AddMount/…), so a devcontainer needs a
-    `daft workspace from-devcontainer <path>` command (or a bulk
-    apply-spec RPC) that reads the json, calls `ToWorkspaceSpec`, and
-    issues the setters. Then an `image:`-based devcontainer boots
-    end-to-end. **PostCreate** still needs a post-boot-exec mechanism
-    (proto field + executor/agent sequencing) — its own slice.
+  - **Design refinement (2026-06-08, user).** The devcontainer is NOT a
+    one-shot import macro. Instead: (1) a **`devcontainer_path` field on
+    the workspace config** names the config (relative to the workspace
+    content root); (2) the devcontainer is a **base layer** and the
+    explicit workspace settings **take precedence over it** — a live
+    overlay, not a copy; (3) the workspace-content mount uses **model (B),
+    push-CAS**: an empty-Source mount (resolved to the workspace UUID +
+    CAS server-side, the established `daft workspace mount` shape), with
+    the local dir recorded for `push`/`pull` — NOT a raw host bind.
+    Explicit extra binds with an absolute Source stay direct host binds.
+    The read-and-overlay happens at **Launch** (the server reads
+    `devcontainer_path` from the pushed content, projects → base, overlays
+    the stored explicit settings → effective SandboxSpec); push (B) is the
+    prerequisite that makes the file available server-side.
+  - **Slice 2b (next) — overlay + (B) mount fix (pure).** Add
+    `devcontainerspec.Overlay(base, override workspacecatalog.Spec)`:
+    override wins (image/resources by non-zero; mounts/env/ports
+    union-by-key with override winning) — encodes "workspace settings take
+    precedence". Fix `ToWorkspaceSpec` so the **workspace-content mount
+    has an empty Source** (model B), leaving extra absolute-Source mounts
+    as direct binds. Both pure + table-tested; no proto/RPC churn yet.
+  - **Slice 2c — `devcontainer_path` field + setter + CLI.** proto field
+    on the workspace spec, catalog plumbing, `daft workspace devcontainer
+    <path>` setter (mirrors `image`).
+  - **Slice 2d — server-side read+overlay at Launch.** Read
+    `devcontainer_path` from the pushed CAS content, `Resolve` →
+    `ToWorkspaceSpec` → `Overlay(base, explicit)` → effective SandboxSpec.
+    Unblocks an `image:`-based devcontainer end-to-end.
+  - **PostCreate** still needs a post-boot-exec mechanism (proto field +
+    executor/agent sequencing) — its own slice, after 2d.
   - **Slice 3 — image builder (the gap).** Build `build.dockerfile`.
     First host-side (buildah/buildkit → push to the embedded registry →
     daft pulls) to de-risk; then in-sandbox as the real product feature.

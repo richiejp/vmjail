@@ -68,14 +68,22 @@ func ToWorkspaceSpec(s *devcontainer.Spec) (workspacecatalog.Spec, error) {
 	}, nil
 }
 
-// projectMounts emits the workspace mount first (when workspaceMount was
-// given) followed by the extra mounts, all as catalog Mounts. A target
-// collision is rejected — two binds at one path would race the agent's
-// mount loop the same way duplicate spec mounts do.
+// projectMounts emits the workspace-content mount first (when
+// workspaceMount was given) followed by the extra mounts, all as catalog
+// Mounts. A target collision is rejected — two binds at one path would
+// race the agent's mount loop the same way duplicate spec mounts do.
+//
+// The workspace-content mount uses model (B), push-CAS: its Source is
+// left EMPTY so the node resolves it to the workspace UUID + CAS at
+// dispatch (the established `daft workspace mount` shape), with the local
+// project dir pushed up separately — NOT a raw host bind of
+// ${localWorkspaceFolder}. Extra devcontainer mounts keep their Source:
+// an absolute one is a direct host bind (the advanced `mount add
+// --source /abs` path the executor honours).
 func projectMounts(s *devcontainer.Spec) ([]workspacecatalog.Mount, error) {
 	out := make([]workspacecatalog.Mount, 0, 1+len(s.Mounts))
 	if m := s.Workspace.Mount; m != nil {
-		out = append(out, workspacecatalog.Mount{Target: m.Target, Source: m.Source, ReadOnly: m.ReadOnly})
+		out = append(out, workspacecatalog.Mount{Target: m.Target, Source: "", ReadOnly: m.ReadOnly})
 	}
 	for _, m := range s.Mounts {
 		out = append(out, workspacecatalog.Mount{Target: m.Target, Source: m.Source, ReadOnly: m.ReadOnly})

@@ -39,7 +39,10 @@ func TestToWorkspaceSpecImageBased(t *testing.T) {
 	want := workspacecatalog.Spec{
 		ImageRef: "ghcr.io/acme/dev:1",
 		Mounts: []workspacecatalog.Mount{
-			{Target: "/workspace/app", Source: "/home/dev/app"},
+			// (B) push-CAS: workspace-content mount has an empty Source;
+			// the local /home/dev/app dir is pushed up separately.
+			{Target: "/workspace/app", Source: ""},
+			// Extra mount keeps its absolute Source (direct host bind).
 			{Target: "/cache", Source: "/host/cache", ReadOnly: true},
 		},
 		Env: []workspacecatalog.EnvVar{
