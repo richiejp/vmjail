@@ -30,6 +30,15 @@ type Bundle struct {
 	// Path is the absolute directory containing config.json and
 	// rootfs/. Pass directly to `crun run --bundle <Path>`.
 	Path string
+	// UID and GID are the numeric uid/gid the container process runs
+	// as, resolved from the image's OCI `User` field against the
+	// unpacked rootfs (see resolveImageUser). 0:0 for a root image.
+	// The host orchestrator uses these to present host-backed
+	// workspace shares to the guest as owned by the container user
+	// (virtiofsd id-translation), so a non-root container can read
+	// and write them.
+	UID int
+	GID int
 }
 
 // BundleOptions overrides the OCI runtime spec we generate from the
@@ -131,7 +140,12 @@ func (s *Store) Bundle(ctx context.Context, digest string, opts BundleOptions) (
 	}
 
 	s.touchEntry(digest)
-	return &Bundle{Digest: digest, Path: bundlePath}, nil
+	return &Bundle{
+		Digest: digest,
+		Path:   bundlePath,
+		UID:    cfg.Process.User.UID,
+		GID:    cfg.Process.User.GID,
+	}, nil
 }
 
 // loadLayoutImage looks up digest in the on-disk OCI layout. Returns

@@ -45,6 +45,13 @@ const HelloTimeout = 30 * time.Second
 // const so goconst doesn't flag the three nearby call sites.
 const traceAttrShares = "shares"
 
+// virtiofsd id-translation flag names (see translateArgs). Factored as
+// consts so goconst doesn't flag the repeated literals.
+const (
+	flagTranslateUID = "--translate-uid"
+	flagTranslateGID = "--translate-gid"
+)
+
 // Config selects the VMM and the artifacts it boots. All paths are
 // absolute on the sandbox-host. The struct is exported so tests and
 // callers can build one without going through the env.
@@ -237,6 +244,28 @@ type ShareConfig struct {
 	// either daft-fuse (read-only by construction) or a host dir
 	// we don't want the container mutating directly.
 	Overlay bool
+	// Translate, when non-nil, asks virtiofsd to present this share's
+	// files to the guest as owned by Translate.UID:GID — rather than
+	// identity-passing the host owner through sandboxd's userns — and
+	// to map guest-side writes back to that host owner. This lets a
+	// non-root container, running as the image's USER uid:gid, read
+	// and write a host-backed workspace whose files belong to the dev
+	// who launched daft. It assumes the share's host files are owned
+	// by the uid that maps to ns-uid 0 (the sandboxd user), which is
+	// the common "dev runs daft on their own files" case.
+	//
+	// nil (the default) is identity passthrough, which is correct for
+	// the bundle/rootfs share whose tree legitimately carries many
+	// uids. Requires virtiofsd >= 1.13 (the --translate-uid/-gid
+	// software id-mapping).
+	Translate *ShareTranslate
+}
+
+// ShareTranslate carries the container uid/gid a Share is presented as.
+// See ShareConfig.Translate.
+type ShareTranslate struct {
+	UID int
+	GID int
 }
 
 // validate returns an error listing every missing required field.
@@ -367,6 +396,14 @@ func (s *ShareConfig) validate() error {
 	if !info.IsDir() {
 		return fmt.Errorf("sandbox: Share.HostDir %q is not a directory", s.HostDir)
 	}
+	if s.Translate != nil {
+		if s.Translate.UID < 0 || s.Translate.GID < 0 {
+			return fmt.Errorf(
+				"sandbox: Share.Translate uid/gid must be non-negative, got %d:%d",
+				s.Translate.UID, s.Translate.GID,
+			)
+		}
+	}
 	return nil
 }
 
@@ -469,6 +506,34 @@ func (virtiofsdSidecar) start(ctx context.Context, cfg Config, cgroupDir string)
 	return sockets, stopAll, nil
 }
 
+// translateArgs builds virtiofsd's bidirectional id-translation flags
+// for a Share's Translate config (nil → no flags, identity passthrough).
+// The four rules pin a single host owner (the uid/gid that maps to
+// ns-0, i.e. the sandboxd user) to the container's uid/gid in both
+// directions:
+//
+//   - host:0:UID:1 — getattr/readdir presents host-0's files to the
+//     guest as owned by the container uid, so a non-root container sees
+//     them as its own.
+//   - guest:UID:0:1 — create/chown writes the container uid back to
+//     host-0, so files persist owned by the dev (not a userns subuid).
+//
+// Both directions are required: with only the host→guest rule, guest
+// writes land as the userns-mapped subordinate id instead of the dev.
+// uid 0:0 (a root container) yields identity rules — the caller skips
+// Translate entirely in that case, so this only runs for non-root.
+func translateArgs(t *ShareTranslate) []string {
+	if t == nil {
+		return nil
+	}
+	return []string{
+		flagTranslateUID, fmt.Sprintf("host:0:%d:1", t.UID),
+		flagTranslateUID, fmt.Sprintf("guest:%d:0:1", t.UID),
+		flagTranslateGID, fmt.Sprintf("host:0:%d:1", t.GID),
+		flagTranslateGID, fmt.Sprintf("guest:%d:0:1", t.GID),
+	}
+}
+
 // startOneVirtiofsd spawns a single virtiofsd against share, writes
 // its socket into a fresh temp dir, and waits for the socket to
 // appear before returning. stop tears down the process + temp dir.
@@ -497,17 +562,22 @@ func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig, c
 	// subordinate id range. No `--uid-map` / `--gid-map` is needed:
 	// the kernel translates uids/gids through sandboxd's userns,
 	// and virtiofsd's identity passthrough lands the translated
-	// host ids on the underlying fs.
-	//
-	// #nosec G204 — `binary` is cfg.Virtiofsd, an absolute path
-	// passed by the host operator who's already trusted to spawn
-	// the VMM. There's no untrusted user input on the argv here.
-	cmd := exec.CommandContext(
-		ctx, binary,
+	// host ids on the underlying fs. A workspace share additionally
+	// carries --translate-uid/-gid rules (see translateArgs) so a
+	// non-root container sees and writes it as its own user.
+	args := make([]string, 0, 5+8)
+	args = append(
+		args,
 		"--socket-path", socket,
 		"--shared-dir", share.HostDir,
 		"--sandbox=none",
 	)
+	args = append(args, translateArgs(share.Translate)...)
+	// #nosec G204 — `binary` is cfg.Virtiofsd, an absolute path passed
+	// by the host operator who's already trusted to spawn the VMM, and
+	// every argv element is either a const flag or a daft-derived path /
+	// numeric id. There's no untrusted user input on the argv here.
+	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 

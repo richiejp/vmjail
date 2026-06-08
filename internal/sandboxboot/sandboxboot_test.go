@@ -11,6 +11,7 @@ import (
 
 	"github.com/localai-org/darkaifactory/internal/bundled"
 	"github.com/localai-org/darkaifactory/internal/imagestore"
+	"github.com/localai-org/darkaifactory/internal/sandbox"
 )
 
 const (
@@ -276,6 +277,56 @@ func TestBuildBundleConfigHappyPath(t *testing.T) {
 	unlock()
 	if unlockCalls != 1 {
 		t.Errorf("unlock invoked %d times, want 1", unlockCalls)
+	}
+}
+
+// TestBuildBundleConfigTranslatesUserMountsForNonRoot pins the #100
+// wiring: a non-root container (bundle resolves a non-zero USER) gets
+// each host-backed user mount presented as its own uid/gid via
+// virtiofsd id-translation, while the bundle/rootfs share keeps
+// identity passthrough. A root container leaves every share untranslated.
+func TestBuildBundleConfigTranslatesUserMountsForNonRoot(t *testing.T) {
+	mounts := []Mount{{Target: "/workspace", Source: "/srv/work"}}
+
+	tests := []struct {
+		name     string
+		uid, gid int
+		want     *sandbox.ShareTranslate
+	}{
+		{name: "non-root", uid: 1000, gid: 100, want: &sandbox.ShareTranslate{UID: 1000, GID: 100}},
+		{name: "root", uid: 0, gid: 0, want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var unlockCalls int
+			deps := happyPathDeps(t, &unlockCalls)
+			store := &fakeStore{
+				pull: func(context.Context, string) (*imagestore.Image, error) {
+					return &imagestore.Image{Digest: testDigest}, nil
+				},
+				bundle: func(_ context.Context, digest string, _ imagestore.BundleOptions) (*imagestore.Bundle, error) {
+					return &imagestore.Bundle{Path: "/tmp/bundles/" + digest, UID: tt.uid, GID: tt.gid}, nil
+				},
+				lock: func(string) (func(), error) { return func() { unlockCalls++ }, nil },
+			}
+			deps.OpenStore = func() (Store, error) { return store, nil }
+
+			cfg, unlock, err := BuildBundleConfig(t.Context(), "alpine:3", BootOptions{Mounts: mounts}, deps)
+			if err != nil {
+				t.Fatalf("BuildBundleConfig: %v", err)
+			}
+			defer unlock()
+
+			// Shares[0] is the bundle share — never translated.
+			if cfg.Shares[0].Translate != nil {
+				t.Errorf("bundle share Translate = %+v, want nil", cfg.Shares[0].Translate)
+			}
+			// Shares[1] is the /workspace user mount.
+			got := cfg.Shares[1].Translate
+			if (got == nil) != (tt.want == nil) || (got != nil && *got != *tt.want) {
+				t.Errorf("user mount Translate = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
 

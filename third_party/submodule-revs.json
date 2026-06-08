@@ -17,6 +17,6 @@
   },
   "virtiofsd": {
     "url": "https://gitlab.com/virtio-fs/virtiofsd.git",
-    "rev": "9accc39bc3c4020242aa68b29f663c858fb21abc"
+    "rev": "bbf82173682a3e48083771a0a23331e5c23b4924"
   }
 }

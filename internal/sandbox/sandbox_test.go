@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -607,6 +608,14 @@ func TestShareConfigValidate(t *testing.T) {
 			s:         ShareConfig{HostDir: tmpFile, Tag: "t", Mountpoint: "/m"},
 			errSubstr: "not a directory",
 		},
+		{
+			name: "negative translate uid",
+			s: ShareConfig{
+				HostDir: dir, Tag: "t", Mountpoint: "/m",
+				Translate: &ShareTranslate{UID: -1, GID: 100},
+			},
+			errSubstr: "must be non-negative",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -615,6 +624,26 @@ func TestShareConfigValidate(t *testing.T) {
 				t.Fatalf("err = %v, want substring %q", err, tt.errSubstr)
 			}
 		})
+	}
+}
+
+// TestTranslateArgs pins the virtiofsd id-translation flag construction.
+// nil → no flags (identity passthrough); a non-nil Translate → the four
+// bidirectional rules that present host-0's files to the guest as the
+// container uid/gid and map guest writes back to host-0.
+func TestTranslateArgs(t *testing.T) {
+	if got := translateArgs(nil); got != nil {
+		t.Fatalf("translateArgs(nil) = %v, want nil", got)
+	}
+	got := translateArgs(&ShareTranslate{UID: 1000, GID: 100})
+	want := []string{
+		flagTranslateUID, "host:0:1000:1",
+		flagTranslateUID, "guest:1000:0:1",
+		flagTranslateGID, "host:0:100:1",
+		flagTranslateGID, "guest:100:0:1",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("translateArgs = %v, want %v", got, want)
 	}
 }
 

@@ -2096,16 +2096,29 @@ the user-host or in CI today.
                       `crw-------`), and the root nested integration still boots
                       inner VMs. (The per-VM cgroup is a *separate* concern —
                       hard precondition via #102, see the cgroup section.)
-                    - **#100 `/workspace`** in the container is `drwxr-xr-x 0 0`
+                    - **#100 `/workspace`** in the container was `drwxr-xr-x 0 0`
                       (**root:root 0755**) over `virtiofs rw`, even though the
                       host source dir is `rich(1000:100)` — the OUTER
                       (sandboxd-run) virtiofsd **squashes the share to
                       root:root**, so a non-root container uid lands in `other`
-                      (r-x) and writes EPERM. Fix is a design choice: virtiofsd
-                      uid/gid-map, present-as-host-uid (no squash), or chown the
-                      share root to the container uid — coupled to a workspace
-                      uid/gid override so the container User and mount owner
-                      agree.
+                      (r-x) and writes EPERM. **LANDED:** bumped virtiofsd
+                      1.9.0 → 1.13.3 and present each *user mount* (not the
+                      bundle/rootfs share) with bidirectional software
+                      id-translation keyed off the resolved image USER:
+                      `--translate-uid host:0:N:1 --translate-uid guest:N:0:1`
+                      (+ gid M). `sandbox.ShareConfig.Translate{UID,GID}` carries
+                      N:M; `imagestore.Bundle.{UID,GID}` surfaces the resolved
+                      container user; `sandboxboot.buildShares` derives the rule
+                      (nil for a root container — identity, unchanged path).
+                      PROVEN by probe: a non-root (User 1000:100) container over
+                      a realistic 0700 workspace reads+writes `/workspace` as its
+                      own uid and files persist on the HOST as the dev
+                      (1000:100), not a userns subuid. No kernel idmap, no
+                      default_permissions, no chown. The host base pins to the
+                      uid that maps to ns-0 (the sandboxd user) — the common
+                      "dev runs daft on their own files" case; a `run_as_user`
+                      override that decouples the presented owner from the image
+                      USER is a later add if a workspace needs it.
                   For ordinary non-nested, share-less workloads, just setting
                   the User is the whole fix.
                 - *`crun exec` caveat — RESOLVED (#98, commit 0747cbf):*

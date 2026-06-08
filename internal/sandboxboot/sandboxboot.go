@@ -193,21 +193,42 @@ func BuildBundleConfig(
 		Kernel:          paths.Kernel,
 		Initramfs:       paths.Initramfs,
 		Virtiofsd:       paths.Virtiofsd,
-		Shares: []*sandbox.ShareConfig{{
-			HostDir:    filepath.Dir(bundle.Path),
-			Tag:        BundlesTag,
-			Mountpoint: BundlesMount,
-		}},
-		Bundle: filepath.Join(BundlesMount, filepath.Base(bundle.Path)),
+		Shares:          buildShares(bundle, opts.Mounts),
+		Bundle:          filepath.Join(BundlesMount, filepath.Base(bundle.Path)),
 	}
-	for i, m := range opts.Mounts {
-		cfg.Shares = append(cfg.Shares, &sandbox.ShareConfig{
+	return cfg, bundleUnlock, nil
+}
+
+// buildShares assembles the virtio-fs shares: the bundle/rootfs share
+// (identity passthrough — its tree legitimately carries many uids)
+// followed by one share per user mount.
+//
+// A non-root container (image USER uid:gid) can't read or write a
+// host-backed mount whose files belong to the dev: sandboxd's userns
+// presents them as ns-0 (root), leaving the container in `other`. So
+// each user mount is presented as owned by the container user via
+// virtiofsd id-translation. A root container already owns ns-0's
+// files and needs none, so its mounts stay untranslated.
+func buildShares(bundle *imagestore.Bundle, mounts []Mount) []*sandbox.ShareConfig {
+	shares := make([]*sandbox.ShareConfig, 0, 1+len(mounts))
+	shares = append(shares, &sandbox.ShareConfig{
+		HostDir:    filepath.Dir(bundle.Path),
+		Tag:        BundlesTag,
+		Mountpoint: BundlesMount,
+	})
+	var translate *sandbox.ShareTranslate
+	if bundle.UID != 0 || bundle.GID != 0 {
+		translate = &sandbox.ShareTranslate{UID: bundle.UID, GID: bundle.GID}
+	}
+	for i, m := range mounts {
+		shares = append(shares, &sandbox.ShareConfig{
 			HostDir:    m.Source,
 			Tag:        mountTag(i),
 			Mountpoint: m.Target,
+			Translate:  translate,
 		})
 	}
-	return cfg, bundleUnlock, nil
+	return shares
 }
 
 // writeBundleCACert writes pem into the bundle's rootfs at the
