@@ -24,34 +24,33 @@ import (
 // deliberately strict: a missing/garbled devcontainer fails the dispatch
 // loudly rather than silently booting something unexpected (the
 // orchestrator trusted the path provisionally at Ready time; this is
-// where it's validated for real). Only image_ref + env are overlaid in
-// this cut; ports are a follow-up (they're consumed in resolveBootConfig,
-// not here).
-func resolveDevcontainerOverlay(spec *sandboxv1.SandboxSpec, mounts []sandboxboot.Mount) (imageRef string, env []string, err error) {
+// where it's validated for real). image_ref, env, and forwardPorts are
+// overlaid.
+func resolveDevcontainerOverlay(spec *sandboxv1.SandboxSpec, mounts []sandboxboot.Mount) (imageRef string, env []string, ports []*sandboxv1.PortMapping, err error) {
 	rel := spec.GetDevcontainerPath()
 	file, err := findDevcontainerFile(mounts, rel)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	// #nosec G304 — file is rooted-and-cleaned under a materialised mount
 	// dir by findDevcontainerFile, so it cannot escape the workspace content.
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return "", nil, fmt.Errorf("sandboxexec: read devcontainer %q: %w", rel, err)
+		return "", nil, nil, fmt.Errorf("sandboxexec: read devcontainer %q: %w", rel, err)
 	}
 	resolved, err := devcontainer.Resolve(data, devcontainer.Substitutions{})
 	if err != nil {
-		return "", nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
+		return "", nil, nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
 	}
 	// ToWorkspaceSpec guarantees a non-empty image on success (it rejects
 	// image-less and build-based configs), so the overlay's effective
 	// image is always set here.
 	base, err := devcontainerspec.ToWorkspaceSpec(resolved)
 	if err != nil {
-		return "", nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
+		return "", nil, nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
 	}
 	eff := devcontainerspec.Overlay(base, explicitSpec(spec))
-	return eff.ImageRef, envStrings(eff.Env), nil
+	return eff.ImageRef, envStrings(eff.Env), portMappingsToProto(eff.Ports), nil
 }
 
 // findDevcontainerFile locates rel (a path within the workspace content,
@@ -75,13 +74,34 @@ func findDevcontainerFile(mounts []sandboxboot.Mount, rel string) (string, error
 	return "", fmt.Errorf("sandboxexec: devcontainer %q not found in any workspace mount", rel)
 }
 
-// explicitSpec projects the SandboxSpec's user-set image+env onto a
-// workspacecatalog.Spec — the "override" side of the overlay. Only the
-// fields this cut overlays are carried.
+// explicitSpec projects the SandboxSpec's user-set image+env+ports onto a
+// workspacecatalog.Spec — the "override" side of the overlay.
 func explicitSpec(spec *sandboxv1.SandboxSpec) workspacecatalog.Spec {
 	out := workspacecatalog.Spec{ImageRef: spec.GetImageRef()}
 	for _, e := range spec.GetEnv() {
 		out.Env = append(out.Env, workspacecatalog.EnvVar{Name: e.GetName(), Value: e.GetValue()})
+	}
+	for _, p := range spec.GetPorts() {
+		out.Ports = append(out.Ports, workspacecatalog.PortMapping{
+			ContainerPort: p.GetContainerPort(),
+			Protocol:      int32(p.GetProtocol()),
+		})
+	}
+	return out
+}
+
+// portMappingsToProto converts the overlay's effective catalog ports back
+// to the wire type portForwardsFromSpec consumes.
+func portMappingsToProto(in []workspacecatalog.PortMapping) []*sandboxv1.PortMapping {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*sandboxv1.PortMapping, 0, len(in))
+	for _, p := range in {
+		out = append(out, &sandboxv1.PortMapping{
+			ContainerPort: p.ContainerPort,
+			Protocol:      sandboxv1.Protocol(p.Protocol),
+		})
 	}
 	return out
 }

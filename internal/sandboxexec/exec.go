@@ -574,12 +574,15 @@ func (e *Executor) registerObserverRoute(cfg sandbox.Config, uid string) func() 
 // device the C1.3c ingress path will dial through. unlock is
 // always non-nil so callers can defer it unconditionally.
 func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) (sandbox.Config, func(), error) {
-	cfg, unlock, err := e.baseBootConfig(ctx, uid, spec)
+	cfg, ports, unlock, err := e.baseBootConfig(ctx, uid, spec)
 	if err != nil {
 		return sandbox.Config{}, func() {}, err
 	}
 	applyResourceSizing(&cfg, spec)
-	cfg.PortForwards = portForwardsFromSpec(spec.GetPorts())
+	// ports is the effective set: the spec's explicit ports, or — when a
+	// devcontainer drove the boot — those overlaid with the devcontainer's
+	// forwardPorts (explicit winning).
+	cfg.PortForwards = portForwardsFromSpec(ports)
 	// Vsock is always-on: every dispatch gets a hybrid-vsock device so the
 	// in-VM agent fetches its config (and streams status events) over the
 	// control channel instead of the world-readable kernel cmdline. The
@@ -720,7 +723,11 @@ func (e *Executor) assignVsock(uid string) *sandbox.VsockConfig {
 // it; otherwise we fall back to the smoke-test baseline. Split out
 // so port-forward layering above stays a one-liner regardless of
 // which branch produced the cfg.
-func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) (sandbox.Config, func(), error) {
+// baseBootConfig also returns the effective port set the caller should
+// forward: the spec's explicit ports, except when a devcontainer drove
+// the boot, in which case they're the devcontainer's forwardPorts
+// overlaid with the explicit ports (explicit winning).
+func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) (sandbox.Config, []*sandboxv1.PortMapping, func(), error) {
 	imageRef := spec.GetImageRef()
 	hasDevcontainer := spec.GetDevcontainerPath() != ""
 	// A devcontainer-only workspace carries no explicit image_ref — the
@@ -728,23 +735,24 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 	// content is materialised below. So take the image path when either
 	// an image_ref or a devcontainer_path is set.
 	if (imageRef == "" && !hasDevcontainer) || e.assembler == nil {
-		return e.base, func() {}, nil
+		return e.base, spec.GetPorts(), func() {}, nil
 	}
 	mounts, err := e.resolveMounts(ctx, uid, spec)
 	if err != nil {
-		return sandbox.Config{}, func() {}, err
+		return sandbox.Config{}, nil, func() {}, err
 	}
 	env := envFromSpec(spec.GetEnv())
+	ports := spec.GetPorts()
 	if hasDevcontainer {
 		// Read the devcontainer from the just-materialised content and
 		// overlay the explicit spec on top (explicit wins). The effective
-		// env already folds in the explicit env, so it replaces (not
-		// appends to) the spec env here.
-		effImage, effEnv, derr := resolveDevcontainerOverlay(spec, mounts)
+		// env/ports already fold in the explicit ones, so they replace
+		// (not append to) the spec values here.
+		effImage, effEnv, effPorts, derr := resolveDevcontainerOverlay(spec, mounts)
 		if derr != nil {
-			return sandbox.Config{}, func() {}, derr
+			return sandbox.Config{}, nil, func() {}, derr
 		}
-		imageRef, env = effImage, effEnv
+		imageRef, env, ports = effImage, effEnv, effPorts
 	}
 	opts := sandboxboot.BootOptions{
 		Mounts:               mounts,
@@ -760,7 +768,8 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 		opts.CACert = e.egressProxy.CACertPEM
 		opts.CACertGuestPath = egressCAGuestPath
 	}
-	return e.assembler(ctx, imageRef, opts)
+	cfg, unlock, aerr := e.assembler(ctx, imageRef, opts)
+	return cfg, ports, unlock, aerr
 }
 
 // egressActive reports whether a usable egress proxy is configured.

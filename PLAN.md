@@ -2474,11 +2474,20 @@ the user-host or in CI today.
       → effective **image_ref + env** handed to the assembler. A
       devcontainer-only workspace (no explicit image) now boots the image
       the devcontainer names; a missing/malformed/build-based devcontainer
-      fails the dispatch loudly. **This cut overlays image_ref + env**;
-      ports are a follow-up (consumed in `resolveBootConfig`, and optional
-      for the e2e). An `image:`-based devcontainer now boots end-to-end.
-      Tests: overlay happy-path + missing-file + malformed/build-based +
-      `findDevcontainerFile` traversal. gate 94.30%.
+      fails the dispatch loudly. This cut overlaid image_ref + env (ports
+      followed in 2d-iii). An `image:`-based devcontainer now boots
+      end-to-end. Tests: overlay happy-path + missing-file +
+      malformed/build-based + `findDevcontainerFile` traversal. gate 94.30%.
+    - **Slice 2d-iii (landed 2026-06-09) — port overlay.** The overlay now
+      also folds in `forwardPorts`: `resolveDevcontainerOverlay` returns the
+      effective ports (devcontainer `forwardPorts` ⊕ explicit, explicit
+      winning), `baseBootConfig` returns them, and `resolveBootConfig`
+      forwards them via `portForwardsFromSpec`. So a devcontainer that
+      declares `forwardPorts: [3000]` gets 3000 forwarded without a separate
+      `daft workspace port add`. Test asserts a devcontainer port + an
+      explicit workspace port both reach `cfg.PortForwards`. gate 94.32%.
+      **image_ref + env + ports now overlaid; only `postCreateCommand`
+      remains for image-based spec parity.**
     - **E2E proof (landed 2026-06-08).** `TestClusterWorkspaceDevcontainerBoots`
       (testdaemons, real VM): a workspace with NO explicit image, only a
       `.devcontainer/devcontainer.json` in its content, boots the image the

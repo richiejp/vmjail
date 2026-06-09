@@ -569,6 +569,52 @@ func TestHandleSandboxEventDevcontainerOverlay(t *testing.T) {
 	}
 }
 
+// TestDevcontainerForwardPortsOverlay pins the port overlay: a
+// devcontainer's forwardPorts are folded into the dispatch's forwards,
+// unioned with the workspace's explicit ports (explicit winning a clash).
+func TestDevcontainerForwardPortsOverlay(t *testing.T) {
+	mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
+		return os.WriteFile(filepath.Join(dest, "devcontainer.json"),
+			[]byte(`{"image":"ghcr.io/acme/dev:1","forwardPorts":[3000]}`), 0o644)
+	}}
+	asm := func(_ context.Context, _ string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		return sandbox.Config{}, func() {}, nil
+	}
+	var seen sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		seen = cfg
+		return nil
+	}
+	e, err := New(Config{
+		Stdout: io.Discard, Runner: runner, Assembler: asm,
+		MountMaterializer: mat, MountBackingDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{
+		WorkspaceUuid:    testWSUUID,
+		DevcontainerPath: "devcontainer.json",
+		Mounts:           []*sandboxv1.Mount{{Target: mntWorkspace}},
+		// An explicit workspace port that should survive alongside the
+		// devcontainer's 3000.
+		Ports: []*sandboxv1.PortMapping{{ContainerPort: 8080, Protocol: sandboxv1.Protocol_PROTOCOL_TCP}},
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-ports", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	got := make(map[uint32]bool)
+	for _, pf := range seen.PortForwards {
+		got[pf.ContainerPort] = true
+	}
+	if !got[3000] {
+		t.Errorf("PortForwards %v missing the devcontainer's 3000", seen.PortForwards)
+	}
+	if !got[8080] {
+		t.Errorf("PortForwards %v missing the workspace's explicit 8080", seen.PortForwards)
+	}
+}
+
 // TestDevcontainerMissingFileFailsDispatch pins that a devcontainer_path
 // pointing at a file absent from the materialised content fails the
 // dispatch loudly rather than booting something unexpected.
