@@ -518,6 +518,80 @@
               };
             };
 
+          # daft-build-image is the #101 slice-3 builder image: it runs
+          # inside a disposable daft sandbox and turns a Dockerfile into an
+          # OCI image tarball via buildah (daemonless), which the host then
+          # ociregistry.Pushes for the workspace to boot.
+          #
+          # Isolation is `chroot` (Env BUILDAH_ISOLATION): the default `oci`
+          # isolation would have buildah spawn a nested OCI runtime +
+          # user/mount namespaces for every RUN, which is fragile inside
+          # daft's already-nested container-in-a-microVM; chroot runs RUN
+          # steps in a chroot and is far likelier to work nested. Storage is
+          # `vfs` for the spike (no overlay/fuse deps); the perf path
+          # (fuse-overlayfs over the existing privileged-fuse CAP_SYS_ADMIN +
+          # /dev/fuse grant) is a follow-up. fuse-overlayfs is bundled now so
+          # that switch needs no image change.
+          daft-build-image =
+            let
+              buildToolchain = pkgs.buildEnv {
+                name = "daft-build-toolchain";
+                paths = with pkgs; [
+                  buildah fuse-overlayfs
+                  bashInteractive dash coreutils
+                  gnutar gzip
+                ];
+              };
+              containersConf = pkgs.runCommand "daft-build-containers-conf"
+                {
+                  policy = pkgs.writeText "policy.json"
+                    ''{"default":[{"type":"insecureAcceptAnything"}]}'';
+                  storage = pkgs.writeText "storage.conf" ''
+                    [storage]
+                    driver = "vfs"
+                    graphroot = "/var/lib/containers/storage"
+                    runroot = "/run/containers/storage"
+                  '';
+                  registries = pkgs.writeText "registries.conf" ''
+                    unqualified-search-registries = []
+                  '';
+                } ''
+                mkdir -p $out/etc/containers $out/bin $out/var
+                ln -s ${pkgs.dash}/bin/dash $out/bin/sh
+                # buildah's commit writes layer temp under /var/tmp; the
+                # container rootfs is read-only, so point it at the writable
+                # tmpfs. (Real builds may want a disk-backed writable mount
+                # here instead of RAM — fine for the spike.)
+                ln -s /tmp $out/var/tmp
+                cp $policy $out/etc/containers/policy.json
+                cp $storage $out/etc/containers/storage.conf
+                cp $registries $out/etc/containers/registries.conf
+                printf 'root:100000:65536\n' > $out/etc/subuid
+                printf 'root:100000:65536\n' > $out/etc/subgid
+              '';
+            in
+            pkgs.dockerTools.buildLayeredImage {
+              name = "daft-build";
+              tag = "v1";
+              # fakeNss provides /etc/passwd (+ group, nsswitch) with a root
+              # uid-0 entry. Without it buildah's user.Current() lookup fails
+              # ("error determining current user: unknown userid 0") since a
+              # bare nix image ships no passwd — the spike's first finding.
+              contents = [ buildToolchain containersConf pkgs.fakeNss ];
+              config = {
+                Entrypoint = [
+                  "/bin/dash" "-c"
+                  "echo daft-build ready; exec /bin/sleep infinity"
+                ];
+                Env = [
+                  "PATH=/bin"
+                  "HOME=/root"
+                  "BUILDAH_ISOLATION=chroot"
+                  "STORAGE_DRIVER=vfs"
+                ];
+              };
+            };
+
           # d6c1-flake-fixture is the tiny flake the D6c.1 test
           # mounts at /workspace. Its `serve` app's `program`
           # points at python3 inside the nix-tooling-image's

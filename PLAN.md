@@ -2500,8 +2500,56 @@ the user-host or in CI today.
   - **PostCreate** still needs a post-boot-exec mechanism (proto field +
     executor/agent sequencing) — its own slice, after 2d.
   - **Slice 3 — image builder (the gap).** Build `build.dockerfile`.
-    First host-side (buildah/buildkit → push to the embedded registry →
-    daft pulls) to de-risk; then in-sandbox as the real product feature.
+    **Design decided 2026-06-09 (user):** builder = **Buildah** (daemonless +
+    rootless-native — no buildkitd daemon to babysit, fits running the build
+    inside a disposable sandbox VM); export = **docker-archive tarball →
+    `ociregistry.Push` → daft pulls+bundles** (reuses the ENTIRE proven
+    nix-image consume path — the only new code is the build invocation);
+    location = **inside a daft sandbox VM** (the real isolation goal, not
+    node-side). This lines up with the proto's existing `pending_build_id`
+    → "buildkit-VM (Phase E)" slot + the `ImageResolved` condition.
+    *Research notes:* the "export is slow" worry that drove Ayup's
+    run-workload-inside-the-build hack is largely moot for daft — it pushes
+    to a LOCAL registry once per image-change (not a remote registry per
+    interactive iteration), and zstd/lazy-pull/remote-cache have since cut
+    BuildKit export a lot. The deepest optimisation (skip compression: feed
+    the flattened rootfs straight to `Bundle` via `buildah mount`) is
+    deferred — tarball→registry reuses everything and the cost is
+    acceptable; revisit if export bites. Buildah's daemonless model is also
+    what makes the in-VM build tractable where Ayup needed rootlesskit +
+    buildkitd. Slices:
+    - **3a (spike) — buildah builds in a sandbox VM. PROVEN 2026-06-09.**
+      `daft-build-image` (buildah 1.43 + fuse-overlayfs + vfs/chroot config)
+      + `TestClusterWorkspaceBuildahSpike`: a `FROM scratch` + `COPY`
+      Dockerfile builds inside a daft sandbox and exports a valid
+      docker-archive tarball (host loads it, ≥1 layer) — **PASS in 21s
+      against /dev/kvm**. Three findings, each a one-line fix (the
+      verify→falsify→narrow loop):
+      1. **`/etc/passwd`** — buildah's `user.Current()` on uid 0 fails on a
+         bare nix image ("unknown userid 0"); fixed with `pkgs.fakeNss`.
+      2. **build caps** — buildah's copier chroots even for `COPY`, needing
+         **CAP_SYS_CHROOT** (+ the standard container set), which daft strips
+         to empty and `privileged-fuse`'s CAP_SYS_ADMIN doesn't cover.
+      3. **`/var/tmp`** — buildah's commit layer-temp; the rootfs is
+         read-only, so symlink `/var/tmp → /tmp` (tmpfs). Real builds may
+         want a disk-backed writable mount here instead of RAM.
+      Findings 1+3 are permanent `daft-build-image` fixes (kept). Finding 2
+      was confirmed via a **throwaway probe** (the standard cap set jammed
+      into `applyPrivilegedFuseMounts`, since reverted) — productizing it is
+      the next step: a **build capability grant** as a config-section (the
+      `privileged-fuse`/`nested-virtualization` idiom) = standard container
+      cap set + CAP_SYS_ADMIN, acceptable because the VM is the boundary. The
+      spike test stays gated/WIP until that grant lands (it currently relies
+      on the reverted probe). Storage stayed vfs; fuse-overlayfs (perf) is a
+      later switch. Still to spike: a `RUN` step (needs the full cap set +
+      maybe a writable disk-backed `/var/tmp`) and a real base image (needs
+      egress to pull `FROM <image>`).
+    - **3b — push + resolve.** Host reads the build VM's output tarball,
+      `ociregistry.Push` → ref.
+    - **3c — orchestration.** A build-based devcontainer (or `build`
+      workspace) launches the build sandbox, pushes, sets the resolved
+      image, then boots normally — replacing today's `ErrBuildUnsupported`
+      in `resolveDevcontainerOverlay`.
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **features** (OCI install units) as build steps.
 
