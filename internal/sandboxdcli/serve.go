@@ -294,22 +294,31 @@ var buildDispatcher = func(
 		observerDir = ""
 	}
 	return sandboxexec.New(sandboxexec.Config{
-		Base:              base,
-		Stdout:            stdout,
-		Assembler:         assembler,
-		Bridger:           bridger,
-		AttachRegistry:    attachRegistry,
-		ObserverRegistry:  observerRegistry,
-		SummaryRegistry:   summaryRegistry,
-		ObserveSummary:    observeSummaryFromEnv(),
-		VsockDir:          vsockDir,
-		NetEnabled:        true,
-		EgressProxy:       egress,
-		MountMaterializer: materializer,
-		MountBackingDir:   mountBackingDir,
-		ObserverDir:       observerDir,
+		Base:               base,
+		Stdout:             stdout,
+		Assembler:          assembler,
+		Bridger:            bridger,
+		AttachRegistry:     attachRegistry,
+		ObserverRegistry:   observerRegistry,
+		SummaryRegistry:    summaryRegistry,
+		ObserveSummary:     observeSummaryFromEnv(),
+		VsockDir:           vsockDir,
+		NetEnabled:         true,
+		EgressProxy:        egress,
+		MountMaterializer:  materializer,
+		MountBackingDir:    mountBackingDir,
+		ObserverDir:        observerDir,
+		BuildImageRef:      os.Getenv(envBuildImageRef),
+		BuildPushTransport: hostedRT,
 	})
 }
+
+// envBuildImageRef names the orchestrator-hosted ref of the static image
+// builder VM (buildah + dash + a CA bundle). When set, a build-based
+// devcontainer is built in an ephemeral sandbox from this ref before the
+// workload boots (#101 slice 3c). Unset leaves in-sandbox builds off —
+// a build-based devcontainer then fails the dispatch loudly.
+const envBuildImageRef = "DAFT_BUILD_IMAGE_REF"
 
 // envObserveSummary gates the Tier-2 observe share (open-snoop gadget +
 // build-progress summary) on every image-backed dispatch. It is ON BY

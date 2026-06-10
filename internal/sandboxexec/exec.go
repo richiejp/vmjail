@@ -25,12 +25,14 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/localai-org/darkaifactory/internal/agent"
 	"github.com/localai-org/darkaifactory/internal/assert"
 	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/localai-org/darkaifactory/internal/observability"
+	"github.com/localai-org/darkaifactory/internal/ociregistry"
 	"github.com/localai-org/darkaifactory/internal/sandbox"
 	"github.com/localai-org/darkaifactory/internal/sandboxattach"
 	"github.com/localai-org/darkaifactory/internal/sandboxboot"
@@ -159,6 +161,23 @@ type Executor struct {
 	// behaviour); observability is best-effort and never fails a
 	// dispatch.
 	observerDir string
+	// buildImageRef is the orchestrator-hosted ref of the static image
+	// builder VM (buildah + dash + a CA bundle). When set, a build-based
+	// devcontainer is built in an ephemeral sandbox booted from this ref
+	// before the workload boots (#101 slice 3c). Empty disables in-sandbox
+	// builds — a build-based devcontainer then fails the dispatch loudly.
+	buildImageRef string
+	// buildRunner boots the ephemeral build VM and returns when its build
+	// container has exited (BOOT_COMPLETE). Defaults to sandbox.RunToCompletion;
+	// tests inject a fake that simulates a build by writing the output tarball.
+	buildRunner Runner
+	// buildTimeout caps a single in-sandbox build. Zero means "bounded only
+	// by the dispatch ctx".
+	buildTimeout time.Duration
+	// pushImage uploads the build VM's output tarball into the orchestrator
+	// registry and returns the hosted ref. Defaults to a closure over
+	// ociregistry.Push + the configured push transport; tests inject a fake.
+	pushImage func(tarPath, repo, tag string) (string, error)
 	// nextCID hands out fresh AF_VSOCK Context IDs for each dispatch.
 	// Initialised to 2 so the first .Add(1) returns 3 — the lowest
 	// CID the ABI allows for a guest (0/1/2 are reserved).
@@ -251,6 +270,25 @@ type Config struct {
 	// ($XDG_STATE_HOME/daft/sandboxes); leave empty in tests/baselines
 	// that don't want observer logs written.
 	ObserverDir string
+	// BuildImageRef is the orchestrator-hosted ref of the static image
+	// builder (buildah + dash + CA bundle). When set, a build-based
+	// devcontainer is built in an ephemeral sandbox booted from this ref
+	// before the workload boots (#101 slice 3c). `daft-sandboxd serve`
+	// sources it from DAFT_BUILD_IMAGE_REF. Empty disables in-sandbox
+	// builds (build-based devcontainers then fail the dispatch loudly).
+	BuildImageRef string
+	// BuildRunner boots the ephemeral build VM and returns once its build
+	// container has exited. Defaults to sandbox.RunToCompletion; tests
+	// inject a fake that simulates the build by writing the output tarball.
+	BuildRunner Runner
+	// BuildTimeout caps a single in-sandbox build. Zero means "bounded
+	// only by the dispatch ctx".
+	BuildTimeout time.Duration
+	// BuildPushTransport is the mTLS RoundTripper the executor pushes a
+	// built image into the orchestrator registry over (the same hostedRT
+	// the imagestore pulls hosted refs with). Required for in-sandbox
+	// builds to be pullable; leave nil when BuildImageRef is unset.
+	BuildPushTransport http.RoundTripper
 }
 
 // EgressProxy configures the in-stack egress proxy (Phase J6). The
@@ -308,6 +346,18 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.ObserverDir != "" && !filepath.IsAbs(cfg.ObserverDir) {
 		return nil, fmt.Errorf("sandboxexec: ObserverDir %q must be absolute", cfg.ObserverDir)
 	}
+	if cfg.BuildRunner == nil {
+		cfg.BuildRunner = sandbox.RunToCompletion
+	}
+	if cfg.BuildTimeout == 0 {
+		cfg.BuildTimeout = defaultBuildTimeout
+	}
+	// A configured build image is only useful if the built result can be
+	// pushed back; pair them at construction so a misconfigured node fails
+	// fast here rather than after wasting a build VM boot at first dispatch.
+	if cfg.BuildImageRef != "" && cfg.BuildPushTransport == nil {
+		return nil, errors.New("sandboxexec: BuildPushTransport required when BuildImageRef is set")
+	}
 	e := &Executor{
 		base:              cfg.Base,
 		stdout:            cfg.Stdout,
@@ -324,7 +374,15 @@ func New(cfg Config) (*Executor, error) {
 		mountMaterializer: cfg.MountMaterializer,
 		mountBackingDir:   cfg.MountBackingDir,
 		observerDir:       cfg.ObserverDir,
+		buildImageRef:     cfg.BuildImageRef,
+		buildRunner:       cfg.BuildRunner,
+		buildTimeout:      cfg.BuildTimeout,
 		live:              map[string]*liveSandbox{},
+	}
+	// New guarantees BuildPushTransport is non-nil whenever a build can run
+	// (BuildImageRef set), so the closure needs no nil guard of its own.
+	e.pushImage = func(tarPath, repo, tag string) (string, error) {
+		return ociregistry.Push(tarPath, repo, tag, cfg.BuildPushTransport)
 	}
 	// First .Add(1) returns 3 — the lowest CID the AF_VSOCK ABI
 	// allows for a guest.
@@ -585,31 +643,9 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 	cfg.PortForwards = portForwardsFromSpec(ports)
 	// Vsock is always-on: every dispatch gets a hybrid-vsock device so the
 	// in-VM agent fetches its config (and streams status events) over the
-	// control channel instead of the world-readable kernel cmdline. The
-	// only gate is a configured VsockDir — production sandboxd always sets
-	// it (the Bridger/AttachRegistry/NetEnabled paths require it in New),
-	// so this is unconditional there; a bare unit-test executor with no
-	// VsockDir uses a fake runner that never boots a real VM, so it needs
-	// no device. The per-feature ports stay gated on their feature flags.
-	if e.vsockDir != "" {
-		cfg.Vsock = e.assignVsock(uid)
-		if e.attachRegistry != nil {
-			cfg.Vsock.Attach = true
-		}
-		if e.netEnabled {
-			cfg.Vsock.Net = true
-			// With an egress proxy configured, serve it in-stack on the
-			// gateway and lock the netstack to default-deny: every
-			// legitimate egress is injected to route through the proxy
-			// (J6), so anything dialing elsewhere is a leak we want dropped
-			// + logged rather than silently sent.
-			if e.egressActive() {
-				cfg.DenyEgress = true
-				cfg.ProxyHandler = e.egressProxy.Handler
-				cfg.ProxyPort = e.proxyPort()
-			}
-		}
-	}
+	// control channel instead of the world-readable kernel cmdline. attach
+	// is enabled here so the workload is reachable over the attach lane.
+	e.applyVsockEgress(&cfg, uid, true, true)
 	e.applyObserverLog(&cfg, uid)
 	e.applyObserveSummary(&cfg, uid)
 	return cfg, unlock, nil
@@ -703,6 +739,49 @@ func (e *Executor) registerSummaryRoute(cfg sandbox.Config, uid string) func() {
 	return func() { e.summaryRegistry.Unregister(uid) }
 }
 
+// applyVsockEgress mints the per-VM hybrid-vsock device (so the agent has
+// a control channel for config + the BOOT_COMPLETE event) and, when net is
+// enabled, the sandboxnet listener — locking it to default-deny with the
+// in-stack proxy whenever an egress proxy is active so every legitimate
+// egress is injected through the proxy (J6) and anything dialing elsewhere
+// is dropped + logged. Gated on a configured VsockDir: production sandboxd
+// always sets it (the Bridger/AttachRegistry/NetEnabled paths require it in
+// New), while a bare unit-test executor with no VsockDir uses a fake runner
+// that never boots a real VM, so it needs no device. attach is layered only
+// for the workload boot (it owns the attach lane); the ephemeral build VM
+// passes false. Shared by resolveBootConfig and buildDevcontainerImage.
+func (e *Executor) applyVsockEgress(cfg *sandbox.Config, uid string, enableNet, enableAttach bool) {
+	if e.vsockDir == "" {
+		return
+	}
+	cfg.Vsock = e.assignVsock(uid)
+	if enableAttach && e.attachRegistry != nil {
+		cfg.Vsock.Attach = true
+	}
+	if enableNet && e.netEnabled {
+		cfg.Vsock.Net = true
+		if e.egressActive() {
+			cfg.DenyEgress = true
+			cfg.ProxyHandler = e.egressProxy.Handler
+			cfg.ProxyPort = e.proxyPort()
+		}
+	}
+}
+
+// applyEgressOpts layers the egress-proxy env + CA into BootOptions before
+// the assembler bundles them: the proxy vars route the container's HTTP(S)
+// egress through the in-stack proxy and the CA is written into the rootfs
+// so TLS clients trust its MITM leaves. No-op when no proxy is active.
+// Shared by baseBootConfig and buildDevcontainerImage.
+func (e *Executor) applyEgressOpts(opts *sandboxboot.BootOptions) {
+	if !e.egressActive() {
+		return
+	}
+	opts.Env = append(opts.Env, proxyEnv(e.proxyGuestURL())...)
+	opts.CACert = e.egressProxy.CACertPEM
+	opts.CACertGuestPath = egressCAGuestPath
+}
+
 // assignVsock mints a per-Sandbox hybrid-vsock device: a fresh
 // GuestCID via the executor's atomic counter and an absolute UDS
 // path under VsockDir named after the Sandbox uid. Caller
@@ -747,12 +826,24 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 		// Read the devcontainer from the just-materialised content and
 		// overlay the explicit spec on top (explicit wins). The effective
 		// env/ports already fold in the explicit ones, so they replace
-		// (not append to) the spec values here.
-		effImage, effEnv, effPorts, derr := resolveDevcontainerOverlay(spec, mounts)
+		// (not append to) the spec values here. A build-based devcontainer
+		// also yields a build plan (nil otherwise).
+		effImage, effEnv, effPorts, build, derr := resolveDevcontainerOverlay(spec, mounts)
 		if derr != nil {
 			return sandbox.Config{}, nil, func() {}, derr
 		}
 		imageRef, env, ports = effImage, effEnv, effPorts
+		// A build-based devcontainer with no explicit image override
+		// (overlay leaves imageRef empty) is built in an ephemeral
+		// sandbox; the resulting hosted ref is what the workload boots
+		// from. An explicit workspace image wins and skips the build.
+		if build != nil && imageRef == "" {
+			builtRef, berr := e.buildDevcontainerImage(ctx, uid, spec, build)
+			if berr != nil {
+				return sandbox.Config{}, nil, func() {}, berr
+			}
+			imageRef = builtRef
+		}
 	}
 	opts := sandboxboot.BootOptions{
 		Mounts:               mounts,
@@ -762,13 +853,9 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 		PrivilegedBuild:      spec.GetPrivilegedBuild().GetEnable(),
 	}
 	// Layer the egress-proxy env after the workspace's own env so the
-	// proxy vars win on a key clash (a workload can't unset the proxy
-	// the node mandates), and ship the proxy CA into the rootfs.
-	if e.egressActive() {
-		opts.Env = append(opts.Env, proxyEnv(e.proxyGuestURL())...)
-		opts.CACert = e.egressProxy.CACertPEM
-		opts.CACertGuestPath = egressCAGuestPath
-	}
+	// proxy vars win on a key clash (a workload can't unset the proxy the
+	// node mandates), and ship the proxy CA into the rootfs.
+	e.applyEgressOpts(&opts)
 	cfg, unlock, aerr := e.assembler(ctx, imageRef, opts)
 	return cfg, ports, unlock, aerr
 }

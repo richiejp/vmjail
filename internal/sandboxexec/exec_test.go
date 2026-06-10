@@ -32,6 +32,10 @@ const (
 	mntData       = "/data"
 	testWSUUID    = "ws-uuid"
 	hostWS        = "/host/ws"
+
+	devcontainerNestedPath = ".devcontainer/devcontainer.json"
+	devcontainerFlatPath   = "devcontainer.json"
+	testBuildImageRef      = "daft-registry.internal/builder:v1"
 )
 
 func noopRunner() Runner {
@@ -550,7 +554,7 @@ func TestHandleSandboxEventDevcontainerOverlay(t *testing.T) {
 	}
 	spec := &sandboxv1.SandboxSpec{
 		WorkspaceUuid:    testWSUUID,
-		DevcontainerPath: ".devcontainer/devcontainer.json",
+		DevcontainerPath: devcontainerNestedPath,
 		// Empty Source ⇒ CAS-materialised content mount.
 		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}},
 		Env:    []*sandboxv1.EnvVar{{Name: "OVERRIDE", Value: "ws"}},
@@ -594,7 +598,7 @@ func TestDevcontainerForwardPortsOverlay(t *testing.T) {
 	}
 	spec := &sandboxv1.SandboxSpec{
 		WorkspaceUuid:    testWSUUID,
-		DevcontainerPath: "devcontainer.json",
+		DevcontainerPath: devcontainerFlatPath,
 		Mounts:           []*sandboxv1.Mount{{Target: mntWorkspace}},
 		// An explicit workspace port that should survive alongside the
 		// devcontainer's 3000.
@@ -633,7 +637,7 @@ func TestDevcontainerMissingFileFailsDispatch(t *testing.T) {
 	}
 	spec := &sandboxv1.SandboxSpec{
 		WorkspaceUuid:    testWSUUID,
-		DevcontainerPath: ".devcontainer/devcontainer.json",
+		DevcontainerPath: devcontainerNestedPath,
 		Mounts:           []*sandboxv1.Mount{{Target: "/workspace"}},
 	}
 	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-miss", spec)); err == nil {
@@ -669,7 +673,7 @@ func TestDevcontainerInvalidConfigFailsDispatch(t *testing.T) {
 			}
 			spec := &sandboxv1.SandboxSpec{
 				WorkspaceUuid:    testWSUUID,
-				DevcontainerPath: "devcontainer.json",
+				DevcontainerPath: devcontainerFlatPath,
 				Mounts:           []*sandboxv1.Mount{{Target: "/workspace"}},
 			}
 			if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-bad", spec)); err == nil {
@@ -690,18 +694,21 @@ func TestFindDevcontainerFile(t *testing.T) {
 	}
 	mounts := []sandboxboot.Mount{{Source: ""}, {Source: root}} // empty source skipped
 
-	got, err := findDevcontainerFile(mounts, ".devcontainer/devcontainer.json")
+	got, gotRoot, err := findDevcontainerFile(mounts, ".devcontainer/devcontainer.json")
 	if err != nil || got != want {
 		t.Errorf("findDevcontainerFile = %q, %v; want %q", got, err, want)
 	}
+	if gotRoot != root {
+		t.Errorf("findDevcontainerFile root = %q; want %q", gotRoot, root)
+	}
 	// A "../" escape is rooted-and-cleaned away, so it resolves within the
 	// mount (here: not found) rather than reaching outside it.
-	if _, err := findDevcontainerFile(mounts, "../../etc/passwd"); err == nil {
+	if _, _, err := findDevcontainerFile(mounts, "../../etc/passwd"); err == nil {
 		t.Error("expected not-found for an escaping path, got nil")
 	}
 	// Degenerate paths are rejected.
 	for _, bad := range []string{"", ".", "/"} {
-		if _, err := findDevcontainerFile(mounts, bad); err == nil {
+		if _, _, err := findDevcontainerFile(mounts, bad); err == nil {
 			t.Errorf("findDevcontainerFile(%q): want error", bad)
 		}
 	}

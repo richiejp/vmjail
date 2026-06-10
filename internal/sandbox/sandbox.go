@@ -1142,6 +1142,31 @@ func Serve(ctx context.Context, w io.Writer, cfg Config) error {
 	return serveWith(ctx, w, cfg, cloudHypervisorRunner{}, virtiofsdSidecar{})
 }
 
+// RunToCompletion boots cfg, waits for the agent's BOOT_COMPLETE event —
+// which the agent sends immediately after the container's entrypoint
+// process exits (internal/agent: runContainer blocks on the container,
+// then signalBootComplete) — and tears the VM down. It is the
+// one-shot-workload runner: unlike Hello it imposes no deadline of its
+// own, so a long build (minutes) is bounded only by the caller's ctx;
+// unlike Serve it returns when the workload finishes rather than running
+// until cancellation. The executor's in-sandbox image builder (#101
+// slice 3c) uses it to run a buildah build and know exactly when the
+// build container has exited so it can read back the output tarball.
+func RunToCompletion(ctx context.Context, w io.Writer, cfg Config) error {
+	return helloWithTimeout(ctx, w, cfg, cloudHypervisorRunner{}, virtiofsdSidecar{}, 0)
+}
+
+// contextWithOptionalTimeout derives a child ctx that either inherits the
+// parent's deadline alone (timeout == 0) or adds one of its own. The
+// returned cancel doubles as the "kill the VM" lever waitForBootComplete
+// pulls on ctx expiry, so it must always be called.
+func contextWithOptionalTimeout(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout == 0 {
+		return context.WithCancel(ctx)
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 // serveWith is Serve parameterised on its subprocess drivers so
 // tests can swap in fakes. Production callers go through Serve.
 func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareSidecar) error {
@@ -1233,6 +1258,14 @@ func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 // can swap in fakes. Production code calls Hello, which threads the
 // real cloudHypervisorRunner / virtiofsdSidecar.
 func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareSidecar) error {
+	return helloWithTimeout(ctx, w, cfg, r, sc, HelloTimeout)
+}
+
+// helloWithTimeout is helloWith parameterised on the boot-completion
+// deadline. timeout == 0 means "no deadline of our own" — the wait is
+// bounded only by ctx, which is what RunToCompletion needs for one-shot
+// workloads (image builds) that legitimately run longer than HelloTimeout.
+func helloWithTimeout(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareSidecar, timeout time.Duration) error {
 	ctx, span := trace.Start(ctx, "sandbox.Hello",
 		trace.WithAttributes(
 			trace.KV{Key: "kernel", Value: cfg.Kernel},
@@ -1246,7 +1279,7 @@ func helloWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	cfg = cfg.withDefaults()
 
-	runCtx, cancel := context.WithTimeout(ctx, HelloTimeout)
+	runCtx, cancel := contextWithOptionalTimeout(ctx, timeout)
 	defer cancel()
 
 	// Same cgroup + teardown choreography as serveWith — see the long

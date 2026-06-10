@@ -60,6 +60,12 @@ type Mount struct {
 // honours alongside the image ref.
 type BootOptions struct {
 	Mounts []Mount
+	// Args, when non-nil, replaces the image's Entrypoint+Cmd with the
+	// container's process args — the seam the in-sandbox image builder
+	// (#101 slice 3c) uses to run a generated build script against the
+	// static build image instead of baking a per-build image. See
+	// imagestore.BundleOptions.Args.
+	Args []string
 	// Env is merged over the image's Env (keyed by NAME) in the
 	// container's OCI process env. Carries the workspace's own env
 	// plus, under Phase J, the injected egress-proxy variables.
@@ -153,6 +159,7 @@ func BuildBundleConfig(
 	}
 	bundle, err := store.Bundle(ctx, img.Digest, imagestore.BundleOptions{
 		ExtraMounts:          bundleMountsFromSpec(opts.Mounts),
+		Args:                 opts.Args,
 		Env:                  opts.Env,
 		Nested:               opts.Nested,
 		PrivilegedFuseMounts: opts.PrivilegedFuseMounts,

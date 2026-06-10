@@ -6,9 +6,11 @@
 //
 // This is the devcontainer.json → bootable-workspace seam: once a config
 // is a workspacecatalog.Spec it flows through the entire existing
-// pipeline unchanged. The projection is image-based only — a build
-// stanza needs the in-sandbox image builder (PLAN.md D6c.5 slice 3) that
-// does not exist yet, so it is rejected rather than silently ignored.
+// pipeline unchanged. Both image- and build-based configs project their
+// env / mounts / forwardPorts here; a build-based config additionally
+// leaves ImageRef empty, since its image is produced by the in-sandbox
+// builder (PLAN.md D6c.5 slice 3c) from build inputs the caller reads off
+// the devcontainer.Spec.Build directly.
 //
 // Two devcontainer fields have no home in workspacecatalog.Spec and so
 // are NOT consumed here: postCreateCommand (no post-boot-exec mechanism
@@ -28,16 +30,12 @@ import (
 	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
 )
 
-// ErrBuildUnsupported is returned for a build-based config. daft can
-// only pull images today (imagestore only pulls); building a
-// devcontainer Dockerfile is PLAN.md D6c.5 slice 3.
-var ErrBuildUnsupported = errors.New("devcontainerspec: build-based devcontainer needs an image builder (not yet implemented); use an image-based config")
-
-// ErrNoImage is returned when a Spec names no image (and no build).
+// ErrNoImage is returned when a Spec selects neither an image nor a build.
 var ErrNoImage = errors.New("devcontainerspec: devcontainer selects no image")
 
-// ToWorkspaceSpec projects an image-based devcontainer.Spec onto a
-// workspacecatalog.Spec: image_ref, the workspace mount and any extra
+// ToWorkspaceSpec projects a devcontainer.Spec onto a
+// workspacecatalog.Spec: image_ref (empty for a build-based config — the
+// image is built later from s.Build), the workspace mount and any extra
 // mounts, containerEnv, and forwardPorts (as TCP). Mount targets must be
 // absolute (the executor rejects relative/empty targets); ports must be
 // in 1..65535.
@@ -45,10 +43,7 @@ func ToWorkspaceSpec(s *devcontainer.Spec) (workspacecatalog.Spec, error) {
 	if s == nil {
 		return workspacecatalog.Spec{}, errors.New("devcontainerspec: nil spec")
 	}
-	if s.Build != nil {
-		return workspacecatalog.Spec{}, ErrBuildUnsupported
-	}
-	if s.Image == "" {
+	if s.Image == "" && s.Build == nil {
 		return workspacecatalog.Spec{}, ErrNoImage
 	}
 

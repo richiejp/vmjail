@@ -2595,12 +2595,43 @@ the user-host or in CI today.
       proxy CA at boot; (2) de-risked routing first with `--tls-verify=false`
       (Step 1), then hardened to real CA trust (Step 2). **The last build-path
       technical unknown is retired — 3b/3c are now pure plumbing.**
-    - **3b — push + resolve.** Host reads the build VM's output tarball,
-      `ociregistry.Push` → ref.
-    - **3c — orchestration.** A build-based devcontainer (or `build`
-      workspace) launches the build sandbox, pushes, sets the resolved
-      image, then boots normally — replacing today's `ErrBuildUnsupported`
-      in `resolveDevcontainerOverlay`.
+    - **3b+3c (code landed, e2e pending) — build orchestration.** A
+      build-based devcontainer now builds its image in an ephemeral
+      sandbox at dispatch, then boots the workload from the result —
+      `ErrBuildUnsupported` is gone. The seam is node-side in
+      `baseBootConfig` (orchestrator stays content-blind, just forwards
+      `devcontainer_path`): `resolveDevcontainerOverlay` returns a
+      `devcontainerBuildPlan` for a build config (nil when an explicit
+      workspace image overrides it — explicit wins); `baseBootConfig`
+      calls `buildDevcontainerImage`, which boots the static build image
+      (`DAFT_BUILD_IMAGE_REF`) with a generated buildah script as the
+      container **command override** (new `BootOptions.Args` → the
+      image's Entrypoint+Cmd, so no per-build image baking), the
+      devcontainer context exported read-only at `/build/ctx` and a
+      writable `/build/out`, `PrivilegedBuild` + the default-deny egress
+      lane on. The host reads `/build/out/image.tar` back and
+      `ociregistry.Push`es it to `daft-build/<ws>:<uid>` over the same
+      hostedRT the imagestore pulls with; that ref becomes the workload's
+      image.
+      - **Key finding (overturned "pure plumbing"):** the build VM does
+        **not** self-terminate when its container exits — the agent
+        blocks on `<-ctx.Done()`. But it emits `BOOT_COMPLETE` right
+        *after* the build container exits (runContainer blocks on
+        `cmd.Wait`, then `signalBootComplete`), so the completion +
+        teardown handshake is `Hello`'s existing wait-for-BOOT_COMPLETE.
+        `Hello`'s 30s cap is the only mismatch → new
+        `sandbox.RunToCompletion` (helloWith parameterised on the
+        timeout; 0 = bounded only by ctx) is the build runner. Success =
+        a tarball on `/build/out` (a failed `set -e` build pushes
+        nothing); no container-exit-code plumbing needed.
+      - Path resolution: `context` (default ".") and `dockerfile`
+        (default "Dockerfile") are both relative to the devcontainer.json
+        dir; the context must stay within the workspace-content mount
+        root and the Dockerfile within the context (a hostile
+        devcontainer.json can't bind arbitrary host paths or escape).
+      - **3c-e2e (pending):** a real build-based devcontainer dispatched
+        against KVM → build sandbox → push → workload boots from the
+        built image and sees a RUN-baked artefact.
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **features** (OCI install units) as build steps.
 

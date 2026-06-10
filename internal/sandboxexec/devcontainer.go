@@ -17,50 +17,66 @@ import (
 // spec.devcontainer_path out of the already-materialised workspace
 // content, projects it to a base workspace spec, and overlays the
 // workspace's explicit spec fields on top (explicit wins). It returns the
-// effective image ref and env the assembler should boot with.
+// effective image ref + env + forwardPorts the assembler should boot with
+// and, for a build-based config, a resolved build plan (nil otherwise).
 //
 // This runs node-side at dispatch — the only place the pushed content
 // exists — after resolveMounts has reconstructed it onto disk. Reading is
 // deliberately strict: a missing/garbled devcontainer fails the dispatch
 // loudly rather than silently booting something unexpected (the
 // orchestrator trusted the path provisionally at Ready time; this is
-// where it's validated for real). image_ref, env, and forwardPorts are
-// overlaid.
-func resolveDevcontainerOverlay(spec *sandboxv1.SandboxSpec, mounts []sandboxboot.Mount) (imageRef string, env []string, ports []*sandboxv1.PortMapping, err error) {
+// where it's validated for real).
+//
+// For an image-based config the effective image is always set. For a
+// build-based config the projection leaves it empty and returns the build
+// plan instead — the caller builds the image, unless the workspace
+// explicitly overrode the image (overlay then fills it and the plan is
+// ignored).
+func resolveDevcontainerOverlay(spec *sandboxv1.SandboxSpec, mounts []sandboxboot.Mount) (imageRef string, env []string, ports []*sandboxv1.PortMapping, build *devcontainerBuildPlan, err error) {
 	rel := spec.GetDevcontainerPath()
-	file, err := findDevcontainerFile(mounts, rel)
+	file, root, err := findDevcontainerFile(mounts, rel)
 	if err != nil {
-		return "", nil, nil, err
+		return "", nil, nil, nil, err
 	}
 	// #nosec G304 — file is rooted-and-cleaned under a materialised mount
 	// dir by findDevcontainerFile, so it cannot escape the workspace content.
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("sandboxexec: read devcontainer %q: %w", rel, err)
+		return "", nil, nil, nil, fmt.Errorf("sandboxexec: read devcontainer %q: %w", rel, err)
 	}
 	resolved, err := devcontainer.Resolve(data, devcontainer.Substitutions{})
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
+		return "", nil, nil, nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
 	}
-	// ToWorkspaceSpec guarantees a non-empty image on success (it rejects
-	// image-less and build-based configs), so the overlay's effective
-	// image is always set here.
+	// ToWorkspaceSpec projects env/ports/mounts for both image- and
+	// build-based configs, leaving ImageRef empty for the latter.
 	base, err := devcontainerspec.ToWorkspaceSpec(resolved)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
+		return "", nil, nil, nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
 	}
 	eff := devcontainerspec.Overlay(base, explicitSpec(spec))
-	return eff.ImageRef, envStrings(eff.Env), portMappingsToProto(eff.Ports), nil
+	// Only resolve a build plan when the config is build-based and the
+	// overlay didn't fill the image from an explicit override — otherwise
+	// the build would run pointlessly.
+	if resolved.Build != nil && eff.ImageRef == "" {
+		build, err = resolveBuildPlan(file, root, resolved.Build)
+		if err != nil {
+			return "", nil, nil, nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
+		}
+	}
+	return eff.ImageRef, envStrings(eff.Env), portMappingsToProto(eff.Ports), build, nil
 }
 
 // findDevcontainerFile locates rel (a path within the workspace content,
 // e.g. ".devcontainer/devcontainer.json") under one of the materialised
 // mount backing dirs. rel is rooted-and-cleaned so a "../" can't escape a
-// mount; the first mount that contains the file wins.
-func findDevcontainerFile(mounts []sandboxboot.Mount, rel string) (string, error) {
+// mount; the first mount that contains the file wins. It returns the file
+// path and the mount Source (root) it was found under — the root bounds a
+// build context so a hostile config can't escape the workspace content.
+func findDevcontainerFile(mounts []sandboxboot.Mount, rel string) (file, root string, err error) {
 	clean := strings.TrimPrefix(filepath.Clean("/"+filepath.FromSlash(rel)), string(filepath.Separator))
 	if clean == "" || clean == "." {
-		return "", fmt.Errorf("sandboxexec: invalid devcontainer path %q", rel)
+		return "", "", fmt.Errorf("sandboxexec: invalid devcontainer path %q", rel)
 	}
 	for _, m := range mounts {
 		if m.Source == "" {
@@ -68,10 +84,10 @@ func findDevcontainerFile(mounts []sandboxboot.Mount, rel string) (string, error
 		}
 		cand := filepath.Join(m.Source, clean)
 		if fi, statErr := os.Stat(cand); statErr == nil && !fi.IsDir() {
-			return cand, nil
+			return cand, m.Source, nil
 		}
 	}
-	return "", fmt.Errorf("sandboxexec: devcontainer %q not found in any workspace mount", rel)
+	return "", "", fmt.Errorf("sandboxexec: devcontainer %q not found in any workspace mount", rel)
 }
 
 // explicitSpec projects the SandboxSpec's user-set image+env+ports onto a

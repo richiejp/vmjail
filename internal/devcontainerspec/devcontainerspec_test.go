@@ -59,19 +59,27 @@ func TestToWorkspaceSpecImageBased(t *testing.T) {
 	}
 }
 
-// TestPyTorchCPURejectedUntilBuilder pins the current boundary: PyTorch's
-// real CPU config is build-based, so it cannot boot until the slice-3
-// image builder lands. The error must be explicit, not a silent drop.
-func TestPyTorchCPURejectedUntilBuilder(t *testing.T) {
+// TestPyTorchCPUBuildProjects pins the slice-3c behaviour: PyTorch's real
+// CPU config is build-based, so it projects with an EMPTY image (the
+// in-sandbox builder fills it later) while still carrying env/mounts —
+// not rejected, not silently dropped. The build inputs ride along on the
+// devcontainer.Spec.Build the caller reads directly.
+func TestPyTorchCPUBuildProjects(t *testing.T) {
 	dc := resolve(t, `{
   "name": "PyTorch - CPU",
-  "build": { "dockerfile": "../Dockerfile", "context": "./" },
+  "build": { "dockerfile": "Dockerfile", "context": ".." },
   "workspaceFolder": "/workspace/pytorch"
 }`, "/home/dev/pytorch")
 
-	_, err := ToWorkspaceSpec(dc)
-	if !errors.Is(err, ErrBuildUnsupported) {
-		t.Errorf("err = %v, want ErrBuildUnsupported", err)
+	got, err := ToWorkspaceSpec(dc)
+	if err != nil {
+		t.Fatalf("ToWorkspaceSpec: %v", err)
+	}
+	if got.ImageRef != "" {
+		t.Errorf("ImageRef = %q, want empty for a build-based config", got.ImageRef)
+	}
+	if dc.Build == nil {
+		t.Error("resolved spec lost its build stanza")
 	}
 }
 
@@ -83,7 +91,6 @@ func TestToWorkspaceSpecErrors(t *testing.T) {
 	}{
 		{"nil", nil, nil},
 		{"no image", &devcontainer.Spec{}, ErrNoImage},
-		{"build", &devcontainer.Spec{Build: &devcontainer.BuildSpec{}}, ErrBuildUnsupported},
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
