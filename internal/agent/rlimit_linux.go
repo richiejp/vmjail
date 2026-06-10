@@ -22,21 +22,32 @@ const rlimitNPROC = 6
 // in-sandbox image build's RUN step, which forces these to ~1M).
 const guestRlimit uint64 = 1 << 20
 
-// raiseGuestRlimits lifts the agent's RLIMIT_NOFILE and RLIMIT_NPROC to
-// guestRlimit before any container starts, so crun and the workload
-// inherit a normal-host-like limit (the runtime spec leaves Rlimits
-// empty, so the container inherits the agent's). The agent is guest-root
-// with CAP_SYS_RESOURCE, so raising the hard limit is permitted here even
+// raiseGuestRlimits lifts the agent's RLIMIT_NOFILE and RLIMIT_NPROC to at
+// least guestRlimit before any container starts, so crun and the workload
+// inherit a normal-host-like limit (the runtime spec leaves Rlimits empty,
+// so the container inherits the agent's). The agent is guest-root with
+// CAP_SYS_RESOURCE, so raising the hard limit is permitted here even
 // though the zero-cap container could not raise it itself.
 func raiseGuestRlimits(w io.Writer) {
-	raiseRlimits(w, syscall.Setrlimit)
+	raiseRlimits(w, syscall.Getrlimit, syscall.Setrlimit)
 }
 
-// raiseRlimits is the testable core of raiseGuestRlimits: the setrlimit
-// syscall is a parameter so a test can drive both branches without
-// touching the process's real limits. Best-effort — a per-resource
-// failure is reported but does not fail the boot.
-func raiseRlimits(w io.Writer, setrlimit func(resource int, rlim *syscall.Rlimit) error) {
+// raiseRlimits is the testable core of raiseGuestRlimits: the getrlimit /
+// setrlimit syscalls are parameters so a test can drive every branch
+// without touching the process's real limits.
+//
+// It RAISES, never lowers: each soft/hard is bumped to guestRlimit only
+// when it is currently below it (NPROC's kernel default scales with RAM
+// and can already exceed guestRlimit on a large guest — clamping down
+// would be a regression, and a function named "raise" must not lower).
+// Best-effort — a per-resource failure is reported but does not fail the
+// boot, and a getrlimit failure falls back to a plain raise to guestRlimit
+// (we can't know the current value, but the intent is still to lift it).
+func raiseRlimits(
+	w io.Writer,
+	getrlimit func(resource int, rlim *syscall.Rlimit) error,
+	setrlimit func(resource int, rlim *syscall.Rlimit) error,
+) {
 	for _, r := range []struct {
 		name     string
 		resource int
@@ -44,11 +55,22 @@ func raiseRlimits(w io.Writer, setrlimit func(resource int, rlim *syscall.Rlimit
 		{"NOFILE", syscall.RLIMIT_NOFILE},
 		{"NPROC", rlimitNPROC},
 	} {
-		lim := syscall.Rlimit{Cur: guestRlimit, Max: guestRlimit}
-		if err := setrlimit(r.resource, &lim); err != nil {
+		var cur syscall.Rlimit
+		if err := getrlimit(r.resource, &cur); err != nil {
+			// Pathological (a valid resource id never fails getrlimit);
+			// fall back to a plain raise rather than skip the lift.
+			cur = syscall.Rlimit{}
+			_, _ = fmt.Fprintf(w, "rlimit: read %s failed (%v); setting to %d\n", r.name, err, guestRlimit)
+		}
+		want := syscall.Rlimit{Cur: max(cur.Cur, guestRlimit), Max: max(cur.Max, guestRlimit)}
+		if want == cur {
+			_, _ = fmt.Fprintf(w, "rlimit: %s already >= %d (cur=%d hard=%d)\n", r.name, guestRlimit, cur.Cur, cur.Max)
+			continue
+		}
+		if err := setrlimit(r.resource, &want); err != nil {
 			_, _ = fmt.Fprintf(w, "rlimit: raise %s to %d failed: %v\n", r.name, guestRlimit, err)
 			continue
 		}
-		_, _ = fmt.Fprintf(w, "rlimit: raised %s to %d\n", r.name, guestRlimit)
+		_, _ = fmt.Fprintf(w, "rlimit: raised %s to cur=%d hard=%d\n", r.name, want.Cur, want.Max)
 	}
 }
