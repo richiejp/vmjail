@@ -260,6 +260,22 @@ func (h *WorkspaceCatalogHandler) SetPrivilegedFuseMounts(
 		})
 }
 
+// SetPrivilegedBuild toggles the workspace's build capability grant.
+// Enabling gives the workload container the standard container cap set at
+// Launch (so an in-sandbox buildah can build); disabling reverts to the
+// zero-cap default.
+func (h *WorkspaceCatalogHandler) SetPrivilegedBuild(
+	_ context.Context,
+	req *connect.Request[workspacev1.SetPrivilegedBuildRequest],
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	enable := req.Msg.GetEnable()
+	return h.mutate(req.Header(), req.Msg.GetHandle(),
+		func(w *workspacecatalog.Workspace) error {
+			w.Spec.PrivilegedBuild = enable
+			return nil
+		})
+}
+
 // mutate is the shared auth → resolve → Update → project plumbing
 // behind every per-field setter. Defaults to MutateSpec (bumps
 // generation + recomputes Missing/Ready). Add* handlers don't use
@@ -829,6 +845,9 @@ func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Finge
 		PrivilegedFuseMounts: &sandboxv1.PrivilegedFuseMounts{
 			Enable: ws.Spec.PrivilegedFuseMounts,
 		},
+		PrivilegedBuild: &sandboxv1.PrivilegedBuild{
+			Enable: ws.Spec.PrivilegedBuild,
+		},
 	}
 }
 
@@ -975,6 +994,9 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 			},
 			PrivilegedFuseMounts: &sandboxv1.PrivilegedFuseMounts{
 				Enable: ws.Spec.PrivilegedFuseMounts,
+			},
+			PrivilegedBuild: &sandboxv1.PrivilegedBuild{
+				Enable: ws.Spec.PrivilegedBuild,
 			},
 		},
 		Status: &workspacev1.WorkspaceStatus{

@@ -797,6 +797,39 @@ func TestSetNestedVirtualizationRoundTripsAndClears(t *testing.T) {
 	}
 }
 
+// TestSetPrivilegedBuildRoundTripsAndClears proves the build capability
+// grant toggles on then back off through the wire spec — the field the
+// Launch projection reads onto SandboxSpec.privileged_build.
+//
+//nolint:dupl // Deliberately parallel to the nested-virt round-trip test.
+func TestSetPrivilegedBuildRoundTripsAndClears(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "pb"},
+	))
+	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
+
+	set, err := rig.client.SetPrivilegedBuild(t.Context(), connect.NewRequest(
+		&workspacev1.SetPrivilegedBuildRequest{Handle: handle, Enable: true},
+	))
+	if err != nil {
+		t.Fatalf("SetPrivilegedBuild: %v", err)
+	}
+	if !set.Msg.GetWorkspace().GetSpec().GetPrivilegedBuild().GetEnable() {
+		t.Error("after enable, spec privileged_build.enable = false, want true")
+	}
+
+	cleared, err := rig.client.SetPrivilegedBuild(t.Context(), connect.NewRequest(
+		&workspacev1.SetPrivilegedBuildRequest{Handle: handle, Enable: false},
+	))
+	if err != nil {
+		t.Fatalf("SetPrivilegedBuild clear: %v", err)
+	}
+	if cleared.Msg.GetWorkspace().GetSpec().GetPrivilegedBuild().GetEnable() {
+		t.Error("after disable, spec privileged_build.enable = true, want false")
+	}
+}
+
 // TestSetPrivilegedFuseMountsRoundTripsAndClears proves the FUSE
 // grant toggles on then back off through the wire spec — the field the
 // Launch projection reads onto SandboxSpec.privileged_fuse_mounts.

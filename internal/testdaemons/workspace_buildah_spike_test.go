@@ -35,17 +35,6 @@ import (
 // and validates with go-containerregistry. RUN steps (need exec caps /
 // isolation) and a real base image (need egress) are follow-up spikes.
 func TestClusterWorkspaceBuildahSpike(t *testing.T) {
-	// Gated: PROVEN green 2026-06-09 (PASS 21s) but only with the standard
-	// container cap set granted. That was confirmed via a throwaway probe
-	// (caps jammed into applyPrivilegedFuseMounts, since reverted); buildah's
-	// copier chroots even for COPY, needing CAP_SYS_CHROOT et al. that
-	// privileged-fuse's CAP_SYS_ADMIN doesn't cover. Until the proper build
-	// capability grant lands (#101 slice 3a productize), the privileged-fuse
-	// step below no longer grants enough, so this skips by default. Set
-	// DAFT_RUN_BUILDAH_SPIKE=1 (with that grant wired) to run it.
-	if os.Getenv("DAFT_RUN_BUILDAH_SPIKE") == "" {
-		t.Skip("buildah spike needs the build-cap grant (#101 slice 3a); set DAFT_RUN_BUILDAH_SPIKE=1")
-	}
 	imgPath := requireEnvPath(t, "DAFT_BUILD_IMAGE",
 		"nix build .#daft-build-image -o bin/daft-build-image")
 
@@ -103,10 +92,10 @@ func TestClusterWorkspaceBuildahSpike(t *testing.T) {
 			"%s workspace mount add /build/out --source %s --name %s %s",
 			prefix, out, wsName, orch,
 		)},
-		// buildah wants CAP_SYS_ADMIN/mounts for its storage even on the
-		// no-RUN path; the privileged-fuse grant is the existing lever.
-		{Label: "fuse", Cmd: fmt.Sprintf(
-			"%s workspace privileged-fuse --enable --name %s %s", prefix, wsName, orch,
+		// The build capability grant: buildah's copier chroots even for
+		// COPY (CAP_SYS_CHROOT), which daft's zero-cap default withholds.
+		{Label: "build-caps", Cmd: fmt.Sprintf(
+			"%s workspace privileged-build --enable --name %s %s", prefix, wsName, orch,
 		)},
 		{Label: "target", Cmd: fmt.Sprintf(
 			"%s workspace target %s --name %s %s", prefix, c.SandboxdFP, wsName, orch,

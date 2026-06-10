@@ -378,6 +378,7 @@ const (
 	nameFlagVal     = "x"
 	orchestratorArg = "--orchestrator"
 	enableFlag      = "--enable"
+	disableFlag     = "--disable"
 )
 
 const (
@@ -609,7 +610,7 @@ func TestWorkspaceNestedRequiresExactlyOneFlag(t *testing.T) {
 	h.run(append([]string{createSubName}, h.commonArgs...)...)
 	for _, flags := range [][]string{
 		{},                        // neither
-		{enableFlag, "--disable"}, // both
+		{enableFlag, disableFlag}, // both
 	} {
 		args := append(append([]string{nestedSubName}, flags...), h.commonArgs...)
 		if _, err := h.runErr(args...); err == nil {
@@ -639,11 +640,40 @@ func TestWorkspacePrivilegedFuseRequiresExactlyOneFlag(t *testing.T) {
 	h.run(append([]string{createSubName}, h.commonArgs...)...)
 	for _, flags := range [][]string{
 		{},                        // neither
-		{enableFlag, "--disable"}, // both
+		{enableFlag, disableFlag}, // both
 	} {
 		args := append(append([]string{fuseSubName}, flags...), h.commonArgs...)
 		if _, err := h.runErr(args...); err == nil {
 			t.Errorf("privileged-fuse %v: expected error, got nil", flags)
+		}
+	}
+}
+
+// TestWorkspacePrivilegedBuildEnable drives the privileged-build
+// subcommand end-to-end: --enable calls SetPrivilegedBuild and the
+// rendered summary surfaces the grant.
+func TestWorkspacePrivilegedBuildEnable(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	out := h.run(append([]string{buildSubName, enableFlag}, h.commonArgs...)...)
+	if !strings.Contains(out, "Privileged-Build:") {
+		t.Errorf("privileged-build --enable summary missing Privileged-Build row:\n%s", out)
+	}
+}
+
+// TestWorkspacePrivilegedBuildRequiresExactlyOneFlag pins the client-side
+// guard for the build grant: neither flag (or both) is a usage error that
+// never reaches the wire.
+func TestWorkspacePrivilegedBuildRequiresExactlyOneFlag(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	for _, flags := range [][]string{
+		{},                        // neither
+		{enableFlag, disableFlag}, // both
+	} {
+		args := append(append([]string{buildSubName}, flags...), h.commonArgs...)
+		if _, err := h.runErr(args...); err == nil {
+			t.Errorf("privileged-build %v: expected error, got nil", flags)
 		}
 	}
 }

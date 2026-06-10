@@ -79,6 +79,14 @@ type BundleOptions struct {
 	// inside the VM), emitted only when the workspace opts in
 	// (SandboxSpec.privileged_fuse_mounts.enable).
 	PrivilegedFuseMounts bool
+	// PrivilegedBuild grants the container the standard container
+	// capability set (CAP_SYS_CHROOT, CAP_SYS_ADMIN, CHOWN, DAC_OVERRIDE,
+	// SETUID, SETGID, MKNOD, …) so an in-sandbox buildah can build images:
+	// daft zeroes container caps by default, and a Dockerfile build needs
+	// them (COPY chroots, RUN mounts/chowns). Off by default — a real
+	// privilege bump, emitted only when the workspace opts in
+	// (SandboxSpec.privileged_build.enable).
+	PrivilegedBuild bool
 }
 
 // BundleMount mirrors the subset of the OCI runtime-spec mount type

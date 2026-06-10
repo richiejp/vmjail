@@ -21,7 +21,7 @@ import "github.com/localai-org/darkaifactory/internal/workspacecatalog"
 //     a key collision. Base order is preserved; override-only entries are
 //     appended in their own order. This lets a workspace re-point one
 //     mount or override one env var without restating the whole set.
-//   - Boolean grants (NestedVirt, PrivilegedFuseMounts): OR. These never
+//   - Boolean grants (NestedVirt, PrivilegedFuseMounts, PrivilegedBuild): OR. These never
 //     originate from a devcontainer (the base carries them false), so the
 //     union degenerates to "the override decides" while still composing
 //     sensibly if a future base sets one.
@@ -45,6 +45,7 @@ func Overlay(base, override workspacecatalog.Spec) workspacecatalog.Spec {
 
 	out.NestedVirt = base.NestedVirt || override.NestedVirt
 	out.PrivilegedFuseMounts = base.PrivilegedFuseMounts || override.PrivilegedFuseMounts
+	out.PrivilegedBuild = base.PrivilegedBuild || override.PrivilegedBuild
 	return out
 }
 

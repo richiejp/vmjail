@@ -81,6 +81,11 @@ type BootOptions struct {
 	// Off by default; set from SandboxSpec.privileged_fuse_mounts.enable
 	// by the executor. See imagestore.BundleOptions.PrivilegedFuseMounts.
 	PrivilegedFuseMounts bool
+	// PrivilegedBuild grants the workload container the standard
+	// container capability set so an in-sandbox buildah can build images.
+	// Off by default; set from SandboxSpec.privileged_build.enable by the
+	// executor. See imagestore.BundleOptions.PrivilegedBuild.
+	PrivilegedBuild bool
 }
 
 // Store is the imagestore surface BuildBundleConfig needs. Kept as
@@ -151,6 +156,7 @@ func BuildBundleConfig(
 		Env:                  opts.Env,
 		Nested:               opts.Nested,
 		PrivilegedFuseMounts: opts.PrivilegedFuseMounts,
+		PrivilegedBuild:      opts.PrivilegedBuild,
 	})
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: bundle %s: %w", img.Digest, err)

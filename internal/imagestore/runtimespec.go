@@ -177,6 +177,9 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions, rootfs string) (runtim
 	if opts.PrivilegedFuseMounts {
 		mounts, linux, caps = applyPrivilegedFuseMounts(mounts, linux, caps)
 	}
+	if opts.PrivilegedBuild {
+		caps = applyPrivilegedBuild(caps)
+	}
 	return runtimeSpec{
 		OCIVersion: "1.0.2",
 		Process: runtimeProcess{
@@ -262,6 +265,38 @@ func applyPrivilegedFuseMounts(
 	caps.Effective = append(caps.Effective, capSysAdmin)
 	caps.Permitted = append(caps.Permitted, capSysAdmin)
 	return mounts, linux, caps
+}
+
+// buildCapabilities is the standard container capability set (what
+// Docker/podman grant a container by default) plus CAP_SYS_ADMIN — the
+// set an in-sandbox buildah needs. daft zeroes container caps by default;
+// a Dockerfile build needs them back: even COPY fails without
+// CAP_SYS_CHROOT (buildah's copier chroots), and RUN bind-mounts
+// (CAP_SYS_ADMIN) + chowns/setuids/mknods (CHOWN/SETUID/SETGID/MKNOD/…).
+// The container shares sandboxd's userns, so in the rootless path these
+// are userns-confined; the VM is the security boundary regardless.
+//
+//nolint:gochecknoglobals // immutable capability set, parallel to capSysAdmin.
+var buildCapabilities = []string{
+	"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER",
+	"CAP_MKNOD", "CAP_NET_RAW", "CAP_SETGID", "CAP_SETUID",
+	"CAP_SETFCAP", "CAP_SETPCAP", "CAP_NET_BIND_SERVICE",
+	"CAP_SYS_CHROOT", "CAP_KILL", "CAP_AUDIT_WRITE", capSysAdmin,
+}
+
+// applyPrivilegedBuild grants the container the build capability set
+// (see buildCapabilities and the PrivilegedBuild proto doc) so an
+// in-sandbox image build can run. Added to bounding, effective and
+// permitted so the uid-0 container keeps them across execve (already in
+// permitted, so NoNewPrivileges does not strip them), reaching buildah's
+// deeply-exec'd copier / RUN subprocesses. A CAP_SYS_ADMIN duplicate when
+// PrivilegedFuseMounts is also on is harmless — crun reads capabilities
+// into a set. Returns a fresh-appended set; off by default otherwise.
+func applyPrivilegedBuild(caps runtimeCapabilities) runtimeCapabilities {
+	caps.Bounding = append(caps.Bounding, buildCapabilities...)
+	caps.Effective = append(caps.Effective, buildCapabilities...)
+	caps.Permitted = append(caps.Permitted, buildCapabilities...)
+	return caps
 }
 
 // mergeArgs returns override unchanged when non-nil, otherwise

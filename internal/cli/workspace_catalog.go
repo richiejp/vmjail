@@ -56,6 +56,7 @@ const (
 	resourcesSubName    = "resources"
 	nestedSubName       = "nested"
 	fuseSubName         = "privileged-fuse"
+	buildSubName        = "privileged-build"
 )
 
 // workspaceClientOpts is the shared flag set every catalog
@@ -233,6 +234,7 @@ func newWorkspaceCatalogSubcommands() []*cobra.Command {
 		newWorkspaceResourcesCmd(),
 		newWorkspaceNestedCmd(),
 		newWorkspacePrivilegedFuseCmd(),
+		newWorkspacePrivilegedBuildCmd(),
 		newWorkspaceMountCmd(),
 		newWorkspacePushCmd(),
 		newWorkspacePullCatalogCmd(),
@@ -566,6 +568,54 @@ func newWorkspacePrivilegedFuseCmd() *cobra.Command {
 		"grant privileged FUSE mounts (bind /dev/fuse + CAP_SYS_ADMIN into the workload container)")
 	cmd.Flags().BoolVar(&disable, "disable", false,
 		"revoke privileged FUSE mounts (the default)")
+	bindWorkspaceClientFlags(cmd, &opts)
+	return cmd
+}
+
+// newWorkspacePrivilegedBuildCmd toggles the workspace's build capability
+// grant. `--enable` gives the workload container the standard container
+// cap set at Launch so an in-sandbox buildah can build images (daft zeroes
+// container caps by default); `--disable` reverts to the zero-cap default.
+// The caps are near-root inside the VM, so the grant is danger-named and
+// exactly one of the two flags is required.
+//
+// both are --enable/--disable grant toggles differing only by RPC and copy.
+//
+//nolint:dupl // Deliberately parallel to newWorkspacePrivilegedFuseCmd:
+func newWorkspacePrivilegedBuildCmd() *cobra.Command {
+	var (
+		opts    workspaceClientOpts
+		enable  bool
+		disable bool
+	)
+	cmd := &cobra.Command{
+		Use:           buildSubName,
+		Short:         "Enable/disable the build capability grant (--enable gives the standard container cap set for in-sandbox image builds)",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if enable == disable {
+				return fmt.Errorf("specify exactly one of --enable / --disable")
+			}
+			return runCatalogCmd(cmd, opts, buildSubName,
+				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
+					resp, err := c.SetPrivilegedBuild(ctx, connect.NewRequest(
+						&workspacev1.SetPrivilegedBuildRequest{
+							Handle: h,
+							Enable: enable,
+						},
+					))
+					if err != nil {
+						return err
+					}
+					return writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace())
+				})
+		},
+	}
+	cmd.Flags().BoolVar(&enable, "enable", false,
+		"grant the build capability set (standard container caps for an in-sandbox buildah)")
+	cmd.Flags().BoolVar(&disable, "disable", false,
+		"revoke the build capability grant (the default)")
 	bindWorkspaceClientFlags(cmd, &opts)
 	return cmd
 }
@@ -1106,6 +1156,9 @@ func writeWorkspaceSummary(w io.Writer, ws *workspacev1.Workspace) error {
 	}
 	if spec.GetPrivilegedFuseMounts().GetEnable() {
 		rows = append(rows, [2]string{"Privileged-FUSE", "enabled (CAP_SYS_ADMIN)"})
+	}
+	if spec.GetPrivilegedBuild().GetEnable() {
+		rows = append(rows, [2]string{"Privileged-Build", "enabled (standard container caps)"})
 	}
 	for _, row := range rows {
 		if _, err := fmt.Fprintf(tw, "%s:\t%s\n", row[0], row[1]); err != nil {

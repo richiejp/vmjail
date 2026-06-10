@@ -97,6 +97,11 @@ message SandboxSpec {
   // spec fields above (image_ref/env/mounts/ports) on top — the explicit
   // fields win. Empty ⇒ no devcontainer base. See PLAN.md D6c.5.
   string devcontainer_path = 13;
+
+  // Build capability grant. Unset ⇒ disabled. See the PrivilegedBuild
+  // message — grants the standard container cap set so an in-sandbox
+  // buildah can build images.
+  PrivilegedBuild privileged_build = 14;
 }
 
 // SandboxStatus is the orchestrator's observed runtime state.
@@ -211,6 +216,23 @@ message NestedVirtualization {
 // capability with `enable`), so future knobs attach here, e.g.:
 //   bool allow_other = 2;  // permit FUSE mounts with allow_other
 message PrivilegedFuseMounts {
+  bool enable = 1;
+}
+
+// PrivilegedBuild grants a workload the standard container capability set
+// (what Docker/podman give a container by default) so an in-sandbox image
+// builder (buildah) can run. daft strips containers to ZERO capabilities
+// by default (uid 0 + empty caps); a build needs more: even a Dockerfile
+// COPY fails because buildah's copier chroots (CAP_SYS_CHROOT), and RUN
+// steps bind-mount + chown + setuid (CAP_SYS_ADMIN + CHOWN/SETUID/SETGID/
+// MKNOD/…). When enabled the executor adds that set (plus CAP_SYS_ADMIN)
+// to the container's capabilities. The container shares sandboxd's userns,
+// so in the rootless path these are userns-confined caps; on root sandboxd
+// they are effectively real — hence the danger-named, off-by-default
+// section (the VM stays the security boundary). Config-section idiom (one
+// section per capability with `enable`). Do NOT enable for workloads
+// expecting container-level confinement.
+message PrivilegedBuild {
   bool enable = 1;
 }
 

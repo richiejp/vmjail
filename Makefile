@@ -207,6 +207,9 @@ NIX_FLAKE_FIXTURE_OUT := $(BIN_DIR)/nix-flake-fixture
 # flake.nix `daft-check-image`.
 NIX_CHECK_IMAGE_OUT   := $(BIN_DIR)/daft-check-image
 NIX_CHECK_VENDOR_OUT  := $(BIN_DIR)/daft-check-vendor
+# In-sandbox image builder (buildah) for #101 slice 3 — the build-based
+# devcontainer path. Consumed by TestClusterWorkspaceBuildahSpike.
+NIX_BUILD_IMAGE_OUT   := $(BIN_DIR)/daft-build-image
 # Sandbox-VM toolchain artefacts, built fresh from the flake by
 # `build-artefacts` (nix build -o) instead of exported by the dev shell.
 # Nobody runs these by hand — they're dependencies of the sandbox build
@@ -282,6 +285,7 @@ integration-build: dev
 	@nix build .#nix-shell-image    -o $(NIX_IMAGE_OUT)
 	@nix build .#nix-tooling-image  -o $(NIX_TOOLING_IMAGE_OUT)
 	@nix build .#daft-check-image   -o $(NIX_CHECK_IMAGE_OUT)
+	@nix build .#daft-build-image   -o $(NIX_BUILD_IMAGE_OUT)
 	@nix build .#daft.goModules     -o $(NIX_CHECK_VENDOR_OUT)
 	@nix build .#d6c1-flake-fixture -o $(NIX_FLAKE_FIXTURE_OUT)
 	@nix build .#daft-sandboxd      -o $(NIX_SANDBOXD_OUT)
@@ -320,6 +324,7 @@ integration: integration-build
 			DAFT_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd \
 			DAFT_SANDBOXD_BUNDLED_BIN=$(CURDIR)/$(NIX_SANDBOXD_OUT)/bin/daft-sandboxd \
 			DAFT_NIX_IMAGE=$$(realpath $(NIX_IMAGE_OUT)) \
+			DAFT_BUILD_IMAGE=$$(realpath $(NIX_BUILD_IMAGE_OUT)) \
 			DAFT_NIX_TOOLING_IMAGE=$$(realpath $(NIX_TOOLING_IMAGE_OUT)) \
 			DAFT_CHECK_IMAGE=$$(realpath $(NIX_CHECK_IMAGE_OUT)) \
 			DAFT_CHECK_VENDOR=$$(realpath $(NIX_CHECK_VENDOR_OUT)) \

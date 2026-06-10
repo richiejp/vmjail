@@ -251,8 +251,11 @@ type WorkspaceSpec struct {
 	// spec, and overlays these explicit spec fields on top (the explicit
 	// fields win). Empty ⇒ no devcontainer base. See PLAN.md D6c.5.
 	DevcontainerPath string `protobuf:"bytes,13,opt,name=devcontainer_path,json=devcontainerPath,proto3" json:"devcontainer_path,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Build capability grant. Unset ⇒ disabled. Projected directly onto
+	// SandboxSpec.privileged_build at Launch.
+	PrivilegedBuild *v1.PrivilegedBuild `protobuf:"bytes,14,opt,name=privileged_build,json=privilegedBuild,proto3" json:"privileged_build,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *WorkspaceSpec) Reset() {
@@ -374,6 +377,13 @@ func (x *WorkspaceSpec) GetDevcontainerPath() string {
 		return x.DevcontainerPath
 	}
 	return ""
+}
+
+func (x *WorkspaceSpec) GetPrivilegedBuild() *v1.PrivilegedBuild {
+	if x != nil {
+		return x.PrivilegedBuild
+	}
+	return nil
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.
@@ -555,7 +565,7 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xc1\x05\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x8e\x06\n" +
 	"\rWorkspaceSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12(\n" +
 	"\x10pending_build_id\x18\x02 \x01(\tR\x0ependingBuildId\x12.\n" +
@@ -571,7 +581,8 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	" \x01(\rR\bcpuCores\x12Z\n" +
 	"\x15nested_virtualization\x18\v \x01(\v2%.daft.sandbox.v1.NestedVirtualizationR\x14nestedVirtualization\x12[\n" +
 	"\x16privileged_fuse_mounts\x18\f \x01(\v2%.daft.sandbox.v1.PrivilegedFuseMountsR\x14privilegedFuseMounts\x12+\n" +
-	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\"\x8b\x02\n" +
+	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\x12K\n" +
+	"\x10privileged_build\x18\x0e \x01(\v2 .daft.sandbox.v1.PrivilegedBuildR\x0fprivilegedBuild\"\x8b\x02\n" +
 	"\x0fWorkspaceStatus\x12/\n" +
 	"\x13observed_generation\x18\x01 \x01(\x04R\x12observedGeneration\x12:\n" +
 	"\n" +
@@ -612,8 +623,9 @@ var file_workspace_v1_catalog_proto_goTypes = []any{
 	(v1.Isolation)(0),               // 10: daft.sandbox.v1.Isolation
 	(*v1.NestedVirtualization)(nil), // 11: daft.sandbox.v1.NestedVirtualization
 	(*v1.PrivilegedFuseMounts)(nil), // 12: daft.sandbox.v1.PrivilegedFuseMounts
-	(*v1.Condition)(nil),            // 13: daft.sandbox.v1.Condition
-	(*v1.SandboxRef)(nil),           // 14: daft.sandbox.v1.SandboxRef
+	(*v1.PrivilegedBuild)(nil),      // 13: daft.sandbox.v1.PrivilegedBuild
+	(*v1.Condition)(nil),            // 14: daft.sandbox.v1.Condition
+	(*v1.SandboxRef)(nil),           // 15: daft.sandbox.v1.SandboxRef
 }
 var file_workspace_v1_catalog_proto_depIdxs = []int32{
 	1,  // 0: daft.workspace.v1.Workspace.metadata:type_name -> daft.workspace.v1.WorkspaceMetadata
@@ -628,15 +640,16 @@ var file_workspace_v1_catalog_proto_depIdxs = []int32{
 	10, // 9: daft.workspace.v1.WorkspaceSpec.isolation:type_name -> daft.sandbox.v1.Isolation
 	11, // 10: daft.workspace.v1.WorkspaceSpec.nested_virtualization:type_name -> daft.sandbox.v1.NestedVirtualization
 	12, // 11: daft.workspace.v1.WorkspaceSpec.privileged_fuse_mounts:type_name -> daft.sandbox.v1.PrivilegedFuseMounts
-	13, // 12: daft.workspace.v1.WorkspaceStatus.conditions:type_name -> daft.sandbox.v1.Condition
-	14, // 13: daft.workspace.v1.WorkspaceStatus.current_sandbox:type_name -> daft.sandbox.v1.SandboxRef
-	4,  // 14: daft.workspace.v1.WorkspaceStatus.lock:type_name -> daft.workspace.v1.Lock
-	5,  // 15: daft.workspace.v1.Lock.expires_at:type_name -> google.protobuf.Timestamp
-	16, // [16:16] is the sub-list for method output_type
-	16, // [16:16] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	13, // 12: daft.workspace.v1.WorkspaceSpec.privileged_build:type_name -> daft.sandbox.v1.PrivilegedBuild
+	14, // 13: daft.workspace.v1.WorkspaceStatus.conditions:type_name -> daft.sandbox.v1.Condition
+	15, // 14: daft.workspace.v1.WorkspaceStatus.current_sandbox:type_name -> daft.sandbox.v1.SandboxRef
+	4,  // 15: daft.workspace.v1.WorkspaceStatus.lock:type_name -> daft.workspace.v1.Lock
+	5,  // 16: daft.workspace.v1.Lock.expires_at:type_name -> google.protobuf.Timestamp
+	17, // [17:17] is the sub-list for method output_type
+	17, // [17:17] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_workspace_v1_catalog_proto_init() }

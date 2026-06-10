@@ -549,6 +549,62 @@ func TestBundlePrivilegedFuseGatesFuse(t *testing.T) {
 	}
 }
 
+// TestApplyPrivilegedBuildAddsCaps pins that the build grant adds the
+// standard container cap set (incl. CAP_SYS_CHROOT for buildah's COPY
+// chroot and CAP_SYS_ADMIN for RUN mounts) to bounding/effective/
+// permitted, and never to ambient.
+func TestApplyPrivilegedBuildAddsCaps(t *testing.T) {
+	caps := applyPrivilegedBuild(emptyCapabilities())
+	for _, want := range []string{"CAP_SYS_CHROOT", "CAP_CHOWN", "CAP_SETUID", capSysAdmin} {
+		for _, set := range [][]string{caps.Bounding, caps.Effective, caps.Permitted} {
+			if !slices.Contains(set, want) {
+				t.Errorf("capability set %v missing %s", set, want)
+			}
+		}
+	}
+	if len(caps.Ambient) != 0 {
+		t.Errorf("ambient caps unexpectedly non-empty: %v", caps.Ambient)
+	}
+}
+
+// TestBundlePrivilegedBuildGatesCaps proves BundleOptions.PrivilegedBuild
+// is what flips the build cap set in the emitted config.json: a plain
+// workload carries none (zero-cap default), a build workload carries them.
+func TestBundlePrivilegedBuildGatesCaps(t *testing.T) {
+	host := localRegistry(t)
+	ref := host + "/test/privbuild:v1"
+	layer := helloLayer(t, "x\n")
+	img, _ := mutate.AppendLayers(empty.Image, layer)
+	img, _ = mutate.Config(img, v1.Config{Entrypoint: []string{testEntrypoint}})
+	r, _ := name.ParseReference(ref)
+	if err := crane.Push(img, r.String()); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	store, _ := New(t.TempDir(), 1<<30)
+	pulled, _ := store.Pull(context.Background(), ref)
+
+	for _, tc := range []struct {
+		name string
+		on   bool
+		want bool
+	}{
+		{"default omits build caps", false, false},
+		{"enabled adds build caps", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bundle, err := store.Bundle(context.Background(), pulled.Digest,
+				BundleOptions{PrivilegedBuild: tc.on})
+			if err != nil {
+				t.Fatalf("Bundle: %v", err)
+			}
+			cfg, _ := os.ReadFile(filepath.Join(bundle.Path, "config.json"))
+			if got := strings.Contains(string(cfg), "CAP_SYS_CHROOT"); got != tc.want {
+				t.Errorf("config.json contains CAP_SYS_CHROOT = %v, want %v:\n%s", got, tc.want, cfg)
+			}
+		})
+	}
+}
+
 // TestBundleNestedVirtGatesKVM proves the BundleOptions.Nested flag
 // is what flips the /dev/kvm device node in the emitted config.json:
 // off by default, present (as a linux.devices mknod entry) when set.

@@ -2544,6 +2544,19 @@ the user-host or in CI today.
       later switch. Still to spike: a `RUN` step (needs the full cap set +
       maybe a writable disk-backed `/var/tmp`) and a real base image (needs
       egress to pull `FROM <image>`).
+    - **3a-grant (landed 2026-06-10) — build-capability grant.** Productized
+      finding #2 as a `PrivilegedBuild` config section (the
+      `privileged-fuse`/`nested-virtualization` idiom): proto (sandbox +
+      workspace) + `SetPrivilegedBuild` RPC → `workspacecatalog.Spec` →
+      handler + both projections → executor → `BootOptions`/`BundleOptions`
+      → `applyPrivilegedBuild` (adds the standard container cap set +
+      CAP_SYS_ADMIN) → `daft workspace privileged-build --enable/--disable`
+      + status row → overlay OR. Off by default; danger-named because on
+      root sandboxd the caps are real (userns-confined when rootless; VM is
+      the backstop). Unit-tested at runtimespec/bundle-gate/orchestrator-
+      round-trip/CLI layers; the buildah spike is **ungated** and switched
+      to the real grant — **PASS in 13s against /dev/kvm** with
+      `daft workspace privileged-build --enable`. gate 94.31%.
     - **3b — push + resolve.** Host reads the build VM's output tarball,
       `ociregistry.Push` → ref.
     - **3c — orchestration.** A build-based devcontainer (or `build`

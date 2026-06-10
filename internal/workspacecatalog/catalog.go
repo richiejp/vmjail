@@ -206,6 +206,11 @@ type Spec struct {
 	// disabled. Projected onto SandboxSpec.privileged_fuse_mounts at
 	// Launch.
 	PrivilegedFuseMounts bool
+	// PrivilegedBuild grants the workload the standard container
+	// capability set so an in-sandbox buildah can build images. False ⇒
+	// disabled (the zero-cap default). Projected onto
+	// SandboxSpec.privileged_build at Launch.
+	PrivilegedBuild bool
 }
 
 // Status is the controller-observed workspace state.

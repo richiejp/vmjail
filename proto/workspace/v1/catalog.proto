@@ -107,6 +107,10 @@ message WorkspaceSpec {
   // spec, and overlays these explicit spec fields on top (the explicit
   // fields win). Empty ⇒ no devcontainer base. See PLAN.md D6c.5.
   string devcontainer_path = 13;
+
+  // Build capability grant. Unset ⇒ disabled. Projected directly onto
+  // SandboxSpec.privileged_build at Launch.
+  daft.sandbox.v1.PrivilegedBuild privileged_build = 14;
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.
