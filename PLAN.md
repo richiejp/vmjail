@@ -2577,8 +2577,24 @@ the user-host or in CI today.
       build-specific hack. Confirmed via a throwaway CAP_SYS_RESOURCE probe
       that rlimits were the *last* RUN blocker, then replaced by the agent
       fix (no cap added). Needs an initramfs rebuild (agent lives there).
-      Still to spike: a real base image (`FROM <registry-image>` needs the
-      build sandbox's egress proxy).
+    - **3a-egress (landed 2026-06-10) — `FROM <registry>` through the
+      egress proxy.** `TestClusterWorkspaceBuildahPullEgress`: with
+      `WithEgressProxy()` (default-deny + MITM) AND `privileged-build`,
+      buildah pulls a real multi-layer base `FROM` a non-loopback local OCI
+      registry through the injected proxy, runs a RUN step, and the host
+      extracts the proof — **PASS ~26s against /dev/kvm, the
+      production-faithful path** (real TLS verify, no `--tls-verify=false`).
+      Mirrors the EgressProxyEnv test: the registry binds a non-loopback
+      host IP (Go's ProxyFromEnvironment bypasses the proxy for loopback),
+      and the host-side push skips verify (httptest cert is for 127.0.0.1).
+      Two findings, both real fixes: (1) buildah/containers-image uses Go's
+      **system trust store** (`/etc/ssl/certs/ca-certificates.crt`), NOT the
+      `SSL_CERT_FILE` daft injects for nix/curl — so the daft-build-image
+      now ships a CA bundle there (it had **none**, a latent wart that broke
+      *any* registry TLS), which daft's `installProxyCA` overwrites with the
+      proxy CA at boot; (2) de-risked routing first with `--tls-verify=false`
+      (Step 1), then hardened to real CA trust (Step 2). **The last build-path
+      technical unknown is retired — 3b/3c are now pure plumbing.**
     - **3b — push + resolve.** Host reads the build VM's output tarball,
       `ociregistry.Push` → ref.
     - **3c — orchestration.** A build-based devcontainer (or `build`

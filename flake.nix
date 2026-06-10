@@ -556,13 +556,22 @@
                     unqualified-search-registries = []
                   '';
                 } ''
-                mkdir -p $out/etc/containers $out/bin $out/var
+                mkdir -p $out/etc/containers $out/bin $out/var $out/etc/ssl/certs
                 ln -s ${pkgs.dash}/bin/dash $out/bin/sh
                 # buildah's commit writes layer temp under /var/tmp; the
                 # container rootfs is read-only, so point it at the writable
                 # tmpfs. (Real builds may want a disk-backed writable mount
                 # here instead of RAM — fine for the spike.)
                 ln -s /tmp $out/var/tmp
+                # A system CA bundle at the path Go's crypto/x509 reads
+                # first (/etc/ssl/certs/ca-certificates.crt) so buildah's
+                # registry-pull TLS has a trust store. A bare nix image ships
+                # none, so without this buildah can't validate ANY registry
+                # cert. When daft's egress proxy is on, installProxyCA
+                # overwrites this file with the proxy CA so the MITM leaf is
+                # trusted; off, it's the real CA set (cacert) for direct pulls.
+                ln -s ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
+                  $out/etc/ssl/certs/ca-certificates.crt
                 cp $policy $out/etc/containers/policy.json
                 cp $storage $out/etc/containers/storage.conf
                 cp $registries $out/etc/containers/registries.conf
