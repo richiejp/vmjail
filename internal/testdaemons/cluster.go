@@ -320,6 +320,12 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	// egress branch, which reassigns sbxEnv wholesale.
 	sbxEnv = append(sbxEnv, sandboxdcli.EnvStateDir+"="+observerDir)
 
+	// Opt the node into in-sandbox devcontainer builds when the test
+	// supplied a builder ref (#101 slice 3c).
+	if o.buildImageRef != "" {
+		sbxEnv = append(sbxEnv, "DAFT_BUILD_IMAGE_REF="+o.buildImageRef)
+	}
+
 	var sbxScrub []string
 	if o.bundledSandboxd != "" {
 		// serve still calls ConfigFromEnv at startup, which demands the
@@ -359,6 +365,9 @@ type clusterOpts struct {
 	// of the locally go-built one AND scrubs the artefact env vars from
 	// its environment, forcing it onto the //go:embed-bundled artefacts.
 	bundledSandboxd string
+	// buildImageRef, when set, is exported as DAFT_BUILD_IMAGE_REF so the
+	// node can build a build-based devcontainer in an ephemeral sandbox.
+	buildImageRef string
 }
 
 // WithEgressProxy makes the cluster run the in-stack egress proxy:
@@ -380,6 +389,15 @@ func WithEgressProxy() ClusterOption {
 // embed path.
 func WithBundledSandboxd(binPath string) ClusterOption {
 	return func(o *clusterOpts) { o.bundledSandboxd = binPath }
+}
+
+// WithBuildImage configures the node with the static image-builder ref so a
+// build-based devcontainer is built in an ephemeral sandbox before its
+// workload boots (#101 slice 3c). ref must be pullable by the node (a
+// loopback test-registry ref is fine — the node pulls host-side). The
+// built result is pushed back over the cluster's own hosted-registry mTLS.
+func WithBuildImage(ref string) ClusterOption {
+	return func(o *clusterOpts) { o.buildImageRef = ref }
 }
 
 // artefactEnvKeys are the sandbox-artefact env vars dropped from a

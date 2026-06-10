@@ -2629,9 +2629,18 @@ the user-host or in CI today.
         dir; the context must stay within the workspace-content mount
         root and the Dockerfile within the context (a hostile
         devcontainer.json can't bind arbitrary host paths or escape).
-      - **3c-e2e (pending):** a real build-based devcontainer dispatched
-        against KVM → build sandbox → push → workload boots from the
-        built image and sees a RUN-baked artefact.
+      - **3c-e2e (landed 2026-06-10) — PASS ~23s against /dev/kvm.**
+        `TestClusterWorkspaceDevcontainerBuild`: a workspace whose only
+        image source is a build-based devcontainer.json is built in an
+        ephemeral sandbox — buildah pulls the base `FROM` a non-loopback
+        registry through the default-deny egress proxy, runs a RUN step
+        baking a sentinel, the host pushes the docker-archive into the
+        orchestrator registry over the cluster's hosted-registry mTLS —
+        and the workload then boots from the built ref and prints the
+        sentinel only the RUN baked. New `testdaemons.WithBuildImage(ref)`
+        sets `DAFT_BUILD_IMAGE_REF`; the builder image is pulled host-side
+        from a loopback test registry, the base guest-side through the
+        proxy. **The full #101 build-based devcontainer arc is closed.**
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **features** (OCI install units) as build steps.
 
