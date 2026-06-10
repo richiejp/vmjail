@@ -198,9 +198,13 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 		WriteContainerResolvConf(w, bundle)
 	}
 	// Put /sys/fs/cgroup on v2 before crun runs so it manages the
-	// container under the unified hierarchy (see ensureCgroupV2).
+	// container under the unified hierarchy (see ensureCgroupV2), and
+	// lift the guest's pristine-low rlimits to a normal-host level so the
+	// container inherits them (see raiseGuestRlimits) — both are
+	// guest-environment normalisation that must run before the container.
 	if bundle != "" {
 		ensureCgroupV2(w)
+		raiseGuestRlimits(w)
 	}
 	// Dump the guest kernel's available syscall list to the observe state
 	// folder (one-shot; the share was mounted by applyShares above) so a

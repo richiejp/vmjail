@@ -2557,6 +2557,28 @@ the user-host or in CI today.
       round-trip/CLI layers; the buildah spike is **ungated** and switched
       to the real grant — **PASS in 13s against /dev/kvm** with
       `daft workspace privileged-build --enable`. gate 94.31%.
+    - **3a-run (landed 2026-06-10) — RUN step + guest rlimits.**
+      `TestClusterWorkspaceBuildahRunStep`: a Dockerfile `RUN` executes
+      in-sandbox and the host extracts the RUN-created file from the built
+      image's layers — **PASS in ~18s against /dev/kvm**. Base-pull is
+      decoupled from egress: the build seeds buildah storage from a LOCAL
+      docker-archive (the nix-shell image on a read-only mount), tags it
+      `localhost/base:v1`, and builds `FROM` that with an exec-form `RUN`
+      (`/bin/dash`, since the nix image has no `/bin/sh`). One finding:
+      buildah's RUN forces `RLIMIT_NOFILE`/`NPROC` to ~1M, but daft's
+      microVM inherits the kernel's pristine-low limits (NOFILE 1024/4096;
+      NPROC RAM-derived) — no systemd/PAM lifts them — and raising a *hard*
+      limit needs CAP_SYS_RESOURCE. **Fix at the right altitude:** the
+      agent raises the guest's NOFILE/NPROC to 1048576 before the container
+      (`raiseGuestRlimits`, beside `ensureCgroupV2`; agent is guest-root so
+      it may), so crun + the workload inherit a normal-host limit and
+      buildah needs no extra cap. This unsurprises **all** FD/process-hungry
+      workloads (databases, node), not just builds — north-star, not a
+      build-specific hack. Confirmed via a throwaway CAP_SYS_RESOURCE probe
+      that rlimits were the *last* RUN blocker, then replaced by the agent
+      fix (no cap added). Needs an initramfs rebuild (agent lives there).
+      Still to spike: a real base image (`FROM <registry-image>` needs the
+      build sandbox's egress proxy).
     - **3b — push + resolve.** Host reads the build VM's output tarball,
       `ociregistry.Push` → ref.
     - **3c — orchestration.** A build-based devcontainer (or `build`
