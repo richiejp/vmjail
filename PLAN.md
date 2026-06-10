@@ -2642,7 +2642,55 @@ the user-host or in CI today.
         from a loopback test registry, the base guest-side through the
         proxy. **The full #101 build-based devcontainer arc is closed.**
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
-    **features** (OCI install units) as build steps.
+    **devcontainer features**.
+
+    **4-features (designed 2026-06-10, not started) — features as build
+    steps + config merge.** A devcontainer `feature` is an OCI *artifact*
+    (e.g. `ghcr.io/devcontainers/features/node:1`), not an image:
+    unpacked it's `devcontainer-feature.json` (declared `options` +
+    runtime contributions: `containerEnv`, `mounts`, `entrypoint`,
+    `capAdd`, `installsAfter`, `dependsOn`) plus `install.sh`. We already
+    parse the request into `devcontainer.Spec.Features []FeatureRef{ID,
+    Options(raw)}` (sorted, **unconsumed** today). Realising it has two
+    halves: the `install.sh` becomes extra buildah RUN layers (slots
+    straight into the slice-3 in-sandbox builder), AND the metadata merges
+    into the boot config (the `devcontainerspec` overlay). The structural
+    consequence: an `"image": "…"` config **with features** now also flows
+    through the builder (synthesise `FROM <image>` + feature RUNs), so the
+    build path stops being the `build`-stanza minority.
+
+    **Scope:** Debian/Ubuntu bases only — almost every published feature's
+    `install.sh` assumes `apt` + a sudo-capable non-root user, and forcing
+    that onto nix images is the opposite of "free" (user confirmed Ubuntu
+    is fine, 2026-06-10). Not a compatibility guarantee; the *mechanism*
+    is the goal.
+
+    Slices:
+    - **4a — resolver + install order (pure, no VM/network).** Parse
+      `devcontainer-feature.json`; order via `dependsOn` (hard) +
+      `installsAfter` (soft) + `overrideFeatureInstallOrder`, deterministic
+      tiebreak (lexicographic, matching `resolveFeatures`' existing sort).
+      Unit-tested with metadata fixtures.
+    - **4b — fetch + stage.** Pull each feature OCI artifact **host-side**
+      (the node already has the registry transports) and unpack
+      `install.sh` + its files into the build context. Decided host-side
+      over in-VM: it buys nothing in-VM, and the *interesting* egress —
+      `install.sh`'s `apt-get` — still runs in-VM through the default-deny
+      proxy, so that path stays exercised.
+    - **4c — synthesise the build.** Generate `FROM <base|built-image>` +
+      per-feature `COPY` + `RUN install.sh` (options → uppercased env vars)
+      through the slice-3 builder. Image-based-with-features routes here too.
+    - **4d — merge feature runtime config.** `containerEnv` / `remoteUser`
+      / `mounts` (and `capAdd` → the existing PrivilegedBuild-style grants)
+      into the `devcontainerspec` overlay — the half that is NOT a build step.
+    - **4e — e2e on KVM.** `image: ubuntu` + a **minimal local feature**
+      (an `install.sh` that drops a sentinel file, no apt — hermetic, fast,
+      pushed to the test registry) → build → boot → sentinel present. A
+      real `ghcr.io` feature hitting apt through the proxy is a heavier
+      gated check, not the default.
+
+    **4-hostreq (#103):** `hostRequirements` (cpus/memory/storage) →
+    per-VM cgroup limits + balloon-based reclaim. Independent of features.
 
   *e2e target — PyTorch (CPU variant: no GPU/`--gpus`).* Tiered like the
   self-build: **Tier 1 (loop proof, cheap):** resolve the CPU config →
