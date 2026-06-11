@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/localai-org/darkaifactory/internal/component"
@@ -213,12 +214,25 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	// Attach the open-snoop + exec-snoop + sleep-snoop + io-snoop gadgets
 	// before the container so their tracepoints are live for the workload's
 	// first syscalls, then start the build-progress summary as a live view over
-	// whichever gadgets came up.
-	osAgg := startOpensnoop(ctx, w, d)
-	exAgg := startExecsnoop(ctx, w, d)
-	slAgg := startSleepsnoop(ctx, w, d)
-	ioAgg := startIosnoop(ctx, w, d)
+	// whichever gadgets came up. Each start* returns a readiness channel that
+	// closes once the gadget has attached (or given up).
+	osAgg, osReady := startOpensnoop(ctx, w, d)
+	exAgg, exReady := startExecsnoop(ctx, w, d)
+	slAgg, slReady := startSleepsnoop(ctx, w, d)
+	ioAgg, ioReady := startIosnoop(ctx, w, d)
 	startSummaryWriter(ctx, w, d, osAgg, exAgg, slAgg, ioAgg)
+	// Hold the container until every started gadget has either attached or
+	// given up, so a healthy gadget's tracepoints are live before the
+	// workload's first syscalls rather than racing them (the dropped-early-
+	// events flake). A gadget that failed to attach releases the barrier too —
+	// the trace is simply absent for it; observability is never a correctness
+	// gate. Bounded so a wedged gadget never blocks the boot. The barrier only
+	// exists to order against the container, so a share-only boot (no bundle)
+	// skips it rather than risk stalling on a wedged gadget that protects
+	// nothing — the gadgets still attach in the background.
+	if bundle != "" {
+		awaitGadgetsAttached(ctx, w, osReady, exReady, slReady, ioReady)
+	}
 	runContainer(ctx, w, d, bundle)
 	bootSpan.End()
 
@@ -235,6 +249,77 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	signalBootComplete(w, ctrl)
 	<-ctx.Done()
 	return ctx.Err()
+}
+
+// GadgetReportPrefix labels console lines about the observe gadgets as a group
+// rather than one named gadget — currently only the attach-barrier timeout.
+const GadgetReportPrefix = "observe: "
+
+// gadgetAttachTimeout bounds awaitGadgetsAttached. Gadgets normally attach in
+// milliseconds, and a failed attach releases its barrier immediately (its
+// drain goroutine returns), so only a pathologically wedged BPF load can reach
+// this. When it does, booting the workload without the trace beats hanging the
+// VM — observability is never a correctness gate.
+//
+//nolint:gochecknoglobals // test-hook timeout; mutated only in tests.
+var gadgetAttachTimeout = 5 * time.Second
+
+// spawnGadgetDrain runs a gadget's drain loop in a goroutine and returns a
+// channel that closes once the gadget has attached — drain calls the onReady it
+// is handed the instant its tracepoints are live — or the goroutine exits,
+// whichever comes first. The sync.Once makes the two paths idempotent: a failed
+// attach never calls onReady, so the deferred signalReady closes the channel on
+// return instead, ensuring awaitGadgetsAttached can never block on a gadget
+// that gave up. f (the trace file) is closed when the loop returns; a mid-run
+// error while ctx is still live is reported under prefix.
+func spawnGadgetDrain(ctx context.Context, w io.Writer, prefix string, f io.Closer, drain func(onReady func()) error) <-chan struct{} {
+	ready := make(chan struct{})
+	go func() {
+		defer func() { _ = f.Close() }()
+		var once sync.Once
+		signalReady := func() { once.Do(func() { close(ready) }) }
+		defer signalReady()
+		if err := drain(signalReady); err != nil && ctx.Err() == nil {
+			writeReport(w, prefix, err.Error())
+		}
+	}()
+	return ready
+}
+
+// awaitGadgetsAttached blocks until every non-nil ready channel has closed —
+// each started gadget has attached (its tracepoints live) or its drain
+// goroutine has given up — or a single shared deadline elapses, whichever
+// first. For a healthy gadget this is the happens-before that keeps the
+// workload's first syscalls from outrunning attach (the lost-early-events
+// flake); a gadget that failed to attach simply has no trace. nil channels
+// (gadgets that never started) are skipped; a deadline overrun is reported
+// once and the boot proceeds best-effort.
+func awaitGadgetsAttached(ctx context.Context, w io.Writer, readies ...<-chan struct{}) {
+	timer := time.NewTimer(gadgetAttachTimeout)
+	defer timer.Stop()
+	for _, ready := range readies {
+		if ready == nil {
+			continue
+		}
+		// Prefer an already-signalled gadget. select picks among ready cases at
+		// random, so a plain three-way select could pick a fired timer.C over an
+		// already-closed ready and misreport an attached gadget as timed out.
+		// This fast path takes the close without ever consulting the timer; only
+		// a gadget still genuinely un-signalled here falls through to wait.
+		select {
+		case <-ready:
+			continue
+		default:
+		}
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			writeReport(w, GadgetReportPrefix, "tracepoint attach timed out; workload may race the trace")
+			return
+		}
+	}
 }
 
 // openControlChannel opens the control channel via d.openControl (when

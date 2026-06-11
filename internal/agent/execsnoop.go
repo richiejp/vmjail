@@ -29,8 +29,10 @@ type execsnoopDeps struct {
 	// container-workload filter; a zero return (or nil) disables the filter.
 	selfPIDNS func() (uint32, error)
 	// run drains the gadget into w until ctx is cancelled, folding each event
-	// into agg. Production wires execsnoop.RunAggregating.
-	run func(ctx context.Context, w io.Writer, agg *execsnoop.Aggregator, selfPidns uint32) error
+	// into agg. It calls onReady once its tracepoints are attached so the agent
+	// can hold the container until the gadget is capturing. Production wires
+	// execsnoop.RunAggregating.
+	run func(ctx context.Context, w io.Writer, agg *execsnoop.Aggregator, selfPidns uint32, onReady func()) error
 }
 
 // defaultExecsnoopDeps wires the real gadget. ensureTracefs + readSelfPIDNS
@@ -57,35 +59,34 @@ func defaultExecsnoopDeps() execsnoopDeps {
 // the boot — observability is a debugging surface, not a correctness
 // invariant.
 //
-// Called before the container so the tracepoint is attaching before the
-// workload's first exec.
+// Called before the container, returning a readiness channel that closes once
+// the tracepoints are attached; runWith waits on it so the workload's first
+// exec can't outrun the gadget. nil agg + nil channel when the gadget was not
+// requested or could not start.
 //
-//nolint:dupl // deliberately parallel to startOpensnoop; the two gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
-func startExecsnoop(ctx context.Context, w io.Writer, d runDeps) *execsnoop.Aggregator {
+//nolint:dupl // deliberately parallel to startOpensnoop; the two gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS, spawnGadgetDrain) is already factored out — a generic abstraction would be less readable than the symmetry.
+func startExecsnoop(ctx context.Context, w io.Writer, d runDeps) (agg *execsnoop.Aggregator, ready <-chan struct{}) {
 	if d.execsnoop.run == nil {
-		return nil
+		return nil, nil
 	}
 	path, ok := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetExecsnoop)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if err := d.execsnoop.mountTracefs(); err != nil {
 		writeReport(w, ExecsnoopReportPrefix, err.Error())
-		return nil
+		return nil, nil
 	}
 	f, err := d.execsnoop.openLog(path)
 	if err != nil {
 		writeReport(w, ExecsnoopReportPrefix, err.Error())
-		return nil
+		return nil, nil
 	}
 	selfPidns, scope := resolveSelfPIDNS(w, ExecsnoopReportPrefix, d.execsnoop.selfPIDNS)
-	agg := execsnoop.NewAggregator()
+	agg = execsnoop.NewAggregator()
 	writeReport(w, ExecsnoopReportPrefix, "tracing "+scope+" execve → "+path)
-	go func() {
-		defer func() { _ = f.Close() }()
-		if rerr := d.execsnoop.run(ctx, f, agg, selfPidns); rerr != nil && ctx.Err() == nil {
-			writeReport(w, ExecsnoopReportPrefix, rerr.Error())
-		}
-	}()
-	return agg
+	ready = spawnGadgetDrain(ctx, w, ExecsnoopReportPrefix, f, func(onReady func()) error {
+		return d.execsnoop.run(ctx, f, agg, selfPidns, onReady)
+	})
+	return agg, ready
 }

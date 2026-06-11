@@ -31,7 +31,7 @@ func (f *fakeLog) Close() error                { close(f.closed); return nil }
 
 // opensnoopTestDeps builds a runDeps wiring the gadget seam with a
 // no-op tracefs mount (the privileged mount is covered separately).
-func opensnoopTestDeps(openLog func(string) (io.WriteCloser, error), run func(context.Context, io.Writer, *opensnoop.Aggregator, uint32) error) runDeps {
+func opensnoopTestDeps(openLog func(string) (io.WriteCloser, error), run func(context.Context, io.Writer, *opensnoop.Aggregator, uint32, func()) error) runDeps {
 	return runDeps{opensnoop: opensnoopDeps{
 		mountTracefs: func() error { return nil },
 		openLog:      openLog,
@@ -61,7 +61,7 @@ func TestStartOpensnoopDisabledWhenRunNil(t *testing.T) {
 func TestStartOpensnoopAbsentToken(t *testing.T) {
 	called := false
 	openLog := func(string) (io.WriteCloser, error) { called = true; return newFakeLog(), nil }
-	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32) error { return nil }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32, func()) error { return nil }
 	var console bytes.Buffer
 	startOpensnoop(context.Background(), &console, opensnoopTestDeps(openLog, run))
 	if called {
@@ -78,7 +78,7 @@ func TestStartOpensnoopAbsentToken(t *testing.T) {
 func TestStartOpensnoopReportsTracefsError(t *testing.T) {
 	opened := false
 	openLog := func(string) (io.WriteCloser, error) { opened = true; return newFakeLog(), nil }
-	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32) error { return nil }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32, func()) error { return nil }
 	var console bytes.Buffer
 	d := runDeps{cfg: opensnoopCfg("/share/x.log"), opensnoop: opensnoopDeps{
 		mountTracefs: func() error { return errors.New("boom-tracefs") },
@@ -99,7 +99,10 @@ func TestStartOpensnoopReportsTracefsError(t *testing.T) {
 func TestStartOpensnoopReportsOpenError(t *testing.T) {
 	openLog := func(string) (io.WriteCloser, error) { return nil, errors.New("boom-open") }
 	runCalled := false
-	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32) error { runCalled = true; return nil }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32, func()) error {
+		runCalled = true
+		return nil
+	}
 	var console bytes.Buffer
 	d := opensnoopTestDeps(openLog, run)
 	d.cfg = opensnoopCfg("/share/x.log")
@@ -123,7 +126,7 @@ func TestStartOpensnoopHappyPath(t *testing.T) {
 		return log, nil
 	}
 	started := make(chan io.Writer, 1)
-	run := func(ctx context.Context, w io.Writer, _ *opensnoop.Aggregator, _ uint32) error {
+	run := func(ctx context.Context, w io.Writer, _ *opensnoop.Aggregator, _ uint32, _ func()) error {
 		started <- w
 		<-ctx.Done()
 		return nil
@@ -160,7 +163,7 @@ func TestStartOpensnoopFiltersToContainer(t *testing.T) {
 		mountTracefs: func() error { return nil },
 		openLog:      func(string) (io.WriteCloser, error) { return log, nil },
 		selfPIDNS:    func() (uint32, error) { return 4026531836, nil },
-		run: func(ctx context.Context, _ io.Writer, _ *opensnoop.Aggregator, selfPidns uint32) error {
+		run: func(ctx context.Context, _ io.Writer, _ *opensnoop.Aggregator, selfPidns uint32, _ func()) error {
 			gotNS <- selfPidns
 			<-ctx.Done()
 			return nil
@@ -192,7 +195,7 @@ func TestStartOpensnoopReportsPIDNSError(t *testing.T) {
 		mountTracefs: func() error { return nil },
 		openLog:      func(string) (io.WriteCloser, error) { return log, nil },
 		selfPIDNS:    func() (uint32, error) { return 0, errors.New("boom-pidns") },
-		run: func(ctx context.Context, _ io.Writer, _ *opensnoop.Aggregator, selfPidns uint32) error {
+		run: func(ctx context.Context, _ io.Writer, _ *opensnoop.Aggregator, selfPidns uint32, _ func()) error {
 			gotNS <- selfPidns
 			<-ctx.Done()
 			return nil
@@ -221,7 +224,9 @@ func TestStartOpensnoopReportsPIDNSError(t *testing.T) {
 func TestStartOpensnoopReportsRunError(t *testing.T) {
 	log := newFakeLog()
 	openLog := func(string) (io.WriteCloser, error) { return log, nil }
-	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32) error { return errors.New("boom-run") }
+	run := func(context.Context, io.Writer, *opensnoop.Aggregator, uint32, func()) error {
+		return errors.New("boom-run")
+	}
 	var console bytes.Buffer
 	d := opensnoopTestDeps(openLog, run)
 	d.cfg = opensnoopCfg("/share/x.log")

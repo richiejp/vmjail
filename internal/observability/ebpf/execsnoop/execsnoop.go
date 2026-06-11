@@ -164,8 +164,28 @@ func Run(ctx context.Context, w io.Writer, selfPidns uint32) error {
 // RunAggregating is Run that additionally folds every decoded event into agg,
 // so the agent's summary writer can snapshot the live aggregate while the
 // same drain still writes the raw trace to w. A nil agg behaves like Run.
-func RunAggregating(ctx context.Context, w io.Writer, agg *Aggregator, selfPidns uint32) error {
-	return run(ctx, w, agg, openSourceFor(selfPidns))
+//
+// onReady, when non-nil, is called exactly once both tracepoints are attached
+// and the ring buffer is open — the instant after which no exec can be missed.
+// The agent waits on it to hold the container until the gadget is capturing,
+// closing the attach-vs-workload race. A nil onReady disables the signal.
+func RunAggregating(ctx context.Context, w io.Writer, agg *Aggregator, selfPidns uint32, onReady func()) error {
+	return run(ctx, w, agg, attachSignalling(openSourceFor(selfPidns), onReady))
+}
+
+// attachSignalling wraps an opener so onReady fires immediately after a
+// successful open — once load + attach + ring-buffer-open have all
+// succeeded. A failed open never signals (the agent's drain goroutine
+// releases its readiness barrier on return instead), and a nil onReady is a
+// no-op, so the unfiltered Run path is unchanged.
+func attachSignalling(open opener, onReady func()) opener {
+	return func() (recordReader, func() error, error) {
+		rd, cleanup, err := open()
+		if err == nil && onReady != nil {
+			onReady()
+		}
+		return rd, cleanup, err
+	}
 }
 
 func run(ctx context.Context, w io.Writer, agg *Aggregator, open opener) error {

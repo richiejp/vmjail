@@ -442,7 +442,46 @@ func TestRunRealLoadFails(t *testing.T) {
 	if err := Run(ctx, io.Discard, 0); err == nil {
 		t.Skip("BPF load unexpectedly succeeded (running privileged); nothing to assert")
 	}
-	if err := RunAggregating(ctx, io.Discard, NewAggregator(), 0); err == nil {
+	if err := RunAggregating(ctx, io.Discard, NewAggregator(), 0, nil); err == nil {
 		t.Skip("BPF load unexpectedly succeeded (running privileged)")
 	}
+}
+
+// TestAttachSignalling pins the readiness signal RunAggregating threads to the
+// agent: onReady fires once, right after a successful open (so the agent can
+// hold the container until the gadget is counting the workload's I/O), never
+// when open fails (the agent releases its barrier on the drain goroutine's
+// return instead), and a nil onReady is an inert no-op (the unfiltered Run
+// path).
+func TestAttachSignalling(t *testing.T) {
+	t.Run("fires after a successful open", func(t *testing.T) {
+		calls := 0
+		src := &source{cleanup: func() error { return nil }}
+		got, err := attachSignalling(func() (*source, error) { return src, nil }, func() { calls++ })()
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if got != src {
+			t.Fatal("open did not return the wrapped source")
+		}
+		if calls != 1 {
+			t.Fatalf("onReady called %d times, want 1", calls)
+		}
+	})
+	t.Run("stays silent when open fails", func(t *testing.T) {
+		want := errors.New("load boom")
+		called := false
+		if _, err := attachSignalling(func() (*source, error) { return nil, want }, func() { called = true })(); !errors.Is(err, want) {
+			t.Fatalf("err = %v, want %v", err, want)
+		}
+		if called {
+			t.Fatal("onReady fired despite a failed open")
+		}
+	})
+	t.Run("nil onReady is a no-op", func(t *testing.T) {
+		src := &source{cleanup: func() error { return nil }}
+		if _, err := attachSignalling(func() (*source, error) { return src, nil }, nil)(); err != nil {
+			t.Fatalf("open: %v", err)
+		}
+	})
 }

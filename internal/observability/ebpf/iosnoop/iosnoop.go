@@ -68,8 +68,29 @@ func Run(ctx context.Context, w io.Writer, selfPidns uint32) error {
 // RunAggregating is Run that additionally folds each map snapshot into agg, so
 // the agent's summary writer can read the live aggregate while the same drain
 // still writes the raw per-fd trace to w. A nil agg behaves like Run.
-func RunAggregating(ctx context.Context, w io.Writer, agg *Aggregator, selfPidns uint32) error {
-	return run(ctx, w, agg, openSourceFor(selfPidns), defaultResolve, defaultInterval)
+//
+// onReady, when non-nil, is called exactly once the I/O tracepoints are
+// attached — the instant after which the BPF maps begin counting the
+// workload's syscalls. The agent waits on it to hold the container until the
+// gadget is capturing, closing the attach-vs-workload race. A nil onReady
+// disables the signal.
+func RunAggregating(ctx context.Context, w io.Writer, agg *Aggregator, selfPidns uint32, onReady func()) error {
+	return run(ctx, w, agg, attachSignalling(openSourceFor(selfPidns), onReady), defaultResolve, defaultInterval)
+}
+
+// attachSignalling wraps an opener so onReady fires immediately after a
+// successful open — once the I/O tracepoints are attached and the maps are
+// live. A failed open never signals (the agent's drain goroutine releases its
+// readiness barrier on return instead), and a nil onReady is a no-op, so the
+// unfiltered Run path is unchanged.
+func attachSignalling(open opener, onReady func()) opener {
+	return func() (*source, error) {
+		src, err := open()
+		if err == nil && onReady != nil {
+			onReady()
+		}
+		return src, err
+	}
 }
 
 // run is the testable core: open the source, write the trace header, then on

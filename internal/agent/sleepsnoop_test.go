@@ -20,7 +20,7 @@ func sleepsnoopCfg(path string) *agentv1.GuestConfig {
 
 // sleepsnoopTestDeps builds a runDeps wiring the sleep-snoop gadget seam with a
 // no-op tracefs mount and a fixed self-PID-namespace (container scope).
-func sleepsnoopTestDeps(openLog func(string) (io.WriteCloser, error), run func(context.Context, io.Writer, *sleepsnoop.Aggregator, uint32) error) runDeps {
+func sleepsnoopTestDeps(openLog func(string) (io.WriteCloser, error), run func(context.Context, io.Writer, *sleepsnoop.Aggregator, uint32, func()) error) runDeps {
 	return runDeps{sleepsnoop: sleepsnoopDeps{
 		mountTracefs: func() error { return nil },
 		openLog:      openLog,
@@ -33,7 +33,7 @@ func TestStartSleepsnoopDisabledWhenRunNil(t *testing.T) {
 	called := false
 	openLog := func(string) (io.WriteCloser, error) { called = true; return newFakeLog(), nil }
 	var console bytes.Buffer
-	agg := startSleepsnoop(context.Background(), &console,
+	agg, _ := startSleepsnoop(context.Background(), &console,
 		runDeps{cfg: sleepsnoopCfg("/share/x.log"), sleepsnoop: sleepsnoopDeps{openLog: openLog, run: nil}})
 	if agg != nil || called || console.Len() != 0 {
 		t.Fatalf("disabled gadget did something: agg=%v called=%v console=%q", agg, called, console.String())
@@ -41,23 +41,23 @@ func TestStartSleepsnoopDisabledWhenRunNil(t *testing.T) {
 }
 
 func TestStartSleepsnoopAbsentToken(t *testing.T) {
-	run := func(context.Context, io.Writer, *sleepsnoop.Aggregator, uint32) error { return nil }
+	run := func(context.Context, io.Writer, *sleepsnoop.Aggregator, uint32, func()) error { return nil }
 	var console bytes.Buffer
-	if agg := startSleepsnoop(context.Background(), &console,
+	if agg, _ := startSleepsnoop(context.Background(), &console,
 		sleepsnoopTestDeps(func(string) (io.WriteCloser, error) { return newFakeLog(), nil }, run)); agg != nil || console.Len() != 0 {
 		t.Fatalf("absent token started the gadget: agg=%v console=%q", agg, console.String())
 	}
 }
 
 func TestStartSleepsnoopReportsTracefsError(t *testing.T) {
-	run := func(context.Context, io.Writer, *sleepsnoop.Aggregator, uint32) error { return nil }
+	run := func(context.Context, io.Writer, *sleepsnoop.Aggregator, uint32, func()) error { return nil }
 	var console bytes.Buffer
 	d := runDeps{cfg: sleepsnoopCfg("/share/x.log"), sleepsnoop: sleepsnoopDeps{
 		mountTracefs: func() error { return errors.New("boom-tracefs") },
 		openLog:      func(string) (io.WriteCloser, error) { return newFakeLog(), nil },
 		run:          run,
 	}}
-	if agg := startSleepsnoop(context.Background(), &console, d); agg != nil {
+	if agg, _ := startSleepsnoop(context.Background(), &console, d); agg != nil {
 		t.Fatal("gadget started despite tracefs failure")
 	}
 	if !strings.Contains(console.String(), SleepsnoopReportPrefix+"boom-tracefs") {
@@ -67,7 +67,7 @@ func TestStartSleepsnoopReportsTracefsError(t *testing.T) {
 
 func TestStartSleepsnoopReportsOpenError(t *testing.T) {
 	openLog := func(string) (io.WriteCloser, error) { return nil, errors.New("boom-open") }
-	run := func(context.Context, io.Writer, *sleepsnoop.Aggregator, uint32) error {
+	run := func(context.Context, io.Writer, *sleepsnoop.Aggregator, uint32, func()) error {
 		t.Fatal("run called despite open error")
 		return nil
 	}
@@ -88,7 +88,7 @@ func TestStartSleepsnoopHappyPath(t *testing.T) {
 	var opened string
 	openLog := func(path string) (io.WriteCloser, error) { opened = path; return log, nil }
 	gotNS := make(chan uint32, 1)
-	run := func(ctx context.Context, w io.Writer, agg *sleepsnoop.Aggregator, selfPidns uint32) error {
+	run := func(ctx context.Context, w io.Writer, agg *sleepsnoop.Aggregator, selfPidns uint32, _ func()) error {
 		gotNS <- selfPidns
 		<-ctx.Done()
 		return nil
@@ -97,7 +97,7 @@ func TestStartSleepsnoopHappyPath(t *testing.T) {
 	var console bytes.Buffer
 	d := sleepsnoopTestDeps(openLog, run)
 	d.cfg = sleepsnoopCfg("/share/sleep.log")
-	agg := startSleepsnoop(ctx, &console, d)
+	agg, _ := startSleepsnoop(ctx, &console, d)
 	if agg == nil {
 		t.Fatal("happy path returned a nil aggregator")
 	}
@@ -125,7 +125,7 @@ func TestStartSleepsnoopReportsPIDNSError(t *testing.T) {
 		mountTracefs: func() error { return nil },
 		openLog:      func(string) (io.WriteCloser, error) { return log, nil },
 		selfPIDNS:    func() (uint32, error) { return 0, errors.New("boom-pidns") },
-		run: func(ctx context.Context, _ io.Writer, _ *sleepsnoop.Aggregator, selfPidns uint32) error {
+		run: func(ctx context.Context, _ io.Writer, _ *sleepsnoop.Aggregator, selfPidns uint32, _ func()) error {
 			gotNS <- selfPidns
 			<-ctx.Done()
 			return nil
@@ -150,7 +150,9 @@ func TestStartSleepsnoopReportsPIDNSError(t *testing.T) {
 // is surfaced by the drain goroutine.
 func TestStartSleepsnoopReportsRunError(t *testing.T) {
 	log := newFakeLog()
-	run := func(context.Context, io.Writer, *sleepsnoop.Aggregator, uint32) error { return errors.New("boom-run") }
+	run := func(context.Context, io.Writer, *sleepsnoop.Aggregator, uint32, func()) error {
+		return errors.New("boom-run")
+	}
 	var console bytes.Buffer
 	d := sleepsnoopTestDeps(func(string) (io.WriteCloser, error) { return log, nil }, run)
 	d.cfg = sleepsnoopCfg("/share/x.log")

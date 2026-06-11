@@ -20,7 +20,7 @@ func execsnoopCfg(path string) *agentv1.GuestConfig {
 
 // execsnoopTestDeps builds a runDeps wiring the exec-snoop gadget seam with a
 // no-op tracefs mount and a fixed self-PID-namespace (container scope).
-func execsnoopTestDeps(openLog func(string) (io.WriteCloser, error), run func(context.Context, io.Writer, *execsnoop.Aggregator, uint32) error) runDeps {
+func execsnoopTestDeps(openLog func(string) (io.WriteCloser, error), run func(context.Context, io.Writer, *execsnoop.Aggregator, uint32, func()) error) runDeps {
 	return runDeps{execsnoop: execsnoopDeps{
 		mountTracefs: func() error { return nil },
 		openLog:      openLog,
@@ -33,7 +33,7 @@ func TestStartExecsnoopDisabledWhenRunNil(t *testing.T) {
 	called := false
 	openLog := func(string) (io.WriteCloser, error) { called = true; return newFakeLog(), nil }
 	var console bytes.Buffer
-	agg := startExecsnoop(context.Background(), &console,
+	agg, _ := startExecsnoop(context.Background(), &console,
 		runDeps{cfg: execsnoopCfg("/share/x.log"), execsnoop: execsnoopDeps{openLog: openLog, run: nil}})
 	if agg != nil || called || console.Len() != 0 {
 		t.Fatalf("disabled gadget did something: agg=%v called=%v console=%q", agg, called, console.String())
@@ -41,23 +41,23 @@ func TestStartExecsnoopDisabledWhenRunNil(t *testing.T) {
 }
 
 func TestStartExecsnoopAbsentToken(t *testing.T) {
-	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32) error { return nil }
+	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32, func()) error { return nil }
 	var console bytes.Buffer
-	if agg := startExecsnoop(context.Background(), &console,
+	if agg, _ := startExecsnoop(context.Background(), &console,
 		execsnoopTestDeps(func(string) (io.WriteCloser, error) { return newFakeLog(), nil }, run)); agg != nil || console.Len() != 0 {
 		t.Fatalf("absent token started the gadget: agg=%v console=%q", agg, console.String())
 	}
 }
 
 func TestStartExecsnoopReportsTracefsError(t *testing.T) {
-	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32) error { return nil }
+	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32, func()) error { return nil }
 	var console bytes.Buffer
 	d := runDeps{cfg: execsnoopCfg("/share/x.log"), execsnoop: execsnoopDeps{
 		mountTracefs: func() error { return errors.New("boom-tracefs") },
 		openLog:      func(string) (io.WriteCloser, error) { return newFakeLog(), nil },
 		run:          run,
 	}}
-	if agg := startExecsnoop(context.Background(), &console, d); agg != nil {
+	if agg, _ := startExecsnoop(context.Background(), &console, d); agg != nil {
 		t.Fatal("gadget started despite tracefs failure")
 	}
 	if !strings.Contains(console.String(), ExecsnoopReportPrefix+"boom-tracefs") {
@@ -67,7 +67,7 @@ func TestStartExecsnoopReportsTracefsError(t *testing.T) {
 
 func TestStartExecsnoopReportsOpenError(t *testing.T) {
 	openLog := func(string) (io.WriteCloser, error) { return nil, errors.New("boom-open") }
-	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32) error {
+	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32, func()) error {
 		t.Fatal("run called despite open error")
 		return nil
 	}
@@ -88,7 +88,7 @@ func TestStartExecsnoopHappyPath(t *testing.T) {
 	var opened string
 	openLog := func(path string) (io.WriteCloser, error) { opened = path; return log, nil }
 	gotNS := make(chan uint32, 1)
-	run := func(ctx context.Context, w io.Writer, agg *execsnoop.Aggregator, selfPidns uint32) error {
+	run := func(ctx context.Context, w io.Writer, agg *execsnoop.Aggregator, selfPidns uint32, _ func()) error {
 		gotNS <- selfPidns
 		<-ctx.Done()
 		return nil
@@ -97,7 +97,7 @@ func TestStartExecsnoopHappyPath(t *testing.T) {
 	var console bytes.Buffer
 	d := execsnoopTestDeps(openLog, run)
 	d.cfg = execsnoopCfg("/share/execve.log")
-	agg := startExecsnoop(ctx, &console, d)
+	agg, _ := startExecsnoop(ctx, &console, d)
 	if agg == nil {
 		t.Fatal("happy path returned a nil aggregator")
 	}
@@ -125,7 +125,7 @@ func TestStartExecsnoopReportsPIDNSError(t *testing.T) {
 		mountTracefs: func() error { return nil },
 		openLog:      func(string) (io.WriteCloser, error) { return log, nil },
 		selfPIDNS:    func() (uint32, error) { return 0, errors.New("boom-pidns") },
-		run: func(ctx context.Context, _ io.Writer, _ *execsnoop.Aggregator, selfPidns uint32) error {
+		run: func(ctx context.Context, _ io.Writer, _ *execsnoop.Aggregator, selfPidns uint32, _ func()) error {
 			gotNS <- selfPidns
 			<-ctx.Done()
 			return nil
@@ -150,7 +150,9 @@ func TestStartExecsnoopReportsPIDNSError(t *testing.T) {
 // is surfaced by the drain goroutine.
 func TestStartExecsnoopReportsRunError(t *testing.T) {
 	log := newFakeLog()
-	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32) error { return errors.New("boom-run") }
+	run := func(context.Context, io.Writer, *execsnoop.Aggregator, uint32, func()) error {
+		return errors.New("boom-run")
+	}
 	var console bytes.Buffer
 	d := execsnoopTestDeps(func(string) (io.WriteCloser, error) { return log, nil }, run)
 	d.cfg = execsnoopCfg("/share/x.log")

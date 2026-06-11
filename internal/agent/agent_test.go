@@ -9,10 +9,12 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
+	"github.com/localai-org/darkaifactory/internal/observability/ebpf/opensnoop"
 )
 
 // TestMain doubles the test binary as a "fake crun" when invoked with
@@ -275,4 +277,141 @@ func TestMainReturnsOneOnRunError(t *testing.T) {
 	if !strings.Contains(errOut.String(), "daft-agent:") {
 		t.Fatalf("stderr should report agent error, got: %q", errOut.String())
 	}
+}
+
+// TestRunWithHoldsContainerUntilGadgetAttached pins the attach-vs-workload
+// barrier — the fix for the open-snoop capture flake. runWith must not launch
+// the container until every started gadget has signalled ready (its tracepoints
+// are live); without the barrier the workload's early syscalls outran attach
+// and the trace dropped them. The fake gadget holds its onReady behind a gate;
+// the test asserts the container's Exec runs only after the gadget attached,
+// and not before.
+func TestRunWithHoldsContainerUntilGadgetAttached(t *testing.T) {
+	gate := make(chan struct{}) // released by the test to let the gadget "attach"
+	var attached atomic.Bool    // set just before the gadget signals ready
+	sawAttached := make(chan bool, 1)
+
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{
+		Bundle:  "/share/bundle",
+		Observe: &agentv1.GuestConfig_Observe{Opensnoop: "/share/openat.log"},
+	}}
+	deps := runDeps{
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       newFakeShareDeps().toShareDeps(),
+		container: ContainerDeps{
+			Exec: func(context.Context, io.Writer, string) error {
+				sawAttached <- attached.Load()
+				return nil
+			},
+		},
+		opensnoop: opensnoopDeps{
+			mountTracefs: func() error { return nil },
+			openLog:      func(string) (io.WriteCloser, error) { return newFakeLog(), nil },
+			run: func(ctx context.Context, _ io.Writer, _ *opensnoop.Aggregator, _ uint32, onReady func()) error {
+				<-gate // hold attach until the test releases it
+				attached.Store(true)
+				onReady() // tracepoints now live
+				<-ctx.Done()
+				return nil
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { _ = runWith(ctx, io.Discard, deps); close(done) }()
+
+	// While the gadget is held pre-attach, the barrier must keep the container
+	// from running — so nothing should arrive on sawAttached yet.
+	select {
+	case got := <-sawAttached:
+		t.Fatalf("container ran before the gadget attached (saw attached=%v)", got)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(gate) // gadget attaches → barrier releases → container runs
+	select {
+	case got := <-sawAttached:
+		if !got {
+			t.Fatal("container started, but the gadget had not attached first")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("container never ran after the gadget attached")
+	}
+	cancel()
+	<-done
+}
+
+// TestAwaitGadgetsAttached exercises the barrier in isolation: it skips nil
+// channels (gadgets that never started), returns once every live channel
+// closes, unblocks on ctx cancel, and — its safety valve — returns on the
+// deadline rather than hanging the boot on a wedged gadget.
+func TestAwaitGadgetsAttached(t *testing.T) {
+	t.Run("returns once all live channels close, skipping nil", func(t *testing.T) {
+		closed := make(chan struct{})
+		close(closed)
+		done := make(chan struct{})
+		go func() {
+			awaitGadgetsAttached(t.Context(), io.Discard, nil, closed, nil, closed)
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("barrier did not return though every live channel was closed")
+		}
+	})
+	t.Run("returns when ctx is cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		done := make(chan struct{})
+		// A never-closing channel: only the cancelled ctx can release the wait.
+		go func() {
+			awaitGadgetsAttached(ctx, io.Discard, make(chan struct{}))
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("barrier did not return on a cancelled context")
+		}
+	})
+	t.Run("returns and reports on the attach deadline", func(t *testing.T) {
+		orig := gadgetAttachTimeout
+		gadgetAttachTimeout = 20 * time.Millisecond
+		t.Cleanup(func() { gadgetAttachTimeout = orig })
+		var console bytes.Buffer
+		done := make(chan struct{})
+		go func() {
+			awaitGadgetsAttached(context.Background(), &console, make(chan struct{}))
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("barrier never timed out on a wedged gadget")
+		}
+		if !strings.Contains(console.String(), GadgetReportPrefix+"tracepoint attach timed out") {
+			t.Fatalf("missing attach-timeout report: %q", console.String())
+		}
+	})
+	t.Run("never reports a timeout for an already-attached gadget at the deadline", func(t *testing.T) {
+		// Deadline already elapsed (1ns) AND the gadget has attached (closed
+		// channel): a plain three-way select would pick the fired timer ~half
+		// the time and emit a spurious timeout. The fast-path pre-check must
+		// take the close instead — deterministically, every iteration.
+		orig := gadgetAttachTimeout
+		gadgetAttachTimeout = time.Nanosecond
+		t.Cleanup(func() { gadgetAttachTimeout = orig })
+		closed := make(chan struct{})
+		close(closed)
+		for i := range 1000 {
+			var console bytes.Buffer
+			awaitGadgetsAttached(context.Background(), &console, closed)
+			if console.Len() != 0 {
+				t.Fatalf("iteration %d: spurious timeout for an attached gadget: %q", i, console.String())
+			}
+		}
+	})
 }

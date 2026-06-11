@@ -405,7 +405,7 @@ func TestRunFailsUnprivileged(t *testing.T) {
 	cancel()
 	for _, err := range []error{
 		Run(ctx, io.Discard, 4026531836),
-		RunAggregating(ctx, io.Discard, NewAggregator(), 4026531836),
+		RunAggregating(ctx, io.Discard, NewAggregator(), 4026531836, nil),
 	} {
 		if err == nil {
 			t.Skip("environment unexpectedly allowed BPF load; success path is covered by the VM e2e test")
@@ -414,4 +414,40 @@ func TestRunFailsUnprivileged(t *testing.T) {
 			t.Errorf("error = %v, want an execsnoop-prefixed failure", err)
 		}
 	}
+}
+
+// TestAttachSignalling pins the readiness signal RunAggregating threads to the
+// agent: onReady fires once, right after a successful open (so the agent can
+// hold the container until the gadget is capturing), never when open fails
+// (the agent releases its barrier on the drain goroutine's return instead),
+// and a nil onReady is an inert no-op (the unfiltered Run path).
+func TestAttachSignalling(t *testing.T) {
+	t.Run("fires after a successful open", func(t *testing.T) {
+		calls := 0
+		open := attachSignalling(fakeOpener(newFakeReader()), func() { calls++ })
+		_, cleanup, err := open()
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		_ = cleanup()
+		if calls != 1 {
+			t.Fatalf("onReady called %d times, want 1", calls)
+		}
+	})
+	t.Run("stays silent when open fails", func(t *testing.T) {
+		want := errors.New("load boom")
+		failing := func() (recordReader, func() error, error) { return nil, nil, want }
+		called := false
+		if _, _, err := attachSignalling(failing, func() { called = true })(); !errors.Is(err, want) {
+			t.Fatalf("err = %v, want %v", err, want)
+		}
+		if called {
+			t.Fatal("onReady fired despite a failed open")
+		}
+	})
+	t.Run("nil onReady is a no-op", func(t *testing.T) {
+		if _, _, err := attachSignalling(fakeOpener(newFakeReader()), nil)(); err != nil {
+			t.Fatalf("open: %v", err)
+		}
+	})
 }

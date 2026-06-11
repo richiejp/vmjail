@@ -1899,6 +1899,33 @@ the user-host or in CI today.
        container's `make check` — noted for a later look, not chased
        here.)
 
+       **Gadget attach barrier (2026-06-11, fixes the open-snoop
+       capture flake).** `TestHelloIntegrationOpensnoopCapturesOpenat`
+       flaked intermittently: the four observe gadgets loaded +
+       attached their tracepoints in a goroutine while `runWith`
+       launched the container in parallel, so a short-lived
+       workload's first syscalls could outrun attach and the ring
+       buffer (live only *after* attach) dropped them. Fixed at the
+       mechanism level for all four gadgets: each `RunAggregating`
+       fires an `onReady` the instant its tracepoints are live — an
+       `attachSignalling` opener wrapper, so the core drain loop and
+       its tests are untouched — the agent's `spawnGadgetDrain` turns
+       that into a readiness channel (closed on attach OR on the drain
+       goroutine's exit, so a failed attach can't hang the barrier),
+       and `runWith` calls `awaitGadgetsAttached` *before*
+       `runContainer`. The barrier is a 5 s-bounded happens-before:
+       observability never gates the boot, so a wedged or failed
+       gadget releases it (the trace is simply absent for that
+       gadget). Covered by a deterministic agent-level ordering test +
+       per-gadget `attachSignalling` unit tests; an adversarial review
+       cleared the concurrency (no double-close, hang, premature
+       launch, or aggregator race). 25/25 clean KVM boots confirmed
+       the e2e's strict `comm="hello"` assertion is now race-free. The
+       exec-snoop content assertion stays conditional — that gadget's
+       single early record is subject to a separate *flush*-to-host
+       race before the abrupt teardown, which this attach barrier does
+       not address.
+
        **Bug surfaced by the first run (2026-05-28, fixed
        same day):** the in-VM nix client mis-handled
        cache.nixos.org's 404 for a not-cached narinfo, parsing

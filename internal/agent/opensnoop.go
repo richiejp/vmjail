@@ -38,9 +38,11 @@ type opensnoopDeps struct {
 	selfPIDNS func() (uint32, error)
 	// run drains the gadget into w until ctx is cancelled, folding each
 	// event into agg so the summary writer can snapshot the live aggregate.
-	// Production wires opensnoop.RunAggregating; tests inject a fake so the
-	// file + goroutine wiring is covered without loading BPF.
-	run func(ctx context.Context, w io.Writer, agg *opensnoop.Aggregator, selfPidns uint32) error
+	// It calls onReady once its tracepoints are attached so the agent can hold
+	// the container until the gadget is capturing. Production wires
+	// opensnoop.RunAggregating; tests inject a fake so the file + goroutine
+	// wiring is covered without loading BPF.
+	run func(ctx context.Context, w io.Writer, agg *opensnoop.Aggregator, selfPidns uint32, onReady func()) error
 }
 
 // defaultOpensnoopDeps wires the real gadget. opensnoop.Run loads the
@@ -87,39 +89,34 @@ func resolveSelfPIDNS(w io.Writer, prefix string, fn func() (uint32, error)) (se
 // line per outcome and never fails the boot — observability is a debugging
 // surface, not a correctness invariant.
 //
-// Called before the container so the tracepoint is attaching before the
-// workload's openat storm; the ring buffer absorbs events emitted while
-// the drain goroutine is still being scheduled.
+// Called before the container, returning a readiness channel that closes once
+// the tracepoints are attached; runWith waits on it so the workload's openat
+// storm can't start before the gadget is capturing. nil agg + nil channel when
+// the gadget was not requested or could not start.
 //
-//nolint:dupl // deliberately parallel to startExecsnoop; the two gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
-func startOpensnoop(ctx context.Context, w io.Writer, d runDeps) *opensnoop.Aggregator {
+//nolint:dupl // deliberately parallel to startExecsnoop; the two gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS, spawnGadgetDrain) is already factored out — a generic abstraction would be less readable than the symmetry.
+func startOpensnoop(ctx context.Context, w io.Writer, d runDeps) (agg *opensnoop.Aggregator, ready <-chan struct{}) {
 	if d.opensnoop.run == nil {
-		return nil
+		return nil, nil
 	}
 	path, ok := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetOpensnoop)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if err := d.opensnoop.mountTracefs(); err != nil {
 		writeReport(w, OpensnoopReportPrefix, err.Error())
-		return nil
+		return nil, nil
 	}
 	f, err := d.opensnoop.openLog(path)
 	if err != nil {
 		writeReport(w, OpensnoopReportPrefix, err.Error())
-		return nil
+		return nil, nil
 	}
 	selfPidns, scope := resolveSelfPIDNS(w, OpensnoopReportPrefix, d.opensnoop.selfPIDNS)
-	agg := opensnoop.NewAggregator()
+	agg = opensnoop.NewAggregator()
 	writeReport(w, OpensnoopReportPrefix, "tracing "+scope+" openat → "+path)
-	go func() {
-		defer func() { _ = f.Close() }()
-		// ctx cancel is the normal stop (Run returns nil); only a real
-		// mid-run failure is worth a console line, and only while the VM
-		// is still up to carry it.
-		if rerr := d.opensnoop.run(ctx, f, agg, selfPidns); rerr != nil && ctx.Err() == nil {
-			writeReport(w, OpensnoopReportPrefix, rerr.Error())
-		}
-	}()
-	return agg
+	ready = spawnGadgetDrain(ctx, w, OpensnoopReportPrefix, f, func(onReady func()) error {
+		return d.opensnoop.run(ctx, f, agg, selfPidns, onReady)
+	})
+	return agg, ready
 }

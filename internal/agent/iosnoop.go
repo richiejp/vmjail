@@ -29,8 +29,10 @@ type iosnoopDeps struct {
 	// container-workload filter; a zero return (or nil) disables the filter.
 	selfPIDNS func() (uint32, error)
 	// run drains the gadget into w until ctx is cancelled, folding each map
-	// snapshot into agg. Production wires iosnoop.RunAggregating.
-	run func(ctx context.Context, w io.Writer, agg *iosnoop.Aggregator, selfPidns uint32) error
+	// snapshot into agg. It calls onReady once its tracepoints are attached so
+	// the agent can hold the container until the gadget is capturing. Production
+	// wires iosnoop.RunAggregating.
+	run func(ctx context.Context, w io.Writer, agg *iosnoop.Aggregator, selfPidns uint32, onReady func()) error
 }
 
 // defaultIosnoopDeps wires the real gadget. ensureTracefs + readSelfPIDNS are
@@ -57,35 +59,34 @@ func defaultIosnoopDeps() iosnoopDeps {
 // it reports one line per outcome and never fails the boot — observability is a
 // debugging surface, not a correctness invariant.
 //
-// Called before the container so the tracepoints are attaching before the
-// workload's first I/O.
+// Called before the container, returning a readiness channel that closes once
+// the tracepoints are attached; runWith waits on it so the workload's first
+// I/O can't outrun the gadget. nil agg + nil channel when the gadget was not
+// requested or could not start.
 //
-//nolint:dupl // deliberately parallel to startSleepsnoop / startExecsnoop; the gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
-func startIosnoop(ctx context.Context, w io.Writer, d runDeps) *iosnoop.Aggregator {
+//nolint:dupl // deliberately parallel to startSleepsnoop / startExecsnoop; the gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS, spawnGadgetDrain) is already factored out — a generic abstraction would be less readable than the symmetry.
+func startIosnoop(ctx context.Context, w io.Writer, d runDeps) (agg *iosnoop.Aggregator, ready <-chan struct{}) {
 	if d.iosnoop.run == nil {
-		return nil
+		return nil, nil
 	}
 	path, ok := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetIosnoop)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if err := d.iosnoop.mountTracefs(); err != nil {
 		writeReport(w, IosnoopReportPrefix, err.Error())
-		return nil
+		return nil, nil
 	}
 	f, err := d.iosnoop.openLog(path)
 	if err != nil {
 		writeReport(w, IosnoopReportPrefix, err.Error())
-		return nil
+		return nil, nil
 	}
 	selfPidns, scope := resolveSelfPIDNS(w, IosnoopReportPrefix, d.iosnoop.selfPIDNS)
-	agg := iosnoop.NewAggregator()
+	agg = iosnoop.NewAggregator()
 	writeReport(w, IosnoopReportPrefix, "tracing "+scope+" fd I/O → "+path)
-	go func() {
-		defer func() { _ = f.Close() }()
-		if rerr := d.iosnoop.run(ctx, f, agg, selfPidns); rerr != nil && ctx.Err() == nil {
-			writeReport(w, IosnoopReportPrefix, rerr.Error())
-		}
-	}()
-	return agg
+	ready = spawnGadgetDrain(ctx, w, IosnoopReportPrefix, f, func(onReady func()) error {
+		return d.iosnoop.run(ctx, f, agg, selfPidns, onReady)
+	})
+	return agg, ready
 }

@@ -29,8 +29,10 @@ type sleepsnoopDeps struct {
 	// container-workload filter; a zero return (or nil) disables the filter.
 	selfPIDNS func() (uint32, error)
 	// run drains the gadget into w until ctx is cancelled, folding each event
-	// into agg. Production wires sleepsnoop.RunAggregating.
-	run func(ctx context.Context, w io.Writer, agg *sleepsnoop.Aggregator, selfPidns uint32) error
+	// into agg. It calls onReady once its tracepoints are attached so the agent
+	// can hold the container until the gadget is capturing. Production wires
+	// sleepsnoop.RunAggregating.
+	run func(ctx context.Context, w io.Writer, agg *sleepsnoop.Aggregator, selfPidns uint32, onReady func()) error
 }
 
 // defaultSleepsnoopDeps wires the real gadget. ensureTracefs + readSelfPIDNS
@@ -56,35 +58,34 @@ func defaultSleepsnoopDeps() sleepsnoopDeps {
 // helpers it reports one line per outcome and never fails the boot —
 // observability is a debugging surface, not a correctness invariant.
 //
-// Called before the container so the tracepoints are attaching before the
-// workload's first sleep.
+// Called before the container, returning a readiness channel that closes once
+// the tracepoints are attached; runWith waits on it so the workload's first
+// sleep can't outrun the gadget. nil agg + nil channel when the gadget was not
+// requested or could not start.
 //
-//nolint:dupl // deliberately parallel to startOpensnoop / startExecsnoop; the gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS) is already factored out — a generic abstraction would be less readable than the symmetry.
-func startSleepsnoop(ctx context.Context, w io.Writer, d runDeps) *sleepsnoop.Aggregator {
+//nolint:dupl // deliberately parallel to startOpensnoop / startExecsnoop; the gadget wirings differ only by gadget type and the shared logic (resolveSelfPIDNS, spawnGadgetDrain) is already factored out — a generic abstraction would be less readable than the symmetry.
+func startSleepsnoop(ctx context.Context, w io.Writer, d runDeps) (agg *sleepsnoop.Aggregator, ready <-chan struct{}) {
 	if d.sleepsnoop.run == nil {
-		return nil
+		return nil, nil
 	}
 	path, ok := resolveObservePath(d.cfg, (*agentv1.GuestConfig_Observe).GetSleepsnoop)
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	if err := d.sleepsnoop.mountTracefs(); err != nil {
 		writeReport(w, SleepsnoopReportPrefix, err.Error())
-		return nil
+		return nil, nil
 	}
 	f, err := d.sleepsnoop.openLog(path)
 	if err != nil {
 		writeReport(w, SleepsnoopReportPrefix, err.Error())
-		return nil
+		return nil, nil
 	}
 	selfPidns, scope := resolveSelfPIDNS(w, SleepsnoopReportPrefix, d.sleepsnoop.selfPIDNS)
-	agg := sleepsnoop.NewAggregator()
+	agg = sleepsnoop.NewAggregator()
 	writeReport(w, SleepsnoopReportPrefix, "tracing "+scope+" nanosleep → "+path)
-	go func() {
-		defer func() { _ = f.Close() }()
-		if rerr := d.sleepsnoop.run(ctx, f, agg, selfPidns); rerr != nil && ctx.Err() == nil {
-			writeReport(w, SleepsnoopReportPrefix, rerr.Error())
-		}
-	}()
-	return agg
+	ready = spawnGadgetDrain(ctx, w, SleepsnoopReportPrefix, f, func(onReady func()) error {
+		return d.sleepsnoop.run(ctx, f, agg, selfPidns, onReady)
+	})
+	return agg, ready
 }
