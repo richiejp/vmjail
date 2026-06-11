@@ -8,6 +8,8 @@ var errNoCgroupV2 = errors.New("observability: cgroup v2 is linux-only")
 
 func CurrentCgroup() (string, error)                      { return "", errNoCgroupV2 }
 func CreateSubCgroup(parent, name string) (string, error) { return "", errNoCgroupV2 }
+func PrepareDelegatedSubtree(_ string) (string, error)    { return "", errNoCgroupV2 }
+func WriteCgroupControl(_, _, _ string) error             { return errNoCgroupV2 }
 func RemoveCgroup(_ string) error                         { return errNoCgroupV2 }
 func OpenCgroupFD(_ string) (int, error)                  { return -1, errNoCgroupV2 }
 func DelegationOK() bool                                  { return false }

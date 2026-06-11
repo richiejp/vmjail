@@ -813,9 +813,17 @@ var createVMCgroupFn = createVMCgroup
 // accounting view (memory.peak / io.stat missing whichever helper
 // failed to open).
 func createVMCgroup(name string) (string, error) {
-	parent, err := observability.CurrentCgroup()
-	if err != nil {
-		return "", fmt.Errorf("sandbox: locate own cgroup for per-VM accounting: %w", err)
+	// Per-VM cgroups go under the prepared scope (a sibling of the
+	// supervisor leaf, with the memory/cpu controllers enabled) when
+	// startup set it; otherwise the caller's own cgroup, the pre-limits
+	// fallback for unit tests and unprepared paths.
+	parent := vmCgroupParent
+	if parent == "" {
+		var err error
+		parent, err = observability.CurrentCgroup()
+		if err != nil {
+			return "", fmt.Errorf("sandbox: locate own cgroup for per-VM accounting: %w", err)
+		}
 	}
 	dir, err := observability.CreateSubCgroup(parent, name)
 	if err != nil {
@@ -1197,6 +1205,9 @@ func serveWith(ctx context.Context, w io.Writer, cfg Config, r runner, sc shareS
 	}
 	td := &vmTeardown{cgroupDir: cgroupDir}
 	defer td.run()
+	// Bound the VM's host resource use: soft + hard memory and CPU caps on
+	// the per-VM cgroup, derived from its guest-RAM / vCPU allocation.
+	applyVMCgroupLimitsFn(w, cgroupDir, cfg)
 
 	shareSockets, stopShare, err := startShares(ctx, cfg, sc, cgroupDir)
 	if err != nil {
@@ -1290,6 +1301,7 @@ func helloWithTimeout(ctx context.Context, w io.Writer, cfg Config, r runner, sc
 	}
 	td := &vmTeardown{cgroupDir: cgroupDir}
 	defer td.run()
+	applyVMCgroupLimitsFn(w, cgroupDir, cfg)
 
 	shareSockets, stopShare, err := startShares(runCtx, cfg, sc, cgroupDir)
 	if err != nil {

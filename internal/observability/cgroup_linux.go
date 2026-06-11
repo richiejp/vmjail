@@ -104,6 +104,90 @@ func CreateSubCgroup(parent, name string) (string, error) {
 	return path, nil
 }
 
+// PrepareDelegatedSubtree enables the memory + cpu + io + pids controllers
+// on the caller's delegated cgroup v2 scope so per-VM child cgroups can
+// carry resource limits AND full accounting (memory/io/pids), and returns
+// the scope path — the parent under which those per-VM cgroups must be
+// created so they inherit the controllers.
+//
+// cgroup v2's "no internal processes" rule forbids enabling controllers in
+// a cgroup's subtree_control while that cgroup holds processes directly.
+// The delegated scope holds the sandbox-host process itself, so this first
+// moves the caller into a leaf child (<scope>/<leaf>) — leaving the scope
+// processless — then writes the controllers to <scope>/cgroup.subtree_control.
+// Per-VM cgroups are then created as siblings of the leaf, under the scope.
+//
+// Idempotent via leaf detection: when the caller is ALREADY inside the leaf
+// (e.g. a re-exec'd child that inherited it from a parent which already
+// prepared the scope) the move + enable are skipped and the scope (the
+// leaf's parent) is returned. MUST be called while a single process owns
+// the scope — i.e. before any userns re-exec forks a sibling into it.
+//
+// On failure it returns a non-empty fallback vmParent (the caller's current
+// cgroup) ALONGSIDE the error, so the caller can still create per-VM
+// cgroups there — just without the controllers, i.e. without limits. The
+// common failure is a SHARED scope (CI / a test harness, where sibling
+// processes leave the scope non-empty so subtree_control can't be enabled):
+// best-effort there rather than refusing to boot.
+func PrepareDelegatedSubtree(leaf string) (vmParent string, err error) {
+	cur, err := CurrentCgroup()
+	if err != nil {
+		return "", err
+	}
+	return prepareDelegatedSubtreeAt(cur, leaf)
+}
+
+// subtreeControllers is the controller set enabled on the delegated scope.
+// memory + cpu back the per-VM limits; io + pids round out the accounting
+// the per-VM cgroup can then report.
+const subtreeControllers = "+memory +cpu +io +pids"
+
+// prepareDelegatedSubtreeAt is PrepareDelegatedSubtree with the caller's
+// cgroup passed in, so it can be unit-tested against a fake cgroup root.
+func prepareDelegatedSubtreeAt(cur, leaf string) (string, error) {
+	if leaf == "" || strings.ContainsAny(leaf, "/\x00") {
+		return cur, fmt.Errorf("observability: invalid supervisor leaf %q", leaf)
+	}
+	if filepath.Base(cur) == leaf {
+		// Already inside the leaf — a parent already prepared the scope.
+		return filepath.Dir(cur), nil
+	}
+	// On failure return cur as the fallback parent (per-VM cgroups still get
+	// created there, just uncontrolled) alongside the error.
+	sup := filepath.Join(cur, leaf)
+	if err := os.Mkdir(sup, 0o750); err != nil && !os.IsExist(err) {
+		return cur, fmt.Errorf("observability: create supervisor cgroup: %w", err)
+	}
+	if err := WriteCgroupControl(sup, "cgroup.procs", strconv.Itoa(os.Getpid())); err != nil {
+		return cur, fmt.Errorf("observability: move self into supervisor cgroup: %w", err)
+	}
+	if err := WriteCgroupControl(cur, "cgroup.subtree_control", subtreeControllers); err != nil {
+		return cur, fmt.Errorf("observability: enable cgroup controllers: %w", err)
+	}
+	return cur, nil
+}
+
+// WriteCgroupControl writes value to <dir>/<file>, a cgroup v2 control
+// file (e.g. memory.max, cpu.max, cgroup.subtree_control). dir must be
+// under the cgroup v2 root; file must be a bare name.
+func WriteCgroupControl(dir, file, value string) error {
+	if !strings.HasPrefix(dir, cgroupV2Root) {
+		return fmt.Errorf("observability: cgroup dir %q outside %s", dir, cgroupV2Root)
+	}
+	if file == "" || strings.ContainsAny(file, "/\x00") {
+		return fmt.Errorf("observability: invalid cgroup control file %q", file)
+	}
+	// The perm only applies if the file must be created, which never
+	// happens for a real cgroup control file (the kernel owns it); it
+	// matters only under a fake tempdir root in tests.
+	// #nosec G304 — dir is validated under the cgroup root and file is a
+	// bare cgroup v2 control-file name; no untrusted path component.
+	if err := os.WriteFile(filepath.Join(dir, file), []byte(value), 0o600); err != nil {
+		return fmt.Errorf("observability: write %s/%s: %w", dir, file, err)
+	}
+	return nil
+}
+
 // RemoveCgroup rmdir's a previously-created sub-cgroup. The
 // kernel refuses rmdir while any process remains in the cgroup —
 // callers should ensure the workload has exited before calling.

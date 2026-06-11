@@ -10,6 +10,8 @@ import (
 	"os"
 
 	"github.com/localai-org/darkaifactory/internal/cgroupwrap"
+	"github.com/localai-org/darkaifactory/internal/observability"
+	"github.com/localai-org/darkaifactory/internal/sandbox"
 	"github.com/localai-org/darkaifactory/internal/sandboxdcli"
 	"github.com/localai-org/darkaifactory/internal/userns"
 )
@@ -19,6 +21,14 @@ var (
 	osExit       = os.Exit
 	usernsReexec = userns.Reexec
 	cgroupReexec = cgroupwrap.EnsureDelegated
+	// prepareCgroupSubtree moves the sandbox-host into a leaf of its
+	// delegated scope and enables the memory/cpu/io/pids controllers so
+	// per-VM cgroups can carry limits + accounting, returning the scope
+	// (the per-VM parent). A test seam so main()'s success path doesn't
+	// touch the real cgroup tree.
+	prepareCgroupSubtree = func() (string, error) {
+		return observability.PrepareDelegatedSubtree(sandbox.SupervisorLeaf)
+	}
 )
 
 func main() {
@@ -37,6 +47,21 @@ func main() {
 		osExit(1)
 		return
 	}
+
+	// With a delegated scope in hand, enable the memory/cpu controllers on
+	// it so per-VM cgroups can carry resource limits (and full accounting).
+	// This MUST run while a single process owns the scope — before the
+	// userns re-exec below forks a sibling into it — so it goes here,
+	// between the two re-execs. Best-effort, UNLIKE the delegation itself:
+	// a shared scope (a CI/test harness where sibling processes keep the
+	// scope non-empty) genuinely can't enable controllers, so we warn
+	// loudly and boot without per-VM limits rather than refuse to start.
+	// Per-VM cgroup CREATION stays a hard precondition downstream.
+	vmParent, err := prepareCgroupSubtree()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "daft-sandboxd: per-VM cgroup limits disabled:", err)
+	}
+	sandbox.SetVMCgroupParent(vmParent)
 
 	// Re-exec ourselves inside a user namespace populated from
 	// the calling user's /etc/subuid + /etc/subgid before any

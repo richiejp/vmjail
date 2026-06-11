@@ -2265,15 +2265,46 @@ the user-host or in CI today.
          (`cgroupStubInUnitTests`), so the hard precondition doesn't abort
          fake-runner boot tests.
 
-         **Per-VM resource LIMITS + balloon-based reclaim — TRACKED (task
-         #103, not yet started).** Today the per-VM cgroup is accounting-only:
-         `createVMCgroup` does a bare `mkdir` and writes NO limit files, so
-         `memory.max`/`pids.max`/`io.max`/`cpu.max` all sit at inherited
-         `max`. The only real per-VM bound is CH's own `--memory`/`--cpus` at
-         the VM boundary; the host cgroup adds accounting + an atomic
-         `cgroup.kill` unit, not a cap. Enabling real limits is the logical
-         completion of the strict posture (cgroup as a blast-radius *limiter*,
-         not just a meter).
+         **Per-VM resource LIMITS — soft + hard memory & CPU — LANDED
+         2026-06-11 (task #103; balloon reclaim deferred).** The per-VM
+         cgroup now carries `memory.high`/`memory.max` and
+         `cpu.weight`/`cpu.max`, derived from the VM's effective guest-RAM /
+         vCPU allocation (`sandbox.applyVMCgroupLimits` + `limitsForConfig`):
+         memory headroom is guest + max(12.5%, 128 MiB) soft / guest +
+         max(25%, 384 MiB) hard (the cgroup also holds CH's guest-RAM mapping
+         + virtiofsd page cache, so a cap at exactly guest RAM would OOM a
+         healthy VM); CPU is a hard `cpu.max` of the vCPU count's cores plus a
+         soft `cpu.weight` of 100×cores (clamped 10000).
+
+         *Enabling the controllers* (the prerequisite — a child's limit files
+         need the controller in the PARENT's `subtree_control`, which can't be
+         written while a process sits in the cgroup, EBUSY): at startup, after
+         the cgroupwrap delegation and BEFORE the userns re-exec (single owner
+         of the scope), `observability.PrepareDelegatedSubtree` moves the
+         sandbox-host into a `daft-supervisor` leaf and writes
+         `+memory +cpu +io +pids` to the scope's `subtree_control`; per-VM
+         cgroups are then created as siblings under the scope
+         (`sandbox.SetVMCgroupParent`, used by `createVMCgroup`). This also
+         turns on per-VM **memory/io/pids accounting**, which was silently
+         zero before (the controllers were never enabled). Bonus over the
+         pre-existing CH `--memory`/`--cpus` VM-boundary bound: the host cgroup
+         is now a real blast-radius limiter, not just a meter.
+
+         *Posture — best-effort, NOT fatal* (diverges from the earlier strict
+         framing). The enable needs a PRIVATE scope; a SHARED one (a CI/test
+         harness, or a pre-delegated session where sibling processes keep the
+         scope non-empty) can't enable controllers. There we warn loudly on
+         stderr and boot WITHOUT limits rather than refuse to start — per-VM
+         cgroup *creation* stays the hard precondition (#102). In normal use
+         `daft-sandboxd serve` self-wraps into a private systemd-run scope (an
+         undelegated shell session), so limits apply; the integration harness
+         shares the `go test` scope, so it exercises the no-regression path,
+         not the limit values (those are covered by unit tests +
+         the 2026-06-07 manual cgroup probe).
+
+         *Still open under #103:* mapping devcontainer `hostRequirements`
+         (cpus/memory/storage) onto the workspace resources that feed these
+         limits, and balloon-based reclaim (below).
 
          *Mechanics — VERIFIED empirically 2026-06-07 on this host (systemd
          258, kernel 6.12), correcting the earlier "complicated dance /
@@ -2297,9 +2328,9 @@ the user-host or in CI today.
            5. write `memory.max` / `pids.max` on the child → sticks (read
               back 512 MiB / 512). `io.max`, `io.weight` etc. all present.
          So ~10 lines in cgroupwrap/observability + having sandboxd remember
-         `R`. Under the STRICT POSTURE this is part of guaranteeing the
-         cgroup: if it can't be performed where required, that's a startup
-         failure, not a degrade.
+         `R` — which is what landed (see the LANDED note above), except the
+         posture is best-effort, not fatal: the move+enable needs a PRIVATE
+         scope, and a shared one degrades loudly instead of aborting.
 
          *`memory.max` is a HARD limit* — on breach (after failed reclaim) the
          cgroup OOM-killer fires, which for a VM means SIGKILL to CH = abrupt
@@ -2689,8 +2720,11 @@ the user-host or in CI today.
       real `ghcr.io` feature hitting apt through the proxy is a heavier
       gated check, not the default.
 
-    **4-hostreq (#103):** `hostRequirements` (cpus/memory/storage) →
-    per-VM cgroup limits + balloon-based reclaim. Independent of features.
+    **4-hostreq (#103):** the per-VM cgroup soft+hard memory/CPU limits
+    LANDED 2026-06-11 (see the D-section #103 note). What remains: mapping a
+    devcontainer's `hostRequirements` (cpus/memory/storage) onto the
+    workspace resources that feed those limits, and balloon-based reclaim.
+    Independent of features.
 
   *e2e target — PyTorch (CPU variant: no GPU/`--gpus`).* Tiered like the
   self-build: **Tier 1 (loop proof, cheap):** resolve the CPU config →

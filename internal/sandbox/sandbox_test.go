@@ -385,6 +385,14 @@ func TestCloudHypervisorRunner_ObserverAndCgroupTeardown(t *testing.T) {
 	createVMCgroupFn = createVMCgroup
 	t.Cleanup(func() { createVMCgroupFn = prevFn })
 
+	// Against a fake (regular-file) cgroup root, writing limit files would
+	// leave the per-VM dir non-empty and break the teardown rmdir this test
+	// checks; a real cgroup's control files don't. Stub limits out — they
+	// have their own coverage.
+	prevLim := applyVMCgroupLimitsFn
+	applyVMCgroupLimitsFn = func(io.Writer, string, Config) {}
+	t.Cleanup(func() { applyVMCgroupLimitsFn = prevLim })
+
 	fakeRoot := t.TempDir()
 	prev := observability.SwapCgroupRoot(fakeRoot)
 	t.Cleanup(func() { observability.SwapCgroupRoot(prev) })

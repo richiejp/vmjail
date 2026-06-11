@@ -5,10 +5,114 @@ package observability
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 )
+
+func TestPrepareDelegatedSubtreeAt(t *testing.T) {
+	root := t.TempDir()
+	prev := SwapCgroupRoot(root)
+	t.Cleanup(func() { SwapCgroupRoot(prev) })
+
+	scope := filepath.Join(root, "scope")
+	if err := os.MkdirAll(scope, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	vmParent, err := prepareDelegatedSubtreeAt(scope, "daft-supervisor")
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if vmParent != scope {
+		t.Errorf("vmParent = %q, want the scope %q", vmParent, scope)
+	}
+	// We moved ourselves into the supervisor leaf.
+	procs, err := os.ReadFile(filepath.Join(scope, "daft-supervisor", "cgroup.procs")) //nolint:gosec // test reads a file under the temp cgroup root.
+	if err != nil {
+		t.Fatalf("read leaf cgroup.procs: %v", err)
+	}
+	if strings.TrimSpace(string(procs)) != strconv.Itoa(os.Getpid()) {
+		t.Errorf("cgroup.procs = %q, want our pid %d", procs, os.Getpid())
+	}
+	// Controllers enabled on the scope.
+	st, err := os.ReadFile(filepath.Join(scope, "cgroup.subtree_control")) //nolint:gosec // test reads a file under the temp cgroup root.
+	if err != nil {
+		t.Fatalf("read subtree_control: %v", err)
+	}
+	if !strings.Contains(string(st), "memory") || !strings.Contains(string(st), "cpu") {
+		t.Errorf("subtree_control = %q, want memory + cpu", st)
+	}
+}
+
+func TestPrepareDelegatedSubtree(t *testing.T) {
+	// Drive the public entry point (which reads /proc/self/cgroup via
+	// CurrentCgroup) against a fake root seeded at our real cgroup path.
+	root := t.TempDir()
+	prev := SwapCgroupRoot(root)
+	t.Cleanup(func() { SwapCgroupRoot(prev) })
+
+	cur, err := CurrentCgroup()
+	if err != nil {
+		t.Fatalf("CurrentCgroup: %v", err)
+	}
+	if err := os.MkdirAll(cur, 0o750); err != nil {
+		t.Fatalf("seed cur: %v", err)
+	}
+	vmParent, err := PrepareDelegatedSubtree("daft-supervisor")
+	if err != nil {
+		t.Fatalf("PrepareDelegatedSubtree: %v", err)
+	}
+	if vmParent != cur {
+		t.Errorf("vmParent = %q, want our (seeded) cgroup %q", vmParent, cur)
+	}
+}
+
+func TestPrepareDelegatedSubtreeAtAlreadyPrepared(t *testing.T) {
+	root := t.TempDir()
+	prev := SwapCgroupRoot(root)
+	t.Cleanup(func() { SwapCgroupRoot(prev) })
+
+	// Already inside the leaf (a re-exec'd child) — return the scope, no move.
+	cur := filepath.Join(root, "scope", "daft-supervisor")
+	vmParent, err := prepareDelegatedSubtreeAt(cur, "daft-supervisor")
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if want := filepath.Join(root, "scope"); vmParent != want {
+		t.Errorf("vmParent = %q, want %q", vmParent, want)
+	}
+	if _, err := os.Stat(cur); !os.IsNotExist(err) {
+		t.Error("already-prepared path must not create any directories")
+	}
+}
+
+func TestPrepareDelegatedSubtreeAtInvalidLeaf(t *testing.T) {
+	if _, err := prepareDelegatedSubtreeAt("/sys/fs/cgroup/x", "a/b"); err == nil {
+		t.Fatal("want error for a leaf name with a slash")
+	}
+}
+
+func TestWriteCgroupControl(t *testing.T) {
+	root := t.TempDir()
+	prev := SwapCgroupRoot(root)
+	t.Cleanup(func() { SwapCgroupRoot(prev) })
+
+	if err := WriteCgroupControl(filepath.Join(t.TempDir(), "elsewhere"), "memory.max", "1"); err == nil {
+		t.Error("want error for a dir outside the cgroup root")
+	}
+	if err := WriteCgroupControl(root, "a/b", "1"); err == nil {
+		t.Error("want error for an invalid control-file name")
+	}
+	if err := WriteCgroupControl(root, memoryMaxFile, "123"); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, _ := os.ReadFile(filepath.Join(root, memoryMaxFile)) //nolint:gosec // test reads a file under the temp cgroup root.
+	if string(got) != "123" {
+		t.Errorf("memory.max = %q, want 123", got)
+	}
+}
 
 func closeFD(fd int) error { return syscall.Close(fd) }
 

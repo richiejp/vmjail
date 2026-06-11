@@ -66,6 +66,16 @@ func disableCgroupReexec(t *testing.T) {
 	t.Cleanup(func() { cgroupReexec = prev })
 }
 
+// disablePrepareCgroupSubtree installs a no-op subtree-prepare stub so
+// main() doesn't move the test process into a leaf cgroup / write the real
+// cgroup tree on its success path.
+func disablePrepareCgroupSubtree(t *testing.T) {
+	t.Helper()
+	prev := prepareCgroupSubtree
+	prepareCgroupSubtree = func() (string, error) { return "", nil }
+	t.Cleanup(func() { prepareCgroupSubtree = prev })
+}
+
 type failingWriter struct{}
 
 func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("nope") }
@@ -98,6 +108,7 @@ func TestRunReturns2WhenStderrWriteFails(t *testing.T) {
 func TestMainPassesArgvAndCallsOsExit(t *testing.T) {
 	disableUsernsReexec(t)
 	disableCgroupReexec(t)
+	disablePrepareCgroupSubtree(t)
 	oldArgs, oldExit := os.Args, osExit
 	defer func() { os.Args, osExit = oldArgs, oldExit }()
 	os.Args = []string{binName, versionSubcommand}
@@ -119,6 +130,7 @@ func TestMainPassesArgvAndCallsOsExit(t *testing.T) {
 // far downstream.
 func TestMainExitsOnUsernsFailure(t *testing.T) {
 	disableCgroupReexec(t)
+	disablePrepareCgroupSubtree(t)
 	prev := usernsReexec
 	usernsReexec = func(io.Writer) error { return errors.New("synthetic") }
 	t.Cleanup(func() { usernsReexec = prev })
@@ -129,6 +141,28 @@ func TestMainExitsOnUsernsFailure(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "userns: synthetic") {
 		t.Errorf("stderr = %q, want it to mention 'userns: synthetic'", stderr)
+	}
+}
+
+// TestMainWarnsButContinuesOnSubtreeFailure pins the best-effort posture of
+// the controller-enable step (which backs the per-VM resource limits):
+// unlike the delegation wrap, a failure here (e.g. a shared scope) warns on
+// stderr but does NOT abort — per-VM cgroup creation, not limits, is the
+// hard precondition. It runs after the delegation wrap, before the userns
+// re-exec.
+func TestMainWarnsButContinuesOnSubtreeFailure(t *testing.T) {
+	disableUsernsReexec(t)
+	disableCgroupReexec(t)
+	prev := prepareCgroupSubtree
+	prepareCgroupSubtree = func() (string, error) { return "", errors.New("synthetic-subtree") }
+	t.Cleanup(func() { prepareCgroupSubtree = prev })
+
+	code, stderr := runMainCapturingStderr(t)
+	if code != 0 {
+		t.Errorf("osExit code = %d, want 0 (warn-and-continue)", code)
+	}
+	if !strings.Contains(stderr, "limits disabled: synthetic-subtree") {
+		t.Errorf("stderr = %q, want it to mention the disabled-limits warning", stderr)
 	}
 }
 
