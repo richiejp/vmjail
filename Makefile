@@ -223,6 +223,12 @@ NIX_UROOT_OUT     := $(BIN_DIR)/u-root
 NIX_UROOT_SRC_OUT := $(BIN_DIR)/u-root-src
 # Real (//go:embed-bundled) daft-sandboxd, for the embedded-boot test.
 NIX_SANDBOXD_OUT  := $(BIN_DIR)/daft-sandboxd-bundled
+# iso-nested-qemu diversion fixtures (branch iso-nested-qemu): a tiny
+# bootable-with-sshd NixOS ISO + a headless-qemu launcher image. Consumed
+# by TestClusterNestedISOBoot, which boots the ISO as a nested L2 VM under
+# qemu inside a daft sandbox and forwards its sshd out. See PLAN.md.
+NIX_ISO_FIXTURE_OUT    := $(BIN_DIR)/iso-ssh-fixture
+NIX_ISO_QEMU_IMAGE_OUT := $(BIN_DIR)/iso-qemu-runner-image
 
 # build-artefacts realises the sandbox-VM toolchain from the flake into
 # bin/ (a cache hit when nothing changed). These used to be exported by
@@ -289,6 +295,8 @@ integration-build: dev
 	@nix build .#daft.goModules     -o $(NIX_CHECK_VENDOR_OUT)
 	@nix build .#d6c1-flake-fixture -o $(NIX_FLAKE_FIXTURE_OUT)
 	@nix build .#daft-sandboxd      -o $(NIX_SANDBOXD_OUT)
+	@nix build .#iso-ssh-fixture       -o $(NIX_ISO_FIXTURE_OUT)
+	@nix build .#iso-qemu-runner-image -o $(NIX_ISO_QEMU_IMAGE_OUT)
 
 # Lock file for `make integration`. Two concurrent runs race on
 # /dev/kvm, host ports, vsock CIDs, and tap interface names, and
@@ -329,6 +337,8 @@ integration: integration-build
 			export DAFT_CHECK_IMAGE=$$(realpath $(NIX_CHECK_IMAGE_OUT)); \
 			export DAFT_CHECK_VENDOR=$$(realpath $(NIX_CHECK_VENDOR_OUT)); \
 			export DAFT_NIX_FLAKE_FIXTURE=$$(realpath $(NIX_FLAKE_FIXTURE_OUT)); \
+			export DAFT_ISO_SSH_FIXTURE=$$(realpath $(NIX_ISO_FIXTURE_OUT)/iso/*.iso); \
+			export DAFT_ISO_QEMU_IMAGE=$$(realpath $(NIX_ISO_QEMU_IMAGE_OUT)); \
 			rc=0; \
 			echo "[e2e] sandbox pkg — in-process host shares the delegated scope: per-VM accounting, limits off"; \
 			$$delegate go test -v -tags=integration -count=1 -timeout 20m ./internal/sandbox/ || rc=1; \

@@ -1041,6 +1041,149 @@
               platforms = platforms.unix;
             };
           };
+
+          # iso-qemu-runner-image carries qemu + a launcher that boots a
+          # third-party ISO as a NESTED L2 VM: QEMU -accel kvm against
+          # the daft sandbox's bound /dev/kvm, with slirp user-net
+          # hostfwd exposing the ISO's sshd on the container loopback.
+          # daft's existing port-forward then reaches it from the host
+          # (TestClusterNestedISOBoot). Part of the iso-nested-qemu
+          # diversion: the ISO is the only untrusted layer, wrapped from
+          # outside by the normal daft VM (vsock, cgroups, /proc
+          # sampler) — daft never has to learn to boot ISOs itself.
+          iso-qemu-runner-image =
+            let
+              # qemu_test is the headless "for-vm-tests" build: same
+              # KVM + virtio + slirp user-net + x86_64-softmmu we need,
+              # but compiled WITHOUT the gtk/sdl/spice/pulse/gstreamer
+              # desktop+audio stack qemu_kvm drags in — which a
+              # -display none launcher never touches. Cuts the image
+              # from ~450 MB to a fraction.
+              qemuRunner = pkgs.qemu_test;
+              # launch-iso boots the ISO under qemu and blocks until its
+              # sshd answers SSH-2.0 on the slirp-forwarded loopback
+              # port, then prints DAFT_ISO_SSH_READY (the sentinel the
+              # test waits on) and stays in the foreground so the
+              # host-side forward + SSH assertions have a live target.
+              # writeShellScriptBin (not writeShellApplication) on
+              # purpose: the readiness probe relies on commands that fail
+              # by design, so `set -e` must stay off.
+              launchIso = pkgs.writeShellScriptBin "launch-iso" ''
+                export PATH=${pkgs.coreutils}/bin:${qemuRunner}/bin:$PATH
+                ISO="''${1:?usage: launch-iso <iso-path> [hostport]}"
+                HOSTPORT="''${2:-2222}"
+                SER="''${QEMU_SERIAL_LOG:-/work/.tmp/qemu-serial.log}"
+                mkdir -p "$(dirname "$SER")"
+                : > "$SER"
+
+                qemu-system-x86_64 \
+                  -accel kvm -cpu host \
+                  -m "''${QEMU_MEM_MB:-1536}" -smp "''${QEMU_SMP:-2}" \
+                  -cdrom "$ISO" \
+                  -netdev "user,id=n,hostfwd=tcp:127.0.0.1:''${HOSTPORT}-:22" \
+                  -device virtio-net-pci,netdev=n \
+                  -display none -serial "file:$SER" &
+                QPID=$!
+                echo "daft-iso-qemu: launched qemu pid=$QPID iso=$ISO hostfwd=127.0.0.1:''${HOSTPORT}->:22"
+                trap 'kill -TERM "$QPID" 2>/dev/null' TERM INT
+
+                ready=
+                for i in $(seq 1 "''${QEMU_READY_TRIES:-180}"); do
+                  if ! kill -0 "$QPID" 2>/dev/null; then
+                    echo "daft-iso-qemu: FATAL qemu exited before sshd came up"
+                    echo "--- serial tail ---"; tail -n 40 "$SER" 2>/dev/null || true
+                    exit 1
+                  fi
+                  banner=$(exec 3<>"/dev/tcp/127.0.0.1/''${HOSTPORT}" 2>/dev/null && head -c 40 <&3 2>/dev/null)
+                  case "$banner" in
+                    SSH-2.0*)
+                      echo "daft-iso-qemu: sshd reachable: ''${banner%%$'\r'*}"
+                      echo "DAFT_ISO_SSH_READY"
+                      ready=1
+                      break
+                      ;;
+                  esac
+                  sleep 1
+                done
+                if [ -z "$ready" ]; then
+                  echo "daft-iso-qemu: FATAL sshd not reachable within timeout"
+                  echo "--- serial tail ---"; tail -n 40 "$SER" 2>/dev/null || true
+                  kill -9 "$QPID" 2>/dev/null
+                  exit 1
+                fi
+
+                wait "$QPID"
+              '';
+            in pkgs.dockerTools.buildLayeredImage {
+              name = "daft-iso-qemu-runner";
+              tag = "v1";
+              contents = [
+                pkgs.bashInteractive pkgs.coreutils pkgs.dash
+                launchIso qemuRunner
+              ];
+              config = {
+                Entrypoint = [
+                  "${pkgs.bashInteractive}/bin/bash" "-c"
+                  "echo daft-iso-qemu ready; exec ${pkgs.coreutils}/bin/sleep infinity"
+                ];
+                Env = [ "PATH=/bin" "HOME=/work" ];
+              };
+            };
+
+          # iso-ssh-fixture is the slice-1 proof payload for the
+          # ISO-nested-QEMU diversion (branch iso-nested-qemu): a
+          # deliberately tiny bootable NixOS ISO that starts sshd on
+          # boot. It stands in for a third-party "Linux + agent" ISO we
+          # cannot rebuild — the integration test boots it under QEMU
+          # *inside* a daft sandbox VM (nested KVM), forwards its sshd
+          # out, and asserts the SSH banner is reachable end-to-end.
+          # Pointing the mechanism at a real ISO is a one-line --source
+          # swap; this fixture exists only so the chain is CI-provable.
+          #
+          # Stripped to the bone (profiles/minimal.nix, no docs) so it
+          # builds quickly and stays far under the installer default.
+          # Serial console on ttyS0 so QEMU -nographic surfaces the boot.
+          iso-ssh-fixture =
+            (nixpkgs.lib.nixosSystem {
+              inherit system;
+              modules = [
+                ({ lib, modulesPath, ... }: {
+                  imports = [
+                    "${modulesPath}/installer/cd-dvd/iso-image.nix"
+                    "${modulesPath}/profiles/minimal.nix"
+                  ];
+
+                  isoImage.makeEfiBootable = true;
+                  isoImage.makeUsbBootable = true;
+                  # zstd: small output without a slow build.
+                  isoImage.squashfsCompression =
+                    "zstd -Xcompression-level 6";
+
+                  # sshd on boot with password auth so the test (and a
+                  # human) can reach it; this fixture is a throwaway.
+                  services.openssh.enable = true;
+                  services.openssh.settings = {
+                    PermitRootLogin = "yes";
+                    PasswordAuthentication = true;
+                  };
+                  users.users.root.password = "root";
+
+                  # Serial console for QEMU -nographic boot visibility.
+                  boot.kernelParams = [
+                    "console=ttyS0,115200n8"
+                    "console=tty0"
+                  ];
+
+                  # Shrink: drop docs + redistributable firmware blobs
+                  # the fixture never needs.
+                  documentation.enable = lib.mkForce false;
+                  documentation.nixos.enable = lib.mkForce false;
+                  hardware.enableRedistributableFirmware = lib.mkForce false;
+
+                  system.stateVersion = "24.11";
+                })
+              ];
+            }).config.system.build.isoImage;
         };
       });
 }

@@ -4759,6 +4759,64 @@ is the canonical opt-in.
   and `# CONFIG_WIRELESS is not set` was being overridden by `menuconfig
   WLAN`'s `default y` + `select WIRELESS`, so we now disable WLAN itself.
 
+## Diversion: booting untrusted ISOs via nested QEMU (2026-06-11)
+
+**This is a deliberate side-quest, off the main daft direction, on branch
+`iso-nested-qemu`.** It exists to test a third-party ISO (Linux + LocalAI +
+a minimal LLM agent) that we were handed and cannot rebuild: it starts sshd
+on boot and drops an SSH client straight into the agent's TUI, it cannot use
+vsock, and we need to reach it. Kept here so a future agent knows why these
+fixtures exist and how to drop them.
+
+**Design decision — nest, don't extend daft.** Booting the ISO *directly* as a
+daft VM fights daft's design on four fronts at once: (1) cloud-hypervisor can't
+boot an ISO (kernel+initramfs only, no firmware/cdrom path); (2) a daft VM has
+no TCP NIC — host↔guest is vsock-only, and the port-forward relay needs
+daft-agent running *in* the guest, which an untrusted ISO won't; (3) readiness
+is the daft-agent vsock banner, which the ISO never emits; (4) trace/attach/net
+all hang off the agent's vsock ports. Instead we boot the ISO as an **L2 payload
+under QEMU inside a normal daft VM**. The outer daft VM is unchanged (daft-agent
+over vsock, virtiofs, per-VM cgroups, /proc sampler — the real isolation
+boundary). QEMU boots the ISO the normal way (`-cdrom`, virtio-net, slirp
+user-mode NAT) with KVM accel from the existing `NestedVirtualization` grant's
+bound `/dev/kvm`. A slirp `hostfwd` turns the ISO's sshd into an ordinary TCP
+listener on the container loopback, so daft's **existing** port-forward reaches
+it from the host with zero new daft networking.
+
+**Slice 1 (landed) — proves the chain end to end:**
+- `flake.nix#iso-ssh-fixture` — a stripped bootable NixOS ISO (sshd, serial
+  console, ~0.5 GiB) standing in for the real ISO. Linux-only, like the rest of
+  the VM toolchain.
+- `flake.nix#iso-qemu-runner-image` — a headless `qemu_test` (no gtk/sdl/spice/
+  audio stack → 87 MiB) plus `launch-iso`, which boots the ISO, polls the
+  slirp-forwarded sshd until it speaks `SSH-2.0`, prints `DAFT_ISO_SSH_READY`,
+  and keeps QEMU in the foreground.
+- `internal/testdaemons/nested_iso_test.go#TestClusterNestedISOBoot` — boots the
+  outer daft VM with nested virt + the QEMU image, mounts the ISO read-only off
+  its store dir, runs `launch-iso`, then proves two layers: (1) the sentinel
+  (QEMU+KVM+slirp+guest-sshd up inside the container) and (2) a host-side
+  `daft workspace forward` reading the ISO's SSH banner back through the daft
+  port-forward path.
+- Makefile: `integration-build` builds both fixtures; `integration` exports
+  `DAFT_ISO_SSH_FIXTURE` + `DAFT_ISO_QEMU_IMAGE`.
+
+**Revert path:** everything is additive — two `flake.nix` package blocks, one
+Makefile var/build/env triple, one test file. No daft core code changed, so
+dropping the branch (or reverting the single commit) removes the diversion
+cleanly.
+
+**Pointing at the real ISO + open follow-ups:**
+- Swap the fixture for the real LocalAI ISO: one-line `--source` change on the
+  `/iso` mount (size up `--memory` / `QEMU_MEM_MB` for LocalAI's RAM needs).
+- The "SSH drops into the TUI" escape is ISO-specific, not a daft concern: if
+  it's an sshd `ForceCommand`, the client **cannot** override it — remaster the
+  ISO's `sshd_config` or boot it with `init=/bin/sh`. If it's only the login
+  shell, `ssh -t host /bin/sh` suffices. To *use* the agent, no escape is
+  needed — SSH in and you are in the TUI.
+- The test asserts the SSH banner (reachability). Authenticating + running a
+  command (password `root`/`root` on the fixture) would prove a fuller path but
+  only exercises the ISO's own sshd, not the novel daft chain.
+
 ## How to update this plan
 
 When you (human or agent) change direction, finish a milestone, or surface a
