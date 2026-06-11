@@ -6,6 +6,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http/httptest"
@@ -98,6 +99,68 @@ func TestClusterWorkspaceLaunchAgainstHelloBundle(t *testing.T) {
 	// testdaemons VM (it was dark before roadmap item #4). The dump-on-
 	// failure Cleanup surfaces the same file if this assertion fails.
 	waitForObserverSample(t, c.ObserverDir, 15*time.Second)
+
+	// And the single positive proof that per-VM cgroup limits work end to
+	// end: the observer samples the same per-VM cgroup applyVMCgroupLimits
+	// writes to, so a finite memory.max in the trace means the controllers
+	// were enabled (sandboxd self-wrapped into a private scope) and the hard
+	// cap was written. The fail-closed startup gate makes every other VM-
+	// booting e2e an implicit check that limits *could* be enforced; this is
+	// the one test that asserts they actually *were*.
+	requireCgroupLimitApplied(t, c.ObserverDir, 15*time.Second)
+}
+
+// requireCgroupLimitApplied polls the observer traces until some VM's
+// observer.jsonl carries a cgroup sample with a finite (positive) memory.max —
+// proof the per-VM cgroup's memory controller was enabled and the hard cap
+// was written. memory.max holds the literal "max" (encoded as -1) when no
+// limit is set and is absent (0) when the controller isn't enabled, so a
+// positive value is conclusive that limitsForConfig was applied.
+func requireCgroupLimitApplied(t *testing.T, observerDir string, timeout time.Duration) {
+	t.Helper()
+	type sampleLine struct {
+		Cgroup *struct {
+			Memory struct {
+				MaxBytes int64 `json:"max_bytes"`
+			} `json:"memory"`
+		} `json:"cgroup"`
+	}
+	deadline := time.Now().Add(timeout)
+	lastMax := int64(0)
+	sawCgroup := false
+	for {
+		var found bool
+		_ = filepath.WalkDir(observerDir, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || d.Name() != "observer.jsonl" {
+				return nil //nolint:nilerr // skip unreadable/irrelevant entries; keep walking.
+			}
+			b, rerr := os.ReadFile(path) //nolint:gosec // path is under the test's own TempDir.
+			if rerr != nil {
+				return nil //nolint:nilerr // a half-written file is retried on the next tick.
+			}
+			for _, line := range bytes.Split(b, []byte("\n")) {
+				var s sampleLine
+				if len(line) == 0 || json.Unmarshal(line, &s) != nil || s.Cgroup == nil {
+					continue
+				}
+				sawCgroup = true
+				lastMax = s.Cgroup.Memory.MaxBytes
+				if s.Cgroup.Memory.MaxBytes > 0 {
+					found = true
+				}
+			}
+			return nil
+		})
+		if found {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no per-VM cgroup hard memory limit in any observer.jsonl under %s after %s "+
+				"(sawCgroupSample=%v lastMemoryMax=%d; -1=unlimited, 0=controller off → limits not enforced)",
+				observerDir, timeout, sawCgroup, lastMax)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 }
 
 // waitForObserverSample polls observerDir until some VM's

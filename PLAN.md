@@ -2317,17 +2317,48 @@ the user-host or in CI today.
          pre-existing CH `--memory`/`--cpus` VM-boundary bound: the host cgroup
          is now a real blast-radius limiter, not just a meter.
 
-         *Posture — best-effort, NOT fatal* (diverges from the earlier strict
-         framing). The enable needs a PRIVATE scope; a SHARED one (a CI/test
-         harness, or a pre-delegated session where sibling processes keep the
-         scope non-empty) can't enable controllers. There we warn loudly on
-         stderr and boot WITHOUT limits rather than refuse to start — per-VM
-         cgroup *creation* stays the hard precondition (#102). In normal use
-         `daft-sandboxd serve` self-wraps into a private systemd-run scope (an
-         undelegated shell session), so limits apply; the integration harness
-         shares the `go test` scope, so it exercises the no-regression path,
-         not the limit values (those are covered by unit tests +
-         the 2026-06-07 manual cgroup probe).
+         *Posture — FAIL-CLOSED by default (updated 2026-06-11).* Limits are a
+         blast-radius cap, not an optimisation, so a host that can't enforce
+         them refuses to start (`cmd/daft-sandboxd` exits 1 when
+         `PrepareDelegatedSubtree` fails) rather than silently boot unprotected.
+         The conscious opt-out is `DAFT_DISABLE_CGROUP_LIMITS=1`, which degrades
+         the same failure to a warning. The enable needs a PRIVATE scope, which
+         every supported deployment already has: `daft-sandboxd` self-wraps via
+         `cgroupwrap.EnsureDelegated` into its own `systemd-run --scope` (an
+         undelegated shell session, a headless CI user with linger, or a
+         `Delegate=yes` unit), so the controller-enable here succeeds and the
+         fail-closed gate is satisfied without the flag. A failure means an
+         unusual SHARED scope (a pre-delegated session whose sibling processes
+         block `subtree_control`) where the operator must consciously opt out.
+
+         *e2e wiring — the two test packages need OPPOSITE cgroup setups, so
+         `make integration` runs them as two invocations (2026-06-11):*
+         `internal/testdaemons` spawns the real `daft-sandboxd` BINARY, which
+         self-wraps into a private scope → controllers enable → **limits
+         enforced**; it runs WITHOUT the outer `systemd-run` wrap. The cluster's
+         `startDaemon` (Setpgid + group-SIGTERM cleanup + Pdeathsig) survives
+         the extra systemd-run layer cleanly (verified: 4/4 runs, no leaked
+         procs/scopes/cgroups). `internal/sandbox` calls `sandbox.Hello`
+         IN-PROCESS, so the test process IS the host — it can't self-wrap
+         mid-run and shares its cgroup with the go-test runtime, so it can only
+         get cgroup *creation* (accounting), not controllers; it keeps the outer
+         `systemd-run --scope -p Delegate=yes` wrap. With fail-closed, every
+         VM-booting testdaemons e2e is an implicit check that limits *could* be
+         enforced; the single POSITIVE assertion that they actually *were* is
+         `requireCgroupLimitApplied` in `workspace_launch_test.go`, which reads
+         the per-VM cgroup's `memory.max` back from the host observer trace
+         (`observer.jsonl`, the same cgroup the limits are written to) and
+         asserts it is a finite hard cap (−1 = unlimited → fail).
+
+         *Nested (daft-in-daft) is the canonical opt-out consumer:* an inner
+         `daft-sandboxd` booted INSIDE an outer VM sits at its cgroup-v2 root
+         with no delegated subtree, so enabling controllers there returns EINVAL
+         and fail-closed would abort the inner boot. The nested-boot e2e
+         (`TestClusterNestedVMBoot`) therefore passes `DAFT_DISABLE_CGROUP_LIMITS=1`
+         to the inner sandboxd (alongside the existing `DAFT_DISABLE_USERNS=1`) —
+         a conscious opt-out, since the OUTER VM's per-VM cgroup already bounds
+         the whole nested stack's blast radius. Production daft-in-daft has the
+         same requirement: nest without per-VM limits, capped by the outer layer.
 
          *Still open under #103:* mapping devcontainer `hostRequirements`
          (cpus/memory/storage) onto the workspace resources that feed these
@@ -2355,9 +2386,11 @@ the user-host or in CI today.
            5. write `memory.max` / `pids.max` on the child → sticks (read
               back 512 MiB / 512). `io.max`, `io.weight` etc. all present.
          So ~10 lines in cgroupwrap/observability + having sandboxd remember
-         `R` — which is what landed (see the LANDED note above), except the
-         posture is best-effort, not fatal: the move+enable needs a PRIVATE
-         scope, and a shared one degrades loudly instead of aborting.
+         `R` — which is what landed (see the LANDED note above). The move+enable
+         needs a PRIVATE scope, which the cgroupwrap self-wrap always provides;
+         a SHARED scope (where it returns EBUSY) is now fail-closed, not a silent
+         degrade (see the FAIL-CLOSED posture above; `DAFT_DISABLE_CGROUP_LIMITS`
+         to override).
 
          *`memory.max` is a HARD limit* — on breach (after failed reclaim) the
          cgroup OOM-killer fires, which for a VM means SIGKILL to CH = abrupt

@@ -16,6 +16,12 @@ import (
 	"github.com/localai-org/darkaifactory/internal/userns"
 )
 
+// envDisableCgroupLimits, when set to "1", turns the fail-closed per-VM
+// cgroup-limit precondition into a warning so the host boots without enforced
+// limits. The conscious opt-out for an environment that can't enable the
+// controllers (e.g. a pre-delegated shared scope) — never the default.
+const envDisableCgroupLimits = "DAFT_DISABLE_CGROUP_LIMITS"
+
 //nolint:gochecknoglobals // test seams.
 var (
 	osExit       = os.Exit
@@ -52,14 +58,24 @@ func main() {
 	// it so per-VM cgroups can carry resource limits (and full accounting).
 	// This MUST run while a single process owns the scope — before the
 	// userns re-exec below forks a sibling into it — so it goes here,
-	// between the two re-execs. Best-effort, UNLIKE the delegation itself:
-	// a shared scope (a CI/test harness where sibling processes keep the
-	// scope non-empty) genuinely can't enable controllers, so we warn
-	// loudly and boot without per-VM limits rather than refuse to start.
-	// Per-VM cgroup CREATION stays a hard precondition downstream.
+	// between the two re-execs.
+	//
+	// Fail-closed: per-VM limits are a blast-radius cap, not an optimisation,
+	// so a host that can't enforce them refuses to start rather than silently
+	// boot unprotected. The cgroupwrap re-exec above already guarantees a
+	// PRIVATE delegated scope, so the controller-enable here succeeds in every
+	// supported deployment; a failure means an unusual environment (e.g. a
+	// pre-delegated SHARED scope whose sibling processes block subtree_control)
+	// where the operator must consciously opt out via DAFT_DISABLE_CGROUP_LIMITS.
 	vmParent, err := prepareCgroupSubtree()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "daft-sandboxd: per-VM cgroup limits disabled:", err)
+		if os.Getenv(envDisableCgroupLimits) != "1" {
+			fmt.Fprintln(os.Stderr, "daft-sandboxd: per-VM cgroup limits cannot be enforced:", err)
+			fmt.Fprintln(os.Stderr, "  set "+envDisableCgroupLimits+"=1 to boot without them (no per-VM blast-radius cap).")
+			osExit(1)
+			return
+		}
+		fmt.Fprintln(os.Stderr, "daft-sandboxd: per-VM cgroup limits disabled via "+envDisableCgroupLimits+":", err)
 	}
 	sandbox.SetVMCgroupParent(vmParent)
 

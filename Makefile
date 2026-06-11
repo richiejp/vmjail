@@ -313,23 +313,28 @@ integration: integration-build
 		delegate=""; \
 		if systemd-run --user --scope -p Delegate=yes --quiet -- true >/dev/null 2>&1; then \
 			delegate="systemd-run --user --scope -p Delegate=yes --quiet --"; \
-			echo "[e2e] cgroup delegation on — per-VM accounting cgroups enabled"; \
+			echo "[e2e] cgroup delegation on — sandbox pkg gets accounting; testdaemons sandboxd self-wraps for limits"; \
 		else \
-			echo "[e2e] cgroup delegation off — no delegated user scope; per-VM cgroups fall back to /proc"; \
+			echo "[e2e] cgroup delegation off — no --user scope: the sandbox in-process host and sandboxd's self-wrap both need one, so e2e will fail (enable-linger / run under a Delegate=yes unit)"; \
 		fi; \
-		DAFT_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT) \
-			DAFT_BUNDLE=$(CURDIR)/$(BUNDLE_OUT) \
-			DAFT_KERNEL=$(CURDIR)/$(NIX_KERNEL_OUT)/bzImage \
-			DAFT_CLOUD_HYPERVISOR=$(CURDIR)/$(NIX_CHV_OUT)/bin/cloud-hypervisor \
-			DAFT_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd \
-			DAFT_SANDBOXD_BUNDLED_BIN=$(CURDIR)/$(NIX_SANDBOXD_OUT)/bin/daft-sandboxd \
-			DAFT_NIX_IMAGE=$$(realpath $(NIX_IMAGE_OUT)) \
-			DAFT_BUILD_IMAGE=$$(realpath $(NIX_BUILD_IMAGE_OUT)) \
-			DAFT_NIX_TOOLING_IMAGE=$$(realpath $(NIX_TOOLING_IMAGE_OUT)) \
-			DAFT_CHECK_IMAGE=$$(realpath $(NIX_CHECK_IMAGE_OUT)) \
-			DAFT_CHECK_VENDOR=$$(realpath $(NIX_CHECK_VENDOR_OUT)) \
-			DAFT_NIX_FLAKE_FIXTURE=$$(realpath $(NIX_FLAKE_FIXTURE_OUT)) \
-			$$delegate go test -v -tags=integration -count=1 -timeout 20m ./internal/sandbox/ ./internal/testdaemons/; \
+		export DAFT_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT); \
+			export DAFT_BUNDLE=$(CURDIR)/$(BUNDLE_OUT); \
+			export DAFT_KERNEL=$(CURDIR)/$(NIX_KERNEL_OUT)/bzImage; \
+			export DAFT_CLOUD_HYPERVISOR=$(CURDIR)/$(NIX_CHV_OUT)/bin/cloud-hypervisor; \
+			export DAFT_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd; \
+			export DAFT_SANDBOXD_BUNDLED_BIN=$(CURDIR)/$(NIX_SANDBOXD_OUT)/bin/daft-sandboxd; \
+			export DAFT_NIX_IMAGE=$$(realpath $(NIX_IMAGE_OUT)); \
+			export DAFT_BUILD_IMAGE=$$(realpath $(NIX_BUILD_IMAGE_OUT)); \
+			export DAFT_NIX_TOOLING_IMAGE=$$(realpath $(NIX_TOOLING_IMAGE_OUT)); \
+			export DAFT_CHECK_IMAGE=$$(realpath $(NIX_CHECK_IMAGE_OUT)); \
+			export DAFT_CHECK_VENDOR=$$(realpath $(NIX_CHECK_VENDOR_OUT)); \
+			export DAFT_NIX_FLAKE_FIXTURE=$$(realpath $(NIX_FLAKE_FIXTURE_OUT)); \
+			rc=0; \
+			echo "[e2e] sandbox pkg — in-process host shares the delegated scope: per-VM accounting, limits off"; \
+			$$delegate go test -v -tags=integration -count=1 -timeout 20m ./internal/sandbox/ || rc=1; \
+			echo "[e2e] testdaemons pkg — daft-sandboxd self-wraps into a private scope: per-VM limits enforced (fail-closed)"; \
+			go test -v -tags=integration -count=1 -timeout 20m ./internal/testdaemons/ || rc=1; \
+			exit $$rc; \
 	)
 
 ## Git hooks -----------------------------------------------------------------

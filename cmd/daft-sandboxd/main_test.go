@@ -144,13 +144,12 @@ func TestMainExitsOnUsernsFailure(t *testing.T) {
 	}
 }
 
-// TestMainWarnsButContinuesOnSubtreeFailure pins the best-effort posture of
-// the controller-enable step (which backs the per-VM resource limits):
-// unlike the delegation wrap, a failure here (e.g. a shared scope) warns on
-// stderr but does NOT abort — per-VM cgroup creation, not limits, is the
-// hard precondition. It runs after the delegation wrap, before the userns
-// re-exec.
-func TestMainWarnsButContinuesOnSubtreeFailure(t *testing.T) {
+// TestMainFailsClosedOnSubtreeFailure pins the fail-closed posture of the
+// controller-enable step (which backs the per-VM resource limits): a failure
+// here (e.g. a pre-delegated shared scope that can't enable subtree_control)
+// aborts the boot rather than silently running without a blast-radius cap.
+// It runs after the delegation wrap, before the userns re-exec.
+func TestMainFailsClosedOnSubtreeFailure(t *testing.T) {
 	disableUsernsReexec(t)
 	disableCgroupReexec(t)
 	prev := prepareCgroupSubtree
@@ -158,11 +157,34 @@ func TestMainWarnsButContinuesOnSubtreeFailure(t *testing.T) {
 	t.Cleanup(func() { prepareCgroupSubtree = prev })
 
 	code, stderr := runMainCapturingStderr(t)
-	if code != 0 {
-		t.Errorf("osExit code = %d, want 0 (warn-and-continue)", code)
+	if code != 1 {
+		t.Errorf("osExit code = %d, want 1 (fail-closed)", code)
 	}
-	if !strings.Contains(stderr, "limits disabled: synthetic-subtree") {
-		t.Errorf("stderr = %q, want it to mention the disabled-limits warning", stderr)
+	if !strings.Contains(stderr, "cannot be enforced: synthetic-subtree") {
+		t.Errorf("stderr = %q, want it to report limits cannot be enforced", stderr)
+	}
+	if !strings.Contains(stderr, envDisableCgroupLimits) {
+		t.Errorf("stderr = %q, want it to name the opt-out env var", stderr)
+	}
+}
+
+// TestMainContinuesWhenCgroupLimitsDisabled pins the conscious opt-out: with
+// DAFT_DISABLE_CGROUP_LIMITS=1 the same controller-enable failure degrades to
+// a warning and the host boots without enforced limits, instead of aborting.
+func TestMainContinuesWhenCgroupLimitsDisabled(t *testing.T) {
+	disableUsernsReexec(t)
+	disableCgroupReexec(t)
+	t.Setenv(envDisableCgroupLimits, "1")
+	prev := prepareCgroupSubtree
+	prepareCgroupSubtree = func() (string, error) { return "", errors.New("synthetic-subtree") }
+	t.Cleanup(func() { prepareCgroupSubtree = prev })
+
+	code, stderr := runMainCapturingStderr(t)
+	if code != 0 {
+		t.Errorf("osExit code = %d, want 0 (opt-out warn-and-continue)", code)
+	}
+	if !strings.Contains(stderr, "limits disabled via "+envDisableCgroupLimits) {
+		t.Errorf("stderr = %q, want it to report the opt-out degrade", stderr)
 	}
 }
 

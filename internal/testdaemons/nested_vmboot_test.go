@@ -24,11 +24,15 @@ import (
 // control channel, and prints the agent banner from the L2 serial console.
 //
 // A passing run means the inner VMM stack (CH against the bound /dev/kvm,
-// virtiofsd over a UDS, the hybrid-vsock control channel, the per-VM cgroup)
-// all work inside the hardened container with only the NestedVirtualization
-// grant. A failure surfaces exactly which layer the nested run is missing
-// (cgroup delegation, an rlimit, a socket-path limit, …) — the whole point
-// of running it before investing in the full integration-image delivery.
+// virtiofsd over a UDS, the hybrid-vsock control channel) all work inside the
+// hardened container with only the NestedVirtualization grant. Per-VM cgroup
+// limits are the one layer the inner sandboxd consciously opts out of
+// (DAFT_DISABLE_CGROUP_LIMITS=1 below): a nested VM sits at its cgroup-v2 root
+// with no delegated subtree to enable controllers on, and the outer VM's
+// per-VM cgroup already caps the whole nested stack's blast radius. A failure
+// surfaces exactly which other layer the nested run is missing (an rlimit, a
+// socket-path limit, …) — the whole point of running it before investing in
+// the full integration-image delivery.
 //
 // Self-contained: no artefact delivery beyond the bundled binary, because
 // that binary embeds everything `sandbox.Hello` needs.
@@ -104,8 +108,13 @@ func TestClusterNestedVMBoot(t *testing.T) {
 			// DAFT_DISABLE_USERNS=1: the inner sandboxd already shares the
 			// container's userns, so skip its newuidmap self-wrap (no setuid
 			// helper exists inside the hardened image anyway).
+			// DAFT_DISABLE_CGROUP_LIMITS=1: a nested VM has no delegated cgroup
+			// subtree, so the inner sandboxd can't enable controllers (write
+			// +memory +cpu → EINVAL) and would otherwise trip the fail-closed
+			// per-VM-limit gate. It opts out consciously — the outer VM's
+			// per-VM cgroup already bounds the whole nested stack.
 			"exec env HOME=/work XDG_CACHE_HOME=/work/.cache TMPDIR=/work/.tmp "+
-			"DAFT_DISABLE_USERNS=1 "+
+			"DAFT_DISABLE_USERNS=1 DAFT_DISABLE_CGROUP_LIMITS=1 "+
 			"/work/daft-sandboxd hello")
 	// The agent banner from the L2 serial console is the proof the inner VM
 	// booted all the way to userspace.
