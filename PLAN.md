@@ -4297,6 +4297,19 @@ Open questions:
       executor lands in A4b without churning the wire path again.
       End-to-end tests cover delivery, handler error propagation,
       ErrSandboxNotConnected, and ErrDispatchBacklog.
+- [x] `daft cluster up` / `daft cluster down` — single-box control
+      plane. `up` mints + cross-approves the orchestrator, sandbox-host,
+      and client identities in one `--state` dir, spawns both daemons
+      detached (the sandbox-host must stay its own process for its
+      cgroup + userns re-exec), waits for the node to register, and
+      prints eval-able `DAFT_CLUSTER_*` lines (URL, client dir,
+      fingerprints); `down` tears the pair down via the pidfile. A dying
+      daemon (e.g. address in use) fails fast — readiness reaps the
+      child to tell a dead daemon from a foreign listener on the same
+      port. Core in `internal/localcluster` (reusable `WireIdentities` +
+      `Up`/`Down`); `internal/cli/cluster.go` is a thin wrapper. Collapses
+      the hand-rolled auth + daemon-startup boilerplate in
+      `scripts/dev-cluster.sh` and `scripts/boot-iso.sh` to one `eval`.
 
 ## Architecture
 

@@ -87,6 +87,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newPingCmd())
 	root.AddCommand(newImageCmd())
 	root.AddCommand(newWorkspaceCmd())
+	root.AddCommand(newClusterCmd())
 	root.AddCommand(newGlobalsCmd())
 	// Note: cobra auto-generates a `completion` sub-command for us; we don't
 	// need to register it explicitly. Keeping it auto-generated means it
