@@ -3,4 +3,28 @@
        ai
    fac    tory.▮
 
-Because the clankers produced slop, because they did not think, but instead produced tokens in order of plausibility, interpolating not creating, some came to decide that the clankers could not be used. Others thought that every line of code should be reviewed, every command checked. Then there were those that gave themselves over to the clankers in wild abandon, drowning their lives in a sloppy sprawl of minimally functional code that eventually imploded under its own weight; often right at the moment their clanker's API was reporting 503. Finally there were those that said "what if it can be constrained to only produce locally reversible errors?", shortly thereafter every CLI command got a TUI and GUI, every app got an API, CLI and TUI, every C program was rewritten in Rust and every Rust program rewritten in C... every homelab got it's own dashboard and job scheduler, every clanker addicted coder their own clanker...
+Because the clankers produced slop, because they did not think, but instead produced tokens in order of plausibility, interpolating not creating, some came to decide that the clankers could not be used. Others thought that every line of code should be reviewed, every command checked. Then there were those that gave themselves over to the clankers in wild abandon, drowning their lives in a sloppy sprawl of minimally functional code that eventually imploded under its own weight; often right at the moment their clanker's API was reporting 503. 
+
+Finally there were those that said "what if it can be constrained to only produce locally reversible errors?", shortly thereafter every CLI command got a TUI and GUI, every app got an API, CLI and TUI, every C program was rewritten in Rust and every Rust program rewritten in C... every homelab got it's own dashboard and job scheduler, every clanker addicted coder their own clanker... within months new operating systems began to emerge.
+
+A new class of coder emerged who was not really a coder at all, but instead a latent space cowboy, exploring the frontier of computation via the semantic graph encoded by LLMs and bounded by execution. Life imitated art and the Matrix began to take shape in earnest.
+
+                                 /////////----...----\\\\\\\\\
+
+Anyway enough of that, Darkaifactory is a sandbox based on Linux microvms that host a minimal Go based userland that launches containers. It is motivated from the observation that writing software is getting dangerous and opaque. In fact it has always been opaque to anyone except those who have a very strong grasp of system wide debugging and tracing tools. In modern Linux you have incredible power to instrument and trace every instruction, but realistically very few systems are configured for it and even less people know how to use these tools.
+
+The emergence of AI coding agents has made these tools easier to use in theory, but in practice the LLM doesn't choose to use them on its own and it needs privileged access to the kernel to activate them. Which brings me onto the point that software dev has now taken on a new level of risk.
+
+Basically a coding agent gives remote code execution to whatever machine it is running on with whatever privileges the user who started it has. Yes, if you are running a local LLM then it's technically not RCE, but conceptually you are still handing over control to something that may execute any code.
+
+This is not necessarily that dangerous if you are watching it like a hawk, but if you want to leave your coding agent running overnight then that is plenty of time for something to go badly wrong. In fact about 20 mins is enough time maybe less.
+
+Then there is the simple fact that AI powered supply chain attacks and vulnerabilities are increasing at a rapid pace. Presently this is more worrying than the agent trying to escape its sandbox.
+
+Meanwhile if you want your agent to be able to do something useful then it needs access to various resources. People then tend to run these agents as their login account. Meaning the agent has the same privilges as the user. The agent's own sandbox might remove some bits, but a lot is still there.
+
+So darkaifactory has an allow list of what the agent needs, including what network it can see, what env vars it gets and what files it has access to. These are lifted from the user's host which may be the same machine running the sandboxes or not.
+
+A basic assumption of darkaifactory is that the user works on a laptop where they run their text editor and office software. Meanwhile the agentic workloads run on separate workstations or servers inside sandboxes. The user doesn't execute the code being generated on their desktop machine unless they are building desktop software.
+
+The desktop machine is where the user manages their credentials and downloads code for browsing or signing off on commits. So darkaifactory has a mechanism to transfer workspaces from the user's machine to a sandbox and back again, somewhat like how Mutagen works.
