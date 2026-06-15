@@ -12,14 +12,19 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"sync"
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/go-containerregistry/pkg/crane"
+	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 
 	"github.com/localai-org/darkaifactory/internal/component"
 	"github.com/localai-org/darkaifactory/internal/genpb/health/v1/healthv1connect"
@@ -118,6 +123,26 @@ type Config struct {
 	ReconcilerMissThreshold int
 	ReconcilerSweepInterval time.Duration
 	ReconcilerNodeGrace     time.Duration
+
+	// RegistrySeeds are images loaded into the embedded OCI registry at
+	// construction, before the listener binds — so they are pullable the
+	// moment a node registers. The daft-orchestrator binary uses this to
+	// auto-seed its bundled build image (internal/buildimage) under
+	// ociregistry.BuiltinBuildRef(), so a build-based devcontainer needs no
+	// DAFT_BUILD_IMAGE_REF. Kept generic (an image + ref) so internal/
+	// orchestrator never imports the embed and stays testable with a tiny
+	// fake image.
+	RegistrySeeds []RegistrySeed
+}
+
+// RegistrySeed is an image to load into the embedded registry at startup.
+type RegistrySeed struct {
+	// Ref is the orchestrator-hosted ref to push under (e.g.
+	// ociregistry.BuiltinBuildRef()).
+	Ref string
+	// Image is the image to push. Lazy images are fine — the layers are
+	// read during the seed push.
+	Image v1.Image
 }
 
 // Server is the orchestrator's mTLS-gated control-plane listener.
@@ -225,7 +250,7 @@ func New(cfg Config) (*Server, error) {
 		}
 		return inner.Addr()
 	}
-	if err := registerServices(mux, interceptor, tracer, matcher, sandboxCtrl, workspaceCtrl, getRelayEndpoint); err != nil {
+	if err := registerServices(mux, interceptor, tracer, matcher, sandboxCtrl, workspaceCtrl, getRelayEndpoint, cfg.RegistrySeeds); err != nil {
 		return nil, err
 	}
 	handler := withPeerMiddleware(mux)
@@ -323,6 +348,7 @@ func registerServices(
 	sandboxCtrl *NodeControlHandler,
 	workspaceCtrl *WorkspaceCatalogHandler,
 	relayEndpointFn func() string,
+	registrySeeds []RegistrySeed,
 ) error {
 	healthPath, healthHandler := healthv1connect.NewHealthServiceHandler(
 		NewHealthHandler(), interceptor,
@@ -365,8 +391,68 @@ func registerServices(
 	// external registry. The /v2/ prefix never collides with the Connect
 	// service paths (all /daft.*.v1.*/...). The registry's request log is
 	// discarded to keep it off the orchestrator's stdout.
-	mux.Handle(OCIRegistryPathPrefix, registry.New(registry.Logger(log.New(io.Discard, "", 0))))
+	regHandler := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+	if err := seedRegistry(regHandler, registrySeeds); err != nil {
+		return err
+	}
+	mux.Handle(OCIRegistryPathPrefix, regHandler)
 	return nil
+}
+
+// seedRegistry loads each seed image into the embedded registry handler
+// before the listener binds, so the images are pullable the moment a node
+// registers. Used by the daft-orchestrator binary to auto-seed its bundled
+// build image.
+//
+// It serves the same handler instance on a throwaway loopback HTTP listener
+// and pushes over plain HTTP: the registry stores blobs/manifests keyed by
+// repository path (not host), so an image pushed as
+// 127.0.0.1:PORT/<repo>:<tag> is later served for the hosted
+// daft-registry.internal/<repo>:<tag> through the orchestrator's mTLS mux —
+// same handler, same in-memory store. (A direct in-process RoundTripper is
+// too lossy: the registry + go-containerregistry pusher rely on real upload
+// URL / Location-header resolution.)
+// seedListen is the listener factory seedRegistry uses, a test seam so the
+// listener-failure path is exercisable.
+//
+//nolint:gochecknoglobals // single test seam, mirrors buildDispatcher.
+var seedListen = net.Listen
+
+func seedRegistry(h http.Handler, seeds []RegistrySeed) error {
+	if len(seeds) == 0 {
+		return nil
+	}
+	ln, err := seedListen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("orchestrator: seed registry listener: %w", err)
+	}
+	srv := &http.Server{Handler: h, ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
+	host := ln.Addr().String()
+
+	for _, s := range seeds {
+		repoTag, err := hostedRepoTag(s.Ref)
+		if err != nil {
+			return err
+		}
+		// crane.Insecure → plain HTTP to the loopback listener.
+		if err := crane.Push(s.Image, host+"/"+repoTag, crane.Insecure); err != nil {
+			return fmt.Errorf("orchestrator: seed registry image %s: %w", s.Ref, err)
+		}
+	}
+	return nil
+}
+
+// hostedRepoTag strips a hosted ref's registry host, returning "<repo>:<tag>"
+// — the host-independent storage key the embedded registry uses, so a seed
+// pushed via loopback is served for the same repo under the sentinel host.
+func hostedRepoTag(ref string) (string, error) {
+	r, err := name.ParseReference(ref)
+	if err != nil {
+		return "", fmt.Errorf("orchestrator: parse seed ref %q: %w", ref, err)
+	}
+	return r.Context().RepositoryStr() + ":" + r.Identifier(), nil
 }
 
 // Tracer returns the orchestrator's Tracer. Callers can use it to

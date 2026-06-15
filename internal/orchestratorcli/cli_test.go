@@ -3,6 +3,7 @@ package orchestratorcli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -11,7 +12,11 @@ import (
 	"testing"
 	"time"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/google/go-containerregistry/pkg/v1/random"
+
 	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/ociregistry"
 	"github.com/localai-org/darkaifactory/internal/orchestrator"
 	"github.com/localai-org/darkaifactory/internal/version"
 )
@@ -284,4 +289,50 @@ func mustOpenStore(t *testing.T) *identity.PeerStore {
 		t.Fatalf("OpenPeerStore: %v", err)
 	}
 	return s
+}
+
+// TestBuiltinRegistrySeedsNotBundled covers the plain-`go build` path:
+// without the embedded build image (stub asset), the orchestrator seeds
+// nothing and a build-based devcontainer falls back to DAFT_BUILD_IMAGE_REF.
+func TestBuiltinRegistrySeedsNotBundled(t *testing.T) {
+	seeds, err := builtinRegistrySeeds()
+	if err != nil {
+		t.Fatalf("builtinRegistrySeeds: %v", err)
+	}
+	if seeds != nil {
+		t.Errorf("with the stub build image, expected nil seeds, got %v", seeds)
+	}
+}
+
+// TestRegistrySeeds covers the bundled (success + load-error) and
+// not-bundled branches of the seed builder via an injected loader.
+func TestRegistrySeeds(t *testing.T) {
+	t.Run("not bundled -> no seeds", func(t *testing.T) {
+		seeds, err := registrySeeds(false, func() (v1.Image, error) {
+			t.Fatal("loader must not be called when not bundled")
+			return nil, errors.New("unreachable")
+		})
+		if err != nil || seeds != nil {
+			t.Fatalf("registrySeeds(false) = %v, %v; want nil, nil", seeds, err)
+		}
+	})
+	t.Run("bundled -> one seed under the built-in ref", func(t *testing.T) {
+		img, err := random.Image(256, 1)
+		if err != nil {
+			t.Fatalf("random.Image: %v", err)
+		}
+		seeds, err := registrySeeds(true, func() (v1.Image, error) { return img, nil })
+		if err != nil {
+			t.Fatalf("registrySeeds(true): %v", err)
+		}
+		if len(seeds) != 1 || seeds[0].Ref != ociregistry.BuiltinBuildRef() || seeds[0].Image != img {
+			t.Fatalf("seeds = %+v, want one seed under %s", seeds, ociregistry.BuiltinBuildRef())
+		}
+	})
+	t.Run("bundled but load fails -> error", func(t *testing.T) {
+		wantErr := errors.New("boom")
+		if _, err := registrySeeds(true, func() (v1.Image, error) { return nil, wantErr }); err == nil {
+			t.Fatal("registrySeeds with a failing loader should error")
+		}
+	})
 }

@@ -41,6 +41,25 @@ func Ref(repo, tag string) string {
 	return Host + "/" + repo + ":" + tag
 }
 
+// BuiltinBuildRepo / BuiltinBuildTag name the built-in devcontainer build
+// image (the buildah-based image builder) in the orchestrator's embedded
+// registry. The orchestrator auto-seeds this ref from its bundled copy at
+// startup, and the sandbox-host defaults DAFT_BUILD_IMAGE_REF to it — so a
+// build-based devcontainer works with no env vars set. The tag is a fixed
+// sentinel (not the binary version) so the node and orchestrator agree on
+// the ref without sharing a version string.
+const (
+	BuiltinBuildRepo = "daft-builtin/build"
+	BuiltinBuildTag  = "bundled"
+)
+
+// BuiltinBuildRef is the orchestrator-hosted ref of the built-in build
+// image. Both the orchestrator (seeder) and the sandbox-host (default
+// DAFT_BUILD_IMAGE_REF) resolve to this single value.
+func BuiltinBuildRef() string {
+	return Ref(BuiltinBuildRepo, BuiltinBuildTag)
+}
+
 // IsHosted reports whether ref points at the orchestrator's embedded
 // registry (its registry component is Host). Used by the sandbox-host
 // puller to decide between the mTLS transport and the default keychain.
@@ -93,7 +112,27 @@ func Push(tarPath, repo, tag string, rt http.RoundTripper) (string, error) {
 // opener, because tarball images are lazy — the layers are read during
 // the later Push, so a temp file would have to outlive this call.
 func loadImage(tarPath string) (v1.Image, error) {
-	raw, err := readRawTar(tarPath)
+	in, err := os.Open(tarPath) //nolint:gosec // operator-supplied local image path.
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = in.Close() }()
+	img, err := ImageFromReader(in)
+	if err != nil {
+		return nil, fmt.Errorf("ociregistry: load image %s: %w", tarPath, err)
+	}
+	return img, nil
+}
+
+// ImageFromReader loads a docker/OCI image from r, which may be a raw or
+// gzipped tar (the Nix image outputs are .tar.gz; go-containerregistry's
+// tarball reader only reads raw tar). The raw tar is held in memory and
+// served through an opener, because tarball images are lazy — the layers
+// are read during the later Push, so a streaming reader would have to
+// outlive this call. Used to load embedded/bundled image bytes without a
+// temp file.
+func ImageFromReader(r io.Reader) (v1.Image, error) {
+	raw, err := readRawTar(r)
 	if err != nil {
 		return nil, err
 	}
@@ -101,27 +140,21 @@ func loadImage(tarPath string) (v1.Image, error) {
 		return io.NopCloser(bytes.NewReader(raw)), nil
 	}, nil)
 	if err != nil {
-		return nil, fmt.Errorf("ociregistry: load image %s: %w", tarPath, err)
+		return nil, fmt.Errorf("ociregistry: load image: %w", err)
 	}
 	return img, nil
 }
 
-// readRawTar returns the uncompressed tar bytes of tarPath, transparently
+// readRawTar returns the uncompressed tar bytes of r, transparently
 // gunzipping a gzipped input. It sniffs the gzip magic (1f 8b) via a
 // non-consuming Peek, so there is one linear read path either way.
-func readRawTar(tarPath string) ([]byte, error) {
-	in, err := os.Open(tarPath) //nolint:gosec // operator-supplied local image path.
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = in.Close() }()
-
-	br := bufio.NewReader(in)
+func readRawTar(r io.Reader) ([]byte, error) {
+	br := bufio.NewReader(r)
 	magic, _ := br.Peek(2) // short read (<2 bytes) → not gzip, fall through.
 	if len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
 		gz, err := gzip.NewReader(br)
 		if err != nil {
-			return nil, fmt.Errorf("ociregistry: decompress %s: %w", tarPath, err)
+			return nil, fmt.Errorf("ociregistry: decompress: %w", err)
 		}
 		defer func() { _ = gz.Close() }()
 		return io.ReadAll(gz) //nolint:gosec // trusted local image tarball.

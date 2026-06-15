@@ -51,7 +51,7 @@ func mustOpenStore(t *testing.T) *identity.PeerStore {
 	return s
 }
 
-func newTestPair(t *testing.T, approveClient, approveServer bool) *testPair {
+func newTestPair(t *testing.T, approveClient, approveServer bool, configMutators ...func(*Config)) *testPair {
 	t.Helper()
 	srvID := mustGenerate(t, identity.RoleOrchestrator)
 	cliID := mustGenerate(t, identity.RoleClient)
@@ -68,11 +68,15 @@ func newTestPair(t *testing.T, approveClient, approveServer bool) *testPair {
 		}
 	}
 
-	srv, err := New(Config{
+	cfg := Config{
 		Identity: srvID,
 		Peers:    srvStore,
 		Addr:     testListenAddr,
-	})
+	}
+	for _, m := range configMutators {
+		m(&cfg)
+	}
+	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

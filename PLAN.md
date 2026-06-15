@@ -2732,6 +2732,32 @@ the user-host or in CI today.
         sets `DAFT_BUILD_IMAGE_REF`; the builder image is pulled host-side
         from a loopback test registry, the base guest-side through the
         proxy. **The full #101 build-based devcontainer arc is closed.**
+    - **3d (Go side landed 2026-06-15, Nix build + e2e pending) —
+      `DAFT_BUILD_IMAGE_REF` optional via auto-seeded built-in builder.**
+      Removing the env-var requirement (the "daft runs without a long list
+      of env vars" goal): the orchestrator embeds the buildah build image
+      (new `internal/buildimage`, mirroring `internal/bundled`; stub asset +
+      flake `preBuild` staging on the `daft-orchestrator` derivation) and
+      auto-seeds it into its embedded registry at startup under
+      `ociregistry.BuiltinBuildRef()` (= `daft-builtin/build:bundled`). The
+      seam is a generic `orchestrator.Config.RegistrySeeds` (so the shared
+      `internal/orchestrator` never imports the 172 MB embed and stays
+      testable with a tiny fake); `internal/orchestratorcli` wires the
+      embedded image in. Seeding serves the same in-memory registry handler
+      on a throwaway loopback listener and pushes over plain HTTP — the
+      registry keys by repo path, not host, so a seed pushed as
+      `127.0.0.1:PORT/<repo>:<tag>` is served for the sentinel-host hosted
+      ref through the mTLS mux (an in-process RoundTripper proved too lossy
+      for go-containerregistry's upload-URL/Location resolution).
+      `daft-sandboxd` defaults `DAFT_BUILD_IMAGE_REF` to
+      `ociregistry.BuiltinBuildRef()` when unset *and* a hosted transport
+      exists (else empty — build path off, as before); the env var stays an
+      override. Only the Nix-built orchestrator embeds the real image (the
+      `daft` CLI and a plain `go build` embed the 0-byte stub → seed absent →
+      env fallback). `make check` green at baseline coverage. **Remaining:
+      verify the Nix `daft-orchestrator` build links the 172 MB embed, and
+      an e2e (needs a `WithBundledOrchestrator` harness) proving a
+      build-based devcontainer boots with no `DAFT_BUILD_IMAGE_REF` set.**
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **devcontainer features**.
 

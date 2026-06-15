@@ -69,13 +69,18 @@
         # accidental dynamic-link via a future cgo import. Lives in the
         # `let` rather than under `packages` because it is a function,
         # not a derivation (see goSrc note re: `nix flake check`).
+        # preBuild stages embedded assets into the source tree before the
+        # Go build (e.g. the orchestrator's bundled build image). Empty by
+        # default and omitted from the derivation when empty, so binaries
+        # that embed nothing keep their existing build hash.
         mkDaftBinary = {
           name,
           subPackage,
           description,
           cgoEnabled ? false,
           platforms ? pkgs.lib.platforms.unix,
-        }: pkgs.buildGoModule {
+          preBuild ? "",
+        }: pkgs.buildGoModule ({
           pname = name;
           inherit version;
           src = goSrc;
@@ -91,7 +96,7 @@
             license = licenses.mit;
             maintainers = [ ];
           };
-        };
+        } // pkgs.lib.optionalAttrs (preBuild != "") { inherit preBuild; });
       in
       {
         devShells.default =
@@ -230,10 +235,19 @@
           # a single Health.Ping endpoint to prove the trust path
           # works end-to-end; the registry handler, port forwarder,
           # and terminal stream join the same listener later.
+          # The orchestrator embeds the buildah build image (internal/
+          # buildimage) so it can auto-seed it into its in-memory registry at
+          # startup under ociregistry.BuiltinBuildRef() — a build-based
+          # devcontainer then needs no DAFT_BUILD_IMAGE_REF. preBuild stages
+          # the real tarball over the committed 0-byte stub (mirrors the
+          # daft-sandboxd VM-artefact staging below).
           daft-orchestrator = mkDaftBinary {
             name = "daft-orchestrator";
             subPackage = "cmd/daft-orchestrator";
             description = "darkaifactory orchestrator control-plane";
+            preBuild = ''
+              cp ${daft-build-image} internal/buildimage/assets/build-image.tar.gz
+            '';
           };
 
           # kconfig-verify is a build-time tool: it asserts that every

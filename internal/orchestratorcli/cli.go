@@ -18,8 +18,12 @@ import (
 
 	"github.com/spf13/cobra"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+
 	"github.com/localai-org/darkaifactory/internal/banner"
+	"github.com/localai-org/darkaifactory/internal/buildimage"
 	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/localai-org/darkaifactory/internal/ociregistry"
 	"github.com/localai-org/darkaifactory/internal/orchestrator"
 	"github.com/localai-org/darkaifactory/internal/version"
 )
@@ -36,6 +40,32 @@ const peersFile = "peers.json"
 // serveCmdName is the literal cobra command name used to register
 // and invoke the long-running listener.
 const serveCmdName = "serve"
+
+// builtinRegistrySeeds returns the images the orchestrator auto-seeds into
+// its embedded registry at startup. A Nix-built daft-orchestrator embeds
+// the buildah build image (internal/buildimage); we seed it under
+// ociregistry.BuiltinBuildRef() so a build-based devcontainer works with no
+// DAFT_BUILD_IMAGE_REF. A plain `go build` (stub asset) seeds nothing — the
+// build path then needs DAFT_BUILD_IMAGE_REF, the documented env fallback.
+func builtinRegistrySeeds() ([]orchestrator.RegistrySeed, error) {
+	return registrySeeds(buildimage.IsBundled(), buildimage.Image)
+}
+
+// registrySeeds is builtinRegistrySeeds with the embed source injected, so
+// tests can exercise the bundled (success + load-error) and not-bundled
+// branches without the embed being populated.
+func registrySeeds(bundled bool, load func() (v1.Image, error)) ([]orchestrator.RegistrySeed, error) {
+	if !bundled {
+		return nil, nil
+	}
+	img, err := load()
+	if err != nil {
+		return nil, fmt.Errorf("daft-orchestrator: load bundled build image: %w", err)
+	}
+	return []orchestrator.RegistrySeed{
+		{Ref: ociregistry.BuiltinBuildRef(), Image: img},
+	}, nil
+}
 
 // New builds the root cobra.Command. Stdin/stdout/stderr are passed
 // in for testability.
@@ -101,10 +131,15 @@ func serveCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			seeds, err := builtinRegistrySeeds()
+			if err != nil {
+				return err
+			}
 			srv, err := orchestrator.New(orchestrator.Config{
-				Identity: id,
-				Peers:    peers,
-				Addr:     addr,
+				Identity:      id,
+				Peers:         peers,
+				Addr:          addr,
+				RegistrySeeds: seeds,
 			})
 			if err != nil {
 				return err

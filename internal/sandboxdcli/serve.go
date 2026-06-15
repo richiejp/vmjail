@@ -314,17 +314,36 @@ var buildDispatcher = func(
 		MountMaterializer:  materializer,
 		MountBackingDir:    mountBackingDir,
 		ObserverDir:        observerDir,
-		BuildImageRef:      os.Getenv(envBuildImageRef),
+		BuildImageRef:      resolveBuildImageRef(hostedRT),
 		BuildPushTransport: hostedRT,
 	})
 }
 
 // envBuildImageRef names the orchestrator-hosted ref of the static image
-// builder VM (buildah + dash + a CA bundle). When set, a build-based
-// devcontainer is built in an ephemeral sandbox from this ref before the
-// workload boots (#101 slice 3c). Unset leaves in-sandbox builds off —
-// a build-based devcontainer then fails the dispatch loudly.
+// builder VM (buildah + dash + a CA bundle). A build-based devcontainer is
+// built in an ephemeral sandbox from this ref before the workload boots
+// (#101 slice 3c). It is OPTIONAL: unset, the node defaults to the
+// orchestrator's auto-seeded built-in builder (ociregistry.BuiltinBuildRef);
+// set it only to override with a custom builder image.
 const envBuildImageRef = "DAFT_BUILD_IMAGE_REF"
+
+// resolveBuildImageRef resolves the build image ref: the
+// DAFT_BUILD_IMAGE_REF override when set, else the orchestrator's
+// auto-seeded built-in builder. The built-in default is a hosted ref
+// (sentinel host) pulled over the same mTLS transport as any workspace
+// image, so it is only meaningful when that transport exists — without it
+// we leave the ref empty (build path off, as before) rather than hand
+// sandboxexec a hosted ref it can't reach. On a non-bundled orchestrator
+// the seed is simply absent and the pull fails loudly at build dispatch.
+func resolveBuildImageRef(hostedRT http.RoundTripper) string {
+	if ref := os.Getenv(envBuildImageRef); ref != "" {
+		return ref
+	}
+	if hostedRT == nil {
+		return ""
+	}
+	return ociregistry.BuiltinBuildRef()
+}
 
 // envObserveSummary gates the Tier-2 observe share (open-snoop gadget +
 // build-progress summary) on every image-backed dispatch. It is ON BY
