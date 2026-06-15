@@ -41,6 +41,6 @@ func BenchmarkConfigFromEnv(b *testing.B) {
 	b.Setenv(EnvMemory, "512M")
 	b.Setenv(EnvCPUs, "4")
 	for b.Loop() {
-		_, _ = ConfigFromEnv()
+		_, _ = ConfigFromEnv(true)
 	}
 }

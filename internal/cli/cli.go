@@ -162,7 +162,10 @@ func newSandboxHelloCmd() *cobra.Command {
 // cobra RunE so the env + vsock wiring is unit-testable without booting a
 // VM. The returned cleanup is always safe to call, even on error.
 func helloConfigFromEnv() (sandbox.Config, func(), error) {
-	cfg, err := sandbox.ConfigFromEnv()
+	// The `daft` CLI has no embedded artefacts (internal/bundled is
+	// linked into daft-sandboxd only), so hello must get them from the
+	// environment — require them.
+	cfg, err := sandbox.ConfigFromEnv(true)
 	if err != nil {
 		return sandbox.Config{}, func() {}, err
 	}

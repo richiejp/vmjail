@@ -328,14 +328,13 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 
 	var sbxScrub []string
 	if o.bundledSandboxd != "" {
-		// serve still calls ConfigFromEnv at startup, which demands the
-		// artefact vars be non-empty — but the bundled binary's Extract()
-		// returns the //go:embed'd artefacts and ignores them. Drop the
-		// real (Makefile-injected) paths and substitute bogus ones: the
-		// VM can boot only if extraction won; if embedding were broken,
-		// the env fallback would hit these invalid paths and fail.
+		// A bundled binary no longer requires the artefact env vars at
+		// startup (ConfigFromEnv(false)) — the //go:embed'd artefacts are
+		// the source of truth. Drop the real (Makefile-injected) paths
+		// entirely: the VM can boot only if extraction won. This mirrors
+		// the production `daft cluster up` scenario where no artefact env
+		// vars are exported at all.
 		sbxScrub = artefactEnvKeys
-		sbxEnv = append(sbxEnv, bogusArtefactEnv...)
 	}
 	startDaemon(t, sbxOut, sbxEnv, sbxScrub, sandboxdBin,
 		"serve", "--orchestrator", url, "--config-dir", sbxDir)
@@ -381,12 +380,13 @@ func WithEgressProxy() ClusterOption {
 
 // WithBundledSandboxd runs the real, //go:embed-bundled daft-sandboxd
 // at binPath (the `nix build .#daft-sandboxd` output) instead of the
-// locally go-built binary, with the artefact env vars pointed at bogus
-// paths. The bundled binary's Extract() returns the embedded artefacts
-// and ignores the env, so a VM boots only if extraction won — if the
-// embedding were broken, the env fallback would hit the bogus paths and
-// fail. This turns a normal cluster test into a proof of the production
-// embed path.
+// locally go-built binary, with the artefact env vars scrubbed from its
+// environment entirely. The bundled binary requires no artefact env
+// vars at startup and Extract()s the embedded artefacts, so a VM boots
+// only if extraction won — if the embedding were broken, dispatch would
+// fail with ErrNotBundled. This turns a normal cluster test into a proof
+// of the production embed path (and of the no-env-var startup that
+// `daft cluster up` relies on).
 func WithBundledSandboxd(binPath string) ClusterOption {
 	return func(o *clusterOpts) { o.bundledSandboxd = binPath }
 }
@@ -401,25 +401,12 @@ func WithBuildImage(ref string) ClusterOption {
 }
 
 // artefactEnvKeys are the sandbox-artefact env vars dropped from a
-// bundled sandboxd's inherited environment (then replaced by
-// bogusArtefactEnv). Kept in sync with the keys requireSandboxArtefacts
-// demands of the env path.
+// bundled sandboxd's inherited environment, so it boots purely from its
+// //go:embed'd artefacts — the production `daft cluster up` scenario.
 //
 //nolint:gochecknoglobals // immutable lookup list shared by the harness.
 var artefactEnvKeys = []string{
 	"DAFT_INITRAMFS", "DAFT_KERNEL", "DAFT_VIRTIOFSD", "DAFT_CLOUD_HYPERVISOR",
-}
-
-// bogusArtefactEnv gives the bundled sandboxd non-empty (so
-// ConfigFromEnv passes) but invalid artefact paths, so only the
-// embedded-extraction path can produce a bootable VM.
-//
-//nolint:gochecknoglobals // immutable fixture shared by the harness.
-var bogusArtefactEnv = []string{
-	"DAFT_CLOUD_HYPERVISOR=/nonexistent/daft-embed-test/cloud-hypervisor",
-	"DAFT_KERNEL=/nonexistent/daft-embed-test/bzImage",
-	"DAFT_INITRAMFS=/nonexistent/daft-embed-test/initramfs.cpio.gz",
-	"DAFT_VIRTIOFSD=/nonexistent/daft-embed-test/virtiofsd",
 }
 
 // binaries holds absolute paths to the freshly-built daft, daft-

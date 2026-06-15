@@ -22,14 +22,14 @@ import (
 // is otherwise never exercised end to end.
 //
 // WithBundledSandboxd runs the real bundled binary with the artefact
-// env vars pointed at bogus paths. serve still calls ConfigFromEnv at
-// startup (so the vars must be non-empty), but the bundled binary's
-// Extract() returns the embedded artefacts and ignores the env — so a
-// VM can boot only if extraction won; if embedding were broken, the env
-// fallback would hit the bogus paths and fail. A successful launch +
-// container banner is thus a direct proof of the embedded path. (The
-// workload still comes from the pushed hello image; only the VM-boot
-// artefacts are under test here.)
+// env vars scrubbed entirely. A bundled binary requires no artefact env
+// vars at startup; its Extract() returns the embedded artefacts — so a
+// VM can boot only if extraction won; if embedding were broken, dispatch
+// would fail with ErrNotBundled. A successful launch + container banner
+// is thus a direct proof of the embedded path and of the no-env-var
+// startup that `daft cluster up` relies on. (The workload still comes
+// from the pushed hello image; only the VM-boot artefacts are under test
+// here.)
 func TestClusterEmbeddedSandboxdBoot(t *testing.T) {
 	bundlePath := requireBundle(t)
 	sandboxdBin := requireBundledSandboxd(t)

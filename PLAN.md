@@ -4310,6 +4310,14 @@ Open questions:
       `Up`/`Down`); `internal/cli/cluster.go` is a thin wrapper. Collapses
       the hand-rolled auth + daemon-startup boilerplate in
       `scripts/dev-cluster.sh` and `scripts/boot-iso.sh` to one `eval`.
+      A **Nix/bundled** `daft-sandboxd` needs **no artefact env vars** to
+      start: `buildDispatcher` now calls `sandbox.ConfigFromEnv(false)`
+      when `bundled.IsBundled()`, so `DAFT_KERNEL` / `DAFT_INITRAMFS` /
+      `DAFT_CLOUD_HYPERVISOR` are required only on a plain `go build`
+      (stub-asset) fallback. The embedded assets are the source of truth
+      at dispatch; `daft cluster up` against an installed binary works
+      with nothing exported. `DAFT_BUNDLE` is `daft sandbox hello`-only
+      (the serve/cluster path never reads it).
 
 ## Architecture
 

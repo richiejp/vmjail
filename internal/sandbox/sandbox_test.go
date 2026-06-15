@@ -1094,7 +1094,7 @@ func TestVirtiofsdSidecarTimesOutWhenSocketNeverAppears(t *testing.T) {
 func TestConfigFromEnvReportsMissingVars(t *testing.T) {
 	clearVars(t)
 
-	_, err := ConfigFromEnv()
+	_, err := ConfigFromEnv(true)
 	if err == nil {
 		t.Fatal("ConfigFromEnv with no env returned nil, want error")
 	}
@@ -1102,6 +1102,32 @@ func TestConfigFromEnvReportsMissingVars(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q should mention %q", err.Error(), want)
 		}
+	}
+}
+
+// TestConfigFromEnvArtefactsOptionalWhenNotRequired covers the
+// bundled-binary path: with requireArtefacts=false the artefact paths
+// may all be empty without error, because the embedded assets are the
+// source of truth at dispatch. Any path that *is* set still flows
+// through as an override.
+func TestConfigFromEnvArtefactsOptionalWhenNotRequired(t *testing.T) {
+	clearVars(t)
+
+	cfg, err := ConfigFromEnv(false)
+	if err != nil {
+		t.Fatalf("ConfigFromEnv(false) with no env should not error: %v", err)
+	}
+	if cfg.CloudHypervisor != "" || cfg.Kernel != "" || cfg.Initramfs != "" {
+		t.Fatalf("Config = %+v, want empty artefact paths", cfg)
+	}
+
+	t.Setenv(EnvKernel, "/override/bzImage")
+	cfg, err = ConfigFromEnv(false)
+	if err != nil {
+		t.Fatalf("ConfigFromEnv(false): %v", err)
+	}
+	if cfg.Kernel != "/override/bzImage" {
+		t.Fatalf("Kernel = %q, want the env override to flow through", cfg.Kernel)
 	}
 }
 
@@ -1113,7 +1139,7 @@ func TestConfigFromEnvReturnsConfigWhenAllSet(t *testing.T) {
 	t.Setenv(EnvMemory, "512M")
 	t.Setenv(EnvCPUs, "2")
 
-	cfg, err := ConfigFromEnv()
+	cfg, err := ConfigFromEnv(true)
 	if err != nil {
 		t.Fatalf("ConfigFromEnv: %v", err)
 	}
@@ -1130,7 +1156,7 @@ func TestConfigFromEnvRejectsBadCPUs(t *testing.T) {
 	t.Setenv(EnvInitramfs, "/tmp/initrd")
 	t.Setenv(EnvCPUs, "not-a-number")
 
-	_, err := ConfigFromEnv()
+	_, err := ConfigFromEnv(true)
 	if err == nil {
 		t.Fatal("ConfigFromEnv with invalid DAFT_CPUS returned nil, want error")
 	}
@@ -1185,7 +1211,9 @@ func FuzzConfigFromEnv(f *testing.F) {
 		t.Setenv(EnvInitramfs, initramfs)
 		t.Setenv(EnvMemory, memory)
 		t.Setenv(EnvCPUs, cpus)
-		_, _ = ConfigFromEnv()
+		// Both branches must be panic-free regardless of input.
+		_, _ = ConfigFromEnv(true)
+		_, _ = ConfigFromEnv(false)
 	})
 }
 

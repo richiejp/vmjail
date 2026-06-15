@@ -269,7 +269,13 @@ var buildDispatcher = func(
 	mountBackingDir string,
 	hostedRT http.RoundTripper,
 ) (*sandboxexec.Executor, error) {
-	base, err := sandbox.ConfigFromEnv()
+	// A bundled binary (Nix build) carries the artefacts embedded, so
+	// the DAFT_KERNEL/INITRAMFS/CLOUD_HYPERVISOR paths are not required —
+	// they are read only as an override. A plain `go build` daft-sandboxd
+	// has stub assets and must fall back to env-supplied paths, so require
+	// them there. extractWithEnvFallback resolves the same precedence at
+	// dispatch (bundled assets win; env paths are the no-bundle fallback).
+	base, err := sandbox.ConfigFromEnv(!bundled.IsBundled())
 	if err != nil {
 		return nil, err
 	}
