@@ -2788,9 +2788,24 @@ the user-host or in CI today.
       Scoped to Debian/Ubuntu bases (the features scope). Verified:
       `buildScript` unit test asserts the wiring on/off; the egress-on
       seeded-build e2e still passes with the CA mount active (no regression
-      on the nix base). **Remaining: a RUN-TLS-through-proxy e2e against a
-      real Debian/Ubuntu base (needs an offline Ubuntu base fixture + a
-      system-trust-store TLS client) to prove the trust, not just no-harm.**
+      on the nix base).
+    - **3e-e2e (landed 2026-06-16) — RUN-TLS-through-proxy proof. PASS ~21s
+      against /dev/kvm.** `TestClusterWorkspaceDevcontainerBuildRunTLS`: a
+      build-based devcontainer whose `RUN` step does a *fully-verified*
+      (no `--insecure`) HTTPS GET through the default-deny egress proxy, and
+      succeeds — proving the proxy CA is trusted *inside the buildah RUN
+      container*, not merely available to the buildah process for the `FROM`
+      pull. The vehicle is `daft-http-fetch` (already in the nix base): with
+      no `--insecure` it uses Go's default TLS, whose system cert pool reads
+      `/etc/ssl/certs/ca-certificates.crt` first — exactly the overlay path.
+      This isolates the thing under test: buildah's `--http-proxy` (default
+      on) propagates only the proxy vars into `RUN`, NOT `SSL_CERT_FILE`, so
+      the only way the verified GET can succeed is the `buildScript` overlay.
+      The RUN writes the success line to `/tls-proof.txt` (baked into the
+      image) and the workload entrypoint cats it, so the waited-for
+      `daft-http-fetch ok status=200` is a positive proof, not just no-harm.
+      No Ubuntu fixture needed — the Go-system-store client on the nix base
+      faithfully exercises the Debian trust path. Closes 3e.
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **devcontainer features**.
 
