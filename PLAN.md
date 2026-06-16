@@ -2768,6 +2768,29 @@ the user-host or in CI today.
         pulls it over mTLS, the build VM pulls the base `FROM` through the
         default-deny egress proxy, runs a RUN baking a sentinel, and the
         workload boots printing it. **The auto-seeded-builder arc is closed.**
+    - **3e (landed 2026-06-16) — build RUN steps trust the egress proxy CA.**
+      With the default-deny egress proxy on, a build's `RUN` steps reach the
+      network only through the in-stack MITM proxy, so their TLS clients must
+      trust its CA. `applyEgressOpts` already gives the *buildah process* the
+      CA (so the `FROM` pull works via `SSL_CERT_FILE`), but `RUN` steps run
+      in the built image's rootfs with its own env/trust store. `buildScript`
+      now, when egress is active, adds to the `buildah build` invocation:
+      `--volume <proxyCA>:/etc/ssl/certs/ca-certificates.crt:ro` (ephemeral
+      mount over the Debian/Ubuntu system trust store — NOT baked into the
+      image, so a proxy-off workload isn't left with a dangling file-path CA
+      env that would hard-fail TLS; covers apt/curl/openssl/Go) plus
+      `--env NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt` (Node
+      ignores the system store; safe to persist — Node only warns, never
+      fails, on a missing file, and post-build that path is the base's real
+      bundle). This unblocks `RUN apt … / npm install / curl https://…`
+      through the hermetic proxy, so a build-based devcontainer (e.g. the
+      Claude-Code-on-Ubuntu workload) no longer needs `DAFT_EGRESS_PROXY=0`.
+      Scoped to Debian/Ubuntu bases (the features scope). Verified:
+      `buildScript` unit test asserts the wiring on/off; the egress-on
+      seeded-build e2e still passes with the CA mount active (no regression
+      on the nix base). **Remaining: a RUN-TLS-through-proxy e2e against a
+      real Debian/Ubuntu base (needs an offline Ubuntu base fixture + a
+      system-trust-store TLS client) to prove the trust, not just no-harm.**
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **devcontainer features**.
 

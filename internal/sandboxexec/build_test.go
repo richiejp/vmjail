@@ -140,7 +140,7 @@ func TestBuildScript(t *testing.T) {
 		dockerfile: defaultDockerfile,
 		args:       map[string]string{"B": "2", "A": "1"},
 		target:     "dev",
-	})
+	}, "")
 	want := "set -e\n" +
 		"export HOME=/tmp\n" +
 		"mkdir -p /tmp/cstore /tmp/crun\n" +
@@ -154,12 +154,35 @@ func TestBuildScript(t *testing.T) {
 	}
 
 	// No target, no args: those flags vanish entirely.
-	bare := buildScript(&devcontainerBuildPlan{dockerfile: "Containerfile"})
+	bare := buildScript(&devcontainerBuildPlan{dockerfile: "Containerfile"}, "")
 	if strings.Contains(bare, "--target") || strings.Contains(bare, "--build-arg") {
 		t.Errorf("bare script should carry no target/build-arg flags: %q", bare)
 	}
 	if !strings.Contains(bare, "-f 'Containerfile' .") {
 		t.Errorf("bare script missing -f Containerfile: %q", bare)
+	}
+	// Without an egress CA, no trust-store wiring leaks in.
+	if strings.Contains(bare, "--volume") || strings.Contains(bare, "NODE_EXTRA_CA_CERTS") {
+		t.Errorf("no-egress script should carry no CA wiring: %q", bare)
+	}
+}
+
+// TestBuildScriptEgressCA covers the default-deny-egress path: the proxy CA
+// is mounted over the system trust store for RUN steps (ephemeral) and
+// NODE_EXTRA_CA_CERTS points at it, so RUN-step TLS through the MITM proxy
+// is trusted without baking a brittle file-path CA env into the image.
+func TestBuildScriptEgressCA(t *testing.T) {
+	got := buildScript(&devcontainerBuildPlan{dockerfile: defaultDockerfile}, "/etc/daft-egress-ca.pem")
+	const sysBundle = "/etc/ssl/certs/ca-certificates.crt"
+	if !strings.Contains(got, "--volume '/etc/daft-egress-ca.pem:"+sysBundle+":ro'") {
+		t.Errorf("egress script missing CA volume mount: %q", got)
+	}
+	if !strings.Contains(got, "--env NODE_EXTRA_CA_CERTS="+sysBundle) {
+		t.Errorf("egress script missing NODE_EXTRA_CA_CERTS: %q", got)
+	}
+	// The CA wiring must precede the positional context/dockerfile args.
+	if strings.Index(got, "--volume") > strings.Index(got, "-f ") {
+		t.Errorf("CA volume must come before -f: %q", got)
 	}
 }
 

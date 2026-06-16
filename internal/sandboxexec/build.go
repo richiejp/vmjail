@@ -135,7 +135,7 @@ func withinRoot(root, path string) bool {
 // RunToCompletion waits on (BOOT_COMPLETE) — and the final `sync` flushes
 // the tarball through virtiofs before that exit. vfs storage on the
 // RAM-backed /tmp keeps the read-only rootfs untouched.
-func buildScript(plan *devcontainerBuildPlan) string {
+func buildScript(plan *devcontainerBuildPlan, egressCAPath string) string {
 	var b strings.Builder
 	b.WriteString("set -e\n")
 	b.WriteString("export HOME=/tmp\n")
@@ -143,6 +143,25 @@ func buildScript(plan *devcontainerBuildPlan) string {
 	b.WriteString("cd " + shQuote(buildContextMount) + "\n")
 	b.WriteString("buildah --root /tmp/cstore --runroot /tmp/crun build")
 	b.WriteString(" --isolation chroot --storage-driver vfs")
+	if egressCAPath != "" {
+		// Default-deny egress means RUN steps reach the network only through
+		// the in-stack MITM proxy, so their TLS clients must trust its CA.
+		// buildah already trusts it for the FROM pull (SSL_CERT_FILE on the
+		// buildah process), but RUN steps run in the built image's rootfs
+		// with its own env, so wire the CA in two ways:
+		//   - mount it over the Debian/Ubuntu system trust store for the RUN
+		//     duration (ephemeral, NOT baked into the image — a persisted
+		//     file-path CA env would hard-fail TLS in a proxy-off workload).
+		//     Covers apt / curl / openssl / Go (they read the system store).
+		//   - Node ignores the system store, so point NODE_EXTRA_CA_CERTS at
+		//     the same path. Safe to persist: Node only warns (never fails)
+		//     when the file is absent, and post-build that path is the base
+		//     image's real bundle. Scoped to Debian/Ubuntu bases (the
+		//     devcontainer-features scope).
+		const systemCABundle = "/etc/ssl/certs/ca-certificates.crt"
+		b.WriteString(" --volume " + shQuote(egressCAPath+":"+systemCABundle+":ro"))
+		b.WriteString(" --env NODE_EXTRA_CA_CERTS=" + systemCABundle)
+	}
 	if plan.target != "" {
 		b.WriteString(" --target " + shQuote(plan.target))
 	}
@@ -197,8 +216,16 @@ func (e *Executor) buildDevcontainerImage(ctx context.Context, uid string, spec 
 		}
 	}()
 
+	// When the egress proxy is active, applyEgressOpts below writes its CA
+	// into the build container at egressCAGuestPath and routes egress through
+	// the proxy; tell buildScript so its RUN steps trust the CA too. Gated on
+	// the same egressActive() as applyEgressOpts so the two never disagree.
+	egressCA := ""
+	if e.egressActive() {
+		egressCA = egressCAGuestPath
+	}
 	opts := sandboxboot.BootOptions{
-		Args: []string{"/bin/dash", "-c", buildScript(plan)},
+		Args: []string{"/bin/dash", "-c", buildScript(plan, egressCA)},
 		Mounts: []sandboxboot.Mount{
 			{Target: buildContextMount, Source: plan.contextDir, ReadOnly: true},
 			{Target: buildOutMount, Source: outDir},
