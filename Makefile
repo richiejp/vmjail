@@ -223,6 +223,9 @@ NIX_UROOT_OUT     := $(BIN_DIR)/u-root
 NIX_UROOT_SRC_OUT := $(BIN_DIR)/u-root-src
 # Real (//go:embed-bundled) daft-sandboxd, for the embedded-boot test.
 NIX_SANDBOXD_OUT  := $(BIN_DIR)/daft-sandboxd-bundled
+# Real (//go:embed-bundled build image) daft-orchestrator, for the
+# auto-seeded-builder devcontainer-build test.
+NIX_ORCH_OUT      := $(BIN_DIR)/daft-orchestrator-bundled
 # iso-nested-qemu diversion fixtures (branch iso-nested-qemu): a tiny
 # bootable-with-sshd NixOS ISO + a headless-qemu launcher image. Consumed
 # by TestClusterNestedISOBoot, which boots the ISO as a nested L2 VM under
@@ -295,6 +298,7 @@ integration-build: dev
 	@nix build .#daft.goModules     -o $(NIX_CHECK_VENDOR_OUT)
 	@nix build .#d6c1-flake-fixture -o $(NIX_FLAKE_FIXTURE_OUT)
 	@nix build .#daft-sandboxd      -o $(NIX_SANDBOXD_OUT)
+	@nix build .#daft-orchestrator  -o $(NIX_ORCH_OUT)
 	@nix build .#iso-ssh-fixture       -o $(NIX_ISO_FIXTURE_OUT)
 	@nix build .#iso-qemu-runner-image -o $(NIX_ISO_QEMU_IMAGE_OUT)
 
@@ -331,6 +335,7 @@ integration: integration-build
 			export DAFT_CLOUD_HYPERVISOR=$(CURDIR)/$(NIX_CHV_OUT)/bin/cloud-hypervisor; \
 			export DAFT_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd; \
 			export DAFT_SANDBOXD_BUNDLED_BIN=$(CURDIR)/$(NIX_SANDBOXD_OUT)/bin/daft-sandboxd; \
+			export DAFT_ORCH_BUNDLED_BIN=$(CURDIR)/$(NIX_ORCH_OUT)/bin/daft-orchestrator; \
 			export DAFT_NIX_IMAGE=$$(realpath $(NIX_IMAGE_OUT)); \
 			export DAFT_BUILD_IMAGE=$$(realpath $(NIX_BUILD_IMAGE_OUT)); \
 			export DAFT_NIX_TOOLING_IMAGE=$$(realpath $(NIX_TOOLING_IMAGE_OUT)); \

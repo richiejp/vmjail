@@ -287,9 +287,17 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	orchOut := newOutputCapture(t, "daft-orchestrator")
 	sbxOut := newOutputCapture(t, "daft-sandboxd")
 
-	startDaemon(t, orchOut, nil, nil, bins.orchestrator,
+	orchestratorBin := bins.orchestrator
+	orchReady := daemonReadyTimeout
+	if o.bundledOrchestrator != "" {
+		orchestratorBin = o.bundledOrchestrator
+		// The bundled binary seeds its embedded build image (hundreds of
+		// MiB) into the registry before it listens, so give startup room.
+		orchReady = 60 * time.Second
+	}
+	startDaemon(t, orchOut, nil, nil, orchestratorBin,
 		"serve", "--addr", addr, "--config-dir", orchDir)
-	waitForTCP(t, addr, daemonReadyTimeout)
+	waitForTCP(t, addr, orchReady)
 
 	// When the egress proxy is requested, enable the in-stack proxy via
 	// sandboxd's env: sandboxd builds the proxy (and its CA) in-process
@@ -364,6 +372,11 @@ type clusterOpts struct {
 	// of the locally go-built one AND scrubs the artefact env vars from
 	// its environment, forcing it onto the //go:embed-bundled artefacts.
 	bundledSandboxd string
+	// bundledOrchestrator, when set, runs that daft-orchestrator binary
+	// instead of the locally go-built one. The Nix-built binary embeds the
+	// build image and auto-seeds it into its registry at startup, so a
+	// build-based devcontainer needs no DAFT_BUILD_IMAGE_REF.
+	bundledOrchestrator string
 	// buildImageRef, when set, is exported as DAFT_BUILD_IMAGE_REF so the
 	// node can build a build-based devcontainer in an ephemeral sandbox.
 	buildImageRef string
@@ -389,6 +402,17 @@ func WithEgressProxy() ClusterOption {
 // `daft cluster up` relies on).
 func WithBundledSandboxd(binPath string) ClusterOption {
 	return func(o *clusterOpts) { o.bundledSandboxd = binPath }
+}
+
+// WithBundledOrchestrator runs the real, //go:embed-bundled
+// daft-orchestrator at binPath (the `nix build .#daft-orchestrator`
+// output) instead of the locally go-built binary. The bundled binary
+// embeds the buildah build image and auto-seeds it into its registry at
+// startup under ociregistry.BuiltinBuildRef(), so a build-based
+// devcontainer boots with no DAFT_BUILD_IMAGE_REF set — the proof that
+// the auto-seeded builder path works end to end.
+func WithBundledOrchestrator(binPath string) ClusterOption {
+	return func(o *clusterOpts) { o.bundledOrchestrator = binPath }
 }
 
 // WithBuildImage configures the node with the static image-builder ref so a

@@ -2732,7 +2732,7 @@ the user-host or in CI today.
         sets `DAFT_BUILD_IMAGE_REF`; the builder image is pulled host-side
         from a loopback test registry, the base guest-side through the
         proxy. **The full #101 build-based devcontainer arc is closed.**
-    - **3d (Go side landed 2026-06-15, Nix build + e2e pending) —
+    - **3d (landed 2026-06-15/16) —
       `DAFT_BUILD_IMAGE_REF` optional via auto-seeded built-in builder.**
       Removing the env-var requirement (the "daft runs without a long list
       of env vars" goal): the orchestrator embeds the buildah build image
@@ -2754,10 +2754,20 @@ the user-host or in CI today.
       exists (else empty — build path off, as before); the env var stays an
       override. Only the Nix-built orchestrator embeds the real image (the
       `daft` CLI and a plain `go build` embed the 0-byte stub → seed absent →
-      env fallback). `make check` green at baseline coverage. **Remaining:
-      verify the Nix `daft-orchestrator` build links the 172 MB embed, and
-      an e2e (needs a `WithBundledOrchestrator` harness) proving a
-      build-based devcontainer boots with no `DAFT_BUILD_IMAGE_REF` set.**
+      env fallback). `make check` green at baseline coverage; `nix build
+      .#daft-orchestrator` links the embed (186 MB binary, was ~30 MB); the
+      bundled binary seeds the real 172 MB image at startup and listens.
+      Landed as commit 86b83b5.
+      - **3d-e2e (landed 2026-06-16) — PASS ~17s against /dev/kvm.**
+        `TestClusterWorkspaceDevcontainerBuildSeededBuilder` (new
+        `testdaemons.WithBundledOrchestrator`, mirroring `WithBundledSandboxd`;
+        `make integration` builds `.#daft-orchestrator` → `DAFT_ORCH_BUNDLED_BIN`):
+        a build-based devcontainer builds and boots with **no
+        `DAFT_BUILD_IMAGE_REF`** — the bundled orchestrator auto-seeds the
+        builder, the node defaults to `ociregistry.BuiltinBuildRef()` and
+        pulls it over mTLS, the build VM pulls the base `FROM` through the
+        default-deny egress proxy, runs a RUN baking a sentinel, and the
+        workload boots printing it. **The auto-seeded-builder arc is closed.**
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **devcontainer features**.
 
