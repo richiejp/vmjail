@@ -2830,6 +2830,13 @@ the user-host or in CI today.
         tunnel is the existing `forward` machinery, factored into
         `forwardOnePort` and fanned out one-per-port over a shared client.
         Re-running `up` tolerates an already-dispatched workspace.
+      Verified: unit tests for the overlay normalise, GuestConfig
+      projection, the agent runner, the `up` launch/forward/resolve paths;
+      and an e2e (`TestClusterWorkspaceDevcontainerPostStart`, PASS ~20s
+      against /dev/kvm) proving a build-based devcontainer's
+      `postStartCommand` runs in-container after start (the `post-start:`-
+      prefixed sentinel surfaces on sandboxd stdout). The `up` forward
+      fan-out is unit-covered (the underlying tunnel has its own e2e).
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **devcontainer features**.
 
