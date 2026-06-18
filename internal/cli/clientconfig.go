@@ -67,6 +67,14 @@ type fileConfig struct {
 	Orchestrator string         `json:"orchestrator,omitempty"`
 	Name         string         `json:"name,omitempty"`
 	Mounts       []mountMapping `json:"mounts,omitempty"`
+	// Devcontainer is the absolute HOST path of the devcontainer.json the
+	// `daft workspace devcontainer` command recorded (resolved against the
+	// cwd at that time). `daft workspace up` reads it to learn the
+	// forwardPorts to auto-open — the orchestrator resolves the
+	// devcontainer node-side and never reports the ports back, so the
+	// client re-parses the file locally. Dir-local only (meaningless in the
+	// global scope); not a get/set key.
+	Devcontainer string `json:"devcontainer,omitempty"`
 }
 
 // get returns the value for key and whether key is a known field.
@@ -252,6 +260,33 @@ func resolveWorkspaceNameSource() (string, configSource, error) {
 func resolveWorkspaceNameDefault() (string, error) {
 	v, _, err := resolveWorkspaceNameSource()
 	return v, err
+}
+
+// setDirLocalDevcontainer records (or, with an empty hostPath, clears) the
+// absolute host path of the workspace's devcontainer.json in
+// ./.daft/config.json, so `daft workspace up` can re-parse it for the
+// forwardPorts to auto-open.
+func setDirLocalDevcontainer(hostPath string) error {
+	path, err := dirLocalConfigPath()
+	if err != nil {
+		return err
+	}
+	c, err := loadFileConfig(path)
+	if err != nil {
+		return err
+	}
+	c.Devcontainer = hostPath
+	return saveFileConfig(path, c)
+}
+
+// dirLocalDevcontainer returns the recorded devcontainer.json host path
+// (empty when none).
+func dirLocalDevcontainer() (string, error) {
+	c, err := loadDirLocalConfig()
+	if err != nil {
+		return "", err
+	}
+	return c.Devcontainer, nil
 }
 
 // dirLocalMounts returns the mount mappings recorded in

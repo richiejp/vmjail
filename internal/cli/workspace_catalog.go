@@ -386,6 +386,12 @@ func newWorkspaceDevcontainerCmd() *cobra.Command {
 			if len(args) > 0 {
 				path = args[0]
 			}
+			// Record the devcontainer.json's host path dir-local so
+			// `daft workspace up` can re-parse it for forwardPorts (the
+			// orchestrator resolves it node-side and never reports the
+			// ports back). Best-effort: a dir-local write failure must not
+			// block setting the path on the orchestrator.
+			rememberDevcontainerPath(cmd.ErrOrStderr(), path)
 			return runCatalogCmd(cmd, opts, devcontainerSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.SetDevcontainer(ctx, connect.NewRequest(

@@ -248,13 +248,21 @@ func TestWorkspacePushPullRoundTrip(t *testing.T) {
 // A nil ws + non-nil err makes Get fail; otherwise it returns ws.
 type fakeCatalog struct {
 	workspacev1connect.UnimplementedWorkspaceCatalogServiceHandler
-	ws  *workspacev1.Workspace
-	err error
+	ws        *workspacev1.Workspace
+	err       error
+	launchErr error
 }
 
 func (f *fakeCatalog) Get(_ context.Context, _ *connect.Request[workspacev1.GetWorkspaceRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error) {
 	if f.err != nil {
 		return nil, f.err
+	}
+	return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: f.ws}), nil
+}
+
+func (f *fakeCatalog) Launch(_ context.Context, _ *connect.Request[workspacev1.LaunchRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	if f.launchErr != nil {
+		return nil, f.launchErr
 	}
 	return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: f.ws}), nil
 }
@@ -269,10 +277,6 @@ func fakeCatalogClient(t *testing.T, f *fakeCatalog) workspacev1connect.Workspac
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return workspacev1connect.NewWorkspaceCatalogServiceClient(srv.Client(), srv.URL)
-}
-
-func handleByName(name string) *workspacev1.WorkspaceHandle {
-	return &workspacev1.WorkspaceHandle{Handle: &workspacev1.WorkspaceHandle_Name{Name: name}}
 }
 
 // TestResolveSyncTargetGetError covers the Get-RPC error branch.

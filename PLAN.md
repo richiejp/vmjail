@@ -2806,6 +2806,30 @@ the user-host or in CI today.
       `daft-http-fetch ok status=200` is a positive proof, not just no-harm.
       No Ubuntu fixture needed — the Go-system-store client on the nix base
       faithfully exercises the Debian trust path. Closes 3e.
+    - **3f (landed 2026-06-16) — forwardPorts auto-open + postStartCommand.**
+      Two devcontainer fields that were parsed but unused are now honoured:
+      - **postStartCommand** runs in the container after it starts, every
+        boot (devcontainer semantics). Resolved node-side at dispatch
+        (`resolveDevcontainerOverlay` now returns a `devcontainerResolution`
+        struct carrying the normalised argv lists — shell-form →
+        `["/bin/sh","-c",s]`), threaded `BootOptions →
+        sandbox.Config.PostStartCommands → GuestConfig.post_start_commands`
+        (new proto field). The in-VM agent's `startPostStart`
+        (spawn-and-return, after `startAttachListener`) waits for the
+        container to reach crun `running`, then crun-execs each command via
+        the existing attach exec primitive (TTY off), streaming output under
+        `post-start: `. Non-zero/​start-error is logged, never fatal. No
+        `SandboxSpec` field — the devcontainer resolves node-side after the
+        spec is published, so postStart routes straight into the boot config.
+      - **`daft workspace up`** = launch + auto-open every forwardPort +
+        block (mirrors `docker compose up`). The client learns the ports by
+        re-parsing the devcontainer.json itself — the orchestrator resolves
+        forwardPorts node-side and never reports them back — so
+        `daft workspace devcontainer` now records the file's host path
+        dir-local (`fileConfig.Devcontainer`) for `up` to read. The per-port
+        tunnel is the existing `forward` machinery, factored into
+        `forwardOnePort` and fanned out one-per-port over a shared client.
+        Re-running `up` tolerates an already-dispatched workspace.
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **devcontainer features**.
 

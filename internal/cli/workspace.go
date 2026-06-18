@@ -58,6 +58,7 @@ func newWorkspaceCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newWorkspaceDebugCmd())
 	cmd.AddCommand(newWorkspaceForwardCmd())
+	cmd.AddCommand(newWorkspaceUpCmd())
 	cmd.AddCommand(newWorkspaceExecCmd())
 	for _, sub := range newWorkspaceConfigCmds() {
 		cmd.AddCommand(sub)

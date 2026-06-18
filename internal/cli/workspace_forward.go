@@ -182,6 +182,20 @@ func runWorkspaceForwardWith(
 	if err != nil {
 		return err
 	}
+	return forwardOnePort(ctx, stdout, client, opts, deps)
+}
+
+// forwardOnePort opens the local listener for opts.localPort and tunnels
+// every accepted connection into opts.workspace's container at
+// opts.containerPort, blocking until ctx is cancelled (the listener-close
+// watchdog races Accept). The orchestrator client is passed in so a caller
+// forwarding several ports (daft workspace up) dials once and runs one of
+// these per port concurrently.
+func forwardOnePort(
+	ctx context.Context, stdout io.Writer,
+	client workspacev1connect.WorkspaceCatalogServiceClient,
+	opts workspaceForwardOpts, deps forwardDeps,
+) error {
 	addr := fmt.Sprintf("%s:%d", opts.bind, opts.localPort)
 	ln, err := deps.listenLocal(addr)
 	if err != nil {
