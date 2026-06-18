@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -190,6 +191,7 @@ func TestBuildGuestConfigProjectsConfig(t *testing.T) {
 	cfg.Bundle = "/b"
 	cfg.Shares = []*ShareConfig{{Tag: "t", Mountpoint: "/m", Overlay: true}}
 	cfg.PortForwards = []PortForward{{VsockPort: 10001, ContainerPort: 8080}}
+	cfg.PostStartCommands = [][]string{{"/bin/sh", "-c", "bun run dev"}, nil, {"echo", "hi"}}
 	cfg.OpensnoopLogPath = "/run/daft/observe/opensnoop.log"
 	cfg.ObserveSummaryPath = "/run/daft/observe/progress.json"
 	gc := buildGuestConfig(cfg)
@@ -201,6 +203,12 @@ func TestBuildGuestConfigProjectsConfig(t *testing.T) {
 	}
 	if pfs := gc.GetPortForwards(); len(pfs) != 1 || pfs[0].GetVsockPort() != 10001 || pfs[0].GetContainerPort() != 8080 {
 		t.Errorf("port_forwards = %v, want one 10001->8080", pfs)
+	}
+	// Empty argv entries are dropped; the rest project in order.
+	if pscs := gc.GetPostStartCommands(); len(pscs) != 2 ||
+		strings.Join(pscs[0].GetArgv(), " ") != "/bin/sh -c bun run dev" ||
+		strings.Join(pscs[1].GetArgv(), " ") != "echo hi" {
+		t.Errorf("post_start_commands = %v, want [sh -c 'bun run dev', echo hi]", gc.GetPostStartCommands())
 	}
 	obs := gc.GetObserve()
 	if obs.GetOpensnoop() != "/run/daft/observe/opensnoop.log" || obs.GetSummary() != "/run/daft/observe/progress.json" {

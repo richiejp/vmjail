@@ -175,8 +175,16 @@ type GuestConfig struct {
 	AttachEnabled bool `protobuf:"varint,5,opt,name=attach_enabled,json=attachEnabled,proto3" json:"attach_enabled,omitempty"` // run the exec-attach listener
 	NetEnabled    bool `protobuf:"varint,6,opt,name=net_enabled,json=netEnabled,proto3" json:"net_enabled,omitempty"`          // dial sandboxd's netstack + bring up tap0
 	TraceEnabled  bool `protobuf:"varint,7,opt,name=trace_enabled,json=traceEnabled,proto3" json:"trace_enabled,omitempty"`    // ship the span buffer to the host trace sink
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// Lifecycle commands the agent runs INSIDE the container after it has
+	// started, in order. This is the devcontainer postStartCommand
+	// (resolved node-side at dispatch — see internal/devcontainer). Each
+	// entry is an argv; a shell-form hook is normalised host-side to
+	// ["/bin/sh","-c",<shell>]. Empty leaves the agent's post-start step a
+	// no-op. A non-zero exit is logged, not fatal — the container keeps
+	// running (devcontainer semantics).
+	PostStartCommands []*GuestConfig_PostStartCommand `protobuf:"bytes,8,rep,name=post_start_commands,json=postStartCommands,proto3" json:"post_start_commands,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *GuestConfig) Reset() {
@@ -256,6 +264,13 @@ func (x *GuestConfig) GetTraceEnabled() bool {
 		return x.TraceEnabled
 	}
 	return false
+}
+
+func (x *GuestConfig) GetPostStartCommands() []*GuestConfig_PostStartCommand {
+	if x != nil {
+		return x.PostStartCommands
+	}
+	return nil
 }
 
 // AgentEvent is a status milestone the agent streams to the host over
@@ -430,6 +445,52 @@ func (x *GuestConfig_PortForward) GetContainerPort() uint32 {
 	return 0
 }
 
+// PostStartCommand is one resolved lifecycle command: a full argv the
+// agent crun-execs in the running container.
+type GuestConfig_PostStartCommand struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Argv          []string               `protobuf:"bytes,1,rep,name=argv,proto3" json:"argv,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GuestConfig_PostStartCommand) Reset() {
+	*x = GuestConfig_PostStartCommand{}
+	mi := &file_agent_v1_config_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GuestConfig_PostStartCommand) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GuestConfig_PostStartCommand) ProtoMessage() {}
+
+func (x *GuestConfig_PostStartCommand) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_v1_config_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GuestConfig_PostStartCommand.ProtoReflect.Descriptor instead.
+func (*GuestConfig_PostStartCommand) Descriptor() ([]byte, []int) {
+	return file_agent_v1_config_proto_rawDescGZIP(), []int{1, 2}
+}
+
+func (x *GuestConfig_PostStartCommand) GetArgv() []string {
+	if x != nil {
+		return x.Argv
+	}
+	return nil
+}
+
 // Observe is the set of in-guest absolute paths the Tier-2 gadgets
 // write to (usually on a writable virtiofs share the host reads back).
 // An empty field leaves that gadget off, matching the old per-token
@@ -448,7 +509,7 @@ type GuestConfig_Observe struct {
 
 func (x *GuestConfig_Observe) Reset() {
 	*x = GuestConfig_Observe{}
-	mi := &file_agent_v1_config_proto_msgTypes[5]
+	mi := &file_agent_v1_config_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -460,7 +521,7 @@ func (x *GuestConfig_Observe) String() string {
 func (*GuestConfig_Observe) ProtoMessage() {}
 
 func (x *GuestConfig_Observe) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_config_proto_msgTypes[5]
+	mi := &file_agent_v1_config_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -473,7 +534,7 @@ func (x *GuestConfig_Observe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuestConfig_Observe.ProtoReflect.Descriptor instead.
 func (*GuestConfig_Observe) Descriptor() ([]byte, []int) {
-	return file_agent_v1_config_proto_rawDescGZIP(), []int{1, 2}
+	return file_agent_v1_config_proto_rawDescGZIP(), []int{1, 3}
 }
 
 func (x *GuestConfig_Observe) GetOpensnoop() string {
@@ -524,7 +585,7 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\n" +
 	"\x15agent/v1/config.proto\x12\rdaft.agent.v1\"9\n" +
 	"\x12GuestConfigRequest\x12#\n" +
-	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xb9\x05\n" +
+	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xbe\x06\n" +
 	"\vGuestConfig\x12\x16\n" +
 	"\x06bundle\x18\x01 \x01(\tR\x06bundle\x128\n" +
 	"\x06shares\x18\x02 \x03(\v2 .daft.agent.v1.GuestConfig.ShareR\x06shares\x12K\n" +
@@ -533,7 +594,8 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\x0eattach_enabled\x18\x05 \x01(\bR\rattachEnabled\x12\x1f\n" +
 	"\vnet_enabled\x18\x06 \x01(\bR\n" +
 	"netEnabled\x12#\n" +
-	"\rtrace_enabled\x18\a \x01(\bR\ftraceEnabled\x1aS\n" +
+	"\rtrace_enabled\x18\a \x01(\bR\ftraceEnabled\x12[\n" +
+	"\x13post_start_commands\x18\b \x03(\v2+.daft.agent.v1.GuestConfig.PostStartCommandR\x11postStartCommands\x1aS\n" +
 	"\x05Share\x12\x10\n" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x1e\n" +
 	"\n" +
@@ -543,7 +605,9 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\vPortForward\x12\x1d\n" +
 	"\n" +
 	"vsock_port\x18\x01 \x01(\rR\tvsockPort\x12%\n" +
-	"\x0econtainer_port\x18\x02 \x01(\rR\rcontainerPort\x1a\xb5\x01\n" +
+	"\x0econtainer_port\x18\x02 \x01(\rR\rcontainerPort\x1a&\n" +
+	"\x10PostStartCommand\x12\x12\n" +
+	"\x04argv\x18\x01 \x03(\tR\x04argv\x1a\xb5\x01\n" +
 	"\aObserve\x12\x1c\n" +
 	"\topensnoop\x18\x01 \x01(\tR\topensnoop\x12\x1c\n" +
 	"\texecsnoop\x18\x02 \x01(\tR\texecsnoop\x12\x1e\n" +
@@ -573,26 +637,28 @@ func file_agent_v1_config_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_v1_config_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_agent_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_agent_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_agent_v1_config_proto_goTypes = []any{
-	(AgentEvent_Kind)(0),            // 0: daft.agent.v1.AgentEvent.Kind
-	(*GuestConfigRequest)(nil),      // 1: daft.agent.v1.GuestConfigRequest
-	(*GuestConfig)(nil),             // 2: daft.agent.v1.GuestConfig
-	(*AgentEvent)(nil),              // 3: daft.agent.v1.AgentEvent
-	(*GuestConfig_Share)(nil),       // 4: daft.agent.v1.GuestConfig.Share
-	(*GuestConfig_PortForward)(nil), // 5: daft.agent.v1.GuestConfig.PortForward
-	(*GuestConfig_Observe)(nil),     // 6: daft.agent.v1.GuestConfig.Observe
+	(AgentEvent_Kind)(0),                 // 0: daft.agent.v1.AgentEvent.Kind
+	(*GuestConfigRequest)(nil),           // 1: daft.agent.v1.GuestConfigRequest
+	(*GuestConfig)(nil),                  // 2: daft.agent.v1.GuestConfig
+	(*AgentEvent)(nil),                   // 3: daft.agent.v1.AgentEvent
+	(*GuestConfig_Share)(nil),            // 4: daft.agent.v1.GuestConfig.Share
+	(*GuestConfig_PortForward)(nil),      // 5: daft.agent.v1.GuestConfig.PortForward
+	(*GuestConfig_PostStartCommand)(nil), // 6: daft.agent.v1.GuestConfig.PostStartCommand
+	(*GuestConfig_Observe)(nil),          // 7: daft.agent.v1.GuestConfig.Observe
 }
 var file_agent_v1_config_proto_depIdxs = []int32{
 	4, // 0: daft.agent.v1.GuestConfig.shares:type_name -> daft.agent.v1.GuestConfig.Share
 	5, // 1: daft.agent.v1.GuestConfig.port_forwards:type_name -> daft.agent.v1.GuestConfig.PortForward
-	6, // 2: daft.agent.v1.GuestConfig.observe:type_name -> daft.agent.v1.GuestConfig.Observe
-	0, // 3: daft.agent.v1.AgentEvent.kind:type_name -> daft.agent.v1.AgentEvent.Kind
-	4, // [4:4] is the sub-list for method output_type
-	4, // [4:4] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	7, // 2: daft.agent.v1.GuestConfig.observe:type_name -> daft.agent.v1.GuestConfig.Observe
+	6, // 3: daft.agent.v1.GuestConfig.post_start_commands:type_name -> daft.agent.v1.GuestConfig.PostStartCommand
+	0, // 4: daft.agent.v1.AgentEvent.kind:type_name -> daft.agent.v1.AgentEvent.Kind
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_config_proto_init() }
@@ -606,7 +672,7 @@ func file_agent_v1_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_config_proto_rawDesc), len(file_agent_v1_config_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   6,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -88,6 +88,13 @@ type Config struct {
 	// run.
 	Bundle string
 
+	// PostStartCommands are lifecycle commands the in-VM agent runs
+	// inside the container after it has started, in order (the resolved
+	// devcontainer postStartCommand). Each entry is a full argv. Empty
+	// (the default) leaves the agent's post-start step a no-op. Projected
+	// onto GuestConfig.post_start_commands by buildGuestConfig.
+	PostStartCommands [][]string
+
 	// Vsock, when non-nil, exposes a Cloud Hypervisor hybrid-vsock
 	// device to the guest so the in-VM agent can stream data back
 	// to the sandbox-host without going through the serial console.

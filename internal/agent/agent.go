@@ -192,6 +192,11 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	// the agent's lifetime.
 	startPortForwarders(ctx, w, d)
 	startAttachListener(ctx, w, d)
+	// postStart runs the resolved devcontainer lifecycle command inside the
+	// container after it comes up; it waits for "running" on its own
+	// goroutine and returns immediately, so it never blocks the boot before
+	// runContainer below.
+	startPostStart(ctx, w, d)
 	if startNetBridge(ctx, w, d) != nil && bundle != "" {
 		// The container shares the VM's init netns, so it inherits
 		// tap0 + the default route. resolv.conf is the only missing

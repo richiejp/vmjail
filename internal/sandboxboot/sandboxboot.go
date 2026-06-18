@@ -92,6 +92,13 @@ type BootOptions struct {
 	// Off by default; set from SandboxSpec.privileged_build.enable by the
 	// executor. See imagestore.BundleOptions.PrivilegedBuild.
 	PrivilegedBuild bool
+	// PostStartCommands are the devcontainer lifecycle commands the in-VM
+	// agent runs inside the container after it has started, in order (the
+	// resolved postStartCommand). Each entry is a full argv. Empty leaves
+	// the agent's post-start step a no-op. Set by the executor from the
+	// node-resolved devcontainer; carried through to sandbox.Config →
+	// GuestConfig.
+	PostStartCommands [][]string
 }
 
 // Store is the imagestore surface BuildBundleConfig needs. Kept as
@@ -202,12 +209,13 @@ func BuildBundleConfig(
 	}
 
 	cfg = sandbox.Config{
-		CloudHypervisor: paths.CloudHypervisor,
-		Kernel:          paths.Kernel,
-		Initramfs:       paths.Initramfs,
-		Virtiofsd:       paths.Virtiofsd,
-		Shares:          buildShares(bundle, opts.Mounts),
-		Bundle:          filepath.Join(BundlesMount, filepath.Base(bundle.Path)),
+		CloudHypervisor:   paths.CloudHypervisor,
+		Kernel:            paths.Kernel,
+		Initramfs:         paths.Initramfs,
+		Virtiofsd:         paths.Virtiofsd,
+		Shares:            buildShares(bundle, opts.Mounts),
+		Bundle:            filepath.Join(BundlesMount, filepath.Base(bundle.Path)),
+		PostStartCommands: opts.PostStartCommands,
 	}
 	return cfg, bundleUnlock, nil
 }

@@ -173,6 +173,13 @@ func buildGuestConfig(cfg Config) *agentv1.GuestConfig {
 			ContainerPort: pf.ContainerPort,
 		})
 	}
+	for _, argv := range cfg.PostStartCommands {
+		if len(argv) == 0 {
+			continue
+		}
+		gc.PostStartCommands = append(gc.PostStartCommands,
+			&agentv1.GuestConfig_PostStartCommand{Argv: argv})
+	}
 	gc.Observe = buildObserveConfig(cfg)
 	// Protocol-feature toggles: the agent brings each up on its fixed
 	// constant port, so we send a bit, not the port number. Derived from

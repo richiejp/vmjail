@@ -89,6 +89,21 @@ message GuestConfig {
   bool net_enabled = 6;    // dial sandboxd's netstack + bring up tap0
   bool trace_enabled = 7;  // ship the span buffer to the host trace sink
 
+  // Lifecycle commands the agent runs INSIDE the container after it has
+  // started, in order. This is the devcontainer postStartCommand
+  // (resolved node-side at dispatch — see internal/devcontainer). Each
+  // entry is an argv; a shell-form hook is normalised host-side to
+  // ["/bin/sh","-c",<shell>]. Empty leaves the agent's post-start step a
+  // no-op. A non-zero exit is logged, not fatal — the container keeps
+  // running (devcontainer semantics).
+  repeated PostStartCommand post_start_commands = 8;
+
+  // PostStartCommand is one resolved lifecycle command: a full argv the
+  // agent crun-execs in the running container.
+  message PostStartCommand {
+    repeated string argv = 1;
+  }
+
   // Observe is the set of in-guest absolute paths the Tier-2 gadgets
   // write to (usually on a writable virtiofs share the host reads back).
   // An empty field leaves that gadget off, matching the old per-token

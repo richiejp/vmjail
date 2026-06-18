@@ -13,12 +13,25 @@ import (
 	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
 )
 
+// devcontainerResolution is the effective boot inputs a devcontainer.json
+// projects to: the image (empty for a build-based config), env, forward
+// ports, the normalised postStartCommand argv lists, and a build plan
+// (non-nil only for a build-based config the workspace didn't override).
+type devcontainerResolution struct {
+	ImageRef  string
+	Env       []string
+	Ports     []*sandboxv1.PortMapping
+	PostStart [][]string
+	Build     *devcontainerBuildPlan
+}
+
 // resolveDevcontainerOverlay reads the devcontainer.json named by
 // spec.devcontainer_path out of the already-materialised workspace
 // content, projects it to a base workspace spec, and overlays the
 // workspace's explicit spec fields on top (explicit wins). It returns the
-// effective image ref + env + forwardPorts the assembler should boot with
-// and, for a build-based config, a resolved build plan (nil otherwise).
+// effective image ref + env + forwardPorts + postStartCommand the assembler
+// should boot with and, for a build-based config, a resolved build plan
+// (nil otherwise).
 //
 // This runs node-side at dispatch — the only place the pushed content
 // exists — after resolveMounts has reconstructed it onto disk. Reading is
@@ -32,39 +45,65 @@ import (
 // plan instead — the caller builds the image, unless the workspace
 // explicitly overrode the image (overlay then fills it and the plan is
 // ignored).
-func resolveDevcontainerOverlay(spec *sandboxv1.SandboxSpec, mounts []sandboxboot.Mount) (imageRef string, env []string, ports []*sandboxv1.PortMapping, build *devcontainerBuildPlan, err error) {
+func resolveDevcontainerOverlay(spec *sandboxv1.SandboxSpec, mounts []sandboxboot.Mount) (devcontainerResolution, error) {
 	rel := spec.GetDevcontainerPath()
 	file, root, err := findDevcontainerFile(mounts, rel)
 	if err != nil {
-		return "", nil, nil, nil, err
+		return devcontainerResolution{}, err
 	}
 	// #nosec G304 — file is rooted-and-cleaned under a materialised mount
 	// dir by findDevcontainerFile, so it cannot escape the workspace content.
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return "", nil, nil, nil, fmt.Errorf("sandboxexec: read devcontainer %q: %w", rel, err)
+		return devcontainerResolution{}, fmt.Errorf("sandboxexec: read devcontainer %q: %w", rel, err)
 	}
 	resolved, err := devcontainer.Resolve(data, devcontainer.Substitutions{})
 	if err != nil {
-		return "", nil, nil, nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
+		return devcontainerResolution{}, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
 	}
 	// ToWorkspaceSpec projects env/ports/mounts for both image- and
 	// build-based configs, leaving ImageRef empty for the latter.
 	base, err := devcontainerspec.ToWorkspaceSpec(resolved)
 	if err != nil {
-		return "", nil, nil, nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
+		return devcontainerResolution{}, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
 	}
 	eff := devcontainerspec.Overlay(base, explicitSpec(spec))
 	// Only resolve a build plan when the config is build-based and the
 	// overlay didn't fill the image from an explicit override — otherwise
 	// the build would run pointlessly.
+	var build *devcontainerBuildPlan
 	if resolved.Build != nil && eff.ImageRef == "" {
 		build, err = resolveBuildPlan(file, root, resolved.Build)
 		if err != nil {
-			return "", nil, nil, nil, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
+			return devcontainerResolution{}, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
 		}
 	}
-	return eff.ImageRef, envStrings(eff.Env), portMappingsToProto(eff.Ports), build, nil
+	return devcontainerResolution{
+		ImageRef:  eff.ImageRef,
+		Env:       envStrings(eff.Env),
+		Ports:     portMappingsToProto(eff.Ports),
+		PostStart: normalizePostStart(resolved.Lifecycle.PostStart),
+		Build:     build,
+	}, nil
+}
+
+// normalizePostStart flattens the resolved devcontainer postStartCommand
+// hooks into argv lists the agent can crun-exec directly: a shell-form
+// entry becomes ["/bin/sh","-c",<shell>]; an argv-form entry passes
+// through. Empty/blank entries are dropped. Returns nil when there are no
+// runnable commands, so the boot config stays zero-valued for the common
+// (no-postStart) case.
+func normalizePostStart(entries []devcontainer.CommandEntry) [][]string {
+	var out [][]string
+	for _, e := range entries {
+		switch {
+		case len(e.Argv) > 0:
+			out = append(out, e.Argv)
+		case e.Shell != "":
+			out = append(out, []string{"/bin/sh", "-c", e.Shell})
+		}
+	}
+	return out
 }
 
 // findDevcontainerFile locates rel (a path within the workspace content,

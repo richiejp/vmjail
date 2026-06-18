@@ -822,23 +822,25 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 	}
 	env := envFromSpec(spec.GetEnv())
 	ports := spec.GetPorts()
+	var postStart [][]string
 	if hasDevcontainer {
 		// Read the devcontainer from the just-materialised content and
 		// overlay the explicit spec on top (explicit wins). The effective
 		// env/ports already fold in the explicit ones, so they replace
 		// (not append to) the spec values here. A build-based devcontainer
 		// also yields a build plan (nil otherwise).
-		effImage, effEnv, effPorts, build, derr := resolveDevcontainerOverlay(spec, mounts)
+		res, derr := resolveDevcontainerOverlay(spec, mounts)
 		if derr != nil {
 			return sandbox.Config{}, nil, func() {}, derr
 		}
-		imageRef, env, ports = effImage, effEnv, effPorts
+		imageRef, env, ports = res.ImageRef, res.Env, res.Ports
+		postStart = res.PostStart
 		// A build-based devcontainer with no explicit image override
 		// (overlay leaves imageRef empty) is built in an ephemeral
 		// sandbox; the resulting hosted ref is what the workload boots
 		// from. An explicit workspace image wins and skips the build.
-		if build != nil && imageRef == "" {
-			builtRef, berr := e.buildDevcontainerImage(ctx, uid, spec, build)
+		if res.Build != nil && imageRef == "" {
+			builtRef, berr := e.buildDevcontainerImage(ctx, uid, spec, res.Build)
 			if berr != nil {
 				return sandbox.Config{}, nil, func() {}, berr
 			}
@@ -851,6 +853,7 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 		Nested:               spec.GetNestedVirtualization().GetEnable(),
 		PrivilegedFuseMounts: spec.GetPrivilegedFuseMounts().GetEnable(),
 		PrivilegedBuild:      spec.GetPrivilegedBuild().GetEnable(),
+		PostStartCommands:    postStart,
 	}
 	// Layer the egress-proxy env after the workspace's own env so the
 	// proxy vars win on a key clash (a workload can't unset the proxy the
