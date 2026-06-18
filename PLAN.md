@@ -4392,6 +4392,23 @@ Open questions:
       at dispatch; `daft cluster up` against an installed binary works
       with nothing exported. `DAFT_BUNDLE` is `daft sandbox hello`-only
       (the serve/cluster path never reads it).
+- [x] **Zero-config connect (landed 2026-06-16).** `daft cluster up` no
+      longer requires `--state` (defaults to `localcluster.DefaultStateDir()`
+      = `$XDG_STATE_HOME/daft/cluster`) and no longer prints `DAFT_CLUSTER_*`
+      by default — it prints a human summary; the eval-able env lines moved
+      behind `--shell` (for scripts that need the FPs). The daft client then
+      **auto-discovers** the running cluster: `resolveOrchestratorSource`
+      gained a `sourceLocalCluster` layer (just above the built-in default,
+      below every explicit flag/env/config) that reads the `cluster.json`
+      handle at the default state dir and confirms liveness
+      (`localcluster.Load` + `(*Cluster).Alive()` via `kill(pid,0)`).
+      Identity follows the orchestrator **by value**: `resolveIdentityDir`
+      uses the cluster's cross-approved client dir iff the orchestrator we'll
+      dial equals the cluster URL, else the user's XDG dir — so
+      `$DAFT_ORCHESTRATOR=remote` is never silently given the local cluster's
+      identity. Net: `daft cluster up` then a bare `daft workspace …` works
+      with **no env var and no `--state`/`--orchestrator`/`--config-dir`
+      flag**. `scripts/dev-cluster.sh` / `boot-iso.sh` now pass `--shell`.
 
 ## Architecture
 

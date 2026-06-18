@@ -137,7 +137,7 @@ func runWorkspaceSync(
 		return trace.RecordError(ctx, err)
 	}
 
-	cc, err := openClientCtx(opts.configDir, casDir)
+	cc, err := openClientCtx(opts.configDir, casDir, opts.orchestrator)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}

@@ -108,8 +108,8 @@ type clientCtx struct {
 	store *cas.Store
 }
 
-func openClientCtx(configDirOverride, casDirOverride string) (*clientCtx, error) {
-	dir, id, peers, err := openClientIdentity(configDirOverride)
+func openClientCtx(configDirOverride, casDirOverride, orchFlag string) (*clientCtx, error) {
+	dir, id, peers, err := openClientIdentity(configDirOverride, orchFlag)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +185,7 @@ func runWorkspaceServe(ctx context.Context, stdout io.Writer, opts workspaceServ
 	if err != nil {
 		return err
 	}
-	cc, err := openClientCtx(opts.configDir, opts.casDir)
+	cc, err := openClientCtx(opts.configDir, opts.casDir, opts.orchestrator)
 	if err != nil {
 		return err
 	}
@@ -357,7 +357,7 @@ func runWorkspacePull(
 	if workspaceName == "" {
 		return trace.RecordError(ctx, errors.New("daft workspace pull: --workspace is required"))
 	}
-	cc, err := openClientCtx(configDirOverride, casDirOverride)
+	cc, err := openClientCtx(configDirOverride, casDirOverride, "")
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
@@ -479,7 +479,7 @@ func runWorkspaceDiff(ctx context.Context, stdout io.Writer, localDir string, op
 	case opts.workspaceName == "":
 		return errors.New("daft workspace diff: --workspace is required")
 	}
-	cc, err := openClientCtx(opts.configDir, opts.casDir)
+	cc, err := openClientCtx(opts.configDir, opts.casDir, "")
 	if err != nil {
 		return err
 	}
@@ -558,7 +558,7 @@ func runWorkspaceAttach(ctx context.Context, stdout io.Writer, opts workspaceAtt
 		return err
 	}
 	opts.orchestrator = orchestrator
-	_, id, peers, err := openClientIdentity(opts.configDir)
+	_, id, peers, err := openClientIdentity(opts.configDir, opts.orchestrator)
 	if err != nil {
 		return err
 	}

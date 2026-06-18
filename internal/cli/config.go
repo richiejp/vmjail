@@ -49,9 +49,12 @@ func openClientPeerStore(dir string) (*identity.PeerStore, error) {
 // openClientIdentity resolves the config dir, loads or generates the
 // client identity, and opens the TOFU peer store. Returned for the
 // subcommands that don't need a CAS store (attach, ping); see
-// openClientCtx in workspace.go for the +CAS variant.
-func openClientIdentity(configDirOverride string) (dir string, id *identity.Identity, peers *identity.PeerStore, err error) {
-	dir, err = resolveClientDir(configDirOverride)
+// openClientCtx in workspace.go for the +CAS variant. orchFlag is the
+// command's --orchestrator value ("" when it has none or it's unset) so
+// the identity dir can follow an auto-discovered local cluster (see
+// resolveIdentityDir).
+func openClientIdentity(configDirOverride, orchFlag string) (dir string, id *identity.Identity, peers *identity.PeerStore, err error) {
+	dir, err = resolveIdentityDir(configDirOverride, orchFlag)
 	if err != nil {
 		return "", nil, nil, err
 	}

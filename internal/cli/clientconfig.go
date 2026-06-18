@@ -172,18 +172,26 @@ func loadDirLocalConfig() (fileConfig, error) {
 type configSource string
 
 const (
-	sourceFlag     configSource = "--orchestrator flag"
-	sourceEnv      configSource = "$" + orchestratorEnvVar
-	sourceDirLocal configSource = "./" + dirLocalConfigDir + "/" + dirLocalConfigFile
-	sourceGlobal   configSource = "global config"
-	sourceDefault  configSource = "built-in default"
-	sourceCwd      configSource = "basename(cwd)"
+	sourceFlag         configSource = "--orchestrator flag"
+	sourceEnv          configSource = "$" + orchestratorEnvVar
+	sourceDirLocal     configSource = "./" + dirLocalConfigDir + "/" + dirLocalConfigFile
+	sourceGlobal       configSource = "global config"
+	sourceLocalCluster configSource = "running local cluster (daft cluster up)"
+	sourceDefault      configSource = "built-in default"
+	sourceCwd          configSource = "basename(cwd)"
 )
 
 // resolveOrchestratorSource is the precedence chain, highest first:
 // explicit --orchestrator flag, $DAFT_ORCHESTRATOR, ./.daft/config.json,
-// the global config, then the built-in localhost default. It never
-// returns an empty URL and always names the winning layer.
+// the global config, a running single-box cluster (`daft cluster up`),
+// then the built-in localhost default. It never returns an empty URL and
+// always names the winning layer.
+//
+// The local-cluster layer sits just above the built-in default and below
+// every explicit config, so `daft cluster up` followed by a bare
+// `daft workspace …` connects with no flag and no env var, while a user
+// who has pointed daft at a real orchestrator (flag/env/config) is never
+// silently redirected to a local cluster that happens to be up.
 func resolveOrchestratorSource(flagVal, configDirOverride string) (string, configSource, error) {
 	if flagVal != "" {
 		return flagVal, sourceFlag, nil
@@ -208,6 +216,9 @@ func resolveOrchestratorSource(flagVal, configDirOverride string) (string, confi
 	}
 	if global.Orchestrator != "" {
 		return global.Orchestrator, sourceGlobal, nil
+	}
+	if c, ok := discoverLocalCluster(); ok && c.URL != "" {
+		return c.URL, sourceLocalCluster, nil
 	}
 	return defaultOrchestratorURL, sourceDefault, nil
 }

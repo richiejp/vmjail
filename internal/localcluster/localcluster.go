@@ -367,6 +367,62 @@ func Down(stateDir string, purge bool) error {
 	return nil
 }
 
+// DefaultStateDir is the well-known location a single-box dev cluster
+// lives in when no --state is given: $XDG_STATE_HOME/daft/cluster, else
+// ~/.local/state/daft/cluster. `cluster up`/`down` default to it and the
+// daft client auto-discovers a running cluster there (see the cli
+// package), so the common case needs neither a --state flag nor any
+// DAFT_* env var to connect.
+func DefaultStateDir() (string, error) {
+	base := os.Getenv("XDG_STATE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("localcluster: locate home dir: %w", err)
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+	return filepath.Join(base, "daft", "cluster"), nil
+}
+
+// Load reads the persisted handle at <stateDir>/cluster.json. It returns
+// (nil, nil) when no cluster.json exists, so a caller probing for a
+// cluster can treat "absent" as "none up" without inspecting the error.
+func Load(stateDir string) (*Cluster, error) {
+	// #nosec G304 — caller-supplied state dir.
+	data, err := os.ReadFile(filepath.Join(stateDir, infoFilename))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil //nolint:nilnil // absent handle is the "no cluster up" signal; callers branch on c==nil.
+	}
+	if err != nil {
+		return nil, fmt.Errorf("localcluster: read cluster.json: %w", err)
+	}
+	var f clusterFile
+	if err := json.Unmarshal(data, &f); err != nil {
+		return nil, fmt.Errorf("localcluster: parse cluster.json: %w", err)
+	}
+	return &Cluster{
+		URL: f.URL, ClientConfigDir: f.ClientConfigDir,
+		OrchestratorFP: f.OrchestratorFP, SandboxFP: f.SandboxFP,
+		Addr: f.Addr, StateDir: f.StateDir, PIDs: f.PIDs,
+	}, nil
+}
+
+// Alive reports whether at least one recorded daemon process group is
+// still running. A handle left behind by a reboot or crash (cluster.json
+// present but the daemons gone) reads as not-alive, so discovery skips it
+// rather than pointing the client at a dead orchestrator. Probed with
+// signal 0 because the inspecting process (a later daft invocation) is not
+// the daemons' parent and so cannot Wait4 them.
+func (c *Cluster) Alive() bool {
+	for _, pid := range c.PIDs {
+		if pid > 0 && syscall.Kill(pid, 0) == nil {
+			return true
+		}
+	}
+	return false
+}
+
 // URLForAddr turns a host:port listen address into the https URL a
 // client dials, rewriting a 0.0.0.0 / :: wildcard host to loopback.
 func URLForAddr(addr string) string {

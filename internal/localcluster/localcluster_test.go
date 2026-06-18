@@ -69,8 +69,8 @@ func TestWireIdentitiesIdempotent(t *testing.T) {
 
 func TestURLForAddr(t *testing.T) {
 	cases := map[string]string{
-		"127.0.0.1:8443": "https://127.0.0.1:8443",
-		"0.0.0.0:8443":   "https://127.0.0.1:8443",
+		"127.0.0.1:8443": testClusterURL,
+		"0.0.0.0:8443":   testClusterURL,
 		"[::]:9000":      "https://127.0.0.1:9000",
 		"noport":         "https://noport",
 	}

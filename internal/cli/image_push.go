@@ -76,7 +76,7 @@ func runImagePushWith(_ context.Context, stdout io.Writer, tarPath string, opts 
 	if err != nil {
 		return err
 	}
-	_, id, peers, err := openClientIdentity(opts.configDir)
+	_, id, peers, err := openClientIdentity(opts.configDir, opts.orchestrator)
 	if err != nil {
 		return err
 	}

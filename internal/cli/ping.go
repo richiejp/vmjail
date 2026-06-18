@@ -75,7 +75,7 @@ func runPing(ctx context.Context, stdout io.Writer, addr, message, configDirOver
 	)
 	defer span.End()
 
-	_, id, peers, err := openClientIdentity(configDirOverride)
+	_, id, peers, err := openClientIdentity(configDirOverride, "")
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}

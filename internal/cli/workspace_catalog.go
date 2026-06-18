@@ -133,7 +133,7 @@ func dialWorkspaceCatalog(
 	configDirOverride, orchestrator string,
 	tracer *trace.Tracer,
 ) (workspacev1connect.WorkspaceCatalogServiceClient, *http.Client, error) {
-	_, id, peers, err := openClientIdentity(configDirOverride)
+	_, id, peers, err := openClientIdentity(configDirOverride, orchestrator)
 	if err != nil {
 		return nil, nil, err
 	}

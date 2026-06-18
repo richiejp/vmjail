@@ -77,7 +77,7 @@ func runNodeList(
 	)
 	defer span.End()
 
-	_, id, peers, err := openClientIdentity(configDirOverride)
+	_, id, peers, err := openClientIdentity(configDirOverride, orchestrator)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
