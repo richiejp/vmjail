@@ -378,7 +378,12 @@ func newWorkspaceDevcontainerCmd() *cobra.Command {
 		Long: "The path is relative to the workspace content root (e.g.\n" +
 			".devcontainer/devcontainer.json), not a host path. At launch the\n" +
 			"orchestrator reads it from the pushed content as a base spec and\n" +
-			"overlays the workspace's explicit image/mounts/env/ports on top.",
+			"overlays the workspace's explicit image/mounts/env/ports on top.\n\n" +
+			"Setting a devcontainer also registers its workspace-content mount\n" +
+			"automatically (following the Dev Containers convention: the host\n" +
+			"project root shared into the guest at workspaceFolder, defaulting\n" +
+			"to /workspaces/<basename>), so a separate `daft workspace mount`\n" +
+			"is not needed. Sync stays push/pull, not a live bind.",
 		Args:          cobra.MaximumNArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -392,6 +397,15 @@ func newWorkspaceDevcontainerCmd() *cobra.Command {
 			// ports back). Best-effort: a dir-local write failure must not
 			// block setting the path on the orchestrator.
 			rememberDevcontainerPath(cmd.ErrOrStderr(), path)
+			// Derive the implied workspace mount before the RPC session so
+			// a malformed devcontainer fails loudly here; a read/parse
+			// miss only warns (setting the path must not need the host
+			// json to be locally readable).
+			mnt, haveMnt, derr := deriveDevcontainerWorkspaceMount(path)
+			if derr != nil {
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
+					"daft workspace devcontainer: skip auto-mount: %v\n", derr)
+			}
 			return runCatalogCmd(cmd, opts, devcontainerSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.SetDevcontainer(ctx, connect.NewRequest(
@@ -399,6 +413,9 @@ func newWorkspaceDevcontainerCmd() *cobra.Command {
 					))
 					if err != nil {
 						return err
+					}
+					if haveMnt {
+						registerDevcontainerWorkspaceMount(ctx, c, h, cmd.OutOrStdout(), mnt)
 					}
 					return writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace())
 				})

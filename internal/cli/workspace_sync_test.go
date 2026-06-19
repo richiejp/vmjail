@@ -251,6 +251,18 @@ type fakeCatalog struct {
 	ws        *workspacev1.Workspace
 	err       error
 	launchErr error
+	// addMountErr, when set, is returned by AddMount; addMountTargets
+	// records the in-VM target of each AddMount call for assertions.
+	addMountErr     error
+	addMountTargets []string
+}
+
+func (f *fakeCatalog) AddMount(_ context.Context, req *connect.Request[workspacev1.AddMountRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	f.addMountTargets = append(f.addMountTargets, req.Msg.GetMount().GetTarget())
+	if f.addMountErr != nil {
+		return nil, f.addMountErr
+	}
+	return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: f.ws}), nil
 }
 
 func (f *fakeCatalog) Get(_ context.Context, _ *connect.Request[workspacev1.GetWorkspaceRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error) {

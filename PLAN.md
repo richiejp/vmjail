@@ -2837,6 +2837,40 @@ the user-host or in CI today.
       `postStartCommand` runs in-container after start (the `post-start:`-
       prefixed sentinel surfaces on sandboxd stdout). The `up` forward
       fan-out is unit-covered (the underlying tunnel has its own e2e).
+    - **3g (landed 2026-06-19) — auto-derive the workspace-content mount
+      from the devcontainer (eliminates the manual `daft workspace
+      mount`).** Following the Dev Containers convention for the *path*
+      (not the live bind — sync stays push/pull): `daft workspace
+      devcontainer <path>` now also registers the implied workspace
+      mount. New `internal/cli/workspace_devcontainer_mount.go` derives
+      it client-side from the host devcontainer.json —
+      `deriveDevcontainerWorkspaceMount` resolves the container folder
+      (explicit `workspaceFolder` → explicit `workspaceMount` target →
+      default `/workspaces/<basename>`) and the host root
+      (`${localWorkspaceFolder}`: parent of a `.devcontainer/` dir, else
+      the json's own dir) — then `registerDevcontainerWorkspaceMount`
+      records it through the **same** path a manual mount uses (`AddMount`
+      with empty Source → workspace UUID/push-CAS, plus the dir-local
+      mapping push/pull reads). **Deliberately a registration side effect,
+      not a derived-at-boot special case** (user, 2026-06-19): the boot /
+      resolve layer keeps seeing an ordinary registered mount, no
+      devcontainer branch below the CLI. Idempotent: `AddMount`
+      `AlreadyExists` is treated as success and `addDirLocalMount` upserts
+      by target, so re-running `devcontainer` (or after a sandbox restart)
+      just re-applies it — an edited `workspaceFolder` leaves the old
+      target stale (clear with `mount rm`). Best-effort: a malformed or
+      not-locally-readable devcontainer.json warns ("skip auto-mount") and
+      still sets the path on the orchestrator. Verified: unit tests for the
+      derivation precedence + flat/`.devcontainer` layouts + empty/error
+      paths, the register happy/AlreadyExists/AddMount-error/dir-local-error
+      branches, and a rig-based test driving the real `daft workspace
+      devcontainer` command against a live orchestrator (asserts the
+      dir-local mount lands). gate 94.34% → 94.42%.
+      *Open follow-up:* extra `mounts[]` from the devcontainer.json are
+      still not auto-registered (only the workspace-content mount is); and
+      a purely-derived mount isn't shown by `daft workspace mount` listing
+      — here it IS a catalog entry, so it shows, but extra-mount parity is
+      future work.
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **devcontainer features**.
 
