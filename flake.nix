@@ -201,7 +201,27 @@
           };
 
         packages = rec {
-          default = daft;
+          # The default output is the full local-cluster toolset, not the
+          # bare CLI: `daft cluster up` spawns the daft-orchestrator and
+          # daft-sandboxd daemons (resolved next to the daft binary, else
+          # via PATH — see internal/localcluster resolveBin), so a plain
+          # `nix shell <flake>` must put all three on PATH or cluster up
+          # fails with "daft-orchestrator: executable file not found".
+          # Use `.#daft` for the lean CLI-only closure (no sandboxd VM
+          # artefacts). mainProgram keeps `nix run <flake>` running daft.
+          default = daft-cluster;
+
+          daft-cluster = pkgs.symlinkJoin {
+            name = "daft-cluster-${version}";
+            paths = [ daft daft-orchestrator daft-sandboxd ];
+            meta = with pkgs.lib; {
+              description = "darkaifactory CLI + orchestrator + sandbox-host (local-cluster toolset)";
+              license = licenses.mit;
+              maintainers = [ ];
+              platforms = platforms.linux;
+              mainProgram = "daft";
+            };
+          };
 
           # u-root-src exposes the pinned u-root submodule source as a
           # buildable package so `make integration` can `nix build` it
