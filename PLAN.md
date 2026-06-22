@@ -4443,9 +4443,10 @@ Open questions:
       cgroup + userns re-exec), waits for the node to register, and
       prints eval-able `DAFT_CLUSTER_*` lines (URL, client dir,
       fingerprints); `down` tears the pair down via the pidfile. A dying
-      daemon (e.g. address in use) fails fast — readiness reaps the
-      child to tell a dead daemon from a foreign listener on the same
-      port. Core in `internal/localcluster` (reusable `WireIdentities` +
+      daemon (e.g. address in use) fails fast — readiness reaps the child
+      so a dead daemon isn't mistaken for ready (foreign-listener handling
+      hardened later, see the fail-fast bullet below). Core in
+      `internal/localcluster` (reusable `WireIdentities` +
       `Up`/`Down`); `internal/cli/cluster.go` is a thin wrapper. Collapses
       the hand-rolled auth + daemon-startup boilerplate in
       `scripts/dev-cluster.sh` and `scripts/boot-iso.sh` to one `eval`.
@@ -4474,6 +4475,28 @@ Open questions:
       identity. Net: `daft cluster up` then a bare `daft workspace …` works
       with **no env var and no `--state`/`--orchestrator`/`--config-dir`
       flag**. `scripts/dev-cluster.sh` / `boot-iso.sh` now pass `--shell`.
+- [x] **Fail-fast when the orchestrator port is taken (landed 2026-06-22).**
+      A *foreign* service on 8443 (the default port) used to send `cluster
+      up` down a baffling path: the orchestrator child failed to bind and
+      died, but the readiness probe was a bare TCP-accept that the foreign
+      listener answered, so the supervisor declared it ready and the
+      sandbox-host then handshook with the stranger → `tls: internal
+      error`. Two levels now fail fast and clearly: (1) `Up` **pre-flights
+      the address** (`ensureAddrFree`, after `WireIdentities`, before any
+      spawn) and returns "address 127.0.0.1:8443 is already in use by
+      another process — free it or pass a different --addr"; (2) the
+      orchestrator readiness probe is now `waitOrchestratorHealthy`, an
+      **mTLS NodeControl RPC** (via the client identity) that proves the
+      listener is *our* orchestrator, not anything that merely accepts TCP
+      — so a foreign listener can never be mistaken for ready, and the
+      child-liveness poll reliably wins the race when our orchestrator dies
+      (the old `waitTCPAccept` seam is gone; `waitNodeRegistered` now shares
+      the same `dialNodeControl` helper). Level 2 (the orchestrator's own
+      bind failure → non-zero exit) was already covered by
+      `TestServeFailsWhenAddrAlreadyBound`. Verified: `ensureAddrFree`
+      free/occupied, `waitOrchestratorHealthy` against a live orchestrator
+      vs a foreign plain-TCP listener, and `Up` failing fast (no pidfile)
+      on an occupied addr; plus a manual run against a real foreign 8443.
 
 ## Architecture
 

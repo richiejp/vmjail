@@ -92,21 +92,72 @@ func TestResolveBin(t *testing.T) {
 	}
 }
 
-func TestWaitTCPAccept(t *testing.T) {
+func TestEnsureAddrFree(t *testing.T) {
+	// A free port passes.
+	if err := ensureAddrFree(loopbackAny); err != nil {
+		t.Errorf("ensureAddrFree on a free port: %v", err)
+	}
+	// An occupied port fails fast with an actionable error.
 	ln, err := net.Listen("tcp", loopbackAny)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
 	defer func() { _ = ln.Close() }()
-	if err := waitTCPAccept(context.Background(), ln.Addr().String(), 2*time.Second); err != nil {
-		t.Errorf("waitTCPAccept on live listener: %v", err)
+	err = ensureAddrFree(ln.Addr().String())
+	if err == nil {
+		t.Fatal("ensureAddrFree on an occupied port: want error")
 	}
+	if !strings.Contains(err.Error(), "already in use") {
+		t.Errorf("error = %v, want 'already in use'", err)
+	}
+}
 
-	// A port nothing listens on must time out.
-	closed := ln.Addr().String()
-	_ = ln.Close()
-	if err := waitTCPAccept(context.Background(), closed, 300*time.Millisecond); err == nil {
-		t.Errorf("waitTCPAccept on closed port: want error")
+// TestWaitOrchestratorHealthy: the probe succeeds against a live mTLS
+// orchestrator even with an empty node registry (unlike
+// waitNodeRegistered, it only needs the RPC to answer).
+func TestWaitOrchestratorHealthy(t *testing.T) {
+	clientDir := t.TempDir()
+	cliID, err := identity.LoadOrGenerate(clientDir, identity.RoleClient)
+	if err != nil {
+		t.Fatalf("client identity: %v", err)
+	}
+	url := startOrchestrator(t, clientDir, cliID, nodectrl.NewRegistry(nil))
+	if err := waitOrchestratorHealthy(context.Background(), url, clientDir, 5*time.Second); err != nil {
+		t.Errorf("waitOrchestratorHealthy against a live orchestrator: %v", err)
+	}
+}
+
+// TestWaitOrchestratorHealthyRejectsForeignListener: a plain-TCP service
+// squatting on the port (no TLS) must NOT be mistaken for our
+// orchestrator — the mTLS probe fails where a bare TCP-accept probe
+// would have falsely passed.
+func TestWaitOrchestratorHealthyRejectsForeignListener(t *testing.T) {
+	clientDir := t.TempDir()
+	if _, err := identity.LoadOrGenerate(clientDir, identity.RoleClient); err != nil {
+		t.Fatalf("client identity: %v", err)
+	}
+	ln, err := net.Listen("tcp", loopbackAny)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+	go acceptAndClose(ln)
+	url := "https://" + ln.Addr().String()
+	if err := waitOrchestratorHealthy(context.Background(), url, clientDir, 600*time.Millisecond); err == nil {
+		t.Error("waitOrchestratorHealthy against a foreign TCP listener: want error")
+	}
+}
+
+// acceptAndClose accepts and immediately closes connections so a TLS
+// handshake against the listener fails fast (rather than stalling).
+func acceptAndClose(ln net.Listener) {
+	//daft:lint:disable=forloopbound reason="exits when the listener is closed (Accept errors)"
+	for {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		_ = conn.Close()
 	}
 }
 
@@ -218,7 +269,7 @@ func TestUpFailsFastWhenDaemonDies(t *testing.T) {
 	// readiness timeout.
 	block := make(chan struct{})
 	t.Cleanup(func() { close(block) })
-	stubReadiness(t, func(context.Context, string, time.Duration) error {
+	stubReadiness(t, func(context.Context, string, string, time.Duration) error {
 		<-block
 		return nil
 	}, nil)
@@ -243,6 +294,36 @@ func TestUpFailsFastWhenDaemonDies(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 10*time.Second {
 		t.Errorf("Up took %s — should fail fast, not wait out readiness", elapsed)
+	}
+}
+
+// TestUpFailsFastWhenAddrInUse is the foreign-service case: something
+// already holds the orchestrator's address. Up must fail fast at the
+// pre-flight — before spawning any daemon — with a clear "already in
+// use" error, not limp on to a misleading downstream failure.
+func TestUpFailsFastWhenAddrInUse(t *testing.T) {
+	ln, err := net.Listen("tcp", loopbackAny)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	state := t.TempDir()
+	_, err = Up(context.Background(), Config{
+		StateDir:        state,
+		Addr:            ln.Addr().String(),
+		OrchestratorBin: "/no/such/daft-orchestrator",
+		SandboxdBin:     "/no/such/daft-sandboxd",
+	})
+	if err == nil {
+		t.Fatal("Up with an occupied addr: want error")
+	}
+	if !strings.Contains(err.Error(), "already in use") {
+		t.Errorf("error = %v, want 'already in use'", err)
+	}
+	// Pre-flight runs before any spawn, so no pidfile is left behind.
+	if _, statErr := os.Stat(filepath.Join(state, pidFilename)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("failed pre-flight left a pidfile")
 	}
 }
 
@@ -290,13 +371,18 @@ func TestSleepCtxCancelled(t *testing.T) {
 	}
 }
 
-func TestWaitTCPAcceptHonoursContext(t *testing.T) {
+func TestWaitOrchestratorHealthyHonoursContext(t *testing.T) {
+	clientDir := t.TempDir()
+	if _, err := identity.LoadOrGenerate(clientDir, identity.RoleClient); err != nil {
+		t.Fatalf("client identity: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	// Dial a port nothing listens on; with the ctx already cancelled the
-	// first inter-attempt sleep returns the ctx error.
-	if err := waitTCPAccept(ctx, "127.0.0.1:1", time.Hour); err == nil {
-		t.Errorf("waitTCPAccept with a cancelled ctx: want error")
+	// Nothing listens on :1; with the ctx already cancelled the probe
+	// returns promptly (via the cancelled RPC / inter-attempt sleep)
+	// rather than running out the long timeout.
+	if err := waitOrchestratorHealthy(ctx, "https://127.0.0.1:1", clientDir, time.Hour); err == nil {
+		t.Errorf("waitOrchestratorHealthy with a cancelled ctx: want error")
 	}
 }
 
@@ -572,13 +658,13 @@ func startOrchestrator(t *testing.T, clientDir string, cliID *identity.Identity,
 // them on cleanup. A nil func means "succeed immediately".
 func stubReadiness(
 	t *testing.T,
-	orch func(context.Context, string, time.Duration) error,
+	orch func(context.Context, string, string, time.Duration) error,
 	node func(context.Context, string, string, time.Duration) error,
 ) {
 	t.Helper()
 	origOrch, origNode := waitOrchestratorReady, waitSandboxRegistered
 	if orch == nil {
-		orch = func(context.Context, string, time.Duration) error { return nil }
+		orch = func(context.Context, string, string, time.Duration) error { return nil }
 	}
 	if node == nil {
 		node = func(context.Context, string, string, time.Duration) error { return nil }

@@ -130,7 +130,7 @@ type clusterFile struct {
 //
 //nolint:gochecknoglobals // test seams, swapped in unit tests.
 var (
-	waitOrchestratorReady = waitTCPAccept
+	waitOrchestratorReady = waitOrchestratorHealthy
 	waitSandboxRegistered = waitNodeRegistered
 )
 
@@ -209,6 +209,19 @@ func Up(ctx context.Context, cfg Config) (*Cluster, error) {
 	}
 	url := URLForAddr(r.addr)
 
+	// Pre-flight: fail fast (and clearly) if the orchestrator's address is
+	// already taken by a foreign process, before spawning any daemon.
+	// Without this the orchestrator child would spawn, fail to bind, and
+	// die — while the sandbox-host dials the foreign listener and reports a
+	// baffling TLS error. Runs after WireIdentities (which only mints local
+	// files and is what proves a defaulted state dir) so the gate is purely
+	// about the port, immediately before the first spawn. (Down above
+	// already cleared any stale cluster, so a busy port here is genuinely
+	// someone else's.)
+	if err := ensureAddrFree(r.addr); err != nil {
+		return nil, err
+	}
+
 	var started []int
 	bail := func(e error) (*Cluster, error) {
 		for _, pid := range started {
@@ -220,7 +233,7 @@ func Up(ctx context.Context, cfg Config) (*Cluster, error) {
 	if err := launchDaemon(r.progress, &started, "orchestrator", r.orchBin,
 		[]string{"serve", "--addr", r.addr, "--config-dir", info.OrchDir},
 		r.baseEnv, filepath.Join(logsDir, "orchestrator.log"),
-		func() error { return waitOrchestratorReady(ctx, r.addr, r.timeout) }); err != nil {
+		func() error { return waitOrchestratorReady(ctx, url, info.ClientDir, r.timeout) }); err != nil {
 		return bail(err)
 	}
 
@@ -479,19 +492,71 @@ func spawnDaemon(bin string, args, env []string, logPath string) (int, error) {
 	return cmd.Process.Pid, nil
 }
 
-// waitTCPAccept blocks until a TCP dial to addr succeeds or timeout
-// elapses.
-func waitTCPAccept(ctx context.Context, addr string, timeout time.Duration) error {
+// ensureAddrFree fails fast when addr is already occupied — almost
+// always a foreign service squatting on the orchestrator's port. The
+// error is deliberately actionable: a bare bind failure deep in the
+// orchestrator child (whose stderr lands in a log file the user has to
+// go hunting for) is replaced by an immediate, legible reason at the
+// supervisor level, before any daemon is spawned.
+//
+// There is a TOCTOU window between this probe and the orchestrator's own
+// bind, but it is negligible on a loopback dev box, and if something does
+// grab the port in between the orchestrator's bind fails and the
+// liveness poll in launchDaemon catches the dead child.
+func ensureAddrFree(addr string) error {
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return fmt.Errorf("localcluster: cannot start orchestrator: address %s is already "+
+			"in use by another process — free it or pass a different --addr: %w", addr, err)
+	}
+	return ln.Close()
+}
+
+// dialNodeControl builds a NodeControlService client over mTLS using the
+// client identity in clientDir. Shared by the two readiness probes — both
+// need to prove they are talking to our orchestrator (whose cert the
+// client trusts), not a foreign listener on the same port.
+func dialNodeControl(url, clientDir string) (nodectrlv1connect.NodeControlServiceClient, error) {
+	id, err := identity.Load(clientDir)
+	if err != nil {
+		return nil, fmt.Errorf("load client identity: %w", err)
+	}
+	peers, err := identity.OpenPeerStore(filepath.Join(clientDir, peersFilename))
+	if err != nil {
+		return nil, fmt.Errorf("open client peer store: %w", err)
+	}
+	tlsCfg, err := identity.ClientTLSConfig(id, peers, "")
+	if err != nil {
+		return nil, err
+	}
+	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
+	return nodectrlv1connect.NewNodeControlServiceClient(httpc, url), nil
+}
+
+// waitOrchestratorHealthy blocks until the orchestrator answers a
+// NodeControl RPC over mTLS — proving the listener on url is OUR
+// orchestrator (it presents a cert the client identity trusts and
+// accepts the client's), not a foreign service that merely accepts TCP
+// on the same port. A bare TCP-accept probe cannot tell the two apart
+// and would race the liveness poll into a false "ready"; this cannot.
+// Returns on the first successful ListNodes (any node count), else fails
+// on timeout.
+func waitOrchestratorHealthy(ctx context.Context, url, clientDir string, timeout time.Duration) error {
+	client, err := dialNodeControl(url, clientDir)
+	if err != nil {
+		return err
+	}
 	deadline := time.Now().Add(timeout)
+	var lastErr error
 	//daft:lint:disable=forloopbound reason="bounded by the timeout deadline checked each iteration"
 	for {
-		conn, err := net.DialTimeout("tcp", addr, time.Second)
-		if err == nil {
-			_ = conn.Close()
+		if _, err := client.ListNodes(ctx, connect.NewRequest(&nodectrlv1.ListNodesRequest{})); err == nil {
 			return nil
+		} else {
+			lastErr = err
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("no TCP accept on %s within %s: %w", addr, timeout, err)
+			return fmt.Errorf("orchestrator not healthy on %s within %s: %w", url, timeout, lastErr)
 		}
 		if err := sleepCtx(ctx, 200*time.Millisecond); err != nil {
 			return err
@@ -503,21 +568,10 @@ func waitTCPAccept(ctx context.Context, addr string, timeout time.Duration) erro
 // registered sandbox-host (its ListNodes RPC returns a non-empty set)
 // or timeout elapses. It dials with the client identity in clientDir.
 func waitNodeRegistered(ctx context.Context, url, clientDir string, timeout time.Duration) error {
-	id, err := identity.Load(clientDir)
-	if err != nil {
-		return fmt.Errorf("load client identity: %w", err)
-	}
-	peers, err := identity.OpenPeerStore(filepath.Join(clientDir, peersFilename))
-	if err != nil {
-		return fmt.Errorf("open client peer store: %w", err)
-	}
-	tlsCfg, err := identity.ClientTLSConfig(id, peers, "")
+	client, err := dialNodeControl(url, clientDir)
 	if err != nil {
 		return err
 	}
-	httpc := &http.Client{Transport: &http2.Transport{TLSClientConfig: tlsCfg}}
-	client := nodectrlv1connect.NewNodeControlServiceClient(httpc, url)
-
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	//daft:lint:disable=forloopbound reason="bounded by the timeout deadline checked each iteration"
