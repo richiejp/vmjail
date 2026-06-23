@@ -4497,6 +4497,11 @@ Open questions:
       free/occupied, `waitOrchestratorHealthy` against a live orchestrator
       vs a foreign plain-TCP listener, and `Up` failing fast (no pidfile)
       on an occupied addr; plus a manual run against a real foreign 8443.
+      Follow-up: the **default port moved 8443 → 14443** (`DefaultAddr`
+      and the orchestrator `serve --addr` default) since 8443 turned out
+      to be genuinely contested (alt-HTTPS / Tomcat / k8s);
+      14443 keeps the HTTPS mnemonic, dodges 18443 (Bitcoin regtest), and
+      sits below the Linux ephemeral range. Still overridable via `--addr`.
 
 ## Architecture
 

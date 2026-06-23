@@ -61,8 +61,12 @@ const (
 
 	// DefaultAddr is the orchestrator's loopback listen address. The
 	// port must be concrete (not :0) — the child picks the socket, so a
-	// random port would be unknowable to this supervisor.
-	DefaultAddr = "127.0.0.1:8443"
+	// random port would be unknowable to this supervisor. 14443 keeps the
+	// HTTPS-mnemonic lineage while dodging the crowded ones (8443 is
+	// alt-HTTPS / Tomcat / k8s; 18443 is Bitcoin regtest), and sits below
+	// the Linux ephemeral range (32768+) so it won't clash with an
+	// outbound socket. Override with `--addr` if it's still taken.
+	DefaultAddr = "127.0.0.1:14443"
 
 	// defaultReadyTimeout bounds how long Up waits for the orchestrator
 	// to accept and the sandbox-host to register.

@@ -65,7 +65,7 @@ func newServeCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&orchestratorURL, "orchestrator", "",
-		"orchestrator endpoint URL (e.g. https://orchestrator.example:8443)")
+		"orchestrator endpoint URL (e.g. https://orchestrator.example:14443)")
 	cmd.Flags().StringVar(&configDir, "config-dir", "", configDirFlagDesc)
 	cmd.Flags().StringVar(&vsockDir, "vsock-dir", "",
 		"parent directory for per-Sandbox hybrid-vsock UDS files; defaults to <os.TempDir>/daft-sandboxd-vsock")

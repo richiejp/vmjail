@@ -159,7 +159,7 @@ func serveCommand() *cobra.Command {
 			return runServer(ctx, srv)
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", "0.0.0.0:8443",
+	cmd.Flags().StringVar(&addr, "addr", "0.0.0.0:14443",
 		"TCP listen address (host:port)")
 	cmd.Flags().StringVar(&configDir, "config-dir", "",
 		"override the orchestrator config dir (default: $XDG_CONFIG_HOME/daft/orchestrator)")
