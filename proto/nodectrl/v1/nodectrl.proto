@@ -123,6 +123,12 @@ message RegisterNodeRequest {
   // refused — every shipped client sets this field. See
   // ProtocolVersion's doc for the major/minor/patch policy.
   ProtocolVersion protocol_version = 3;
+  // OS hostname of the sandbox-host (os.Hostname), for human-friendly
+  // node selection (`daft workspace target <hostname>`) and display.
+  // Best-effort: empty when the host can't report one. Not an
+  // identifier — the fingerprint stays canonical; the hostname is a
+  // convenience alias that may collide across hosts.
+  string hostname = 4;
 }
 
 // NodeEvent is the envelope for events pushed on the RegisterNode
@@ -356,6 +362,10 @@ message Node {
   google.protobuf.Timestamp registered_at = 4;
   // Most recent Heartbeat (or RegisterNode, whichever is later).
   google.protobuf.Timestamp last_seen_at = 5;
+  // OS hostname reported at RegisterNode time (may be empty, may
+  // collide across hosts). A human-friendly alias for selection /
+  // display, not an identifier — the fingerprint is canonical.
+  string hostname = 6;
 }
 
 message ListNodesResponse {

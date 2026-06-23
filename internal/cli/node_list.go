@@ -31,14 +31,18 @@ func newNodeListCmd() *cobra.Command {
 		orchestrator string
 		timeout      time.Duration
 		configDir    string
+		full         bool
 	)
 	cmd := &cobra.Command{
 		Use:   nodeListSubName,
 		Short: "List Nodes currently registered with the orchestrator",
 		Long: "Dial the orchestrator over HTTP/2 + mTLS using the local daft\n" +
 			"client identity and call NodeControlService.ListNodes.\n" +
-			"Prints one row per live registration: fingerprint, version, CPUs,\n" +
-			"memory, and last-seen age.\n\n" +
+			"Prints one row per live registration: hostname, an abbreviated\n" +
+			"fingerprint, version, CPUs, memory, and last-seen age.\n\n" +
+			"Select a node (e.g. `daft workspace target`) by hostname or by any\n" +
+			"unique prefix of the fingerprint; pass --full here to print the\n" +
+			"complete fingerprints for scripting.\n\n" +
 			"The orchestrator's fingerprint must already be approved with\n" +
 			"`daft auth approve <fingerprint>`.",
 		Args:          cobra.NoArgs,
@@ -50,7 +54,7 @@ func newNodeListCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
 			defer cancel()
-			return runNodeList(ctx, cmd.OutOrStdout(), resolved, configDir, time.Now)
+			return runNodeList(ctx, cmd.OutOrStdout(), resolved, configDir, full, time.Now)
 		},
 	}
 	cmd.Flags().StringVar(&orchestrator, "orchestrator", "",
@@ -59,6 +63,8 @@ func newNodeListCmd() *cobra.Command {
 		"overall timeout for the RPC")
 	cmd.Flags().StringVar(&configDir, "config-dir", "",
 		"override the daft client config dir (default: $XDG_CONFIG_HOME/daft/client)")
+	cmd.Flags().BoolVar(&full, "full", false,
+		"print full fingerprints instead of the abbreviated form")
 	return cmd
 }
 
@@ -68,6 +74,7 @@ func runNodeList(
 	ctx context.Context,
 	stdout io.Writer,
 	orchestrator, configDirOverride string,
+	full bool,
 	now func() time.Time,
 ) error {
 	tracer, owned := tracerForCommand(ctx)
@@ -97,7 +104,7 @@ func runNodeList(
 		return trace.RecordError(ctx, fmt.Errorf("daft node list: %w", err))
 	}
 
-	if err := writeNodeList(stdout, resp.Msg.GetNodes(), now()); err != nil {
+	if err := writeNodeList(stdout, resp.Msg.GetNodes(), now(), full); err != nil {
 		return trace.RecordError(ctx, err)
 	}
 	if owned {
@@ -111,9 +118,9 @@ func runNodeList(
 // writeNodeList renders the snapshot in a tab-aligned table.
 // Kept separate from the RPC plumbing so it's trivial to test with
 // hand-built protos.
-func writeNodeList(w io.Writer, nodes []*nodectrlv1.Node, refNow time.Time) error {
+func writeNodeList(w io.Writer, nodes []*nodectrlv1.Node, refNow time.Time, full bool) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "FINGERPRINT\tVERSION\tCPUS\tMEMORY\tLAST SEEN"); err != nil {
+	if _, err := fmt.Fprintln(tw, "HOSTNAME\tFINGERPRINT\tVERSION\tCPUS\tMEMORY\tLAST SEEN"); err != nil {
 		return err
 	}
 	for _, s := range nodes {
@@ -122,14 +129,11 @@ func writeNodeList(w io.Writer, nodes []*nodectrlv1.Node, refNow time.Time) erro
 		if !lastSeen.IsZero() {
 			age = formatAge(refNow.Sub(lastSeen))
 		}
-		version := s.GetVersion()
-		if version == "" {
-			version = "—"
-		}
 		if _, err := fmt.Fprintf(
-			tw, "%s\t%s\t%d\t%s\t%s\n",
-			s.GetFingerprint(),
-			version,
+			tw, "%s\t%s\t%s\t%d\t%s\t%s\n",
+			orDash(s.GetHostname()),
+			displayFingerprint(s.GetFingerprint(), full),
+			orDash(s.GetVersion()),
 			s.GetResources().GetCpus(),
 			formatBytes(s.GetResources().GetMemoryBytes()),
 			age,
@@ -138,6 +142,30 @@ func writeNodeList(w io.Writer, nodes []*nodectrlv1.Node, refNow time.Time) erro
 		}
 	}
 	return tw.Flush()
+}
+
+// orDash renders an em dash for an empty string so blank columns read
+// as "unset" rather than as a gap.
+func orDash(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+// displayFingerprint renders the fingerprint column: the full canonical
+// string when full is set (for scripting), else the short Abbrev form.
+// A string that doesn't parse falls back to itself, so a malformed wire
+// value is still shown rather than dropped.
+func displayFingerprint(s string, full bool) string {
+	if full {
+		return s
+	}
+	fp, err := identity.ParseFingerprint(s)
+	if err != nil {
+		return s
+	}
+	return fp.Abbrev()
 }
 
 // formatBytes prints a SI-suffix-style size (MiB / GiB). Local to

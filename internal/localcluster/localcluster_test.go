@@ -170,7 +170,7 @@ func TestWaitNodeRegistered(t *testing.T) {
 
 	reg := nodectrl.NewRegistry(nil)
 	node, _ := identity.Generate(identity.RoleSandboxHost)
-	reg.Register(node.Fingerprint(), "v1", nodectrl.Resources{CPUs: 1, MemoryBytes: 1 << 30})
+	reg.Register(node.Fingerprint(), "", "v1", nodectrl.Resources{CPUs: 1, MemoryBytes: 1 << 30})
 
 	url := startOrchestrator(t, clientDir, cliID, reg)
 	if err := waitNodeRegistered(context.Background(), url, clientDir, 5*time.Second); err != nil {

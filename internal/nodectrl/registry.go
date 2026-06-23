@@ -38,7 +38,12 @@ type Resources struct {
 // Entry is a single live registration. Snapshot returns a slice of
 // these; tests and the (Slice A2) ListNodes RPC read them.
 type Entry struct {
-	Fingerprint  identity.Fingerprint
+	Fingerprint identity.Fingerprint
+	// Hostname is the sandbox-host's OS hostname, reported at
+	// registration. A human-friendly alias for selection/display; may
+	// be empty and may collide across hosts. The fingerprint is the
+	// canonical id.
+	Hostname     string
 	Version      string
 	Resources    Resources
 	RegisteredAt time.Time
@@ -73,7 +78,7 @@ func NewRegistry(now func() time.Time) *Registry {
 // the same fingerprint are replaced — last-register-wins — but
 // the original RegisteredAt is preserved if the caller wants to
 // observe "first seen" via Snapshot.
-func (r *Registry) Register(fp identity.Fingerprint, version string, res Resources) time.Time {
+func (r *Registry) Register(fp identity.Fingerprint, hostname, version string, res Resources) time.Time {
 	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -83,6 +88,7 @@ func (r *Registry) Register(fp identity.Fingerprint, version string, res Resourc
 	}
 	r.all[fp] = Entry{
 		Fingerprint:  fp,
+		Hostname:     hostname,
 		Version:      version,
 		Resources:    res,
 		RegisteredAt: registered,
@@ -128,8 +134,8 @@ func (r *Registry) Forget(fp identity.Fingerprint) {
 func (r *Registry) Snapshot() []Entry {
 	r.mu.Lock()
 	out := make([]Entry, 0, len(r.all))
-	for _, e := range r.all {
-		out = append(out, e)
+	for fp := range r.all {
+		out = append(out, r.all[fp])
 	}
 	r.mu.Unlock()
 	sortByFingerprint(out)

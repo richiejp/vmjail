@@ -4502,6 +4502,34 @@ Open questions:
       to be genuinely contested (alt-HTTPS / Tomcat / k8s);
       14443 keeps the HTTPS mnemonic, dodges 18443 (Bitcoin regtest), and
       sits below the Linux ephemeral range. Still overridable via `--addr`.
+- [x] **Select a node by hostname or fingerprint prefix (landed 2026-06-23).**
+      The fingerprint is the canonical node id, but its 70-char colon form
+      is miserable to read and to type. Now the sandbox-host reports its
+      `os.Hostname()` at registration (new `RegisterNodeRequest.hostname` /
+      `Node.hostname` proto fields → `nodectrl.Entry.Hostname` →
+      `nodectrlclient.Config.Hostname`, best-effort, empty is fine — it's
+      an alias, not an id), and:
+      - **`daft node list`** gains a `HOSTNAME` column and abbreviates the
+        fingerprint to its first 4 bytes (`AB:CD:EF:01…`, via
+        `identity.Fingerprint.Abbrev`); `--full` prints the canonical form
+        for scripting.
+      - **`daft workspace target <node>`** resolves the arg client-side
+        (`resolveTargetSelector` → `resolveNodeSelector`, one bounded
+        NodeControl `ListNodes` dial): an exact hostname wins first, then a
+        unique fingerprint-hex prefix (`Fingerprint.HasHexPrefix`, any
+        spelling). Zero matches → error pointing at `daft node list`; many
+        → an error listing the candidates so the user picks a longer prefix
+        or the full fingerprint. A full fingerprint still works WITHOUT a
+        lookup, so a target can be pinned to a node that hasn't connected
+        yet (validated at launch, as before). Empty clears the target.
+      Verified: `Abbrev`/`HasHexPrefix` unit tests; `ListNodes` carries the
+      hostname; `node list` renders + abbreviates (and `--full`);
+      `resolveNodeSelector` by-hostname / by-prefix / ambiguous-each /
+      no-match / full-fp / empty; and an integration test driving `daft
+      workspace target <hostname>` against a live orchestrator+registry,
+      asserting the stored target is the resolved canonical fingerprint.
+      (Also made the orchestrator-resolution tests hermetic against a
+      developer's running local cluster by isolating `XDG_STATE_HOME`.)
 
 ## Architecture
 

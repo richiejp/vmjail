@@ -132,6 +132,7 @@ func runServe(
 		Identity:          id,
 		Peers:             peers,
 		Version:           version.Version,
+		Hostname:          detectHostname(),
 		HeartbeatInterval: heartbeatInterval,
 		SandboxEvents:     dispatcher,
 		LiveSnapshot:      dispatcher.LiveSnapshot,
@@ -472,6 +473,18 @@ func extractWithEnvFallback(base sandbox.Config) func(dir string) (bundled.Paths
 // must already be absolute. Empty override → a per-sandboxd-process
 // subdir under os.TempDir so test parallelism and multiple daemons
 // on one host don't collide on UDS paths.
+// detectHostname returns the OS hostname for node registration, or ""
+// if the host can't report one. Best-effort: the fingerprint is the
+// canonical node id, so a missing hostname only costs the friendly
+// `daft workspace target <hostname>` alias, never correctness.
+func detectHostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	return h
+}
+
 func resolveVsockDir(override string) (string, error) {
 	dir := override
 	if dir == "" {

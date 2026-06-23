@@ -287,9 +287,9 @@ func (r *Reconciler) staleNodes(now time.Time) []identity.Fingerprint {
 	entries := r.nodes.Snapshot()
 	cutoff := now.Add(-r.nodeGrace)
 	var out []identity.Fingerprint
-	for _, e := range entries {
-		if e.LastSeenAt.Before(cutoff) {
-			out = append(out, e.Fingerprint)
+	for i := range entries {
+		if entries[i].LastSeenAt.Before(cutoff) {
+			out = append(out, entries[i].Fingerprint)
 		}
 	}
 	return out

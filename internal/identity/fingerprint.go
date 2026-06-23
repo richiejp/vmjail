@@ -70,6 +70,55 @@ func (f Fingerprint) String() string {
 	return sb.String()
 }
 
+// abbrevBytes is how many leading fingerprint bytes Abbrev renders.
+// Four bytes (8 hex chars) is enough to be unique in any realistic
+// single-orchestrator fleet while staying glanceable in a table.
+const abbrevBytes = 4
+
+// Abbrev renders a short, human-glanceable prefix of the fingerprint —
+// "AB:CD:EF:01…" — for listings where the full 70-char canonical form
+// is too noisy. The rendered hex is a valid prefix to type back into a
+// prefix-accepting selector (see HasHexPrefix); the trailing ellipsis
+// is display-only and is not part of that prefix.
+func (f Fingerprint) Abbrev() string {
+	var sb strings.Builder
+	for i := 0; i < abbrevBytes && i < len(f); i++ {
+		if i > 0 {
+			sb.WriteByte(':')
+		}
+		fmt.Fprintf(&sb, "%02X", f[i])
+	}
+	sb.WriteString("…")
+	return sb.String()
+}
+
+// normalizeFingerprintHex lowercases s and strips the sha256:/SHA256:
+// algorithm tag, all colons, and surrounding space — reducing any
+// accepted fingerprint spelling (canonical, bare hex, abbreviated) to a
+// plain lowercase hex run for prefix comparison.
+func normalizeFingerprintHex(s string) string {
+	s = strings.TrimSpace(s)
+	if rest, ok := strings.CutPrefix(s, "sha256:"); ok {
+		s = rest
+	} else if rest, ok := strings.CutPrefix(s, "SHA256:"); ok {
+		s = rest
+	}
+	return strings.ToLower(strings.ReplaceAll(s, ":", ""))
+}
+
+// HasHexPrefix reports whether prefix — an abbreviated fingerprint in
+// any accepted spelling (optional sha256: tag, optional colons, any
+// case) — is a prefix of f's canonical hex. An empty or all-separator
+// prefix matches nothing, so it never silently selects an arbitrary
+// node. A non-hex prefix (e.g. a hostname) simply never matches.
+func (f Fingerprint) HasHexPrefix(prefix string) bool {
+	norm := normalizeFingerprintHex(prefix)
+	if norm == "" {
+		return false
+	}
+	return strings.HasPrefix(normalizeFingerprintHex(f.String()), norm)
+}
+
 // ParseFingerprint accepts our canonical "sha256:AA:BB:..." form, the
 // same hex without colons, and either case. The "sha256:" prefix is
 // optional for ergonomics — if a user pastes a bare hex string from

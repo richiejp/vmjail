@@ -10,11 +10,15 @@ import (
 	"testing"
 )
 
-// clearOrchestratorEnv forces $DAFT_ORCHESTRATOR empty for the test
-// so resolution is hermetic regardless of the developer's shell.
+// clearOrchestratorEnv makes orchestrator resolution hermetic regardless
+// of the developer's environment: it forces $DAFT_ORCHESTRATOR empty and
+// points XDG_STATE_HOME at a throwaway dir so the local-cluster
+// discovery layer can't latch onto a real `daft cluster up` the
+// developer happens to have running.
 func clearOrchestratorEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv(orchestratorEnvVar, "")
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
 }
 
 // chdirClean moves into a fresh temp dir so no stray ./.daft/config.json

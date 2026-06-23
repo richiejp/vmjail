@@ -61,8 +61,8 @@ func TestListNodesReflectsRegistry(t *testing.T) {
 	caller := mustGenerate(t, identity.RoleOrchestrator)
 	sandboxA := mustGenerate(t, identity.RoleSandboxHost)
 	sandboxB := mustGenerate(t, identity.RoleSandboxHost)
-	reg.Register(sandboxA.Fingerprint(), "v1.0.0", nodectrl.Resources{CPUs: 2, MemoryBytes: 1 << 30})
-	reg.Register(sandboxB.Fingerprint(), "v1.0.1", nodectrl.Resources{CPUs: 4, MemoryBytes: 4 << 30})
+	reg.Register(sandboxA.Fingerprint(), "host-a", "v1.0.0", nodectrl.Resources{CPUs: 2, MemoryBytes: 1 << 30})
+	reg.Register(sandboxB.Fingerprint(), "host-b", "v1.0.1", nodectrl.Resources{CPUs: 4, MemoryBytes: 4 << 30})
 
 	req := connect.NewRequest(&nodectrlv1.ListNodesRequest{})
 	req.Header().Set(peerFingerprintHeader, caller.Fingerprint().String())
@@ -97,6 +97,9 @@ func TestListNodesReflectsRegistry(t *testing.T) {
 	}
 	if entryA.GetVersion() != "v1.0.0" {
 		t.Errorf("version = %q, want v1.0.0", entryA.GetVersion())
+	}
+	if entryA.GetHostname() != "host-a" {
+		t.Errorf("hostname = %q, want host-a", entryA.GetHostname())
 	}
 	if entryA.GetResources().GetCpus() != 2 || entryA.GetResources().GetMemoryBytes() != 1<<30 {
 		t.Errorf("resources = %+v, want {2, 1GiB}", entryA.GetResources())

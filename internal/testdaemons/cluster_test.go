@@ -32,7 +32,10 @@ func TestClusterDaftNodeListShowsSandboxd(t *testing.T) {
 	c := testdaemons.NewCluster(t)
 	s := testtmux.New(t)
 
-	cmd := fmt.Sprintf("%s --config-dir %s node list --orchestrator %s",
+	// --full so node list prints the canonical fingerprint; the
+	// default view abbreviates it (AB:CD:EF:01…), which WaitFor's
+	// exact-string match below would never find.
+	cmd := fmt.Sprintf("%s --config-dir %s node list --full --orchestrator %s",
 		c.DaftBin, c.ClientConfigDir, c.OrchestratorURL)
 	s.Enter(cmd)
 	// Registration is asynchronous on the sandboxd side; give it

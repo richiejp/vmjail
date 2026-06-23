@@ -74,6 +74,10 @@ type Config struct {
 	// Version is reported alongside the resource advertisement so
 	// the orchestrator can reject too-old sandboxes.
 	Version string
+	// Hostname is the sandbox-host's OS hostname, reported at
+	// registration for human-friendly node selection/display. Empty is
+	// fine (the fingerprint is the canonical id).
+	Hostname string
 	// HeartbeatInterval is the ticker cadence. Zero ⇒
 	// DefaultHeartbeatInterval.
 	HeartbeatInterval time.Duration
@@ -197,6 +201,7 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources nodectrl.Resour
 	stream, err := c.ctrl.RegisterNode(ctx, connect.NewRequest(
 		&nodectrlv1.RegisterNodeRequest{
 			Version:         c.cfg.Version,
+			Hostname:        c.cfg.Hostname,
 			Resources:       resourcesToProto(resources),
 			ProtocolVersion: localProtocolVersionProto(),
 		},

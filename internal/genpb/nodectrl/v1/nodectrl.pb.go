@@ -236,8 +236,14 @@ type RegisterNodeRequest struct {
 	// refused — every shipped client sets this field. See
 	// ProtocolVersion's doc for the major/minor/patch policy.
 	ProtocolVersion *ProtocolVersion `protobuf:"bytes,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// OS hostname of the sandbox-host (os.Hostname), for human-friendly
+	// node selection (`daft workspace target <hostname>`) and display.
+	// Best-effort: empty when the host can't report one. Not an
+	// identifier — the fingerprint stays canonical; the hostname is a
+	// convenience alias that may collide across hosts.
+	Hostname      string `protobuf:"bytes,4,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RegisterNodeRequest) Reset() {
@@ -289,6 +295,13 @@ func (x *RegisterNodeRequest) GetProtocolVersion() *ProtocolVersion {
 		return x.ProtocolVersion
 	}
 	return nil
+}
+
+func (x *RegisterNodeRequest) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
 }
 
 // NodeEvent is the envelope for events pushed on the RegisterNode
@@ -1494,7 +1507,11 @@ type Node struct {
 	// When the orchestrator first accepted this registration.
 	RegisteredAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=registered_at,json=registeredAt,proto3" json:"registered_at,omitempty"`
 	// Most recent Heartbeat (or RegisterNode, whichever is later).
-	LastSeenAt    *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_seen_at,json=lastSeenAt,proto3" json:"last_seen_at,omitempty"`
+	LastSeenAt *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=last_seen_at,json=lastSeenAt,proto3" json:"last_seen_at,omitempty"`
+	// OS hostname reported at RegisterNode time (may be empty, may
+	// collide across hosts). A human-friendly alias for selection /
+	// display, not an identifier — the fingerprint is canonical.
+	Hostname      string `protobuf:"bytes,6,opt,name=hostname,proto3" json:"hostname,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1564,6 +1581,13 @@ func (x *Node) GetLastSeenAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Node) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
 type ListNodesResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Nodes         []*Node                `protobuf:"bytes,1,rep,name=nodes,proto3" json:"nodes,omitempty"`
@@ -1619,11 +1643,12 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\x05patch\x18\x03 \x01(\rR\x05patch\"F\n" +
 	"\rHostResources\x12\x12\n" +
 	"\x04cpus\x18\x01 \x01(\rR\x04cpus\x12!\n" +
-	"\fmemory_bytes\x18\x02 \x01(\x04R\vmemoryBytes\"\xbc\x01\n" +
+	"\fmemory_bytes\x18\x02 \x01(\x04R\vmemoryBytes\"\xd8\x01\n" +
 	"\x13RegisterNodeRequest\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12=\n" +
 	"\tresources\x18\x02 \x01(\v2\x1f.daft.nodectrl.v1.HostResourcesR\tresources\x12L\n" +
-	"\x10protocol_version\x18\x03 \x01(\v2!.daft.nodectrl.v1.ProtocolVersionR\x0fprotocolVersion\"\xd0\x02\n" +
+	"\x10protocol_version\x18\x03 \x01(\v2!.daft.nodectrl.v1.ProtocolVersionR\x0fprotocolVersion\x12\x1a\n" +
+	"\bhostname\x18\x04 \x01(\tR\bhostname\"\xd0\x02\n" +
 	"\tNodeEvent\x12;\n" +
 	"\x05ready\x18\x01 \x01(\v2#.daft.nodectrl.v1.SubscriptionReadyH\x00R\x05ready\x12?\n" +
 	"\asandbox\x18\x02 \x01(\v2#.daft.nodectrl.v1.SandboxWatchEventH\x00R\asandbox\x12@\n" +
@@ -1693,14 +1718,15 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\texit_code\x18\x03 \x01(\x05R\bexitCode\"H\n" +
 	"\x11HeartbeatResponse\x123\n" +
 	"\aseen_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x06seenAt\"\x12\n" +
-	"\x10ListNodesRequest\"\x80\x02\n" +
+	"\x10ListNodesRequest\"\x9c\x02\n" +
 	"\x04Node\x12 \n" +
 	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12=\n" +
 	"\tresources\x18\x03 \x01(\v2\x1f.daft.nodectrl.v1.HostResourcesR\tresources\x12?\n" +
 	"\rregistered_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\fregisteredAt\x12<\n" +
 	"\flast_seen_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"lastSeenAt\"A\n" +
+	"lastSeenAt\x12\x1a\n" +
+	"\bhostname\x18\x06 \x01(\tR\bhostname\"A\n" +
 	"\x11ListNodesResponse\x12,\n" +
 	"\x05nodes\x18\x01 \x03(\v2\x16.daft.nodectrl.v1.NodeR\x05nodes*g\n" +
 	"\x0eObserverSource\x12\x1f\n" +

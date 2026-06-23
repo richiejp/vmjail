@@ -429,14 +429,24 @@ func newWorkspaceDevcontainerCmd() *cobra.Command {
 func newWorkspaceTargetCmd() *cobra.Command {
 	var opts workspaceClientOpts
 	cmd := &cobra.Command{
-		Use:           targetSubName + " <sandbox-fingerprint>",
-		Short:         "Pin the workspace to a specific sandbox-host (or clear with no arg)",
+		Use:   targetSubName + " <node>",
+		Short: "Pin the workspace to a specific sandbox-host (or clear with no arg)",
+		Long: "Pin the workspace to a sandbox-host. <node> may be the host's\n" +
+			"hostname, any unique prefix of its fingerprint, or the full\n" +
+			"fingerprint (`daft node list` shows hostnames + abbreviated\n" +
+			"fingerprints). Hostname/prefix selectors are resolved against the\n" +
+			"live node set; a full fingerprint is accepted even for a host that\n" +
+			"hasn't connected yet. No arg clears the target.",
 		Args:          cobra.MaximumNArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var fp string
+			var selector string
 			if len(args) > 0 {
-				fp = args[0]
+				selector = args[0]
+			}
+			fp, err := resolveTargetSelector(cmd.Context(), opts, selector)
+			if err != nil {
+				return err
 			}
 			return runCatalogCmd(cmd, opts, targetSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {

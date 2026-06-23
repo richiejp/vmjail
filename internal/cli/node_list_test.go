@@ -97,9 +97,11 @@ func TestNodeListRoundTripsAgainstOrchestrator(t *testing.T) {
 	if err := srvStore.Add(identity.Peer{Fingerprint: cliID.Fingerprint()}); err != nil {
 		t.Fatalf("server Add: %v", err)
 	}
+	listFP := fakeFingerprintForList(t)
 	addr, srvID := runOrchestratorWithNodeRegistry(t, srvStore, func(reg *nodectrl.Registry) {
 		reg.Register(
-			fakeFingerprintForList(t),
+			listFP,
+			"node-alpha",
 			"v1.2.3",
 			nodectrl.Resources{CPUs: 4, MemoryBytes: 2 << 30},
 		)
@@ -118,14 +120,34 @@ func TestNodeListRoundTripsAgainstOrchestrator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("node list: %v", err)
 	}
-	if !strings.Contains(stdout, "FINGERPRINT") {
+	if !strings.Contains(stdout, "HOSTNAME") || !strings.Contains(stdout, "FINGERPRINT") {
 		t.Errorf("output missing header row, got:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "node-alpha") {
+		t.Errorf("output missing hostname, got:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "v1.2.3") {
 		t.Errorf("output missing version, got:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "2.0 GiB") {
 		t.Errorf("output missing rendered memory, got:\n%s", stdout)
+	}
+	// Default output abbreviates the fingerprint; --full prints the
+	// canonical 70-char form for scripting.
+	if strings.Contains(stdout, listFP.String()) {
+		t.Errorf("default output should abbreviate the fingerprint, got:\n%s", stdout)
+	}
+	fullOut, _, err := runDaft(
+		t, "node", nodeListSubName,
+		"--orchestrator", "https://"+addr,
+		"--config-dir", clientDir,
+		"--timeout", "3s", "--full",
+	)
+	if err != nil {
+		t.Fatalf("node list --full: %v", err)
+	}
+	if !strings.Contains(fullOut, listFP.String()) {
+		t.Errorf("--full output should contain the canonical fingerprint, got:\n%s", fullOut)
 	}
 }
 
@@ -137,7 +159,7 @@ func TestRunNodeListPropagatesIdentityLoadError(t *testing.T) {
 	mustWrite(t, filepath.Join(dir, "cert.pem"), "garbage")
 	mustWrite(t, filepath.Join(dir, "key.pem"), "garbage")
 	var out bytes.Buffer
-	err := runNodeList(context.Background(), &out, unreachableOrchestrator, dir, time.Now)
+	err := runNodeList(context.Background(), &out, unreachableOrchestrator, dir, false, time.Now)
 	if err == nil {
 		t.Fatal("expected error for corrupt identity")
 	}
@@ -152,7 +174,7 @@ func TestRunNodeListPropagatesPeerStoreError(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(dir, peersFilename), "not json")
 	var out bytes.Buffer
-	err := runNodeList(context.Background(), &out, unreachableOrchestrator, dir, time.Now)
+	err := runNodeList(context.Background(), &out, unreachableOrchestrator, dir, false, time.Now)
 	if err == nil {
 		t.Fatal("expected error for corrupt peer store")
 	}
@@ -168,7 +190,7 @@ func TestRunNodeListPropagatesDialError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	var out bytes.Buffer
-	err := runNodeList(ctx, &out, unreachableOrchestrator, dir, time.Now)
+	err := runNodeList(ctx, &out, unreachableOrchestrator, dir, false, time.Now)
 	if err == nil {
 		t.Fatal("expected error dialing unreachable orchestrator")
 	}
@@ -179,7 +201,7 @@ func TestRunNodeListPropagatesDialError(t *testing.T) {
 func TestRunNodeListPropagatesStdoutWriteError(t *testing.T) {
 	err := writeNodeList(failingWriter{}, []*nodectrlv1.Node{
 		{Fingerprint: "fp", Version: "v0", Resources: &nodectrlv1.HostResources{Cpus: 1, MemoryBytes: 0}, LastSeenAt: timestamppb.New(time.Unix(0, 0))},
-	}, time.Unix(0, 0))
+	}, time.Unix(0, 0), false)
 	if err == nil {
 		t.Fatal("expected error from failing writer")
 	}
@@ -192,22 +214,23 @@ func TestWriteNodeListRendersAllRows(t *testing.T) {
 	rows := []*nodectrlv1.Node{
 		{
 			Fingerprint: "aaa",
+			Hostname:    "host-aaa",
 			Version:     "v1",
 			Resources:   &nodectrlv1.HostResources{Cpus: 2, MemoryBytes: 512 << 20},
 			LastSeenAt:  timestamppb.New(ref.Add(-90 * time.Second)),
 		},
 		{
-			// Empty version → "—"; zero LastSeenAt → "—".
+			// Empty hostname + version → "—"; zero LastSeenAt → "—".
 			Fingerprint: "bbb",
 			Resources:   &nodectrlv1.HostResources{Cpus: 1, MemoryBytes: 0},
 		},
 	}
 	var buf bytes.Buffer
-	if err := writeNodeList(&buf, rows, ref); err != nil {
+	if err := writeNodeList(&buf, rows, ref, false); err != nil {
 		t.Fatalf("writeNodeList: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"aaa", "bbb", "v1", "1m30s", "—", "512.0 MiB", "0 B"} {
+	for _, want := range []string{"host-aaa", "aaa", "bbb", "v1", "1m30s", "—", "512.0 MiB", "0 B"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q, got:\n%s", want, out)
 		}

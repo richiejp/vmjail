@@ -188,7 +188,7 @@ func (h *NodeControlHandler) RegisterNode(
 	}
 
 	resources := resourcesFromProto(req.Msg.GetResources())
-	acceptedAt := h.reg.Register(fp, req.Msg.GetVersion(), resources)
+	acceptedAt := h.reg.Register(fp, req.Msg.GetHostname(), req.Msg.GetVersion(), resources)
 	defer h.reg.Forget(fp)
 
 	events := h.attachStream(fp)
@@ -309,6 +309,7 @@ func localProtocolVersionProto() *nodectrlv1.ProtocolVersion {
 func entryToProto(e nodectrl.Entry) *nodectrlv1.Node {
 	return &nodectrlv1.Node{
 		Fingerprint: e.Fingerprint.String(),
+		Hostname:    e.Hostname,
 		Version:     e.Version,
 		Resources: &nodectrlv1.HostResources{
 			Cpus:        e.Resources.CPUs,

@@ -182,7 +182,7 @@ func TestSweepFlipsUnreachableNodes(t *testing.T) {
 	nodeFP := mustFingerprint(t)
 	// Register the Node "long ago" so it's already stale by the
 	// time the reconciler queries it.
-	nodes.Register(nodeFP, "v0", nodectrl.Resources{})
+	nodes.Register(nodeFP, "", "v0", nodectrl.Resources{})
 	readyDispatchedWorkspace(t, cat, nodeFP, time.Now())
 
 	// Now() is fixedClock's monotone advance; nodeGrace=1ms so the
@@ -209,7 +209,7 @@ func TestSweepIgnoresFreshNodes(t *testing.T) {
 	cat := workspacecatalog.NewStore(clock)
 	nodes := nodectrl.NewRegistry(clock)
 	nodeFP := mustFingerprint(t)
-	nodes.Register(nodeFP, "v0", nodectrl.Resources{})
+	nodes.Register(nodeFP, "", "v0", nodectrl.Resources{})
 	readyDispatchedWorkspace(t, cat, nodeFP, time.Now())
 
 	r := New(Config{Catalog: cat, Nodes: nodes, NodeGrace: time.Hour, Now: clock})

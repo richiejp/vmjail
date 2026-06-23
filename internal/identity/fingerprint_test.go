@@ -169,3 +169,48 @@ func FuzzParseFingerprint(f *testing.F) {
 		}
 	})
 }
+
+// fpFromHexPrefix builds a fingerprint whose canonical hex starts with
+// prefixHex (lowercase, no colons), zero-padded to the full width.
+func fpFromHexPrefix(t *testing.T, prefixHex string) Fingerprint {
+	t.Helper()
+	full := prefixHex + strings.Repeat("0", 2*sha256.Size-len(prefixHex))
+	fp, err := ParseFingerprint(full)
+	if err != nil {
+		t.Fatalf("ParseFingerprint(%q): %v", full, err)
+	}
+	return fp
+}
+
+func TestFingerprintAbbrev(t *testing.T) {
+	fp := fpFromHexPrefix(t, "01020304ff")
+	if got, want := fp.Abbrev(), "01:02:03:04…"; got != want {
+		t.Errorf("Abbrev() = %q, want %q", got, want)
+	}
+}
+
+func TestFingerprintHasHexPrefix(t *testing.T) {
+	fp := fpFromHexPrefix(t, "01020304")
+	cases := []struct {
+		prefix string
+		want   bool
+	}{
+		{"01", true},
+		{"0102", true},
+		{"01:02", true},
+		{"sha256:01:02", true},
+		{"SHA256:0102", true},
+		{"01:02:03:04", true}, // matches Abbrev's hex
+		{fp.String(), true},   // the whole canonical string is its own prefix
+		{"01020305", false},   // diverges in the last nibble
+		{"99", false},         // wrong first byte
+		{"node-host", false},  // a hostname (non-hex) never matches
+		{"", false},           // empty selects nothing
+		{":", false},          // separators-only normalises to empty
+	}
+	for _, tc := range cases {
+		if got := fp.HasHexPrefix(tc.prefix); got != tc.want {
+			t.Errorf("HasHexPrefix(%q) = %v, want %v", tc.prefix, got, tc.want)
+		}
+	}
+}
