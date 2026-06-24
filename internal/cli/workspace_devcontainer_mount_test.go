@@ -16,6 +16,10 @@ import (
 // tests; hoisted so goconst stops flagging the repeated literal.
 const projRemote = "/workspaces/proj"
 
+// dcConventionPath is the primary Dev Containers convention location,
+// hoisted so goconst stops flagging the repeated literal across tests.
+const dcConventionPath = ".devcontainer/devcontainer.json"
+
 // writeDevcontainerJSON drops a devcontainer.json at dir/<rel> and
 // returns its host-relative path from a cwd of base.
 func writeDevcontainerJSON(t *testing.T, dir, body string) string {
@@ -240,7 +244,7 @@ func TestWorkspaceDevcontainerAutoMount(t *testing.T) {
 		`{"image":"x","workspaceFolder":"/code"}`)
 
 	out, _, err := runDaft(t, append(
-		[]string{workspaceCmdName, devcontainerSubName, ".devcontainer/devcontainer.json"},
+		[]string{workspaceCmdName, devcontainerSubName, dcConventionPath},
 		commonArgs...,
 	)...)
 	if err != nil {
@@ -272,7 +276,7 @@ func TestWorkspaceDevcontainerAutoMountMissingFileWarns(t *testing.T) {
 
 	t.Chdir(t.TempDir()) // no devcontainer.json on disk
 	_, stderr, err := runDaft(t, append(
-		[]string{workspaceCmdName, devcontainerSubName, ".devcontainer/devcontainer.json"},
+		[]string{workspaceCmdName, devcontainerSubName, dcConventionPath},
 		commonArgs...,
 	)...)
 	if err != nil {
@@ -288,4 +292,114 @@ func TestWorkspaceDevcontainerAutoMountMissingFileWarns(t *testing.T) {
 	if len(mounts) != 0 {
 		t.Errorf("dir-local mounts = %+v, want none when the json is unreadable", mounts)
 	}
+}
+
+// TestAutodetectDevcontainerPath: the .devcontainer/ location wins over
+// the root-level variant, the root variant is the fallback, and a project
+// with neither errors with a message naming both searched paths.
+func TestAutodetectDevcontainerPath(t *testing.T) {
+	t.Run("prefers .devcontainer dir", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		writeDevcontainerJSON(t, filepath.Join(dir, devcontainerDirName), `{}`)
+		if err := os.WriteFile(filepath.Join(dir, ".devcontainer.json"), []byte(`{}`), 0o600); err != nil {
+			t.Fatalf("write root variant: %v", err)
+		}
+		got, err := autodetectDevcontainerPath()
+		if err != nil {
+			t.Fatalf("autodetect: %v", err)
+		}
+		if got != dcConventionPath {
+			t.Errorf("path = %q, want %q", got, dcConventionPath)
+		}
+	})
+
+	t.Run("falls back to root variant", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		if err := os.WriteFile(filepath.Join(dir, ".devcontainer.json"), []byte(`{}`), 0o600); err != nil {
+			t.Fatalf("write root variant: %v", err)
+		}
+		got, err := autodetectDevcontainerPath()
+		if err != nil {
+			t.Fatalf("autodetect: %v", err)
+		}
+		if got != ".devcontainer.json" {
+			t.Errorf("path = %q, want .devcontainer.json", got)
+		}
+	})
+
+	t.Run("none found errors", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		_, err := autodetectDevcontainerPath()
+		if err == nil {
+			t.Fatal("want error when no devcontainer.json exists")
+		}
+		if !strings.Contains(err.Error(), dcConventionPath) || !strings.Contains(err.Error(), ".devcontainer.json") {
+			t.Errorf("error %q should name both searched paths", err)
+		}
+	})
+
+	t.Run("a directory at the path is not matched", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		// A bare `.devcontainer.json` directory must not satisfy detection.
+		if err := os.Mkdir(filepath.Join(dir, ".devcontainer.json"), 0o750); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if _, err := autodetectDevcontainerPath(); err == nil {
+			t.Error("a directory named .devcontainer.json should not count as a match")
+		}
+	})
+}
+
+// TestResolveDevcontainerArg covers the arg/flag → path mapping: explicit
+// arg passthrough, --clear yielding "", --clear with an arg as a usage
+// error, and the no-arg auto-detect + its not-found error.
+func TestResolveDevcontainerArg(t *testing.T) {
+	t.Run("explicit arg wins", func(t *testing.T) {
+		got, err := resolveDevcontainerArg([]string{"custom/devcontainer.json"}, false)
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if got != "custom/devcontainer.json" {
+			t.Errorf("path = %q, want custom/devcontainer.json", got)
+		}
+	})
+
+	t.Run("clear yields empty", func(t *testing.T) {
+		got, err := resolveDevcontainerArg(nil, true)
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if got != "" {
+			t.Errorf("path = %q, want empty for --clear", got)
+		}
+	})
+
+	t.Run("clear with arg errors", func(t *testing.T) {
+		if _, err := resolveDevcontainerArg([]string{"x"}, true); err == nil {
+			t.Error("--clear with a path arg should error")
+		}
+	})
+
+	t.Run("no arg auto-detects", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		writeDevcontainerJSON(t, filepath.Join(dir, devcontainerDirName), `{}`)
+		got, err := resolveDevcontainerArg(nil, false)
+		if err != nil {
+			t.Fatalf("resolve: %v", err)
+		}
+		if got != dcConventionPath {
+			t.Errorf("path = %q, want %q", got, dcConventionPath)
+		}
+	})
+
+	t.Run("no arg, nothing to detect, errors", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		if _, err := resolveDevcontainerArg(nil, false); err == nil {
+			t.Error("no arg with no devcontainer.json should error")
+		}
+	})
 }

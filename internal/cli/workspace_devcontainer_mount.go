@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"connectrpc.com/connect"
 
@@ -19,6 +20,52 @@ import (
 // devcontainer.json (`.devcontainer/devcontainer.json`). When the json
 // lives there, the project root the workload sees is its parent.
 const devcontainerDirName = ".devcontainer"
+
+// devcontainerConventionPaths returns the locations the Dev Containers
+// spec searches for a devcontainer.json, relative to the workspace content
+// root, in precedence order: the `.devcontainer/` subdir first, then the
+// root-level `.devcontainer.json` variant.
+func devcontainerConventionPaths() []string {
+	return []string{
+		filepath.Join(devcontainerDirName, "devcontainer.json"),
+		".devcontainer.json",
+	}
+}
+
+// resolveDevcontainerArg turns the command's positional args plus the
+// --clear flag into the devcontainer path to record: "" when clearing,
+// the explicit arg when one is given, otherwise the auto-detected
+// convention path. --clear alongside a positional arg is a usage error,
+// as is the no-arg case when no conventional devcontainer.json exists.
+func resolveDevcontainerArg(args []string, clearPath bool) (string, error) {
+	if clearPath {
+		if len(args) > 0 {
+			return "", fmt.Errorf("daft workspace devcontainer: --clear takes no path argument")
+		}
+		return "", nil
+	}
+	if len(args) > 0 {
+		return args[0], nil
+	}
+	return autodetectDevcontainerPath()
+}
+
+// autodetectDevcontainerPath returns the first of the conventional
+// devcontainer.json locations that exists relative to the current
+// directory (the workspace content root), or an error naming the searched
+// paths when none is present.
+func autodetectDevcontainerPath() (string, error) {
+	paths := devcontainerConventionPaths()
+	for _, rel := range paths {
+		if fi, err := os.Stat(rel); err == nil && !fi.IsDir() {
+			return rel, nil
+		}
+	}
+	return "", fmt.Errorf(
+		"daft workspace devcontainer: no devcontainer.json found in the conventional locations (%s); pass an explicit path or use --clear",
+		strings.Join(paths, ", "),
+	)
+}
 
 // devcontainerWorkspaceMount is the workspace-content mount a
 // devcontainer implies: the host project root shared into the guest at

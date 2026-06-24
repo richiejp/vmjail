@@ -372,24 +372,29 @@ func newWorkspaceImageCmd() *cobra.Command {
 //nolint:dupl // catalog subcommands are structurally parallel by design — runCatalogCmd factors the body.
 func newWorkspaceDevcontainerCmd() *cobra.Command {
 	var opts workspaceClientOpts
+	var clearPath bool
 	cmd := &cobra.Command{
-		Use:   devcontainerSubName + " <path>",
-		Short: "Set the path to a devcontainer.json within the workspace content (no arg clears it)",
+		Use:   devcontainerSubName + " [path]",
+		Short: "Set the path to a devcontainer.json within the workspace content (auto-detects the convention when no path is given)",
 		Long: "The path is relative to the workspace content root (e.g.\n" +
-			".devcontainer/devcontainer.json), not a host path. At launch the\n" +
-			"orchestrator reads it from the pushed content as a base spec and\n" +
-			"overlays the workspace's explicit image/mounts/env/ports on top.\n\n" +
+			".devcontainer/devcontainer.json), not a host path. With no path,\n" +
+			"the conventional locations are auto-detected in order:\n" +
+			".devcontainer/devcontainer.json, then .devcontainer.json at the\n" +
+			"content root. At launch the orchestrator reads it from the pushed\n" +
+			"content as a base spec and overlays the workspace's explicit\n" +
+			"image/mounts/env/ports on top.\n\n" +
 			"Setting a devcontainer also registers its workspace-content mount\n" +
 			"automatically (following the Dev Containers convention: the host\n" +
 			"project root shared into the guest at workspaceFolder, defaulting\n" +
 			"to /workspaces/<basename>), so a separate `daft workspace mount`\n" +
-			"is not needed. Sync stays push/pull, not a live bind.",
+			"is not needed. Sync stays push/pull, not a live bind.\n\n" +
+			"Pass --clear to unset the workspace's devcontainer path.",
 		Args:          cobra.MaximumNArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var path string
-			if len(args) > 0 {
-				path = args[0]
+			path, err := resolveDevcontainerArg(args, clearPath)
+			if err != nil {
+				return err
 			}
 			// Record the devcontainer.json's host path dir-local so
 			// `daft workspace up` can re-parse it for forwardPorts (the
@@ -421,6 +426,7 @@ func newWorkspaceDevcontainerCmd() *cobra.Command {
 				})
 		},
 	}
+	cmd.Flags().BoolVar(&clearPath, "clear", false, "unset the workspace's devcontainer path")
 	bindWorkspaceClientFlags(cmd, &opts)
 	return cmd
 }

@@ -2871,6 +2871,21 @@ the user-host or in CI today.
       a purely-derived mount isn't shown by `daft workspace mount` listing
       — here it IS a catalog entry, so it shows, but extra-mount parity is
       future work.
+    - **3g.1 (landed 2026-06-24) — auto-detect the conventional
+      devcontainer.json when no path is given (user).** `.devcontainer/
+      devcontainer.json` is the Dev Containers default, so `daft workspace
+      devcontainer` with no arg now auto-detects rather than requiring the
+      path to be typed. `resolveDevcontainerArg` (in
+      `workspace_devcontainer_mount.go`) maps args+flags → the path to
+      record: explicit arg wins; **no arg → `autodetectDevcontainerPath`**
+      walks the convention list (`.devcontainer/devcontainer.json`, then the
+      root-level `.devcontainer.json`) relative to cwd and returns the first
+      regular file, erroring (naming both searched paths) when neither
+      exists. Clearing moved off the no-arg slot to an explicit **`--clear`**
+      flag (`--clear` + a positional arg is a usage error). Verified: unit
+      tests for the detect precedence / fallback / not-found / dir-not-a-file
+      cases and the arg→path mapping (arg passthrough, `--clear`→"",
+      `--clear`+arg error, no-arg detect + not-found).
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **devcontainer features**.
 
