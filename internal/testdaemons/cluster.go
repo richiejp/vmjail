@@ -318,7 +318,9 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		proxyURL = "http://" + net.JoinHostPort(
 			sandboxnet.DefaultGatewayIP, strconv.Itoa(int(sandboxnet.DefaultProxyPort)),
 		)
-		cacheDir, offline := resolveEgressCache(os.Getenv(envEgressCacheArtifact), t.TempDir)
+		cacheDir, offline := resolveEgressCache(
+			os.Getenv(envEgressCacheArtifact), os.Getenv(envEgressCacheRecord), t.TempDir,
+		)
 		sbxEnv = []string{
 			"DAFT_EGRESS_PROXY=1",
 			"DAFT_EGRESS_PROXY_INSECURE_UPSTREAM=1",
@@ -402,18 +404,33 @@ func WithEgressProxy() ClusterOption {
 // the egress proxy replays it offline instead of recording live.
 const envEgressCacheArtifact = "DAFT_EGRESS_PROXY_CACHE"
 
+// envEgressCacheRecord names the env var (set by `make
+// update-egress-cache`) that points at a persistent dir to RECORD the
+// egress cache into: the proxy runs online and writes every fetch there,
+// producing the artifact that envEgressCacheArtifact later replays.
+const envEgressCacheRecord = "DAFT_EGRESS_PROXY_CACHE_RECORD"
+
 // resolveEgressCache decides the proxy's cache dir + offline flag for a
-// WithEgressProxy cluster. A non-empty artifact dir (a recorded cache
-// shipped with the repo) is replayed read-only and OFFLINE, so the run
-// is deterministic and a miss 504s loudly; an empty one falls back to a
-// fresh writable temp dir (mkTemp) that records live within the run.
-// The offline value is returned as the "1"/"0" string the
-// DAFT_EGRESS_PROXY_OFFLINE env var expects.
-func resolveEgressCache(artifactDir string, mkTemp func() string) (dir, offline string) {
-	if artifactDir != "" {
+// WithEgressProxy cluster, across three modes:
+//   - replay  (artifactDir set): a recorded cache shipped with the repo,
+//     replayed read-only and OFFLINE — deterministic, no upstream hit, a
+//     miss 504s loudly. Wins if both are set.
+//   - record  (recordDir set): a persistent dir the proxy populates
+//     online, producing the artifact. Used only by update-egress-cache.
+//   - default (neither): a fresh writable temp dir that records live and
+//     is wiped on cleanup — today's behaviour for proxy tests at large.
+//
+// offline is returned as the "1"/"0" string DAFT_EGRESS_PROXY_OFFLINE
+// expects.
+func resolveEgressCache(artifactDir, recordDir string, mkTemp func() string) (dir, offline string) {
+	switch {
+	case artifactDir != "":
 		return artifactDir, "1"
+	case recordDir != "":
+		return recordDir, "0"
+	default:
+		return mkTemp(), "0"
 	}
-	return mkTemp(), "0"
 }
 
 // WithBundledSandboxd runs the real, //go:embed-bundled daft-sandboxd

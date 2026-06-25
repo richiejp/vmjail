@@ -3,6 +3,7 @@
 package testdaemons_test
 
 import (
+	_ "embed"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -63,36 +64,16 @@ const d6c3FlakeNix = `{
 // Without it the fixture would resolve the nixos-25.05 *channel* to
 // whatever rev is current at run time, drifting every nar/tarball
 // URL and defeating the recorded egress cache. Committed alongside
-// flake.nix by writeBunFixture; bump it (and re-record the cache via
-// `make update-egress-cache`) to move to a newer nixpkgs.
-const d6c3FlakeLock = `{
-  "nodes": {
-    "nixpkgs": {
-      "locked": {
-        "lastModified": 1767313136,
-        "narHash": "sha256-16KkgfdYqjaeRGBaYsNrhPRRENs0qzkQVUooNHtoy2w=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "ac62194c3917d5f474c1a844b6fd6da2db95077d",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "nixos-25.05",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
-    "root": {
-      "inputs": {
-        "nixpkgs": "nixpkgs"
-      }
-    }
-  },
-  "root": "root",
-  "version": 7
-}
-`
+// flake.nix by writeBunFixture.
+//
+// It lives in the committed bun-flake.lock file (not an inline string)
+// so it is the single source of truth: the test embeds it here, and the
+// Makefile hashes that same file to derive the egress-cache OCI tag — so
+// bumping the lock automatically changes the tag, forcing a re-record
+// via `make update-egress-cache`.
+//
+//go:embed bun-flake.lock
+var d6c3FlakeLock string
 
 // d6c3ServerTS runs inside the bun dev-shell. Bun.serve binds
 // 0.0.0.0 explicitly because Bun defaults to localhost-only

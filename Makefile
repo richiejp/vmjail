@@ -1,4 +1,4 @@
-.PHONY: all check check-submodule-revs verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build proto gen-bpf clean help
+.PHONY: all check check-submodule-revs verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build update-egress-cache proto gen-bpf clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -233,6 +233,18 @@ NIX_ORCH_OUT      := $(BIN_DIR)/daft-orchestrator-bundled
 NIX_ISO_FIXTURE_OUT    := $(BIN_DIR)/iso-ssh-fixture
 NIX_ISO_QEMU_IMAGE_OUT := $(BIN_DIR)/iso-qemu-runner-image
 
+# Pinned egress-replay cache for the bun e2e test (PLAN.md "Pinned
+# egress-replay cache"). The recorded cache is published as a one-layer
+# OCI image to ghcr and pulled here; the tag is the first 16 hex of the
+# fixture flake.lock's sha256, so bumping the lock forces a re-record via
+# `make update-egress-cache`. integration-build pulls it (best-effort);
+# `make integration` then replays it offline when present.
+EGRESS_CACHE_OUT  := $(BIN_DIR)/egress-cache
+EGRESS_CACHE_LOCK := internal/testdaemons/bun-flake.lock
+EGRESS_CACHE_REPO := ghcr.io/localai-org/daft-egress-cache
+EGRESS_CACHE_TAG  := $(shell sha256sum $(EGRESS_CACHE_LOCK) 2>/dev/null | cut -c1-16)
+EGRESS_CACHE_REF  := $(EGRESS_CACHE_REPO):$(EGRESS_CACHE_TAG)
+
 # build-artefacts realises the sandbox-VM toolchain from the flake into
 # bin/ (a cache hit when nothing changed). These used to be exported by
 # the dev shell at entry; building them here on demand keeps the shell
@@ -301,6 +313,14 @@ integration-build: dev
 	@nix build .#daft-orchestrator  -o $(NIX_ORCH_OUT)
 	@nix build .#iso-ssh-fixture       -o $(NIX_ISO_FIXTURE_OUT)
 	@nix build .#iso-qemu-runner-image -o $(NIX_ISO_QEMU_IMAGE_OUT)
+	@# Pull the pinned egress-replay cache so the bun test runs offline.
+	@# Best-effort: skipped while recording, and a miss (not yet published,
+	@# or no network) just leaves the bun test to record live this run.
+	@if [ -z "$$DAFT_EGRESS_RECORD" ]; then \
+		echo "[egress-cache] pull $(EGRESS_CACHE_REF)"; \
+		go run ./cmd/daft-egress-cache pull-unpack $(EGRESS_CACHE_REF) $(EGRESS_CACHE_OUT) \
+			|| echo "[egress-cache] pull failed (unpublished?) — bun test will record live"; \
+	fi
 
 # Lock file for `make integration`. Two concurrent runs race on
 # /dev/kvm, host ports, vsock CIDs, and tap interface names, and
@@ -344,13 +364,37 @@ integration: integration-build
 			export DAFT_NIX_FLAKE_FIXTURE=$$(realpath $(NIX_FLAKE_FIXTURE_OUT)); \
 			export DAFT_ISO_SSH_FIXTURE=$$(realpath $(NIX_ISO_FIXTURE_OUT)/iso/*.iso); \
 			export DAFT_ISO_QEMU_IMAGE=$$(realpath $(NIX_ISO_QEMU_IMAGE_OUT)); \
+			runflag=""; [ -n "$$INTEGRATION_RUN" ] && runflag="-run $$INTEGRATION_RUN"; \
+			if [ -n "$$DAFT_EGRESS_RECORD" ]; then \
+				echo "[egress-cache] RECORD: bun test records into $(EGRESS_CACHE_OUT)"; \
+				rm -rf $(EGRESS_CACHE_OUT); mkdir -p $(EGRESS_CACHE_OUT); \
+				export DAFT_EGRESS_PROXY_CACHE_RECORD=$$(realpath $(EGRESS_CACHE_OUT)); \
+			elif [ -f $(EGRESS_CACHE_OUT)/index.json ]; then \
+				echo "[egress-cache] REPLAY: bun test replays $(EGRESS_CACHE_OUT) offline"; \
+				export DAFT_EGRESS_PROXY_CACHE=$$(realpath $(EGRESS_CACHE_OUT)); \
+			fi; \
 			rc=0; \
 			echo "[e2e] sandbox pkg — in-process host shares the delegated scope: per-VM accounting, limits off"; \
-			$$delegate go test -v -tags=integration -count=1 -timeout 20m ./internal/sandbox/ || rc=1; \
+			$$delegate go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/sandbox/ || rc=1; \
 			echo "[e2e] testdaemons pkg — daft-sandboxd self-wraps into a private scope: per-VM limits enforced (fail-closed)"; \
-			go test -v -tags=integration -count=1 -timeout 20m ./internal/testdaemons/ || rc=1; \
+			go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/testdaemons/ || rc=1; \
 			exit $$rc; \
 	)
+
+## update-egress-cache: re-record the bun dev-shell egress cache and
+## publish it to ghcr. Run after bumping internal/testdaemons/bun-flake.lock
+## (the tag tracks the lock's hash). Records online once (~13 min cold) via
+## the bun test in RECORD mode, then packs + pushes the OCI artifact. Needs
+## gh authenticated with write:packages.
+update-egress-cache:
+	@command -v gh >/dev/null 2>&1 || { echo "gh not on PATH (needed for ghcr auth)"; exit 1; }
+	@gh auth token >/dev/null 2>&1 || { echo "gh not authenticated — run: gh auth login"; exit 1; }
+	@echo "[egress-cache] recording $(EGRESS_CACHE_REF) (online; ~13 min cold)…"
+	@DAFT_EGRESS_RECORD=1 INTEGRATION_RUN='^TestClusterWorkspaceBunDevServer$$' $(MAKE) integration
+	@echo "[egress-cache] publishing $(EGRESS_CACHE_REF)…"
+	@DAFT_GHCR_TOKEN=$$(gh auth token) DAFT_GHCR_USER=$$(gh api user -q .login) \
+		go run ./cmd/daft-egress-cache pack-push $(EGRESS_CACHE_OUT) $(EGRESS_CACHE_REF)
+	@echo "[egress-cache] published $(EGRESS_CACHE_REF) — make this public in the ghcr UI the first time."
 
 ## Git hooks -----------------------------------------------------------------
 

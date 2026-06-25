@@ -4568,33 +4568,39 @@ Open questions:
       2026-06-25) — keeps the artifact out of git history and reuses the repo's
       crane/go-containerregistry tooling (`internal/ociregistry.Push`,
       `crane.Pull`). Sub-slices:
-      - **K1 — determinism + offline-replay wiring.** Pin the fixture: commit a
-        `flake.lock` next to `flake.nix` in `writeBunFixture` so the resolved
-        nixpkgs rev (and thus every nar/tarball URL the proxy keys on) is fixed
-        — today the fixture pins only the *channel* `nixos-25.05`, so URLs drift
-        as it advances. Thread a `DAFT_EGRESS_PROXY_CACHE` path + an offline
-        flag through the harness: `WithEgressProxy` consumes a cache dir (from
-        the env the Makefile exports) instead of a bare `t.TempDir()`, and adds
-        `DAFT_EGRESS_PROXY_OFFLINE=1` to `sbxEnv` (`cluster.go:318`) when the
-        cache is present. Miss ⇒ 504 ⇒ the test fails loudly (drift is caught,
-        not silently re-pulled). No live fallback — the pin drives everything.
-      - **K2 — record + publish.** A `make update-egress-cache` target
-        (modelled on `make proto`: tool-guard + one regenerate command) runs
-        the bun test **online** against a staging cache dir, then packs the dir
-        as an OCI artifact and `crane`-pushes it to
-        `ghcr.io/localai-org/daft-egress-cache:<tag>`, with the tag derived
-        from a content hash of the fixture `flake.lock` (a lock bump ⇒ new tag
-        ⇒ forced re-record). `make integration-build` pulls+unpacks that tag to
-        `bin/egress-cache` (like the `DAFT_*_IMAGE` Nix fixtures are realized to
-        `bin/`), and `make integration` exports
-        `DAFT_EGRESS_PROXY_CACHE=$(realpath bin/egress-cache)`. A small
-        publish workflow (mirroring `validate-tag.yml`'s tag-gated shape;
-        `packages: write` + `GITHUB_TOKEN`) republishes on demand. *Open
-        ghcr specifics to confirm before K2:* package visibility (public ⇒
-        anonymous pull in CI/clones, the simplest path) and who/what may push.
-      Verified (K1): `flake.lock` pin makes URLs stable; harness wiring unit
-      tests (cache dir from env, offline flag set, absent-cache behaviour);
-      end-to-end offline replay confirmed once K2's artifact exists.
+      - **K1 (landed 2026-06-25) — determinism + offline-replay wiring.** The
+        fixture now commits a `flake.lock` (in the committed
+        `internal/testdaemons/bun-flake.lock`, embedded by the test) next to
+        `flake.nix` in `writeBunFixture`, fixing the nixpkgs rev (ac62194c,
+        nixos-25.05) instead of resolving the *channel* at run time — so every
+        nar/tarball URL the proxy keys on is stable. `resolveEgressCache`
+        threads the proxy cache dir + offline flag across three modes: replay
+        (`DAFT_EGRESS_PROXY_CACHE` set ⇒ read-only + `DAFT_EGRESS_PROXY_OFFLINE`,
+        a miss 504s), record (`DAFT_EGRESS_PROXY_CACHE_RECORD` ⇒ persistent +
+        online), or default (`t.TempDir()` + online, today's behaviour). Reads
+        never touch disk (`httpcache.Lookup` bumps LastAccess in memory only),
+        so one read-only dir is safe across concurrent clusters.
+      - **K2 (tooling landed 2026-06-25; first publish pending) — record +
+        publish.** New `internal/egresscache` packs a recorded cache dir into a
+        one-layer OCI image and pushes/pulls it (go-containerregistry/crane,
+        zip-slip-safe extract, deterministic tar); `cmd/daft-egress-cache` is
+        the thin CLI. Tag = first 16 hex of `sha256(bun-flake.lock)` (a lock
+        bump ⇒ new tag ⇒ forced re-record). `make update-egress-cache` records
+        the bun test online (`DAFT_EGRESS_RECORD=1 INTEGRATION_RUN=…`) then
+        `pack-push`es to `ghcr.io/localai-org/daft-egress-cache:<tag>` using
+        `gh auth token`; `make integration-build` best-effort `pull-unpack`s it
+        to `bin/egress-cache`; `make integration` replays it offline when
+        present (else the bun test records live — graceful pre-publish). The
+        package is **public** (anonymous pull; user decision), so only the
+        one-time publish needs auth. *No CI workflow:* CI never runs
+        `make integration` (e2e needs KVM), so the artifact's consumers are
+        local/dev KVM hosts; publishing stays a manual local
+        `make update-egress-cache`. **Pending:** the first record+push (needs
+        `gh auth refresh -s write:packages`, then verify the bun test replays
+        offline/fast).
+      Verified: `flake.lock` pin (rev fixed); harness wiring table test (4
+      modes); `egresscache` pack→push→pull→unpack round-trip against a local
+      registry + zip-slip/error branches; Makefile tag + targets parse.
 
 ## Architecture
 
