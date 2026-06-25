@@ -4545,6 +4545,56 @@ Open questions:
       asserting the stored target is the resolved canonical fingerprint.
       (Also made the orchestrator-resolution tests hermetic against a
       developer's running local cluster by isolating `XDG_STATE_HOME`.)
+- [ ] **Pinned egress-replay cache for the bun e2e test (planned 2026-06-25).**
+      `TestClusterWorkspaceBunDevServer` runs a real `nix develop -c bun run`
+      and substitutes the bun dev-shell closure from cache.nixos.org through
+      the egress MITM proxy. The harness points the proxy cache at a per-test
+      `t.TempDir()` (wiped on cleanup), so **every run is a cold ~35 MB+ pull**
+      whose wall-clock is network-bound and highly variable (≈150 s warm vs
+      ≈13 min cold) — and on a cold run it can starve the package's 20-min
+      `go test` cap and time the whole suite out (see
+      [[project_e2e_bun_cold_cache_flake]]). Fix: record the proxy cache once,
+      ship it as a versioned OCI artifact, and replay it **offline** so the
+      test is deterministic, self-contained, and fast — while still exercising
+      the sandboxnet egress NAT + proxy byte-path (unlike baking the closure
+      into the image, which would bypass the proxy and lose that coverage).
+      All the runtime machinery already exists: production sandboxd honours
+      `DAFT_EGRESS_PROXY_CACHE_DIR` (persist), `DAFT_EGRESS_PROXY_OFFLINE`
+      (replay-only, a miss 504s), and `httpcache.Open(dir, offline, 0)`. The
+      on-disk cache is `index.json` (`map[key]Entry`) + a zstd `cas.Store`
+      under `blobs/sha256/…`; recorded size ≈100 MB (bun nars 35.5 MB + the
+      dev-shell bash/stdenv deps + the nixpkgs source tarball nix fetches from
+      github). Storage backend: **GitHub Container Registry** (user decision,
+      2026-06-25) — keeps the artifact out of git history and reuses the repo's
+      crane/go-containerregistry tooling (`internal/ociregistry.Push`,
+      `crane.Pull`). Sub-slices:
+      - **K1 — determinism + offline-replay wiring.** Pin the fixture: commit a
+        `flake.lock` next to `flake.nix` in `writeBunFixture` so the resolved
+        nixpkgs rev (and thus every nar/tarball URL the proxy keys on) is fixed
+        — today the fixture pins only the *channel* `nixos-25.05`, so URLs drift
+        as it advances. Thread a `DAFT_EGRESS_PROXY_CACHE` path + an offline
+        flag through the harness: `WithEgressProxy` consumes a cache dir (from
+        the env the Makefile exports) instead of a bare `t.TempDir()`, and adds
+        `DAFT_EGRESS_PROXY_OFFLINE=1` to `sbxEnv` (`cluster.go:318`) when the
+        cache is present. Miss ⇒ 504 ⇒ the test fails loudly (drift is caught,
+        not silently re-pulled). No live fallback — the pin drives everything.
+      - **K2 — record + publish.** A `make update-egress-cache` target
+        (modelled on `make proto`: tool-guard + one regenerate command) runs
+        the bun test **online** against a staging cache dir, then packs the dir
+        as an OCI artifact and `crane`-pushes it to
+        `ghcr.io/localai-org/daft-egress-cache:<tag>`, with the tag derived
+        from a content hash of the fixture `flake.lock` (a lock bump ⇒ new tag
+        ⇒ forced re-record). `make integration-build` pulls+unpacks that tag to
+        `bin/egress-cache` (like the `DAFT_*_IMAGE` Nix fixtures are realized to
+        `bin/`), and `make integration` exports
+        `DAFT_EGRESS_PROXY_CACHE=$(realpath bin/egress-cache)`. A small
+        publish workflow (mirroring `validate-tag.yml`'s tag-gated shape;
+        `packages: write` + `GITHUB_TOKEN`) republishes on demand. *Open
+        ghcr specifics to confirm before K2:* package visibility (public ⇒
+        anonymous pull in CI/clones, the simplest path) and who/what may push.
+      Verified (K1): `flake.lock` pin makes URLs stable; harness wiring unit
+      tests (cache dir from env, offline flag set, absent-cache behaviour);
+      end-to-end offline replay confirmed once K2's artifact exists.
 
 ## Architecture
 

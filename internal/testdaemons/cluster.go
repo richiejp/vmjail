@@ -302,10 +302,13 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	// When the egress proxy is requested, enable the in-stack proxy via
 	// sandboxd's env: sandboxd builds the proxy (and its CA) in-process
 	// and serves it on every VM's netstack gateway, so every
-	// image-backed dispatch routes guest TLS through it. Caching is on
-	// (a temp dir) so a repeat fetch replays without a second upstream
-	// hit; upstream verification is skipped because tests use
-	// self-signed upstreams.
+	// image-backed dispatch routes guest TLS through it. Upstream
+	// verification is skipped because tests use self-signed upstreams.
+	// Caching mode is resolved by resolveEgressCache: with a recorded
+	// artifact (envEgressCacheArtifact, exported by `make integration`)
+	// the proxy replays it OFFLINE — deterministic, no upstream hit, a
+	// miss 504s and fails the test loudly; without one it records live
+	// into a temp dir so a repeat fetch replays within the run.
 	// The proxy is on by default in sandboxd, so tests that don't ask
 	// for it must explicitly opt out — otherwise every cluster would
 	// run default-deny and break workloads that egress directly.
@@ -315,10 +318,12 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		proxyURL = "http://" + net.JoinHostPort(
 			sandboxnet.DefaultGatewayIP, strconv.Itoa(int(sandboxnet.DefaultProxyPort)),
 		)
+		cacheDir, offline := resolveEgressCache(os.Getenv(envEgressCacheArtifact), t.TempDir)
 		sbxEnv = []string{
 			"DAFT_EGRESS_PROXY=1",
 			"DAFT_EGRESS_PROXY_INSECURE_UPSTREAM=1",
-			"DAFT_EGRESS_PROXY_CACHE_DIR=" + t.TempDir(),
+			"DAFT_EGRESS_PROXY_CACHE_DIR=" + cacheDir,
+			"DAFT_EGRESS_PROXY_OFFLINE=" + offline,
 		}
 	}
 
@@ -389,6 +394,26 @@ type clusterOpts struct {
 // or VIP — just the DAFT_EGRESS_PROXY* env that NewCluster sets.
 func WithEgressProxy() ClusterOption {
 	return func(o *clusterOpts) { o.egressProxy = true }
+}
+
+// envEgressCacheArtifact names the env var (exported by `make
+// integration`) that points at a recorded, unpacked egress-proxy cache
+// dir — the pinned OCI artifact realized to bin/egress-cache. When set,
+// the egress proxy replays it offline instead of recording live.
+const envEgressCacheArtifact = "DAFT_EGRESS_PROXY_CACHE"
+
+// resolveEgressCache decides the proxy's cache dir + offline flag for a
+// WithEgressProxy cluster. A non-empty artifact dir (a recorded cache
+// shipped with the repo) is replayed read-only and OFFLINE, so the run
+// is deterministic and a miss 504s loudly; an empty one falls back to a
+// fresh writable temp dir (mkTemp) that records live within the run.
+// The offline value is returned as the "1"/"0" string the
+// DAFT_EGRESS_PROXY_OFFLINE env var expects.
+func resolveEgressCache(artifactDir string, mkTemp func() string) (dir, offline string) {
+	if artifactDir != "" {
+		return artifactDir, "1"
+	}
+	return mkTemp(), "0"
 }
 
 // WithBundledSandboxd runs the real, //go:embed-bundled daft-sandboxd

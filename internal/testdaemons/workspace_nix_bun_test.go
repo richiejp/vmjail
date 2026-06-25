@@ -36,11 +36,13 @@ const d6c3BunMarker = "d6c3-bun-marker"
 const d6c3BunSlowBoot = 15 * time.Minute
 
 // d6c3FlakeNix is the minimal flake the test mounts at
-// /workspace. Pins nixpkgs to the nixos-25.05 channel so the
-// dev-shell evaluation is roughly stable across runs; bun
-// itself is pulled by store-path from that nixpkgs revision.
-// nix locks the input on the first `nix develop`, which
-// writes /workspace/flake.lock — the mount must be writable.
+// /workspace. It pins nixpkgs to the nixos-25.05 channel; the
+// exact revision is fixed by the committed d6c3FlakeLock (below),
+// not resolved at run time — so every `nix develop` fetches the
+// same nixpkgs tarball and substitutes the same bun closure, and
+// the egress proxy keys on a stable, replayable set of URLs (see
+// PLAN.md "Pinned egress-replay cache"). bun is pulled by
+// store-path from that revision.
 const d6c3FlakeNix = `{
   description = "D6c.3 bun dev-shell";
 
@@ -53,6 +55,42 @@ const d6c3FlakeNix = `{
       packages = [ pkgs.bun ];
     };
   };
+}
+`
+
+// d6c3FlakeLock pins the nixpkgs input to an exact revision so the
+// dev-shell evaluation is deterministic across runs and over time.
+// Without it the fixture would resolve the nixos-25.05 *channel* to
+// whatever rev is current at run time, drifting every nar/tarball
+// URL and defeating the recorded egress cache. Committed alongside
+// flake.nix by writeBunFixture; bump it (and re-record the cache via
+// `make update-egress-cache`) to move to a newer nixpkgs.
+const d6c3FlakeLock = `{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1767313136,
+        "narHash": "sha256-16KkgfdYqjaeRGBaYsNrhPRRENs0qzkQVUooNHtoy2w=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "ac62194c3917d5f474c1a844b6fd6da2db95077d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-25.05",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
 }
 `
 
@@ -222,15 +260,18 @@ func TestClusterWorkspaceBunDevServer(t *testing.T) {
 	}
 }
 
-// writeBunFixture lays down flake.nix + server.ts under dst.
-// Both files are written with 0o644 so the container's uid
-// (mapped via userns) can read them; flake.lock — which nix
-// writes on first develop — needs the directory writable too.
+// writeBunFixture lays down flake.nix + flake.lock + server.ts
+// under dst. All are written 0o644 so the container's uid (mapped
+// via userns) can read them. The lock is committed (not left for
+// nix to write on first develop) so the nixpkgs rev — and thus the
+// egress URLs the proxy cache replays — is fixed; the mount is
+// still writable since nix touches the lock's mtime on develop.
 func writeBunFixture(t *testing.T, dst string) {
 	t.Helper()
 	files := map[string]string{
-		"flake.nix": d6c3FlakeNix,
-		"server.ts": d6c3ServerTS,
+		"flake.nix":  d6c3FlakeNix,
+		"flake.lock": d6c3FlakeLock,
+		"server.ts":  d6c3ServerTS,
 	}
 	for name, content := range files {
 		out := filepath.Join(dst, name)
