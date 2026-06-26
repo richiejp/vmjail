@@ -21,10 +21,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/localai-org/darkaifactory/internal/bundled"
-	"github.com/localai-org/darkaifactory/internal/imagestore"
-	"github.com/localai-org/darkaifactory/internal/oops"
-	"github.com/localai-org/darkaifactory/internal/sandbox"
+	"github.com/richiejp/darkaifactory/internal/bundled"
+	"github.com/richiejp/darkaifactory/internal/imagestore"
+	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/sandbox"
 )
 
 // In-VM mount points the executor and CLI agree on. Stable so the

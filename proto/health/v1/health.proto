@@ -6,7 +6,7 @@ syntax = "proto3";
 
 package daft.health.v1;
 
-option go_package = "github.com/localai-org/darkaifactory/internal/genpb/health/v1;healthv1";
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/health/v1;healthv1";
 
 service HealthService {
   // Ping echoes back the request message — a round-trip indicator.

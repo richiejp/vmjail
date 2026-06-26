@@ -15,7 +15,7 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/localai-org/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/darkaifactory/internal/lint/suppress"
 )
 
 // analyzerName matches the //daft:lint:disable= NAMES entry and the

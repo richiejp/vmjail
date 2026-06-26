@@ -1,6 +1,6 @@
 package devcontainerspec
 
-import "github.com/localai-org/darkaifactory/internal/workspacecatalog"
+import "github.com/richiejp/darkaifactory/internal/workspacecatalog"
 
 // Overlay composes a base workspacecatalog.Spec (derived from a
 // devcontainer.json) with the explicit workspace settings the user set

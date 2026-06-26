@@ -9,11 +9,11 @@ import (
 	"io"
 	"os"
 
-	"github.com/localai-org/darkaifactory/internal/cgroupwrap"
-	"github.com/localai-org/darkaifactory/internal/observability"
-	"github.com/localai-org/darkaifactory/internal/sandbox"
-	"github.com/localai-org/darkaifactory/internal/sandboxdcli"
-	"github.com/localai-org/darkaifactory/internal/userns"
+	"github.com/richiejp/darkaifactory/internal/cgroupwrap"
+	"github.com/richiejp/darkaifactory/internal/observability"
+	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/darkaifactory/internal/sandboxdcli"
+	"github.com/richiejp/darkaifactory/internal/userns"
 )
 
 // envDisableCgroupLimits, when set to "1", turns the fail-closed per-VM

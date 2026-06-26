@@ -2,7 +2,7 @@
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
-LDFLAGS := -X github.com/localai-org/darkaifactory/internal/version.Version=$(VERSION)
+LDFLAGS := -X github.com/richiejp/darkaifactory/internal/version.Version=$(VERSION)
 
 # Our own Go code lives under cmd/ and internal/. third_party/ holds
 # vendored upstream sources (Linux kernel, Cloud Hypervisor, u-root) that
@@ -241,7 +241,7 @@ NIX_ISO_QEMU_IMAGE_OUT := $(BIN_DIR)/iso-qemu-runner-image
 # `make integration` then replays it offline when present.
 EGRESS_CACHE_OUT  := $(BIN_DIR)/egress-cache
 EGRESS_CACHE_LOCK := internal/testdaemons/bun-flake.lock
-EGRESS_CACHE_REPO := ghcr.io/localai-org/daft-egress-cache
+EGRESS_CACHE_REPO := ghcr.io/richiejp/daft-egress-cache
 EGRESS_CACHE_TAG  := $(shell sha256sum $(EGRESS_CACHE_LOCK) 2>/dev/null | cut -c1-16)
 EGRESS_CACHE_REF  := $(EGRESS_CACHE_REPO):$(EGRESS_CACHE_TAG)
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // writeReport emits a single line of the form "<prefix><body>\n" to

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 )
 
 // testOrchURL is the placeholder URL every exec test uses; the

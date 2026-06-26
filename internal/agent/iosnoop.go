@@ -6,8 +6,8 @@ import (
 	"io"
 	"os"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
-	"github.com/localai-org/darkaifactory/internal/observability/ebpf/iosnoop"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/darkaifactory/internal/observability/ebpf/iosnoop"
 )
 
 // IosnoopReportPrefix labels the io-snoop gadget's console status line.

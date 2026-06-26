@@ -12,9 +12,9 @@ import (
 	"connectrpc.com/connect"
 	"golang.org/x/net/http2"
 
-	healthv1 "github.com/localai-org/darkaifactory/internal/genpb/health/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/health/v1/healthv1connect"
-	"github.com/localai-org/darkaifactory/internal/identity"
+	healthv1 "github.com/richiejp/darkaifactory/internal/genpb/health/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
+	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
 const testListenAddr = "127.0.0.1:0"

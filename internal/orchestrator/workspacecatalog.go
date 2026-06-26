@@ -14,12 +14,12 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
-	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 // errUnauthenticated is returned when an inbound request has no

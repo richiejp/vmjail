@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/userns"
+	"github.com/richiejp/darkaifactory/internal/userns"
 )
 
 // helperEnvVar, when set, makes TestMain invoke

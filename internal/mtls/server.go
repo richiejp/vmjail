@@ -18,7 +18,7 @@ import (
 
 	"golang.org/x/net/http2"
 
-	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
 // Config bundles everything Server needs at construction.

@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/sandboxnet"
-	"github.com/localai-org/darkaifactory/internal/sandboxnet/sandboxnettest"
+	"github.com/richiejp/darkaifactory/internal/sandboxnet"
+	"github.com/richiejp/darkaifactory/internal/sandboxnet/sandboxnettest"
 )
 
 const vsocknetReadTimeout = 5 * time.Second

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
 )
 
 // SyscallsReportPrefix labels the boot-time syscall-dump's console status line.

@@ -13,11 +13,11 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/nodectrl"
-	"github.com/localai-org/darkaifactory/internal/nodectrlclient"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
 )
 
 // badVersionHandler is a stub NodeControlService that always

@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/agent"
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
-	"github.com/localai-org/darkaifactory/internal/observability"
+	"github.com/richiejp/darkaifactory/internal/agent"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/darkaifactory/internal/observability"
 )
 
 // bootEventRunner is a fake VMM whose console stays open (like a real

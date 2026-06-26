@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/imagestore"
+	"github.com/richiejp/darkaifactory/internal/imagestore"
 )
 
 const (

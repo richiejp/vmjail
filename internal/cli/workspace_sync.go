@@ -11,12 +11,12 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
-	"github.com/localai-org/darkaifactory/internal/brokerclient"
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/trace"
-	"github.com/localai-org/darkaifactory/internal/workspace"
+	"github.com/richiejp/darkaifactory/internal/brokerclient"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/darkaifactory/internal/workspace"
 )
 
 const (

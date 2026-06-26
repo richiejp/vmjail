@@ -26,9 +26,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/banner"
-	"github.com/localai-org/darkaifactory/internal/httpcache"
-	"github.com/localai-org/darkaifactory/internal/mitmproxy"
+	"github.com/richiejp/darkaifactory/internal/banner"
+	"github.com/richiejp/darkaifactory/internal/httpcache"
+	"github.com/richiejp/darkaifactory/internal/mitmproxy"
 )
 
 const (

@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/agent"
-	"github.com/localai-org/darkaifactory/internal/sandboxattach"
-	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
+	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/richiejp/darkaifactory/internal/sandboxattach"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 )
 
 // TestAttachExecE2E is the D2 attach end-to-end proof: boot a

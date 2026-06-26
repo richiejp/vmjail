@@ -14,9 +14,9 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
-	"github.com/localai-org/darkaifactory/internal/oops"
-	"github.com/localai-org/darkaifactory/internal/trace"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // AttachPortCmdlineKey is the kernel cmdline parameter that asks the

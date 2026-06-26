@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 )
 
 // fakeObserverClientStream is an in-process observerClientStream:

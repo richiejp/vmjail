@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/agent"
+	"github.com/richiejp/darkaifactory/internal/agent"
 )
 
 func TestRunPrintsBannerAndReturnsZero(t *testing.T) {

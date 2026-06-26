@@ -15,14 +15,14 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
-	"github.com/localai-org/darkaifactory/internal/brokerclient"
-	"github.com/localai-org/darkaifactory/internal/cas"
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/orchestrator"
-	"github.com/localai-org/darkaifactory/internal/workspace"
-	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
+	"github.com/richiejp/darkaifactory/internal/brokerclient"
+	"github.com/richiejp/darkaifactory/internal/cas"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/orchestrator"
+	"github.com/richiejp/darkaifactory/internal/workspace"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 // workRemote is the in-VM target the sync tests map their rw mount

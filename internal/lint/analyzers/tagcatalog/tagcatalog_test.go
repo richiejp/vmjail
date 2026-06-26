@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/localai-org/darkaifactory/internal/lint/analyzers/tagcatalog"
+	"github.com/richiejp/darkaifactory/internal/lint/analyzers/tagcatalog"
 )
 
 func TestAnalyzer(t *testing.T) {

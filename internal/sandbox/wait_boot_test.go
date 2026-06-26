@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/agent"
+	"github.com/richiejp/darkaifactory/internal/agent"
 )
 
 // TestWaitForBootCompleteReturnsOnEvent: the agent reports boot-complete

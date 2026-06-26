@@ -34,10 +34,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/sandboxdcli"
-	"github.com/localai-org/darkaifactory/internal/sandboxnet"
-	"github.com/localai-org/darkaifactory/internal/testtmux"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/sandboxdcli"
+	"github.com/richiejp/darkaifactory/internal/sandboxnet"
+	"github.com/richiejp/darkaifactory/internal/testtmux"
 )
 
 // WorkspaceStep names one `daft workspace …` command in a test's

@@ -17,9 +17,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/sandboxnet"
-	"github.com/localai-org/darkaifactory/internal/testdaemons"
-	"github.com/localai-org/darkaifactory/internal/testtmux"
+	"github.com/richiejp/darkaifactory/internal/sandboxnet"
+	"github.com/richiejp/darkaifactory/internal/testdaemons"
+	"github.com/richiejp/darkaifactory/internal/testtmux"
 )
 
 // proxyListenPrefix is the readiness line daft-mitm-proxy prints on

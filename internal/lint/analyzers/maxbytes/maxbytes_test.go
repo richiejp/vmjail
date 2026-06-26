@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/localai-org/darkaifactory/internal/lint/analyzers/maxbytes"
+	"github.com/richiejp/darkaifactory/internal/lint/analyzers/maxbytes"
 )
 
 func TestAnalyzer(t *testing.T) {

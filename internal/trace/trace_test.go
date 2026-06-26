@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
+	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
 )
 
 func TestStartAndEndAppendsToBuffer(t *testing.T) {

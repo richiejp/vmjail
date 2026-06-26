@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/observability"
+	"github.com/richiejp/darkaifactory/internal/observability"
 )
 
 // EnvStateDir overrides the per-sandbox state root outright. When

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/agent"
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/darkaifactory/internal/agent"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
 )
 
 // configSockPath is the UDS the config server binds for a given cfg —

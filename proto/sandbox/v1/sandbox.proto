@@ -18,7 +18,7 @@ package daft.sandbox.v1;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1;sandboxv1";
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1;sandboxv1";
 
 // Sandbox is the orchestrator's record of one execution instance.
 message Sandbox {

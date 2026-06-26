@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/testdaemons"
-	"github.com/localai-org/darkaifactory/internal/testtmux"
+	"github.com/richiejp/darkaifactory/internal/testdaemons"
+	"github.com/richiejp/darkaifactory/internal/testtmux"
 )
 
 // daftNestedIntegrationSentinel is printed by the wrapper shell when the

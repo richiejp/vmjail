@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/testdaemons"
-	"github.com/localai-org/darkaifactory/internal/testtmux"
+	"github.com/richiejp/darkaifactory/internal/testdaemons"
+	"github.com/richiejp/darkaifactory/internal/testtmux"
 )
 
 // virtiofsBenchProg is an in-guest microbench (run via the baked Go) that

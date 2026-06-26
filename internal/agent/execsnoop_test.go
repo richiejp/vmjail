@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
-	"github.com/localai-org/darkaifactory/internal/observability/ebpf/execsnoop"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/darkaifactory/internal/observability/ebpf/execsnoop"
 )
 
 // execsnoopCfg builds a GuestConfig carrying the exec-snoop observe path.

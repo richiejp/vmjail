@@ -12,9 +12,9 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
-	"github.com/localai-org/darkaifactory/internal/oops"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // observerTailOpts gathers `daft sandbox observer-tail` flags + the

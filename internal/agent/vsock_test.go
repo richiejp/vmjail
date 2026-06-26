@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
-	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
-	"github.com/localai-org/darkaifactory/internal/trace"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // TestRunWithVsockShipsSpansToFakeHost wires runWith with a fake

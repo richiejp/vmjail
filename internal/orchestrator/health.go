@@ -5,8 +5,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	healthv1 "github.com/localai-org/darkaifactory/internal/genpb/health/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/health/v1/healthv1connect"
+	healthv1 "github.com/richiejp/darkaifactory/internal/genpb/health/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 )
 
 // HealthHandler implements healthv1connect.HealthServiceHandler.

@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/cas"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/mtls"
-	"github.com/localai-org/darkaifactory/internal/workspace"
+	"github.com/richiejp/darkaifactory/internal/cas"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/mtls"
+	"github.com/richiejp/darkaifactory/internal/workspace"
 )
 
 // TestPullWorkspaceFromHappyPath drives the full mTLS-dial + pull

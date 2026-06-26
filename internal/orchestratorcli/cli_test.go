@@ -15,10 +15,10 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/ociregistry"
-	"github.com/localai-org/darkaifactory/internal/orchestrator"
-	"github.com/localai-org/darkaifactory/internal/version"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/ociregistry"
+	"github.com/richiejp/darkaifactory/internal/orchestrator"
+	"github.com/richiejp/darkaifactory/internal/version"
 )
 
 const (

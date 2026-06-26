@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 const (

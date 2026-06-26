@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/ociregistry"
+	"github.com/richiejp/darkaifactory/internal/ociregistry"
 )
 
 // TestResolveBuildImageRef covers the three branches of the build-image ref

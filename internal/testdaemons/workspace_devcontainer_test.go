@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
-	"github.com/localai-org/darkaifactory/internal/testdaemons"
-	"github.com/localai-org/darkaifactory/internal/testtmux"
+	"github.com/richiejp/darkaifactory/internal/testdaemons"
+	"github.com/richiejp/darkaifactory/internal/testtmux"
 )
 
 // TestClusterWorkspaceDevcontainerBoots is the #101 end-to-end proof: a

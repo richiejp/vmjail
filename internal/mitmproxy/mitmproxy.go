@@ -29,7 +29,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/httpcache"
+	"github.com/richiejp/darkaifactory/internal/httpcache"
 )
 
 const (

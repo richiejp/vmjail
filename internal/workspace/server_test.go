@@ -11,9 +11,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/localai-org/darkaifactory/internal/cas"
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/richiejp/darkaifactory/internal/cas"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 )
 
 func mustNewServer(t *testing.T) (*Server, *cas.Store) {

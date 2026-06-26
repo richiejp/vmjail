@@ -8,9 +8,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
-	"github.com/localai-org/darkaifactory/internal/observertail"
-	"github.com/localai-org/darkaifactory/internal/oops"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/richiejp/darkaifactory/internal/observertail"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // ObserverResolver maps a sandbox_uid to its host-side observer-log

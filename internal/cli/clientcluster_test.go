@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/localcluster"
+	"github.com/richiejp/darkaifactory/internal/localcluster"
 )
 
 // Shared fixtures for the cluster/discovery tests (hoisted for goconst).

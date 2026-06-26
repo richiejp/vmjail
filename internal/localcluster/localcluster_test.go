@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/nodectrl"
-	"github.com/localai-org/darkaifactory/internal/orchestrator"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/richiejp/darkaifactory/internal/orchestrator"
 )
 
 // loopbackAny is a loopback address with an OS-assigned port.

@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/orchestrator"
-	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/orchestrator"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 // catalogFakeDispatcher mirrors the in-orchestrator fake (which

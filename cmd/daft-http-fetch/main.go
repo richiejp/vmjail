@@ -35,7 +35,7 @@ import (
 	"net/url"
 	"os"
 
-	"github.com/localai-org/darkaifactory/internal/banner"
+	"github.com/richiejp/darkaifactory/internal/banner"
 )
 
 const readyPrefix = "daft-http-fetch ok"

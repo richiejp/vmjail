@@ -4,7 +4,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/localai-org/darkaifactory/internal/observability/progress"
+	"github.com/richiejp/darkaifactory/internal/observability/progress"
 )
 
 // defaultTopN is how many targets each ranking surfaces.

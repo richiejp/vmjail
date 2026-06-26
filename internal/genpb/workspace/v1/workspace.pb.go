@@ -723,7 +723,7 @@ const file_workspace_v1_workspace_proto_rawDesc = "" +
 	"\vGetManifest\x12%.daft.workspace.v1.GetManifestRequest\x1a&.daft.workspace.v1.GetManifestResponse\x12S\n" +
 	"\bGetChunk\x12\".daft.workspace.v1.GetChunkRequest\x1a#.daft.workspace.v1.GetChunkResponse\x12\\\n" +
 	"\vPutManifest\x12%.daft.workspace.v1.PutManifestRequest\x1a&.daft.workspace.v1.PutManifestResponse\x12S\n" +
-	"\bPutChunk\x12\".daft.workspace.v1.PutChunkRequest\x1a#.daft.workspace.v1.PutChunkResponseBNZLgithub.com/localai-org/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
+	"\bPutChunk\x12\".daft.workspace.v1.PutChunkRequest\x1a#.daft.workspace.v1.PutChunkResponseBKZIgithub.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
 
 var (
 	file_workspace_v1_workspace_proto_rawDescOnce sync.Once

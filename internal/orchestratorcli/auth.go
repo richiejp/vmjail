@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
 const (

@@ -20,7 +20,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 
-	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 const readTimeout = 5 * time.Second

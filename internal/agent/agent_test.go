@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
-	"github.com/localai-org/darkaifactory/internal/observability/ebpf/opensnoop"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/darkaifactory/internal/observability/ebpf/opensnoop"
 )
 
 // TestMain doubles the test binary as a "fake crun" when invoked with

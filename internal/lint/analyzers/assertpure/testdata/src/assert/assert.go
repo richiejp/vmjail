@@ -1,5 +1,5 @@
 // Package assert is the test stub stand-in for
-// github.com/localai-org/darkaifactory/internal/assert. The analyzer
+// github.com/richiejp/darkaifactory/internal/assert. The analyzer
 // identifies the real package by its declared name (`assert`) so a
 // local stub with the same name works for analysistest.
 package assert

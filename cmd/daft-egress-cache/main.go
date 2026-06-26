@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/localai-org/darkaifactory/internal/egresscache"
+	"github.com/richiejp/darkaifactory/internal/egresscache"
 )
 
 // Indirection points so the in-package test drives run() without forking

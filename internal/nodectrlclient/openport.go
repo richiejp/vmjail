@@ -12,8 +12,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
-	"github.com/localai-org/darkaifactory/internal/oops"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // PortBridger is the interface the Node-side handler dispatches

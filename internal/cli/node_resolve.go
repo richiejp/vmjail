@@ -11,9 +11,9 @@ import (
 	"connectrpc.com/connect"
 	"golang.org/x/net/http2"
 
-	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
-	"github.com/localai-org/darkaifactory/internal/identity"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
+	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
 // nodeResolveTimeout bounds the ListNodes lookup used to resolve a

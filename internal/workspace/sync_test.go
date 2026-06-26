@@ -10,7 +10,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 )
 
 func TestSyncKeyDistinguishesTargets(t *testing.T) {

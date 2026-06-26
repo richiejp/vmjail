@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // NetReportPrefix tags console lines about the net bridge —

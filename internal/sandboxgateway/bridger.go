@@ -27,7 +27,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // ErrNoRoute is returned by Bridge when no DialFunc has been

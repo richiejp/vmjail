@@ -6,8 +6,8 @@ import (
 	"io"
 	"math/bits"
 
-	"github.com/localai-org/darkaifactory/internal/cas"
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/cas"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 )
 
 // DefaultFastCDCMinSize is the smallest non-final chunk FastCDC

@@ -10,7 +10,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/registry"
 	"github.com/google/go-containerregistry/pkg/v1/random"
 
-	"github.com/localai-org/darkaifactory/internal/ociregistry"
+	"github.com/richiejp/darkaifactory/internal/ociregistry"
 )
 
 // TestPullHostedRoutesThroughTransport covers the orchestrator-hosted

@@ -7,7 +7,7 @@ import (
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/localai-org/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/darkaifactory/internal/lint/suppress"
 )
 
 // probeAnalyzer reports "probe disabled" at every var declaration

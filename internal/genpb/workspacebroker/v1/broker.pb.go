@@ -625,7 +625,7 @@ const file_workspacebroker_v1_broker_proto_rawDesc = "" +
 	"\rRegisterServe\x12-.daft.workspacebroker.v1.RegisterServeRequest\x1a*.daft.workspacebroker.v1.RegistrationEvent\"\x000\x01\x12r\n" +
 	"\x0fRegisterSandbox\x12/.daft.workspacebroker.v1.RegisterSandboxRequest\x1a*.daft.workspacebroker.v1.RegistrationEvent\"\x000\x01\x12p\n" +
 	"\rRequestAttach\x12-.daft.workspacebroker.v1.RequestAttachRequest\x1a..daft.workspacebroker.v1.RequestAttachResponse\"\x00\x12[\n" +
-	"\x05Relay\x12%.daft.workspacebroker.v1.RelayMessage\x1a%.daft.workspacebroker.v1.RelayMessage\"\x00(\x010\x01BZZXgithub.com/localai-org/darkaifactory/internal/genpb/workspacebroker/v1;workspacebrokerv1b\x06proto3"
+	"\x05Relay\x12%.daft.workspacebroker.v1.RelayMessage\x1a%.daft.workspacebroker.v1.RelayMessage\"\x00(\x010\x01BWZUgithub.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1;workspacebrokerv1b\x06proto3"
 
 var (
 	file_workspacebroker_v1_broker_proto_rawDescOnce sync.Once

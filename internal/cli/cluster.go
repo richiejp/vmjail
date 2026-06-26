@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/localai-org/darkaifactory/internal/localcluster"
+	"github.com/richiejp/darkaifactory/internal/localcluster"
 )
 
 const clusterCmdName = "cluster"

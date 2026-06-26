@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/testdaemons"
-	"github.com/localai-org/darkaifactory/internal/testtmux"
+	"github.com/richiejp/darkaifactory/internal/testdaemons"
+	"github.com/richiejp/darkaifactory/internal/testtmux"
 )
 
 // narinfoProbeBody is the body cache.nixos.org returns for a 404

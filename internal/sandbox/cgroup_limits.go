@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/localai-org/darkaifactory/internal/observability"
+	"github.com/richiejp/darkaifactory/internal/observability"
 )
 
 // SupervisorLeaf is the cgroup the sandbox-host process moves itself into

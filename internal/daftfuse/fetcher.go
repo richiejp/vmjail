@@ -5,8 +5,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 )
 
 // NewConnectFetcher adapts a Connect-RPC WorkspaceServiceClient to

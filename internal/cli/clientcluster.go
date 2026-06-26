@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/localai-org/darkaifactory/internal/localcluster"
+	"github.com/richiejp/darkaifactory/internal/localcluster"
 )
 
 // discoverLocalCluster returns the running single-box cluster brought up

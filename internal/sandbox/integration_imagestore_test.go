@@ -21,8 +21,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
-	"github.com/localai-org/darkaifactory/internal/agent"
-	"github.com/localai-org/darkaifactory/internal/imagestore"
+	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/richiejp/darkaifactory/internal/imagestore"
 )
 
 // newImagestore creates a Store rooted at a fresh temp dir with a

@@ -7,8 +7,8 @@ import (
 	"net"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/sandboxnet"
-	"github.com/localai-org/darkaifactory/internal/sandboxnet/sandboxnettest"
+	"github.com/richiejp/darkaifactory/internal/sandboxnet"
+	"github.com/richiejp/darkaifactory/internal/sandboxnet/sandboxnettest"
 )
 
 // BenchmarkAcceptARPRoundTrip measures the gvisor-tap-vsock

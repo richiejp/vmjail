@@ -1419,7 +1419,7 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\x1cCONDITION_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15CONDITION_STATUS_TRUE\x10\x01\x12\x1a\n" +
 	"\x16CONDITION_STATUS_FALSE\x10\x02\x12\x1c\n" +
-	"\x18CONDITION_STATUS_UNKNOWN\x10\x03BJZHgithub.com/localai-org/darkaifactory/internal/genpb/sandbox/v1;sandboxv1b\x06proto3"
+	"\x18CONDITION_STATUS_UNKNOWN\x10\x03BGZEgithub.com/richiejp/darkaifactory/internal/genpb/sandbox/v1;sandboxv1b\x06proto3"
 
 var (
 	file_sandbox_v1_sandbox_proto_rawDescOnce sync.Once

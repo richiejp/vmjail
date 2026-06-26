@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/observability"
+	"github.com/richiejp/darkaifactory/internal/observability"
 )
 
 func TestParseSizeBytes(t *testing.T) {

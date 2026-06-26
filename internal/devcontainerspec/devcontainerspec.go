@@ -25,9 +25,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/localai-org/darkaifactory/internal/devcontainer"
-	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
+	"github.com/richiejp/darkaifactory/internal/devcontainer"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 // ErrNoImage is returned when a Spec selects neither an image nor a build.

@@ -14,9 +14,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/localai-org/darkaifactory/internal/cas"
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/richiejp/darkaifactory/internal/cas"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 )
 
 // applyTestHarness wires up a server with a workspace built from

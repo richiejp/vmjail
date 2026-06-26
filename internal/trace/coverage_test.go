@@ -10,8 +10,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/trace/v1/tracev1connect"
+	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
 )
 
 // These tests fill gaps the main suite leaves uncovered: rare enum

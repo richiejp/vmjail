@@ -21,8 +21,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/agent"
-	"github.com/localai-org/darkaifactory/internal/observability/progress"
+	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/richiejp/darkaifactory/internal/observability/progress"
 )
 
 // testTagDaftshare is the virtio-fs tag the integration tests use

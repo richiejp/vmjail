@@ -11,10 +11,10 @@ import (
 
 	"connectrpc.com/connect"
 
-	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 func summaryReq(uuid string) *workspacev1.ObserveSummaryRequest {

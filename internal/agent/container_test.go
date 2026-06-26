@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
 )
 
 // fakeCrunEnv is the env var that turns the test binary into a fake

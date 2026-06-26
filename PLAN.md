@@ -4587,7 +4587,7 @@ Open questions:
         the thin CLI. Tag = first 16 hex of `sha256(bun-flake.lock)` (a lock
         bump ⇒ new tag ⇒ forced re-record). `make update-egress-cache` records
         the bun test online (`DAFT_EGRESS_RECORD=1 INTEGRATION_RUN=…`) then
-        `pack-push`es to `ghcr.io/localai-org/daft-egress-cache:<tag>` using
+        `pack-push`es to `ghcr.io/richiejp/daft-egress-cache:<tag>` using
         `gh auth token`; `make integration-build` best-effort `pull-unpack`s it
         to `bin/egress-cache`; `make integration` replays it offline when
         present (else the bun test records live — graceful pre-publish). The

@@ -13,9 +13,9 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
-	"github.com/localai-org/darkaifactory/internal/observability/progress"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/richiejp/darkaifactory/internal/observability/progress"
 )
 
 // observeStuckThreshold is how long the open-snoop Total may sit frozen

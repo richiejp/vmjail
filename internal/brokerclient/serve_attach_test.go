@@ -9,10 +9,10 @@ import (
 
 	"connectrpc.com/connect"
 
-	"github.com/localai-org/darkaifactory/internal/brokerclient"
-	healthv1 "github.com/localai-org/darkaifactory/internal/genpb/health/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/health/v1/healthv1connect"
-	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/brokerclient"
+	healthv1 "github.com/richiejp/darkaifactory/internal/genpb/health/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
+	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
 // healthMessage implements healthv1connect.HealthServiceHandler with

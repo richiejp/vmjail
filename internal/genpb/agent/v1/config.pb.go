@@ -622,7 +622,7 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1e.daft.agent.v1.AgentEvent.KindR\x04kind\"/\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x11\n" +
-	"\rBOOT_COMPLETE\x10\x01BFZDgithub.com/localai-org/darkaifactory/internal/genpb/agent/v1;agentv1b\x06proto3"
+	"\rBOOT_COMPLETE\x10\x01BCZAgithub.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1b\x06proto3"
 
 var (
 	file_agent_v1_config_proto_rawDescOnce sync.Once

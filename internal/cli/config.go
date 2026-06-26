@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
 // clientConfigSubdir is appended to the user's config dir to derive

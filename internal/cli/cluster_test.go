@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/localcluster"
+	"github.com/richiejp/darkaifactory/internal/localcluster"
 )
 
 // stubClusterUp swaps the clusterUp seam to return a fixed handle (no real

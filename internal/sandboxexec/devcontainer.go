@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/localai-org/darkaifactory/internal/devcontainer"
-	"github.com/localai-org/darkaifactory/internal/devcontainerspec"
-	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/localai-org/darkaifactory/internal/sandboxboot"
-	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
+	"github.com/richiejp/darkaifactory/internal/devcontainer"
+	"github.com/richiejp/darkaifactory/internal/devcontainerspec"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	"github.com/richiejp/darkaifactory/internal/sandboxboot"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 // devcontainerResolution is the effective boot inputs a devcontainer.json

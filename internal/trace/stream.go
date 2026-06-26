@@ -12,7 +12,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
+	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
 )
 
 // streamMaxMessage caps a single framed batch at 4 MiB. Generous

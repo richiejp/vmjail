@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // safeBuf is a mutex-guarded io.Writer so a test can install it as the

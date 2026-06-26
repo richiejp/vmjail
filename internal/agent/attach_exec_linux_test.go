@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
 	"golang.org/x/sys/unix"
 )
 

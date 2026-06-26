@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/devcontainer"
+	"github.com/richiejp/darkaifactory/internal/devcontainer"
 )
 
 func TestNormalizePostStart(t *testing.T) {

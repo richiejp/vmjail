@@ -6,8 +6,8 @@ import (
 	"io"
 	"os"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
-	"github.com/localai-org/darkaifactory/internal/observability/ebpf/sleepsnoop"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/darkaifactory/internal/observability/ebpf/sleepsnoop"
 )
 
 // SleepsnoopReportPrefix labels the sleep-snoop gadget's console status line.

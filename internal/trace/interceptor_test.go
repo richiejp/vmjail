@@ -9,9 +9,9 @@ import (
 
 	"connectrpc.com/connect"
 
-	healthv1 "github.com/localai-org/darkaifactory/internal/genpb/health/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/health/v1/healthv1connect"
-	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
+	healthv1 "github.com/richiejp/darkaifactory/internal/genpb/health/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
+	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
 )
 
 // pingHandler is a minimal HealthService implementation that

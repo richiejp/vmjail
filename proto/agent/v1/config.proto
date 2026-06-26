@@ -22,7 +22,7 @@ syntax = "proto3";
 
 package daft.agent.v1;
 
-option go_package = "github.com/localai-org/darkaifactory/internal/genpb/agent/v1;agentv1";
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1";
 
 // GuestConfigRequest is the handshake the agent sends on a fresh
 // config connection. Identity is implicit in the per-VM socket, so the

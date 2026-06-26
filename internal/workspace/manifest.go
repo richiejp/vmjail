@@ -9,9 +9,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/localai-org/darkaifactory/internal/cas"
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/cas"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // ManifestVersion is the on-the-wire format version this code

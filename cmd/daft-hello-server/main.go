@@ -24,7 +24,7 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/localai-org/darkaifactory/internal/banner"
+	"github.com/richiejp/darkaifactory/internal/banner"
 )
 
 const (

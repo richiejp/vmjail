@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/orchestrator"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/orchestrator"
 )
 
 // runOrchestrator boots an in-process orchestrator listening on a

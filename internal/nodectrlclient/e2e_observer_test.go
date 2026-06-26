@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
-	"github.com/localai-org/darkaifactory/internal/nodectrl"
-	"github.com/localai-org/darkaifactory/internal/nodectrlclient"
-	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 )
 
 const e2eObserverUID = "sb-observer-e2e"

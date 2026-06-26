@@ -3,8 +3,8 @@ package sleepsnoop
 import (
 	"sync"
 
-	"github.com/localai-org/darkaifactory/internal/observability/ebpf/topk"
-	"github.com/localai-org/darkaifactory/internal/observability/progress"
+	"github.com/richiejp/darkaifactory/internal/observability/ebpf/topk"
+	"github.com/richiejp/darkaifactory/internal/observability/progress"
 )
 
 // Aggregation caps. A build sleeps from a bounded set of distinct comms; the

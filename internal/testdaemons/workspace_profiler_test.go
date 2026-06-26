@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/testdaemons"
+	"github.com/richiejp/darkaifactory/internal/testdaemons"
 )
 
 // workspaceProfilerScript samples the guest's resource state from

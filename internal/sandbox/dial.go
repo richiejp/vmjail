@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // dialReplyLineLimit bounds the OK/REJECT reply line Cloud

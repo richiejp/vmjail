@@ -8,10 +8,10 @@ import (
 	"os"
 	"sync"
 
-	"github.com/localai-org/darkaifactory/internal/agent"
-	"github.com/localai-org/darkaifactory/internal/observability"
-	"github.com/localai-org/darkaifactory/internal/oops"
-	"github.com/localai-org/darkaifactory/internal/sandboxnet"
+	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/richiejp/darkaifactory/internal/observability"
+	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/sandboxnet"
 )
 
 // startVsockNetReceiver opens a UDS listener at

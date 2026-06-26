@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
 )
 
 // fakeVsockListener is an in-process net.Listener that accepts

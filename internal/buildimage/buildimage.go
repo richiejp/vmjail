@@ -20,7 +20,7 @@ import (
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/localai-org/darkaifactory/internal/ociregistry"
+	"github.com/richiejp/darkaifactory/internal/ociregistry"
 )
 
 //go:embed assets/build-image.tar.gz

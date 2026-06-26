@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/devcontainer"
-	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/localai-org/darkaifactory/internal/sandbox"
-	"github.com/localai-org/darkaifactory/internal/sandboxboot"
+	"github.com/richiejp/darkaifactory/internal/devcontainer"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 )
 
 // In-VM mount points + artefact names the in-sandbox image builder agrees

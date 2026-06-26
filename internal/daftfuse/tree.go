@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/workspace"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/workspace"
 )
 
 // node is one inode in the in-memory tree. Mirrors FileEntry but

@@ -9,7 +9,7 @@ package topk
 import (
 	"sort"
 
-	"github.com/localai-org/darkaifactory/internal/observability/progress"
+	"github.com/richiejp/darkaifactory/internal/observability/progress"
 )
 
 // Counter tracks at most cap keys. While under cap it counts exactly; once

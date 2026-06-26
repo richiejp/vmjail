@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
-	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/nodectrl"
-	"github.com/localai-org/darkaifactory/internal/nodectrlclient"
-	"github.com/localai-org/darkaifactory/internal/orchestrator"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
+	"github.com/richiejp/darkaifactory/internal/orchestrator"
 )
 
 // syncBuffer is a thread-safe bytes.Buffer for capturing

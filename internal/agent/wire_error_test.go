@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
 )
 
 // TestControlWireMarshalErrors covers the marshal-error branch of the

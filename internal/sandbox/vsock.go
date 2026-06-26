@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/agent"
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
-	"github.com/localai-org/darkaifactory/internal/oops"
-	"github.com/localai-org/darkaifactory/internal/trace"
+	"github.com/richiejp/darkaifactory/internal/agent"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // standaloneGuestCID is the AF_VSOCK context ID handed to a standalone

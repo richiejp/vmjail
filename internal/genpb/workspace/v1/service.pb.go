@@ -35,7 +35,7 @@
 package workspacev1
 
 import (
-	v1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
+	v1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	durationpb "google.golang.org/protobuf/types/known/durationpb"
@@ -2018,7 +2018,7 @@ const file_workspace_v1_service_proto_rawDesc = "" +
 	"\vForwardPort\x12\x1f.daft.workspace.v1.ForwardFrame\x1a\x1f.daft.workspace.v1.ForwardFrame\"\x00(\x010\x01\x12U\n" +
 	"\rAttachSandbox\x12\x1e.daft.workspace.v1.AttachFrame\x1a\x1e.daft.workspace.v1.AttachFrame\"\x00(\x010\x01\x12\\\n" +
 	"\fObserverTail\x12&.daft.workspace.v1.ObserverTailRequest\x1a .daft.workspace.v1.ObserverChunk\"\x000\x01\x12g\n" +
-	"\x0eObserveSummary\x12(.daft.workspace.v1.ObserveSummaryRequest\x1a).daft.workspace.v1.ObserveSummaryResponse\"\x00BNZLgithub.com/localai-org/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
+	"\x0eObserveSummary\x12(.daft.workspace.v1.ObserveSummaryRequest\x1a).daft.workspace.v1.ObserveSummaryResponse\"\x00BKZIgithub.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
 
 var (
 	file_workspace_v1_service_proto_rawDescOnce sync.Once

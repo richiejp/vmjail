@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/trace"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // TestWorkspacePullTraceShape drives serve+pull in-process with a

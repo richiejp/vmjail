@@ -24,10 +24,10 @@ import (
 	"connectrpc.com/connect"
 	"golang.org/x/net/http2"
 
-	workspacebrokerv1 "github.com/localai-org/darkaifactory/internal/genpb/workspacebroker/v1"
-	"github.com/localai-org/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
-	"github.com/localai-org/darkaifactory/internal/identity"
-	"github.com/localai-org/darkaifactory/internal/workspacebroker"
+	workspacebrokerv1 "github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/workspacebroker"
 )
 
 // Config is everything the broker client needs to dial the

@@ -24,7 +24,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/httpcache"
+	"github.com/richiejp/darkaifactory/internal/httpcache"
 )
 
 // syncBuffer is a mutex-guarded io.Writer + reader for log

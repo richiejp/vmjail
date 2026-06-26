@@ -33,7 +33,7 @@ import "google/protobuf/duration.proto";
 import "sandbox/v1/sandbox.proto";
 import "workspace/v1/catalog.proto";
 
-option go_package = "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1;workspacev1";
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1";
 
 service WorkspaceCatalogService {
   // Create mints a new Workspace owned by the calling identity.

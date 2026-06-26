@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/localai-org/darkaifactory/internal/oops"
-	"github.com/localai-org/darkaifactory/internal/trace"
+	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // PortForwardSpec names one in-VM port forward: VsockPort is the

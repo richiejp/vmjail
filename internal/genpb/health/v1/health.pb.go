@@ -124,7 +124,7 @@ const file_health_v1_health_proto_rawDesc = "" +
 	"\fPingResponse\x12\x18\n" +
 	"\amessage\x18\x01 \x01(\tR\amessage2T\n" +
 	"\rHealthService\x12C\n" +
-	"\x04Ping\x12\x1b.daft.health.v1.PingRequest\x1a\x1c.daft.health.v1.PingResponse\"\x00BHZFgithub.com/localai-org/darkaifactory/internal/genpb/health/v1;healthv1b\x06proto3"
+	"\x04Ping\x12\x1b.daft.health.v1.PingRequest\x1a\x1c.daft.health.v1.PingResponse\"\x00BEZCgithub.com/richiejp/darkaifactory/internal/genpb/health/v1;healthv1b\x06proto3"
 
 var (
 	file_health_v1_health_proto_rawDescOnce sync.Once

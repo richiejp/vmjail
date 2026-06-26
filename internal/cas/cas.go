@@ -25,7 +25,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 
-	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // algoSubdir is the directory under root used to scope chunks by

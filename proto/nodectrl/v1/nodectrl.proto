@@ -22,7 +22,7 @@ package daft.nodectrl.v1;
 import "google/protobuf/timestamp.proto";
 import "sandbox/v1/sandbox.proto";
 
-option go_package = "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1;nodectrlv1";
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1;nodectrlv1";
 
 service NodeControlService {
   // RegisterNode advertises a Node's resources and holds the

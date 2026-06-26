@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/httpcache"
+	"github.com/richiejp/darkaifactory/internal/httpcache"
 )
 
 func mustOpen(t *testing.T, dir string, offline bool) *httpcache.Cache {

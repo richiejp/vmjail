@@ -5,12 +5,12 @@ import (
 	"io"
 	"time"
 
-	agentv1 "github.com/localai-org/darkaifactory/internal/genpb/agent/v1"
-	"github.com/localai-org/darkaifactory/internal/observability/ebpf/execsnoop"
-	"github.com/localai-org/darkaifactory/internal/observability/ebpf/iosnoop"
-	"github.com/localai-org/darkaifactory/internal/observability/ebpf/opensnoop"
-	"github.com/localai-org/darkaifactory/internal/observability/ebpf/sleepsnoop"
-	"github.com/localai-org/darkaifactory/internal/observability/progress"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/darkaifactory/internal/observability/ebpf/execsnoop"
+	"github.com/richiejp/darkaifactory/internal/observability/ebpf/iosnoop"
+	"github.com/richiejp/darkaifactory/internal/observability/ebpf/opensnoop"
+	"github.com/richiejp/darkaifactory/internal/observability/ebpf/sleepsnoop"
+	"github.com/richiejp/darkaifactory/internal/observability/progress"
 )
 
 // SummaryReportPrefix labels the build-progress summary writer's console

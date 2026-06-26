@@ -15,13 +15,13 @@ import (
 	"strings"
 	"testing"
 
-	nodectrlv1 "github.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1"
-	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/localai-org/darkaifactory/internal/sandbox"
-	"github.com/localai-org/darkaifactory/internal/sandboxboot"
-	"github.com/localai-org/darkaifactory/internal/sandboxgateway"
-	"github.com/localai-org/darkaifactory/internal/sandboxnet"
-	"github.com/localai-org/darkaifactory/internal/workspace"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/darkaifactory/internal/sandboxboot"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/richiejp/darkaifactory/internal/sandboxnet"
+	"github.com/richiejp/darkaifactory/internal/workspace"
 )
 
 const (

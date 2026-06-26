@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/bundled"
-	"github.com/localai-org/darkaifactory/internal/observability"
-	"github.com/localai-org/darkaifactory/internal/sandbox"
+	"github.com/richiejp/darkaifactory/internal/bundled"
+	"github.com/richiejp/darkaifactory/internal/observability"
+	"github.com/richiejp/darkaifactory/internal/sandbox"
 )
 
 // resolvedLogPath is a stand-in absolute observer-log path used by the

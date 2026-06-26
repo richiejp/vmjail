@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	workspacev1 "github.com/localai-org/darkaifactory/internal/genpb/workspace/v1"
-	"github.com/localai-org/darkaifactory/internal/workspace"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/workspace"
 )
 
 // White-box test: pinning the printChange formatting + entryKindLabel

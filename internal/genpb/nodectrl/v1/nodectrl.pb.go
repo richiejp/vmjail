@@ -25,7 +25,7 @@
 package nodectrlv1
 
 import (
-	v1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
+	v1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
@@ -1739,7 +1739,7 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\tListNodes\x12\".daft.nodectrl.v1.ListNodesRequest\x1a#.daft.nodectrl.v1.ListNodesResponse\"\x00\x12`\n" +
 	"\x0eOpenPortStream\x12#.daft.nodectrl.v1.PortStreamMessage\x1a#.daft.nodectrl.v1.PortStreamMessage\"\x00(\x010\x01\x12b\n" +
 	"\fAttachStream\x12%.daft.nodectrl.v1.AttachStreamMessage\x1a%.daft.nodectrl.v1.AttachStreamMessage\"\x00(\x010\x01\x12h\n" +
-	"\x0eObserverStream\x12'.daft.nodectrl.v1.ObserverStreamMessage\x1a'.daft.nodectrl.v1.ObserverStreamMessage\"\x00(\x010\x01BLZJgithub.com/localai-org/darkaifactory/internal/genpb/nodectrl/v1;nodectrlv1b\x06proto3"
+	"\x0eObserverStream\x12'.daft.nodectrl.v1.ObserverStreamMessage\x1a'.daft.nodectrl.v1.ObserverStreamMessage\"\x00(\x010\x01BIZGgithub.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1;nodectrlv1b\x06proto3"
 
 var (
 	file_nodectrl_v1_nodectrl_proto_rawDescOnce sync.Once

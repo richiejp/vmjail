@@ -31,8 +31,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/cas"
-	"github.com/localai-org/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/cas"
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // indexName is the JSON index file kept alongside the blob store

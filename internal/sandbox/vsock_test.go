@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	tracev1 "github.com/localai-org/darkaifactory/internal/genpb/trace/v1"
-	"github.com/localai-org/darkaifactory/internal/trace"
+	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // Fixed absolute path used by validate-only tests that don't open

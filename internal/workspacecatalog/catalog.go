@@ -28,8 +28,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/localai-org/darkaifactory/internal/assert"
-	"github.com/localai-org/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/assert"
+	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
 // Condition types. Defined here as constants so handlers and the

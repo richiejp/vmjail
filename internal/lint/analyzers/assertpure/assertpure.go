@@ -30,7 +30,7 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
 
-	"github.com/localai-org/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/darkaifactory/internal/lint/suppress"
 )
 
 // Analyzer is the assertpure analyzer entry point.

@@ -17,8 +17,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
-	"github.com/localai-org/darkaifactory/internal/ociregistry"
-	"github.com/localai-org/darkaifactory/internal/trace"
+	"github.com/richiejp/darkaifactory/internal/ociregistry"
+	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
 // remoteKeychain authenticates pulls. DefaultKeychain reads

@@ -5,9 +5,9 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/localai-org/darkaifactory/internal/devcontainer"
-	sandboxv1 "github.com/localai-org/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/localai-org/darkaifactory/internal/workspacecatalog"
+	"github.com/richiejp/darkaifactory/internal/devcontainer"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 // resolve is a test helper: parse+resolve a devcontainer.json body with

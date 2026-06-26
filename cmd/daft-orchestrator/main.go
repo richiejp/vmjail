@@ -10,7 +10,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/localai-org/darkaifactory/internal/orchestratorcli"
+	"github.com/richiejp/darkaifactory/internal/orchestratorcli"
 )
 
 var osExit = os.Exit
