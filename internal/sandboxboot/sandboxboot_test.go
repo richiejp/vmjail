@@ -33,6 +33,7 @@ const (
 type fakeStore struct {
 	pull   func(context.Context, string) (*imagestore.Image, error)
 	bundle func(context.Context, string, imagestore.BundleOptions) (*imagestore.Bundle, error)
+	clone  func(*imagestore.Bundle) (*imagestore.Bundle, func(), error)
 	lock   func(string) (func(), error)
 }
 
@@ -42,6 +43,16 @@ func (f *fakeStore) Pull(ctx context.Context, ref string) (*imagestore.Image, er
 
 func (f *fakeStore) Bundle(ctx context.Context, digest string, opts imagestore.BundleOptions) (*imagestore.Bundle, error) {
 	return f.bundle(ctx, digest, opts)
+}
+
+// CloneBundle defaults to identity (return the same bundle, no-op
+// cleanup) so tests that don't care about CoW behave as before; a test
+// can set f.clone to assert the dispatch uses the clone's path.
+func (f *fakeStore) CloneBundle(b *imagestore.Bundle) (*imagestore.Bundle, func(), error) {
+	if f.clone != nil {
+		return f.clone(b)
+	}
+	return b, func() {}, nil
 }
 
 func (f *fakeStore) Lock(digest string) (func(), error) {
@@ -277,6 +288,90 @@ func TestBuildBundleConfigHappyPath(t *testing.T) {
 	unlock()
 	if unlockCalls != 1 {
 		t.Errorf("unlock invoked %d times, want 1", unlockCalls)
+	}
+}
+
+// TestBuildBundleConfigUsesCloneNotCache pins the CoW isolation wiring:
+// the dispatch must mount the per-dispatch clone (not the shared cached
+// template), and teardown must release both the clone and the lock.
+func TestBuildBundleConfigUsesCloneNotCache(t *testing.T) {
+	var unlockCalls, cloneCleanups int
+	store := &fakeStore{
+		pull: func(context.Context, string) (*imagestore.Image, error) {
+			return &imagestore.Image{Digest: testDigest}, nil
+		},
+		bundle: func(context.Context, string, imagestore.BundleOptions) (*imagestore.Bundle, error) {
+			return &imagestore.Bundle{Path: "/cache/bundles/" + testDigest}, nil
+		},
+		clone: func(b *imagestore.Bundle) (*imagestore.Bundle, func(), error) {
+			// A distinct per-dispatch path under a clones parent, keeping
+			// the template's basename (mirrors CloneBundle).
+			return &imagestore.Bundle{
+				Path: "/cache/clones/d-xyz/" + filepath.Base(b.Path),
+				UID:  b.UID, GID: b.GID,
+			}, func() { cloneCleanups++ }, nil
+		},
+		lock: func(string) (func(), error) { return func() { unlockCalls++ }, nil },
+	}
+	deps := Deps{
+		OpenStore: func() (Store, error) { return store, nil },
+		CacheDir:  func() (string, error) { return t.TempDir(), nil },
+		Extract: func(string) (bundled.Paths, error) {
+			return bundled.Paths{CloudHypervisor: testCHPath, Kernel: testKernelPath, Initramfs: testInitramfsPath, Virtiofsd: testVirtiofsdPath}, nil
+		},
+	}
+
+	cfg, teardown, err := BuildBundleConfig(t.Context(), "alpine:3", BootOptions{}, deps)
+	if err != nil {
+		t.Fatalf("BuildBundleConfig: %v", err)
+	}
+	// The exported share's host dir is the clone's parent, and the guest
+	// bundle path resolves to the clone — never the cached template.
+	if cfg.Shares[0].HostDir != "/cache/clones/d-xyz" {
+		t.Errorf("share HostDir = %q, want the clone parent", cfg.Shares[0].HostDir)
+	}
+	if cfg.Bundle != BundlesMount+"/"+testDigest {
+		t.Errorf("Bundle = %q, want clone basename under %q", cfg.Bundle, BundlesMount)
+	}
+
+	teardown()
+	if cloneCleanups != 1 {
+		t.Errorf("clone cleanup invoked %d times, want 1", cloneCleanups)
+	}
+	if unlockCalls != 1 {
+		t.Errorf("lock released %d times, want 1", unlockCalls)
+	}
+}
+
+// TestBuildBundleConfigCloneErrorReleasesLock covers the clone-failure
+// branch: a CloneBundle error must release the bundle lock and surface.
+func TestBuildBundleConfigCloneErrorReleasesLock(t *testing.T) {
+	var unlockCalls int
+	store := &fakeStore{
+		pull: func(context.Context, string) (*imagestore.Image, error) {
+			return &imagestore.Image{Digest: testDigest}, nil
+		},
+		bundle: func(context.Context, string, imagestore.BundleOptions) (*imagestore.Bundle, error) {
+			return &imagestore.Bundle{Path: "/cache/bundles/" + testDigest}, nil
+		},
+		clone: func(*imagestore.Bundle) (*imagestore.Bundle, func(), error) {
+			return nil, nil, errors.New("reflink failed")
+		},
+		lock: func(string) (func(), error) { return func() { unlockCalls++ }, nil },
+	}
+	deps := Deps{
+		OpenStore: func() (Store, error) { return store, nil },
+		CacheDir:  func() (string, error) { return t.TempDir(), nil },
+		Extract: func(string) (bundled.Paths, error) {
+			return bundled.Paths{CloudHypervisor: testCHPath, Kernel: testKernelPath, Initramfs: testInitramfsPath, Virtiofsd: testVirtiofsdPath}, nil
+		},
+	}
+	_, _, err := BuildBundleConfig(t.Context(), "alpine:3", BootOptions{}, deps)
+	if err == nil {
+		t.Fatal("want error when CloneBundle fails")
+	}
+	if unlockCalls != 1 {
+		t.Errorf("lock not released on clone failure: unlockCalls=%d", unlockCalls)
 	}
 }
 

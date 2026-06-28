@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // Subdirectory names under Store.Root.
@@ -64,6 +66,16 @@ func New(root string, quota int64) (*Store, error) {
 		if err := os.MkdirAll(filepath.Join(root, sub), 0o755); err != nil {
 			return nil, fmt.Errorf("imagestore: mkdir %s: %w", sub, err)
 		}
+	}
+	// Per-dispatch CoW clones (clonesDir) are ephemeral: each is removed
+	// by its dispatch's teardown. Any clone still on disk at startup is an
+	// orphan from a previous process that was hard-killed before its
+	// teardown ran (a SIGKILL skips Go defers), so sweep them here — New
+	// runs once per sandboxd start, before any dispatch, and a node owns
+	// its store exclusively. Best-effort: a sweep failure is logged, not
+	// fatal, since a stale clone wastes disk but doesn't break boot.
+	if err := forceRemoveAll(filepath.Join(root, clonesDir)); err != nil {
+		oops.Log("imagestore: sweep stale clones", err)
 	}
 	return &Store{
 		Root:  root,

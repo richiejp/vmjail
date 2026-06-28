@@ -107,6 +107,10 @@ type BootOptions struct {
 type Store interface {
 	Pull(ctx context.Context, ref string) (*imagestore.Image, error)
 	Bundle(ctx context.Context, digest string, opts imagestore.BundleOptions) (*imagestore.Bundle, error)
+	// CloneBundle returns an ephemeral copy-on-write clone of a cached
+	// bundle plus a cleanup that removes it, so a dispatch mutates its
+	// own rootfs instead of the shared per-digest cache.
+	CloneBundle(bundle *imagestore.Bundle) (*imagestore.Bundle, func(), error)
 	Lock(digest string) (func(), error)
 }
 
@@ -175,15 +179,15 @@ func BuildBundleConfig(
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: bundle %s: %w", img.Digest, err)
 	}
-	bundleUnlock, err := store.Lock(img.Digest)
+	bundle, bundleTeardown, err := lockAndCloneBundle(store, bundle, img.Digest)
 	if err != nil {
-		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: lock bundle: %w", err)
+		return sandbox.Config{}, unlock, err
 	}
-	// From here on, any error must release the lock.
+	// From here on, any error must remove the clone and release the lock.
 	unlockNow := unlock
 	defer func() {
 		if err != nil {
-			bundleUnlock()
+			bundleTeardown()
 			unlock = unlockNow
 		}
 	}()
@@ -217,7 +221,30 @@ func BuildBundleConfig(
 		Bundle:            filepath.Join(BundlesMount, filepath.Base(bundle.Path)),
 		PostStartCommands: opts.PostStartCommands,
 	}
-	return cfg, bundleUnlock, nil
+	return cfg, bundleTeardown, nil
+}
+
+// lockAndCloneBundle locks the digest's cache entry and returns an
+// ephemeral copy-on-write clone of bundle plus a teardown that removes
+// the clone and releases the lock. The lock is held across the clone so
+// the cached template can't be evicted mid-copy. The clone is what the
+// dispatch mounts and mutates — its host-side provisioning (CA
+// injection) and the guest's rootfs writes (e.g. nix realising a closure
+// into /nix/store) land on the clone, never the shared per-digest cache.
+func lockAndCloneBundle(store Store, bundle *imagestore.Bundle, digest string) (*imagestore.Bundle, func(), error) {
+	bundleUnlock, err := store.Lock(digest)
+	if err != nil {
+		return nil, nil, fmt.Errorf("sandboxboot: lock bundle: %w", err)
+	}
+	clone, cloneCleanup, err := store.CloneBundle(bundle)
+	if err != nil {
+		bundleUnlock()
+		return nil, nil, fmt.Errorf("sandboxboot: clone bundle: %w", err)
+	}
+	return clone, func() {
+		cloneCleanup()
+		bundleUnlock()
+	}, nil
 }
 
 // buildShares assembles the virtio-fs shares: the bundle/rootfs share

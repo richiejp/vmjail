@@ -4595,12 +4595,59 @@ Open questions:
         one-time publish needs auth. *No CI workflow:* CI never runs
         `make integration` (e2e needs KVM), so the artifact's consumers are
         local/dev KVM hosts; publishing stays a manual local
-        `make update-egress-cache`. **Pending:** the first record+push (needs
-        `gh auth refresh -s write:packages`, then verify the bun test replays
-        offline/fast).
+        `make update-egress-cache`.
+        - **First publish (2026-06-26) was EMPTY — and that exposed a deeper
+          bug.** The initial `make update-egress-cache` pushed a 95-byte (empty)
+          layer: it recorded against the **real** image store, whose nix bundle
+          rootfs was already warm (full bun closure baked in from prior runs),
+          so nix substituted nothing, the proxy saw nothing, and an empty cache
+          was packed+pushed. Root cause is the same cache-mutation bug K3 fixes:
+          the per-digest bundle rootfs was mounted **writable** and reused
+          across dispatches, so the first cold run wrote the closure into the
+          cache and every later run (including the record run) found it already
+          present. This is also why the bun test appeared to "bypass" the proxy
+          — it never did; the warm writable bundle just meant zero egress.
+        - **Re-recorded + published (2026-06-28), 139 MB.** After K3 (CoW bundle
+          isolation) the clone is pristine every dispatch, so recording is
+          complete by construction. Re-recorded against a fresh `DAFT_STORE_DIR`
+          (pristine template) → 208 proxy GETs / 277.7 MB substituted live →
+          `bin/egress-cache` 140 MB (104 unique blobs) → pushed to tag
+          `61756a6b322f58c2`; verified the published layer is now 139 MB.
+        - **Still pending:** flip the ghcr package to **public** in the UI (it
+          was published private, so anonymous `pull-unpack` — what
+          `integration-build`/CI use — still 401s; `make integration` records
+          live until then). Optional: an offline-replay run to prove the
+          recorded cache replays with the proxy offline.
       Verified: `flake.lock` pin (rev fixed); harness wiring table test (4
       modes); `egresscache` pack→push→pull→unpack round-trip against a local
-      registry + zip-slip/error branches; Makefile tag + targets parse.
+      registry + zip-slip/error branches; Makefile tag + targets parse; the
+      bun e2e records the full closure through the proxy (208 GETs) and passes.
+
+- [x] **K3 — per-dispatch copy-on-write bundle isolation (landed 2026-06-28).**
+      `imagestore` unpacks each image digest to a cached bundle rootfs under
+      `bundles/<digest>` and the boot path mounted that **writable** and reused
+      it across every dispatch of the image. Guest writes (a `nix develop`
+      realising a closure into `/nix/store`) and host-side CA injection
+      therefore mutated the shared cache: it grew without bound, leaked state
+      between dispatches of the same image, and silently absorbed the bun
+      closure so later runs made zero egress (the "bypass" red herring, and the
+      cause of the empty K2 first-publish). Fix: `Store.CloneBundle`
+      (`internal/imagestore/clone.go`) reflink-clones the cached template to an
+      ephemeral per-dispatch dir under `clones/` (`cp --reflink=always -a`, so a
+      non-reflink store fails loud rather than full-copying — XFS/btrfs/OpenZFS
+      ≥2.2 only); `sandboxboot.BuildBundleConfig` clones under the bundle lock
+      and the dispatch runs on the clone, never the template. The template stays
+      pristine forever, so the cache is immutable and every run substitutes
+      fresh through the proxy. Teardown removes the clone (`forceRemoveAll`
+      chmods read-only 0555 nix dirs first); a SIGKILL'd dispatch skips that, so
+      `Store.New` sweeps orphan `clones/` at startup. Verified: unit tests
+      (isolation, read-only cleanup, orphan sweep, missing-template); the bun
+      e2e passes against a pristine store with the closure landing in the clone
+      (774 paths incl. `bun-1.2.13`) while the template stays pristine (124
+      paths, no bun); reflink confirmed (template+clone share physical extents).
+      Follow-ups: bring `clones/` (and `bundles/`) under the store quota;
+      replace the `cp` shell-out with a native FICLONE walk
+      (`unix.IoctlFileClone`).
 
 ## Architecture
 
