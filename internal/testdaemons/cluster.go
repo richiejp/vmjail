@@ -304,11 +304,14 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	// and serves it on every VM's netstack gateway, so every
 	// image-backed dispatch routes guest TLS through it. Upstream
 	// verification is skipped because tests use self-signed upstreams.
-	// Caching mode is resolved by resolveEgressCache: with a recorded
-	// artifact (envEgressCacheArtifact, exported by `make integration`)
-	// the proxy replays it OFFLINE — deterministic, no upstream hit, a
-	// miss 504s and fails the test loudly; without one it records live
-	// into a temp dir so a repeat fetch replays within the run.
+	// Caching mode is resolved by resolveEgressCache. A cluster that opted
+	// into the recorded cache (WithEgressReplayCache) consults the artifact
+	// (envEgressCacheArtifact, exported by `make integration`) and replays
+	// it OFFLINE — deterministic, no upstream hit, a miss 504s and fails
+	// loudly. Every other WithEgressProxy cluster ignores the env and
+	// records live into a temp dir (online), so a real bin/egress-cache —
+	// which only holds the bun test's URLs — can't force unrelated egress
+	// tests offline into a guaranteed miss. See PLAN.md K2.
 	// The proxy is on by default in sandboxd, so tests that don't ask
 	// for it must explicitly opt out — otherwise every cluster would
 	// run default-deny and break workloads that egress directly.
@@ -318,9 +321,11 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		proxyURL = "http://" + net.JoinHostPort(
 			sandboxnet.DefaultGatewayIP, strconv.Itoa(int(sandboxnet.DefaultProxyPort)),
 		)
-		cacheDir, offline := resolveEgressCache(
-			os.Getenv(envEgressCacheArtifact), os.Getenv(envEgressCacheRecord), t.TempDir,
-		)
+		artifact, record := "", ""
+		if o.egressReplayCache {
+			artifact, record = os.Getenv(envEgressCacheArtifact), os.Getenv(envEgressCacheRecord)
+		}
+		cacheDir, offline := resolveEgressCache(artifact, record, t.TempDir)
 		sbxEnv = []string{
 			"DAFT_EGRESS_PROXY=1",
 			"DAFT_EGRESS_PROXY_INSECURE_UPSTREAM=1",
@@ -375,6 +380,12 @@ type ClusterOption func(*clusterOpts)
 
 type clusterOpts struct {
 	egressProxy bool
+	// egressReplayCache opts THIS cluster into the recorded egress-replay
+	// cache env (DAFT_EGRESS_PROXY_CACHE / _RECORD). Without it a
+	// WithEgressProxy cluster always records live into a throwaway dir and
+	// never goes offline, so a real bin/egress-cache — which only holds the
+	// bun test's URLs — can't force unrelated egress tests into a 504 miss.
+	egressReplayCache bool
 	// bundledSandboxd, when set, runs that daft-sandboxd binary instead
 	// of the locally go-built one AND scrubs the artefact env vars from
 	// its environment, forcing it onto the //go:embed-bundled artefacts.
@@ -396,6 +407,19 @@ type clusterOpts struct {
 // or VIP — just the DAFT_EGRESS_PROXY* env that NewCluster sets.
 func WithEgressProxy() ClusterOption {
 	return func(o *clusterOpts) { o.egressProxy = true }
+}
+
+// WithEgressReplayCache opts the cluster into the recorded egress-replay
+// cache: only under it does NewCluster read DAFT_EGRESS_PROXY_CACHE
+// (replay offline) / DAFT_EGRESS_PROXY_CACHE_RECORD (record). Set it ONLY
+// on a test whose egress URLs are actually in the recorded artifact —
+// under offline replay a cache miss 504s. The recorder
+// (`make update-egress-cache`) scopes to the bun test, so the bun test is
+// the sole consumer; every other WithEgressProxy cluster stays online and
+// keeps working even when a real bin/egress-cache is present on disk.
+// Has no effect without WithEgressProxy (the cache feeds the proxy).
+func WithEgressReplayCache() ClusterOption {
+	return func(o *clusterOpts) { o.egressReplayCache = true }
 }
 
 // envEgressCacheArtifact names the env var (exported by `make

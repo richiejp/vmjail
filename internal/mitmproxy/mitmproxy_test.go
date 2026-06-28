@@ -994,6 +994,60 @@ func TestCacheNonOKPassThrough(t *testing.T) {
 	}
 }
 
+// TestCacheablePolicy pins cacheable's matrix: GET+200 always, GET+404
+// only for a `.narinfo` (the negative-caching carve-out), nothing else.
+func TestCacheablePolicy(t *testing.T) {
+	const ni, nar = "/x.narinfo", "/nar/x.nar.xz"
+	cases := []struct {
+		method, path string
+		code         int
+		want         bool
+	}{
+		{http.MethodGet, ni, 200, true},
+		{http.MethodGet, nar, 200, true},
+		{http.MethodGet, ni, 404, true},   // negative-cache narinfo 404
+		{http.MethodGet, nar, 404, false}, // a missing nar is a hard error
+		{http.MethodGet, ni, 500, false},
+		{http.MethodGet, ni, 206, false},
+		{http.MethodPost, ni, 404, false},
+	}
+	for _, c := range cases {
+		req := httptest.NewRequest(c.method, "https://cache.nixos.org"+c.path, http.NoBody)
+		if got := cacheable(req, &http.Response{StatusCode: c.code}); got != c.want {
+			t.Errorf("cacheable(%s %s -> %d) = %v, want %v", c.method, c.path, c.code, got, c.want)
+		}
+	}
+}
+
+// TestCacheNarinfo404Replay: a 404 on a .narinfo is stored (negative
+// cache) and the second request is served from the cache without
+// refetching upstream. Because serveOne consults Lookup before the
+// offline-miss branch, a stored negative entry is also served as a 404
+// under OFFLINE replay rather than a 504 — the failure that broke the
+// bun e2e's offline replay (nix retries a 504 then fails, but handles a
+// 404 by building locally).
+func TestCacheNarinfo404Replay(t *testing.T) {
+	client, target, logSink, hits := startCachingHarness(t, t.TempDir(), false,
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNotFound) })
+	narinfo := strings.TrimSuffix(target, "/pkg") + "/deadbeef.narinfo"
+
+	if st, _ := doGet(t, client, narinfo); st != http.StatusNotFound {
+		t.Fatalf("record GET status = %d, want 404", st)
+	}
+	if !logSink.waitForContains(t, "STORE", 2*time.Second) {
+		t.Errorf("narinfo 404 not stored: %q", logSink.String())
+	}
+	if st, _ := doGet(t, client, narinfo); st != http.StatusNotFound {
+		t.Fatalf("replay GET status = %d, want 404", st)
+	}
+	if !logSink.waitForContains(t, " HIT", 2*time.Second) {
+		t.Errorf("narinfo 404 not served from cache: %q", logSink.String())
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("upstream hit %d times, want 1 (negative entry must replay)", n)
+	}
+}
+
 // TestServeFromCacheErrors covers serveFromCache's two failure
 // branches: a writeback error (client conn died mid-response) and a
 // cache-read error (the index references a body the CAS no longer

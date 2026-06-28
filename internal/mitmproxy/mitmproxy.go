@@ -26,6 +26,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -262,11 +263,32 @@ func (p *Proxy) serveFromCache(tlsClient io.Writer, req *http.Request, tag strin
 }
 
 // cacheable reports whether a response may be recorded for replay.
-// Conservative for slice I1: only idempotent GETs that returned 200.
-// Range responses (206) and error statuses are passed through
-// untouched so a partial or transient body never poisons the cache.
+// Idempotent GETs that returned 200 are the common case. Range
+// responses (206) and most error statuses are passed through untouched
+// so a partial or transient body never poisons the cache.
+//
+// The one negative result we DO record is a 404 on a `.narinfo`: nix
+// probes `<hash>.narinfo` against a binary cache for every store path in
+// a closure, and a 404 is the cache's authoritative "not here — build it
+// locally" — a stable answer for a pinned closure, not a transient error.
+// Recording it lets OFFLINE replay return the same 404 instead of an
+// offline-miss 504; nix treats a 504 as transient and retries it five
+// times before failing the whole substitution, so an unrecorded narinfo
+// 404 breaks offline replay (the single miss that failed the bun e2e).
+// Scoped to `.narinfo` so a 404 on a nar or any other URL still passes
+// through uncached.
 func cacheable(req *http.Request, resp *http.Response) bool {
-	return req.Method == http.MethodGet && resp.StatusCode == http.StatusOK
+	if req.Method != http.MethodGet {
+		return false
+	}
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return true
+	case http.StatusNotFound:
+		return strings.HasSuffix(req.URL.Path, ".narinfo")
+	default:
+		return false
+	}
 }
 
 func (p *Proxy) logLine(format string, args ...any) {

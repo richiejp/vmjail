@@ -4613,11 +4613,37 @@ Open questions:
           (pristine template) → 208 proxy GETs / 277.7 MB substituted live →
           `bin/egress-cache` 140 MB (104 unique blobs) → pushed to tag
           `61756a6b322f58c2`; verified the published layer is now 139 MB.
-        - **Still pending:** flip the ghcr package to **public** in the UI (it
-          was published private, so anonymous `pull-unpack` — what
-          `integration-build`/CI use — still 401s; `make integration` records
-          live until then). Optional: an offline-replay run to prove the
-          recorded cache replays with the proxy offline.
+        - **First offline-replay run (2026-06-28) found TWO bugs — both now
+          fixed.** Until today the artifact was empty+private so the offline
+          path had never actually run end-to-end; the first real run surfaced:
+          1. **Offline-replay is global, but the cache is bun-only.**
+             `make integration` exports `DAFT_EGRESS_PROXY_CACHE` for the whole
+             `go test` process, so EVERY `WithEgressProxy` cluster went offline
+             against a cache holding only the bun test's URLs → `BuildahPullEgress`
+             + both `DevcontainerBuild*` got 504 misses and timed out. Fix:
+             **per-test opt-in** `WithEgressReplayCache()` — only the bun test
+             reads the artifact/record env and may go offline; every other
+             egress test stays online (record-live), even with a real
+             `bin/egress-cache` on disk. Proven: `BuildahPullEgress` passes
+             online while the cache is present.
+          2. **A `.narinfo` 404 wasn't cached, so offline replay 504'd on it.**
+             nix probes `<hash>.narinfo` for every store path; a 404 ("build it
+             locally") is authoritative for a pinned closure, but `cacheable`
+             stored only 200s, so offline replay returned a 504, which nix
+             retries-then-fails. Fix: `mitmproxy.cacheable` **negative-caches a
+             404 on a `.narinfo`** (scoped — a nar/other 404 still passes
+             through). Re-recorded with the fix (52 narinfo entries) → the bun
+             e2e now **replays fully offline, 0 misses** (the prior single miss
+             `n216…narinfo` is served as a `404 HIT`).
+        - **Still pending before going public:**
+          - **Re-push the artifact** — the 139 MB ghcr image at tag
+            `61756a6b322f58c2` was recorded with the OLD `cacheable` (no negative
+            narinfo entries), so it will NOT replay offline. Re-push the
+            negative-cache-complete recording (`make update-egress-cache`).
+          - **Flip the ghcr package to public** in the UI (it's private, so
+            anonymous `pull-unpack` 401s; `make integration` records live until
+            then). Do this only AFTER the re-push, so the first thing anyone
+            pulls actually replays offline.
       Verified: `flake.lock` pin (rev fixed); harness wiring table test (4
       modes); `egresscache` pack→push→pull→unpack round-trip against a local
       registry + zip-slip/error branches; Makefile tag + targets parse; the

@@ -124,7 +124,12 @@ func TestClusterWorkspaceBunDevServer(t *testing.T) {
 	img := withLongRunningEntrypoint(t, base, "D6C3S2-READY")
 	ref := pushImageToRegistry(t, img, "test/d6c3-nix-bun:v1")
 
-	c := testdaemons.NewCluster(t, testdaemons.WithEgressProxy())
+	// The bun test is the sole consumer of the recorded egress-replay
+	// cache: `make update-egress-cache` records only this test, so only it
+	// may go offline against bin/egress-cache. Every other WithEgressProxy
+	// test stays online (see WithEgressReplayCache).
+	c := testdaemons.NewCluster(t,
+		testdaemons.WithEgressProxy(), testdaemons.WithEgressReplayCache())
 	s := testtmux.New(t)
 
 	mountSrc := t.TempDir()
