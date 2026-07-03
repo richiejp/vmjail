@@ -238,6 +238,7 @@ func New(cfg Config) (*Server, error) {
 	rec := buildReconciler(cfg, workspaceCat, nodeReg)
 	sandboxCtrl.SetReconciler(rec)
 	workspaceCtrl.SetPreActionReconciler(rec)
+	workspaceCtrl.SetNodeLister(nodeReg)
 	wireWorkspaceBridgers(workspaceCtrl, cfg, sandboxCtrl)
 	// The broker handler needs the orchestrator's bound address
 	// to return as the relay endpoint, but the listener doesn't

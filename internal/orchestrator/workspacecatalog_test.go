@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
@@ -166,6 +168,10 @@ type workspaceCatalogRig struct {
 	// is called with a non-nil dispatcher option; nil otherwise so
 	// the production NodeControlHandler is in play.
 	dispatcher *fakeDispatcher
+	// nodes is the registry the handler's single-node auto-pin
+	// consults. Empty by default (no auto-pin); tests register
+	// fingerprints via registerNode to exercise the behaviour.
+	nodes *nodectrl.Registry
 }
 
 func newWorkspaceCatalogRig(t *testing.T) *workspaceCatalogRig {
@@ -175,7 +181,8 @@ func newWorkspaceCatalogRig(t *testing.T) *workspaceCatalogRig {
 func newWorkspaceCatalogRigWith(t *testing.T, dispatcher *fakeDispatcher) *workspaceCatalogRig {
 	t.Helper()
 	cat := workspacecatalog.NewStore(nil)
-	cfg := Config{WorkspaceCatalog: cat}
+	nodes := nodectrl.NewRegistry(nil)
+	cfg := Config{WorkspaceCatalog: cat, NodeRegistry: nodes}
 	if dispatcher != nil {
 		cfg.WorkspaceDispatcher = dispatcher
 	}
@@ -187,7 +194,19 @@ func newWorkspaceCatalogRigWith(t *testing.T, dispatcher *fakeDispatcher) *works
 		callerID:   env.callerID,
 		client:     client,
 		dispatcher: dispatcher,
+		nodes:      nodes,
 	}
+}
+
+// registerNode adds a live sandbox-host registration to the rig's
+// registry and returns its fingerprint, so tests can drive the
+// single-node auto-pin path. Mirrors what a real RegisterNode stream
+// records while it's open.
+func (r *workspaceCatalogRig) registerNode(t *testing.T, hostname string) identity.Fingerprint {
+	t.Helper()
+	fp := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	r.nodes.Register(fp, hostname, "test", nodectrl.Resources{})
+	return fp
 }
 
 // fakeDispatcher records every PublishSandboxEvent call. The
@@ -1303,6 +1322,211 @@ func TestLaunchRejectsDraftAndMissing(t *testing.T) {
 	}
 	if _, ok := fake.last(); ok {
 		t.Error("dispatcher was called for an unready workspace")
+	}
+}
+
+// fakeNodeLister is a canned WorkspaceNodeLister for the white-box
+// autoPinSoleNode branch tests.
+type fakeNodeLister struct{ fps []identity.Fingerprint }
+
+func (f fakeNodeLister) RegisteredFingerprints() []identity.Fingerprint { return f.fps }
+
+// TestAutoPinSoleNodeBranches drives autoPinSoleNode directly through
+// the guard branches the RPC-level Launch tests don't reach: a nil
+// lister, an already-set target, a wider missing set, and the
+// store-update error path (a workspace absent from the store).
+func TestAutoPinSoleNodeBranches(t *testing.T) {
+	store := workspacecatalog.NewStore(nil)
+	h, err := NewWorkspaceCatalogHandler(store, &fakeDispatcher{})
+	if err != nil {
+		t.Fatalf("NewWorkspaceCatalogHandler: %v", err)
+	}
+	sole := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	base := func() workspacecatalog.Workspace {
+		ws := workspacecatalog.Workspace{}
+		ws.Metadata.UUID = "absent-uuid"
+		ws.Status.Missing = []string{workspacecatalog.MissingTarget}
+		return ws
+	}
+
+	// Nil lister → unchanged, no error.
+	if got, err := h.autoPinSoleNode(base()); err != nil || got.Spec.TargetSandboxFingerprint != "" {
+		t.Errorf("nil lister: target=%q err=%v, want unchanged", got.Spec.TargetSandboxFingerprint, err)
+	}
+
+	h.SetNodeLister(fakeNodeLister{fps: []identity.Fingerprint{sole}})
+
+	// Target already set → the explicit pin is never overwritten.
+	ws := base()
+	ws.Spec.TargetSandboxFingerprint = "explicit"
+	if got, _ := h.autoPinSoleNode(ws); got.Spec.TargetSandboxFingerprint != "explicit" {
+		t.Errorf("explicit target overwritten: %q", got.Spec.TargetSandboxFingerprint)
+	}
+
+	// Missing more than just target → not pinned (never masks a gap).
+	ws = base()
+	ws.Status.Missing = []string{"image", workspacecatalog.MissingTarget}
+	if got, _ := h.autoPinSoleNode(ws); got.Spec.TargetSandboxFingerprint != "" {
+		t.Errorf("pinned despite a missing image: %q", got.Spec.TargetSandboxFingerprint)
+	}
+
+	// Sole node but the workspace is absent from the store → the
+	// store.Update failure surfaces as an error.
+	if _, err := h.autoPinSoleNode(base()); err == nil {
+		t.Error("want an error when the workspace is absent from the store")
+	}
+}
+
+// readyExceptTarget builds a workspace with an image and a mount but
+// no target, so "target" is the sole missing field — the exact shape
+// the single-node auto-pin is meant to complete.
+func readyExceptTarget(t *testing.T, rig *workspaceCatalogRig, name string) string {
+	t.Helper()
+	created, err := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: name},
+	))
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	uuid := created.Msg.GetWorkspace().GetMetadata().GetUuid()
+	handle := uuidHandle(uuid)
+	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
+		&workspacev1.AddMountRequest{
+			Handle: handle,
+			Mount:  &sandboxv1.Mount{Target: testMountTarget, Source: testMountSource},
+		},
+	)); err != nil {
+		t.Fatalf("AddMount: %v", err)
+	}
+	if _, err := rig.client.SetImage(t.Context(), connect.NewRequest(
+		&workspacev1.SetImageRequest{Handle: handle, ImageRef: testImageRef},
+	)); err != nil {
+		t.Fatalf("SetImage: %v", err)
+	}
+	return uuid
+}
+
+// TestLaunchAutoPinsSoleNode is the single-node-cluster convenience:
+// a workspace whose only missing field is "target" launches without a
+// manual `daft workspace target` when exactly one node is registered,
+// and the resolved target is persisted onto the workspace.
+func TestLaunchAutoPinsSoleNode(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	fp := rig.registerNode(t, "sole-host")
+	uuid := readyExceptTarget(t, rig, "auto-pin")
+	resp, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+	))
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got := resp.Msg.GetWorkspace().GetSpec().GetTargetSandboxFingerprint(); got != fp.String() {
+		t.Errorf("target = %q, want auto-pinned %q", got, fp.String())
+	}
+	call, ok := fake.last()
+	if !ok {
+		t.Fatal("dispatcher saw no calls; auto-pin did not unblock Launch")
+	}
+	if call.fp != fp {
+		t.Errorf("dispatch target = %s, want sole node %s", call.fp, fp)
+	}
+}
+
+// TestLaunchExplicitTargetBeatsAutoPin pins that an explicit target is
+// never overridden by the sole-node pick.
+func TestLaunchExplicitTargetBeatsAutoPin(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	rig.registerNode(t, "sole-host")
+	explicit := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	uuid := readyWorkspace(t, rig, "explicit-target", explicit.String())
+	resp, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+	))
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if got := resp.Msg.GetWorkspace().GetSpec().GetTargetSandboxFingerprint(); got != explicit.String() {
+		t.Errorf("target = %q, want the explicit %q (not the sole node)", got, explicit.String())
+	}
+	if call, _ := fake.last(); call.fp != explicit {
+		t.Errorf("dispatch target = %s, want explicit %s", call.fp, explicit)
+	}
+}
+
+// TestLaunchNoAutoPinAmbiguousOrAbsent pins that auto-pin fires only
+// for exactly one node: zero nodes and two-or-more both leave "target"
+// missing, so Launch fails its precondition without dispatching.
+func TestLaunchNoAutoPinAmbiguousOrAbsent(t *testing.T) {
+	cases := []struct {
+		name  string
+		nodes int
+	}{
+		{"no nodes", 0},
+		{"ambiguous", 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fake := &fakeDispatcher{}
+			rig := newWorkspaceCatalogRigWith(t, fake)
+			for i := 0; i < tc.nodes; i++ {
+				rig.registerNode(t, fmt.Sprintf("host-%d", i))
+			}
+			uuid := readyExceptTarget(t, rig, "no-auto-pin")
+			_, err := rig.client.Launch(t.Context(), connect.NewRequest(
+				&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+			))
+			if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
+				t.Errorf("code = %s, want FailedPrecondition", code)
+			}
+			if _, ok := fake.last(); ok {
+				t.Error("dispatcher was called; auto-pin should not fire for this node count")
+			}
+			got, gerr := rig.catalog.Get(uuid)
+			if gerr != nil {
+				t.Fatalf("catalog.Get: %v", gerr)
+			}
+			if got.Spec.TargetSandboxFingerprint != "" {
+				t.Errorf("target = %q, want unset (no auto-pin)", got.Spec.TargetSandboxFingerprint)
+			}
+		})
+	}
+}
+
+// TestLaunchNoAutoPinWhenOtherFieldsMissing pins that a sole node does
+// NOT get pinned when the workspace is missing more than just the
+// target — auto-pin must only complete a workspace that's otherwise
+// ready, never mask a missing image/mount.
+func TestLaunchNoAutoPinWhenOtherFieldsMissing(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	rig.registerNode(t, "sole-host")
+	// Mount only: image AND target are both still missing.
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "half-baked"},
+	))
+	uuid := created.Msg.GetWorkspace().GetMetadata().GetUuid()
+	if _, err := rig.client.AddMount(t.Context(), connect.NewRequest(
+		&workspacev1.AddMountRequest{
+			Handle: uuidHandle(uuid),
+			Mount:  &sandboxv1.Mount{Target: testMountTarget, Source: testMountSource},
+		},
+	)); err != nil {
+		t.Fatalf("AddMount: %v", err)
+	}
+	_, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
+		t.Errorf("code = %s, want FailedPrecondition", code)
+	}
+	got, gerr := rig.catalog.Get(uuid)
+	if gerr != nil {
+		t.Fatalf("catalog.Get: %v", gerr)
+	}
+	if got.Spec.TargetSandboxFingerprint != "" {
+		t.Errorf("target = %q, want unset (image still missing → no pin)", got.Spec.TargetSandboxFingerprint)
 	}
 }
 

@@ -142,6 +142,21 @@ func (r *Registry) Snapshot() []Entry {
 	return out
 }
 
+// RegisteredFingerprints returns the fingerprints of every live
+// registration, sorted for determinism. A thin projection of
+// Snapshot the orchestrator uses to auto-pin the sole node as a
+// workspace's target on a single-node cluster.
+func (r *Registry) RegisteredFingerprints() []identity.Fingerprint {
+	r.mu.Lock()
+	out := make([]identity.Fingerprint, 0, len(r.all))
+	for fp := range r.all {
+		out = append(out, fp)
+	}
+	r.mu.Unlock()
+	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
+	return out
+}
+
 // Lookup returns the entry for fp and whether it exists. The
 // returned entry is a value copy; mutating it does not affect the
 // registry.

@@ -36,6 +36,17 @@ type Dispatcher interface {
 	PublishSandboxEvent(fp identity.Fingerprint, eventType sandboxv1.EventType, sandbox *sandboxv1.Sandbox) error
 }
 
+// WorkspaceNodeLister is the seam Launch uses to auto-pin a target
+// when a workspace declares none and the cluster has exactly one
+// registered node — the single-node-cluster convenience that lets
+// `daft workspace launch` (and `up`) work without a manual
+// `daft workspace target`. Production impl is *nodectrl.Registry
+// (RegisteredFingerprints); nil disables auto-pinning, leaving
+// "target" a required field.
+type WorkspaceNodeLister interface {
+	RegisteredFingerprints() []identity.Fingerprint
+}
+
 // WorkspacePortBridger is the seam ForwardPort uses to open a
 // labeled byte channel into the Node bound to a Workspace. The
 // production implementation is *NodeControlHandler (its
@@ -65,10 +76,18 @@ type WorkspaceCatalogHandler struct {
 	workspacev1connect.UnimplementedWorkspaceCatalogServiceHandler
 	store           *workspacecatalog.Store
 	dispatcher      Dispatcher
+	nodes           WorkspaceNodeLister
 	preAction       preActionReconciler
 	portBridger     WorkspacePortBridger
 	attachBridger   WorkspaceAttachBridger
 	observerBridger WorkspaceObserverBridger
+}
+
+// SetNodeLister wires the registry Launch consults to auto-pin the
+// sole node as a workspace's target on a single-node cluster. Nil
+// (the default) leaves "target" a required field.
+func (h *WorkspaceCatalogHandler) SetNodeLister(l WorkspaceNodeLister) {
+	h.nodes = l
 }
 
 // SetPortBridger wires the WorkspacePortBridger ForwardPort calls
@@ -652,6 +671,13 @@ func (h *WorkspaceCatalogHandler) Launch(
 	if err != nil {
 		return nil, mapCatalogErr(err)
 	}
+	// Single-node convenience: pin the sole registered node as the
+	// target when the workspace has none, so the readiness gate below
+	// passes without a manual `daft workspace target`.
+	ws, err = h.autoPinSoleNode(ws)
+	if err != nil {
+		return nil, err
+	}
 	if !ws.Status.IsTrue(workspacecatalog.ConditionReady) {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("workspace: not ready, missing: %v", ws.Status.Missing))
@@ -698,6 +724,39 @@ func (h *WorkspaceCatalogHandler) Launch(
 	return connect.NewResponse(&workspacev1.WorkspaceResponse{
 		Workspace: workspaceToProto(updated),
 	}), nil
+}
+
+// autoPinSoleNode fills in an empty target when the cluster has
+// exactly one registered node — the single-node-cluster convenience
+// that lets Launch work without a manual `daft workspace target`. It
+// fires only when "target" is the *sole* remaining readiness gap, so
+// a workspace still missing its image or mount is never silently
+// pinned, and it persists the pick via SetTarget semantics (a spec
+// mutation) so `daft workspace status` shows the resolved node. Any
+// other node count — zero, or two-or-more where the choice is
+// ambiguous — leaves the target unset; Launch then falls through to
+// the normal missing-target precondition error. A nil lister (the
+// default) disables the behaviour entirely.
+func (h *WorkspaceCatalogHandler) autoPinSoleNode(ws workspacecatalog.Workspace) (workspacecatalog.Workspace, error) {
+	if h.nodes == nil || ws.Spec.TargetSandboxFingerprint != "" {
+		return ws, nil
+	}
+	if len(ws.Status.Missing) != 1 || ws.Status.Missing[0] != workspacecatalog.MissingTarget {
+		return ws, nil
+	}
+	fps := h.nodes.RegisteredFingerprints()
+	if len(fps) != 1 {
+		return ws, nil
+	}
+	updated, err := h.store.Update(ws.Metadata.UUID, workspacecatalog.MutateSpec,
+		func(w *workspacecatalog.Workspace) error {
+			w.Spec.TargetSandboxFingerprint = fps[0].String()
+			return nil
+		})
+	if err != nil {
+		return workspacecatalog.Workspace{}, mapCatalogErr(err)
+	}
+	return updated, nil
 }
 
 // preActionReconciler is the seam Launch/Stop call before reading

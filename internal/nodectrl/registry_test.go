@@ -140,6 +140,30 @@ func TestSnapshotIsSortedByFingerprint(t *testing.T) {
 	}
 }
 
+func TestRegisteredFingerprintsSortedAndForgets(t *testing.T) {
+	r := nodectrl.NewRegistry(nil)
+	if got := r.RegisteredFingerprints(); len(got) != 0 {
+		t.Fatalf("empty registry: len = %d, want 0", len(got))
+	}
+	r.Register(fp(3), "", "v0", nodectrl.Resources{})
+	r.Register(fp(1), "", "v0", nodectrl.Resources{})
+	r.Register(fp(2), "", "v0", nodectrl.Resources{})
+	got := r.RegisteredFingerprints()
+	want := []identity.Fingerprint{fp(1), fp(2), fp(3)}
+	if len(got) != len(want) {
+		t.Fatalf("len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("fp[%d] = %s, want %s (unsorted)", i, got[i], want[i])
+		}
+	}
+	r.Forget(fp(2))
+	if got := r.RegisteredFingerprints(); len(got) != 2 || got[0] != fp(1) || got[1] != fp(3) {
+		t.Errorf("after Forget(2): %v, want [fp1 fp3]", got)
+	}
+}
+
 func TestNewRegistryDefaultsClock(t *testing.T) {
 	r := nodectrl.NewRegistry(nil) // nil → time.Now
 	got := r.Register(fp(1), "", "v0", nodectrl.Resources{})

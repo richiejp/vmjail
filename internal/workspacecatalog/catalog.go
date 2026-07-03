@@ -47,6 +47,13 @@ const (
 // goconst flags the duplicate string literal.
 const conditionStatusUnspecifiedStr = "Unspecified"
 
+// MissingTarget is the missingFields token for an unset target
+// (TargetSandboxFingerprint). Exported so the orchestrator's
+// single-node auto-pin can recognise "target is the only thing
+// standing between this workspace and Ready" without re-deriving the
+// user-facing string.
+const MissingTarget = "target"
+
 // ConditionStatus mirrors daft.sandbox.v1.ConditionStatus. The
 // Connect adapter does the cross-translation; the catalog stays
 // independent of generated proto types.
@@ -488,7 +495,7 @@ func missingFields(spec Spec) []string {
 		out = append(out, "image")
 	}
 	if spec.TargetSandboxFingerprint == "" {
-		out = append(out, "target")
+		out = append(out, MissingTarget)
 	}
 	return out
 }

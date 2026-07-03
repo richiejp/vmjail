@@ -2886,6 +2886,29 @@ the user-host or in CI today.
       tests for the detect precedence / fallback / not-found / dir-not-a-file
       cases and the arg→path mapping (arg passthrough, `--clear`→"",
       `--clear`+arg error, no-arg detect + not-found).
+    - **3g.2 (landed 2026-07-03) — single-node auto-target (user, "we are
+      starting a single node cluster").** A workspace whose only remaining
+      readiness gap is `target` no longer needs a manual `daft workspace
+      target` when the cluster has exactly one registered node. `Launch`
+      (orchestrator `workspacecatalog.go`) calls a new `autoPinSoleNode`
+      *before* the Ready gate: with a nil-safe `WorkspaceNodeLister` seam
+      (production = `*nodectrl.Registry.RegisteredFingerprints`, wired in
+      `server.go`), when the missing set is exactly `[target]` and the
+      registry lists exactly one fingerprint, it persists that fingerprint
+      as the target via a `MutateSpec` update (so `daft workspace status`
+      shows the resolved node). **Deliberately conservative:** fires only
+      when target is the *sole* gap (never masks a missing image/mount), an
+      explicit target always wins, and 0-or-≥2 nodes leave the target unset
+      → the normal missing-target precondition error. Persisting via
+      SetTarget semantics (not a launch-only in-memory pick) keeps it a real
+      pin; adding a second node later doesn't re-home it (clear with
+      `target` no-arg). Exported `workspacecatalog.MissingTarget` so the
+      orchestrator recognises the gap without re-deriving the user-facing
+      string. Verified: rig tests (auto-pin happy path + persisted target,
+      explicit-target-beats-auto-pin, 0/2-node no-pin, other-fields-missing
+      no-pin), a white-box `autoPinSoleNode` branch test (nil lister /
+      target-set / wider-missing / store-error), and a registry
+      `RegisteredFingerprints` sort/forget test. gate held at 94.34%.
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **devcontainer features**.
 
@@ -2939,6 +2962,25 @@ the user-host or in CI today.
     devcontainer's `hostRequirements` (cpus/memory/storage) onto the
     workspace resources that feed those limits, and balloon-based reclaim.
     Independent of features.
+
+    **4-defaults (landed 2026-07-03) — host-scaled resource defaults for
+    real workloads (user, "the resources; do we have sensible defaults?").**
+    Interim to the `hostRequirements` wiring above: `applyResourceSizing`
+    (`sandboxexec/exec.go`) now imposes a *host-scaled* default on any
+    image- OR devcontainer-backed dispatch (the "real workload" guard —
+    previously CPU-only and image-ref-only, so devcontainer-only workspaces
+    were missed) rather than falling to `sandbox.Config`'s 256 MiB / 1-vCPU
+    baseline: vCPUs = half the host's logical cores (existing), memory =
+    `defaultWorkspaceMemory` = a quarter of host RAM, floored at 1 GiB and
+    capped at 8 GiB. The 256 MiB baseline OOM-killed nix/most container
+    builds (the wart this removes); the bare smoke-test VM keeps the config
+    default. Host RAM read via a `detectHostResources` seam
+    (`nodectrlclient.DetectResources` → `/proc/meminfo`), with a 1 GiB
+    fallback when unreadable. An explicit `daft workspace resources
+    --memory/--cpus` (or `DAFT_MEMORY`/`DAFT_CPUS`) still wins. Verified:
+    image + devcontainer default paths, fallback-path-untouched, and
+    `defaultWorkspaceMemory` scale/floor/cap/detect-fail via the seam.
+    Superseded once a devcontainer's `hostRequirements` drives sizing.
 
   *e2e target — PyTorch (CPU variant: no GPU/`--gpus`).* Tiered like the
   self-build: **Tier 1 (loop proof, cheap):** resolve the CPU config →
@@ -4635,15 +4677,19 @@ Open questions:
              through). Re-recorded with the fix (52 narinfo entries) → the bun
              e2e now **replays fully offline, 0 misses** (the prior single miss
              `n216…narinfo` is served as a `404 HIT`).
-        - **Still pending before going public:**
-          - **Re-push the artifact** — the 139 MB ghcr image at tag
-            `61756a6b322f58c2` was recorded with the OLD `cacheable` (no negative
-            narinfo entries), so it will NOT replay offline. Re-push the
-            negative-cache-complete recording (`make update-egress-cache`).
-          - **Flip the ghcr package to public** in the UI (it's private, so
-            anonymous `pull-unpack` 401s; `make integration` records live until
-            then). Do this only AFTER the re-push, so the first thing anyone
-            pulls actually replays offline.
+        - **Re-pushed (2026-06-29).** The negative-cache-complete recording (52
+          narinfo entries, validated to replay offline with 0 misses) was
+          packed+pushed to tag `61756a6b322f58c2` (manifest `sha256:cbfc0d53…`,
+          distinct from the prior empty/pre-fix versions, which are now
+          untagged). The bytes on ghcr now match what offline replay needs.
+        - **Made public + verified end-to-end (2026-06-29).** The ghcr package
+          is now public. Full public-path test against /dev/kvm from a clean
+          tree (no local cache): `integration-build`'s **anonymous**
+          `pull-unpack` succeeds → `make integration` REPLAYs offline → the bun
+          e2e passes (135s) with **0 offline misses**. K2 loop closed: a fresh
+          KVM host pulls the cache anonymously and the bun test runs
+          offline/deterministic, while every other egress test stays online
+          (the K2 per-test opt-in).
       Verified: `flake.lock` pin (rev fixed); harness wiring table test (4
       modes); `egresscache` pack→push→pull→unpack round-trip against a local
       registry + zip-slip/error branches; Makefile tag + targets parse; the

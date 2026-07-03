@@ -31,6 +31,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/assert"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
 	"github.com/richiejp/darkaifactory/internal/observability"
 	"github.com/richiejp/darkaifactory/internal/ociregistry"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
@@ -930,23 +931,30 @@ func proxyEnv(guestURL string) []string {
 }
 
 // applyResourceSizing layers the SandboxSpec's guest-RAM and vCPU
-// requests onto the boot config. A zero memory request leaves
-// cfg.Memory as the assembler produced it (sandbox.Config then
-// applies its 256 MiB default). A zero CPU request on an
-// image-backed dispatch falls back to half the host's logical
-// cores (min 1) — the workspace VM shares cores with the host
-// rather than owning them, and a single vCPU starves CPU-heavy
-// workloads like `nix develop`'s nixpkgs evaluation. The
-// imageRef guard keeps the smoke-test fallback path (which boots
-// e.base) on its own CPU setting.
+// requests onto the boot config. An explicit request always wins.
+// When a request is zero on a *real workload* dispatch (one carrying
+// an image_ref or a devcontainer_path — as opposed to the bare
+// smoke-test VM that boots e.base), the sizing falls back to a
+// host-scaled default rather than sandbox.Config's tiny baseline:
+// half the host's logical cores for vCPUs, and a quarter of host RAM
+// for memory. The workspace VM shares the host's resources rather
+// than owning them; the 256 MiB / single-vCPU baseline OOM-kills and
+// starves nix/container builds, which is the wart this removes. The
+// real-workload guard keeps the smoke-test fallback path on its own
+// (config-default) sizing, and the cfg.Memory/CPUs guards let an
+// explicit DAFT_MEMORY/DAFT_CPUS the assembler already applied win.
 func applyResourceSizing(cfg *sandbox.Config, spec *sandboxv1.SandboxSpec) {
-	if b := spec.GetMemoryBytes(); b > 0 {
-		cfg.Memory = memoryArgFromBytes(b)
+	realWorkload := spec.GetImageRef() != "" || spec.GetDevcontainerPath() != ""
+	switch {
+	case spec.GetMemoryBytes() > 0:
+		cfg.Memory = memoryArgFromBytes(spec.GetMemoryBytes())
+	case realWorkload && cfg.Memory == "":
+		cfg.Memory = defaultWorkspaceMemory()
 	}
 	switch {
 	case spec.GetCpuCores() > 0:
 		cfg.CPUs = int(spec.GetCpuCores())
-	case spec.GetImageRef() != "" && cfg.CPUs == 0:
+	case realWorkload && cfg.CPUs == 0:
 		cfg.CPUs = defaultWorkspaceCPUs()
 	}
 }
@@ -958,6 +966,40 @@ func defaultWorkspaceCPUs() int {
 		return n
 	}
 	return 1
+}
+
+// detectHostResources reports the host's CPU/RAM capacity for
+// default sizing. A package var so tests can inject a fixed host to
+// exercise defaultWorkspaceMemory's floor/cap; production reads
+// /proc/meminfo + runtime.NumCPU() via nodectrlclient (sandboxd is
+// Linux-only, so the /proc dependency is fine).
+//
+//nolint:gochecknoglobals // single test seam; no production mutation.
+var detectHostResources = nodectrlclient.DetectResources
+
+// defaultWorkspaceMemory returns the guest-RAM string for a real
+// workload dispatch that didn't request a size: a quarter of the
+// host's physical RAM, floored at 1 GiB and capped at 8 GiB. Like
+// the vCPU default it scales with the host on the principle that the
+// VM shares RAM rather than owning it. Falls back to the 1 GiB floor
+// when host RAM can't be read.
+func defaultWorkspaceMemory() string {
+	const (
+		mib      = 1 << 20
+		floorMiB = 1024
+		capMiB   = 8192
+	)
+	quarterMiB := uint64(floorMiB)
+	if res, err := detectHostResources(); err == nil {
+		quarterMiB = res.MemoryBytes / 4 / mib
+	}
+	switch {
+	case quarterMiB < floorMiB:
+		quarterMiB = floorMiB
+	case quarterMiB > capMiB:
+		quarterMiB = capMiB
+	}
+	return fmt.Sprintf("%dM", quarterMiB)
 }
 
 // memoryArgFromBytes renders a byte count as the MiB-suffixed

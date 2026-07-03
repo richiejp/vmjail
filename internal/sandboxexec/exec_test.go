@@ -17,6 +17,7 @@ import (
 
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
@@ -1324,11 +1325,26 @@ func TestApplyResourceSizingExplicit(t *testing.T) {
 	}
 }
 
-func TestApplyResourceSizingDefaultsCPUForImageDispatch(t *testing.T) {
+func TestApplyResourceSizingDefaultsForImageDispatch(t *testing.T) {
 	cfg := sandbox.Config{}
 	applyResourceSizing(&cfg, &sandboxv1.SandboxSpec{ImageRef: "img:v1"})
-	if cfg.Memory != "" {
-		t.Errorf("Memory = %q, want empty (defers to sandbox default)", cfg.Memory)
+	if want := defaultWorkspaceMemory(); cfg.Memory != want {
+		t.Errorf("Memory = %q, want host-scaled default %q", cfg.Memory, want)
+	}
+	if want := defaultWorkspaceCPUs(); cfg.CPUs != want {
+		t.Errorf("CPUs = %d, want default %d", cfg.CPUs, want)
+	}
+}
+
+// TestApplyResourceSizingDefaultsForDevcontainerDispatch pins that a
+// devcontainer-only workspace (no explicit image_ref) still gets the
+// host-scaled defaults — the executor takes the image path for it too,
+// so single-vCPU / 256 MiB would starve its build just as badly.
+func TestApplyResourceSizingDefaultsForDevcontainerDispatch(t *testing.T) {
+	cfg := sandbox.Config{}
+	applyResourceSizing(&cfg, &sandboxv1.SandboxSpec{DevcontainerPath: devcontainerNestedPath})
+	if want := defaultWorkspaceMemory(); cfg.Memory != want {
+		t.Errorf("Memory = %q, want host-scaled default %q", cfg.Memory, want)
 	}
 	if want := defaultWorkspaceCPUs(); cfg.CPUs != want {
 		t.Errorf("CPUs = %d, want default %d", cfg.CPUs, want)
@@ -1336,12 +1352,49 @@ func TestApplyResourceSizingDefaultsCPUForImageDispatch(t *testing.T) {
 }
 
 func TestApplyResourceSizingLeavesFallbackPathAlone(t *testing.T) {
-	// No image ref ⇒ the e.base smoke-test path; don't impose the
-	// half-cores default or touch a preset CPU count.
+	// No image ref and no devcontainer ⇒ the e.base smoke-test path;
+	// don't impose the host-scaled defaults or touch a preset CPU count.
 	cfg := sandbox.Config{CPUs: 1}
 	applyResourceSizing(&cfg, &sandboxv1.SandboxSpec{})
 	if cfg.CPUs != 1 {
 		t.Errorf("CPUs = %d, want 1 (untouched on fallback path)", cfg.CPUs)
+	}
+	if cfg.Memory != "" {
+		t.Errorf("Memory = %q, want empty (untouched on fallback path)", cfg.Memory)
+	}
+}
+
+// TestDefaultWorkspaceMemoryScalesAndClamps drives defaultWorkspaceMemory
+// through the host-RAM seam: a quarter of RAM in the normal range,
+// clamped to the 1 GiB floor for a tiny host and the 8 GiB cap for a
+// huge one, and the floor fallback when host detection fails.
+func TestDefaultWorkspaceMemoryScalesAndClamps(t *testing.T) {
+	const gib = 1 << 30
+	cases := []struct {
+		name    string
+		memGiB  uint64
+		fail    bool
+		wantMiB string
+	}{
+		{"quarter", 16, false, "4096M"}, // 16 GiB / 4 = 4 GiB
+		{"floor", 2, false, "1024M"},    // 2 GiB / 4 = 512 MiB → floor 1 GiB
+		{"cap", 64, false, "8192M"},     // 64 GiB / 4 = 16 GiB → cap 8 GiB
+		{"detect-fails", 16, true, "1024M"},
+	}
+	orig := detectHostResources
+	t.Cleanup(func() { detectHostResources = orig })
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			detectHostResources = func() (nodectrl.Resources, error) {
+				if tc.fail {
+					return nodectrl.Resources{}, errors.New("no /proc/meminfo")
+				}
+				return nodectrl.Resources{MemoryBytes: tc.memGiB * gib}, nil
+			}
+			if got := defaultWorkspaceMemory(); got != tc.wantMiB {
+				t.Errorf("defaultWorkspaceMemory() = %q, want %q", got, tc.wantMiB)
+			}
+		})
 	}
 }
 
