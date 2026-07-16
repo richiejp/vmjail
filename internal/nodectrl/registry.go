@@ -147,13 +147,11 @@ func (r *Registry) Snapshot() []Entry {
 // Snapshot the orchestrator uses to auto-pin the sole node as a
 // workspace's target on a single-node cluster.
 func (r *Registry) RegisteredFingerprints() []identity.Fingerprint {
-	r.mu.Lock()
-	out := make([]identity.Fingerprint, 0, len(r.all))
-	for fp := range r.all {
-		out = append(out, fp)
+	entries := r.Snapshot()
+	out := make([]identity.Fingerprint, len(entries))
+	for i := range entries {
+		out[i] = entries[i].Fingerprint
 	}
-	r.mu.Unlock()
-	sort.Slice(out, func(i, j int) bool { return out[i].String() < out[j].String() })
 	return out
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/httpcache"
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/imagestore"
 	"github.com/richiejp/darkaifactory/internal/mitmproxy"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
@@ -280,8 +281,15 @@ var buildDispatcher = func(
 	if err != nil {
 		return nil, err
 	}
+	store, err := openSandboxbootStore(hostedRT)
+	if err != nil {
+		return nil, err
+	}
+	if err := store.SweepOrphanClones(); err != nil {
+		return nil, err
+	}
 	assembler := sandboxexec.ProductionAssembler(sandboxboot.Deps{
-		OpenStore: func() (sandboxboot.Store, error) { return openSandboxbootStore(hostedRT) },
+		OpenStore: func() (sandboxboot.Store, error) { return store, nil },
 		CacheDir:  userCacheDir,
 		Extract:   extractWithEnvFallback(base),
 	})
@@ -500,12 +508,12 @@ func resolveVsockDir(override string) (string, error) {
 	return dir, nil
 }
 
-// openSandboxbootStore is the production OpenStore — it returns
-// the same imagestore handle the legacy `run` command uses, but
-// typed against sandboxboot.Store so the executor doesn't have
-// to import imagestore directly. When hostedRT is non-nil it is the
-// mTLS transport for orchestrator-hosted image refs.
-func openSandboxbootStore(hostedRT http.RoundTripper) (sandboxboot.Store, error) {
+// openSandboxbootStore opens the same production imagestore the legacy `run`
+// command uses. The concrete type is retained so daemon startup can sweep
+// orphan clones before exposing it to the executor through sandboxboot.Store.
+// When hostedRT is non-nil it is the mTLS transport for orchestrator-hosted
+// image refs.
+func openSandboxbootStore(hostedRT http.RoundTripper) (*imagestore.Store, error) {
 	st, err := openStore()
 	if err != nil {
 		return nil, err

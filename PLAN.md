@@ -2917,13 +2917,14 @@ the user-host or in CI today.
       starting a single node cluster").** A workspace whose only remaining
       readiness gap is `target` no longer needs a manual `daft workspace
       target` when the cluster has exactly one registered node. `Launch`
-      (orchestrator `workspacecatalog.go`) calls a new `autoPinSoleNode`
+      (orchestrator `workspacecatalog.go`) calls `autoSelectSoleNode`
       *before* the Ready gate: with a nil-safe `WorkspaceNodeLister` seam
       (production = `*nodectrl.Registry.RegisteredFingerprints`, wired in
       `server.go`), when the missing set is exactly `[target]` and the
-      registry lists exactly one fingerprint, it persists that fingerprint
-      as the target via a `MutateSpec` update (so `daft workspace status`
-      shows the resolved node). **Deliberately conservative:** fires only
+      registry lists exactly one fingerprint, it provisionally selects that
+      node, publishes the Sandbox, then persists the fingerprint atomically
+      with dispatched status (so a failed publish cannot pin the workspace to
+      a node that just disconnected). **Deliberately conservative:** fires only
       when target is the *sole* gap (never masks a missing image/mount), an
       explicit target always wins, and 0-or-≥2 nodes leave the target unset
       → the normal missing-target precondition error. Persisting via
@@ -2933,9 +2934,12 @@ the user-host or in CI today.
       orchestrator recognises the gap without re-deriving the user-facing
       string. Verified: rig tests (auto-pin happy path + persisted target,
       explicit-target-beats-auto-pin, 0/2-node no-pin, other-fields-missing
-      no-pin), a white-box `autoPinSoleNode` branch test (nil lister /
-      target-set / wider-missing / store-error), and a registry
-      `RegisteredFingerprints` sort/forget test. gate held at 94.34%.
+      no-pin + failed-publish-no-persist), a white-box
+      `autoSelectSoleNode` branch test, and a registry
+      `RegisteredFingerprints` sort/forget test. The subprocess e2e rig now
+      waits for `daft node list --full` to observe sandboxd before returning a
+      cluster, closing a launch-time registration race exposed by the full
+      verification suite. gate held at 94.34%.
   - **Slice 4 — `hostRequirements` → cgroup limits (#103)** and
     **devcontainer features**.
 
@@ -3004,7 +3008,9 @@ the user-host or in CI today.
     default. Host RAM read via a `detectHostResources` seam
     (`nodectrlclient.DetectResources` → `/proc/meminfo`), with a 1 GiB
     fallback when unreadable. An explicit `daft workspace resources
-    --memory/--cpus` (or `DAFT_MEMORY`/`DAFT_CPUS`) still wins. Verified:
+    --memory/--cpus` still wins. The ineffective `DAFT_MEMORY` / `DAFT_CPUS`
+    environment knobs were removed; they only reached the smoke-test baseline,
+    never an assembled workload. Verified:
     image + devcontainer default paths, fallback-path-untouched, and
     `defaultWorkspaceMemory` scale/floor/cap/detect-fail via the seam.
     Superseded once a devcontainer's `hostRequirements` drives sizing.
@@ -4731,8 +4737,11 @@ Open questions:
       and the dispatch runs on the clone, never the template. The template stays
       pristine forever, so the cache is immutable and every run substitutes
       fresh through the proxy. Teardown removes the clone (`forceRemoveAll`
-      chmods read-only 0555 nix dirs first); a SIGKILL'd dispatch skips that, so
-      `Store.New` sweeps orphan `clones/` at startup. Verified: unit tests
+      chmods read-only 0555 nix dirs first and reports cleanup failures); a
+      SIGKILL'd dispatch skips that, so daemon startup explicitly calls
+      `Store.SweepOrphanClones` before accepting work. The sweep is deliberately
+      absent from `Store.New`: stores are reopened by dispatch and management
+      paths, where sweeping would delete live clones. Verified: unit tests
       (isolation, read-only cleanup, orphan sweep, missing-template); the bun
       e2e passes against a pristine store with the closure landing in the clone
       (774 paths incl. `bun-1.2.13`) while the template stays pristine (124

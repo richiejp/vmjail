@@ -671,14 +671,12 @@ func (h *WorkspaceCatalogHandler) Launch(
 	if err != nil {
 		return nil, mapCatalogErr(err)
 	}
-	// Single-node convenience: pin the sole registered node as the
-	// target when the workspace has none, so the readiness gate below
-	// passes without a manual `daft workspace target`.
-	ws, err = h.autoPinSoleNode(ws)
-	if err != nil {
-		return nil, err
-	}
-	if !ws.Status.IsTrue(workspacecatalog.ConditionReady) {
+	// Single-node convenience: select the sole registered node without
+	// mutating the workspace yet. The selection is persisted only after
+	// publication succeeds, so a disconnect cannot strand the workspace
+	// pinned to a dead node.
+	autoTarget, autoSelected := h.autoSelectSoleNode(ws)
+	if !ws.Status.IsTrue(workspacecatalog.ConditionReady) && !autoSelected {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("workspace: not ready, missing: %v", ws.Status.Missing))
 	}
@@ -686,10 +684,13 @@ func (h *WorkspaceCatalogHandler) Launch(
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			errors.New("workspace: already dispatched; Stop before relaunching"))
 	}
-	targetFP, err := identity.ParseFingerprint(ws.Spec.TargetSandboxFingerprint)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("workspace: invalid target fingerprint: %w", err))
+	targetFP := autoTarget
+	if !autoSelected {
+		targetFP, err = identity.ParseFingerprint(ws.Spec.TargetSandboxFingerprint)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("workspace: invalid target fingerprint: %w", err))
+		}
 	}
 
 	sandboxUID := mintWorkspaceUUID()
@@ -705,7 +706,14 @@ func (h *WorkspaceCatalogHandler) Launch(
 	}
 
 	now := time.Now()
-	updated, err := h.store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
+	mutation := workspacecatalog.MutateStatus
+	if autoSelected {
+		mutation = workspacecatalog.MutateSpec
+	}
+	updated, err := h.store.Update(ws.Metadata.UUID, mutation, func(w *workspacecatalog.Workspace) error {
+		if autoSelected {
+			w.Spec.TargetSandboxFingerprint = targetFP.String()
+		}
 		w.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
 			UID:             sandboxUID,
 			NodeFingerprint: targetFP,
@@ -726,37 +734,21 @@ func (h *WorkspaceCatalogHandler) Launch(
 	}), nil
 }
 
-// autoPinSoleNode fills in an empty target when the cluster has
-// exactly one registered node — the single-node-cluster convenience
-// that lets Launch work without a manual `daft workspace target`. It
-// fires only when "target" is the *sole* remaining readiness gap, so
-// a workspace still missing its image or mount is never silently
-// pinned, and it persists the pick via SetTarget semantics (a spec
-// mutation) so `daft workspace status` shows the resolved node. Any
-// other node count — zero, or two-or-more where the choice is
-// ambiguous — leaves the target unset; Launch then falls through to
-// the normal missing-target precondition error. A nil lister (the
-// default) disables the behaviour entirely.
-func (h *WorkspaceCatalogHandler) autoPinSoleNode(ws workspacecatalog.Workspace) (workspacecatalog.Workspace, error) {
+// autoSelectSoleNode returns the sole live node when target is the only
+// readiness gap. Selection is deliberately side-effect free: Launch persists
+// it atomically with the dispatched status only after publication succeeds.
+func (h *WorkspaceCatalogHandler) autoSelectSoleNode(ws workspacecatalog.Workspace) (identity.Fingerprint, bool) {
 	if h.nodes == nil || ws.Spec.TargetSandboxFingerprint != "" {
-		return ws, nil
+		return identity.Fingerprint{}, false
 	}
 	if len(ws.Status.Missing) != 1 || ws.Status.Missing[0] != workspacecatalog.MissingTarget {
-		return ws, nil
+		return identity.Fingerprint{}, false
 	}
 	fps := h.nodes.RegisteredFingerprints()
 	if len(fps) != 1 {
-		return ws, nil
+		return identity.Fingerprint{}, false
 	}
-	updated, err := h.store.Update(ws.Metadata.UUID, workspacecatalog.MutateSpec,
-		func(w *workspacecatalog.Workspace) error {
-			w.Spec.TargetSandboxFingerprint = fps[0].String()
-			return nil
-		})
-	if err != nil {
-		return workspacecatalog.Workspace{}, mapCatalogErr(err)
-	}
-	return updated, nil
+	return fps[0], true
 }
 
 // preActionReconciler is the seam Launch/Stop call before reading

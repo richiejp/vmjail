@@ -3,7 +3,6 @@ package sandbox
 import (
 	"fmt"
 	"os"
-	"strconv"
 )
 
 // Env var names. Stable so external scripting (and our integration
@@ -12,8 +11,6 @@ const (
 	EnvCloudHypervisor = "DAFT_CLOUD_HYPERVISOR"
 	EnvKernel          = "DAFT_KERNEL"
 	EnvInitramfs       = "DAFT_INITRAMFS"
-	EnvMemory          = "DAFT_MEMORY"
-	EnvCPUs            = "DAFT_CPUS"
 	EnvVirtiofsd       = "DAFT_VIRTIOFSD"
 	// EnvBundle is consulted only by the integration test to point at
 	// a host-side OCI bundle. The bundle is copied into the share dir
@@ -35,21 +32,13 @@ const (
 // bundled assets are the source of truth at dispatch.
 //
 // Required (requireArtefacts): DAFT_CLOUD_HYPERVISOR, DAFT_KERNEL, DAFT_INITRAMFS
-// Optional:  DAFT_MEMORY (default "256M"), DAFT_CPUS (default 1), DAFT_VIRTIOFSD
+// Optional: DAFT_VIRTIOFSD
 func ConfigFromEnv(requireArtefacts bool) (Config, error) {
 	cfg := Config{
 		CloudHypervisor: os.Getenv(EnvCloudHypervisor),
 		Kernel:          os.Getenv(EnvKernel),
 		Initramfs:       os.Getenv(EnvInitramfs),
-		Memory:          os.Getenv(EnvMemory),
 		Virtiofsd:       os.Getenv(EnvVirtiofsd),
-	}
-	if v := os.Getenv(EnvCPUs); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil {
-			return Config{}, fmt.Errorf("sandbox: invalid %s=%q: %w", EnvCPUs, v, err)
-		}
-		cfg.CPUs = n
 	}
 
 	if !requireArtefacts {

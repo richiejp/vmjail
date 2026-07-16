@@ -1136,32 +1136,13 @@ func TestConfigFromEnvReturnsConfigWhenAllSet(t *testing.T) {
 	t.Setenv(EnvCloudHypervisor, "/tmp/ch")
 	t.Setenv(EnvKernel, "/tmp/bzImage")
 	t.Setenv(EnvInitramfs, "/tmp/initrd")
-	t.Setenv(EnvMemory, "512M")
-	t.Setenv(EnvCPUs, "2")
-
 	cfg, err := ConfigFromEnv(true)
 	if err != nil {
 		t.Fatalf("ConfigFromEnv: %v", err)
 	}
 	if cfg.CloudHypervisor != "/tmp/ch" || cfg.Kernel != "/tmp/bzImage" ||
-		cfg.Initramfs != "/tmp/initrd" || cfg.Memory != "512M" || cfg.CPUs != 2 {
+		cfg.Initramfs != "/tmp/initrd" {
 		t.Fatalf("Config = %+v, missing or wrong field", cfg)
-	}
-}
-
-func TestConfigFromEnvRejectsBadCPUs(t *testing.T) {
-	clearVars(t)
-	t.Setenv(EnvCloudHypervisor, "/tmp/ch")
-	t.Setenv(EnvKernel, "/tmp/bzImage")
-	t.Setenv(EnvInitramfs, "/tmp/initrd")
-	t.Setenv(EnvCPUs, "not-a-number")
-
-	_, err := ConfigFromEnv(true)
-	if err == nil {
-		t.Fatal("ConfigFromEnv with invalid DAFT_CPUS returned nil, want error")
-	}
-	if !strings.Contains(err.Error(), EnvCPUs) {
-		t.Errorf("error should mention %s, got: %v", EnvCPUs, err)
 	}
 }
 
@@ -1171,8 +1152,8 @@ func TestConfigFromEnvRejectsBadCPUs(t *testing.T) {
 
 // FuzzConfigFromEnv feeds arbitrary strings to every env var
 // ConfigFromEnv reads. The current parser only does string membership
-// checks plus a single strconv.Atoi, so the seed corpus alone covers
-// every branch — but the fuzz target exists as a guard: anyone who
+// checks, so the seed corpus covers every branch — but the fuzz target
+// exists as a guard: anyone who
 // later adds richer parsing here (a memory-size validator, an
 // allowlist, a path canonicaliser) inherits a panic-freedom invariant
 // for free.
@@ -1182,26 +1163,20 @@ func TestConfigFromEnvRejectsBadCPUs(t *testing.T) {
 //	go test -run='^$' -fuzz=FuzzConfigFromEnv -fuzztime=30s ./internal/sandbox
 func FuzzConfigFromEnv(f *testing.F) {
 	const ch, k, i = "/ch", "/k", "/i"
-	seeds := [][5]string{
-		{"", "", "", "", ""},                        // all missing
-		{ch, k, i, "", ""},                          // required only
-		{ch, k, i, defaultMemory, "1"},              // happy path
-		{ch, k, i, "1G", "4"},                       // larger sizes
-		{ch, k, i, "", "not-a-number"},              // bad CPUs
-		{ch, k, i, "", "0"},                         // zero CPUs
-		{ch, k, i, "", "-1"},                        // negative CPUs
-		{ch, k, i, "", "999999999999999999"},        // overflow
-		{strings.Repeat("a", 4096), k, i, "m", "1"}, // long values
+	seeds := [][3]string{
+		{"", "", ""},
+		{ch, k, i},
+		{strings.Repeat("a", 4096), k, i},
 	}
 	for _, s := range seeds {
-		f.Add(s[0], s[1], s[2], s[3], s[4])
+		f.Add(s[0], s[1], s[2])
 	}
 
-	f.Fuzz(func(t *testing.T, ch, kernel, initramfs, memory, cpus string) {
+	f.Fuzz(func(t *testing.T, ch, kernel, initramfs string) {
 		// POSIX env vars cannot contain NUL; the kernel rejects such
 		// values at execve time, so they can never reach ConfigFromEnv
 		// in production. Skip rather than letting t.Setenv fail.
-		for _, v := range []string{ch, kernel, initramfs, memory, cpus} {
+		for _, v := range []string{ch, kernel, initramfs} {
 			if strings.ContainsRune(v, 0) {
 				t.Skip()
 			}
@@ -1209,8 +1184,6 @@ func FuzzConfigFromEnv(f *testing.F) {
 		t.Setenv(EnvCloudHypervisor, ch)
 		t.Setenv(EnvKernel, kernel)
 		t.Setenv(EnvInitramfs, initramfs)
-		t.Setenv(EnvMemory, memory)
-		t.Setenv(EnvCPUs, cpus)
 		// Both branches must be panic-free regardless of input.
 		_, _ = ConfigFromEnv(true)
 		_, _ = ConfigFromEnv(false)
@@ -1266,7 +1239,7 @@ func FuzzScanForBanner(f *testing.F) {
 func clearVars(t *testing.T) {
 	t.Helper()
 	for _, k := range []string{
-		EnvCloudHypervisor, EnvKernel, EnvInitramfs, EnvMemory, EnvCPUs,
+		EnvCloudHypervisor, EnvKernel, EnvInitramfs,
 	} {
 		t.Setenv(k, "")
 	}

@@ -1326,16 +1326,14 @@ func TestLaunchRejectsDraftAndMissing(t *testing.T) {
 }
 
 // fakeNodeLister is a canned WorkspaceNodeLister for the white-box
-// autoPinSoleNode branch tests.
+// autoSelectSoleNode branch tests.
 type fakeNodeLister struct{ fps []identity.Fingerprint }
 
 func (f fakeNodeLister) RegisteredFingerprints() []identity.Fingerprint { return f.fps }
 
-// TestAutoPinSoleNodeBranches drives autoPinSoleNode directly through
-// the guard branches the RPC-level Launch tests don't reach: a nil
-// lister, an already-set target, a wider missing set, and the
-// store-update error path (a workspace absent from the store).
-func TestAutoPinSoleNodeBranches(t *testing.T) {
+// TestAutoSelectSoleNodeBranches drives the side-effect-free selection
+// guards the RPC-level Launch tests don't reach.
+func TestAutoSelectSoleNodeBranches(t *testing.T) {
 	store := workspacecatalog.NewStore(nil)
 	h, err := NewWorkspaceCatalogHandler(store, &fakeDispatcher{})
 	if err != nil {
@@ -1349,9 +1347,9 @@ func TestAutoPinSoleNodeBranches(t *testing.T) {
 		return ws
 	}
 
-	// Nil lister → unchanged, no error.
-	if got, err := h.autoPinSoleNode(base()); err != nil || got.Spec.TargetSandboxFingerprint != "" {
-		t.Errorf("nil lister: target=%q err=%v, want unchanged", got.Spec.TargetSandboxFingerprint, err)
+	// Nil lister → no selection.
+	if _, ok := h.autoSelectSoleNode(base()); ok {
+		t.Error("nil lister selected a node")
 	}
 
 	h.SetNodeLister(fakeNodeLister{fps: []identity.Fingerprint{sole}})
@@ -1359,21 +1357,42 @@ func TestAutoPinSoleNodeBranches(t *testing.T) {
 	// Target already set → the explicit pin is never overwritten.
 	ws := base()
 	ws.Spec.TargetSandboxFingerprint = "explicit"
-	if got, _ := h.autoPinSoleNode(ws); got.Spec.TargetSandboxFingerprint != "explicit" {
-		t.Errorf("explicit target overwritten: %q", got.Spec.TargetSandboxFingerprint)
+	if _, ok := h.autoSelectSoleNode(ws); ok {
+		t.Error("explicit target was overridden")
 	}
 
 	// Missing more than just target → not pinned (never masks a gap).
 	ws = base()
 	ws.Status.Missing = []string{"image", workspacecatalog.MissingTarget}
-	if got, _ := h.autoPinSoleNode(ws); got.Spec.TargetSandboxFingerprint != "" {
-		t.Errorf("pinned despite a missing image: %q", got.Spec.TargetSandboxFingerprint)
+	if _, ok := h.autoSelectSoleNode(ws); ok {
+		t.Error("selected despite a missing image")
 	}
 
-	// Sole node but the workspace is absent from the store → the
-	// store.Update failure surfaces as an error.
-	if _, err := h.autoPinSoleNode(base()); err == nil {
-		t.Error("want an error when the workspace is absent from the store")
+	if got, ok := h.autoSelectSoleNode(base()); !ok || got != sole {
+		t.Errorf("sole selection = %s, %v; want %s, true", got, ok, sole)
+	}
+}
+
+// TestLaunchAutoTargetFailureDoesNotPersist verifies that a transient
+// publication failure does not turn the automatic choice into a stale
+// explicit target.
+func TestLaunchAutoTargetFailureDoesNotPersist(t *testing.T) {
+	fake := &fakeDispatcher{nextError: ErrSandboxNotConnected}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	rig.registerNode(t, "departing-host")
+	uuid := readyExceptTarget(t, rig, "auto-target-failure")
+	_, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+	))
+	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
+		t.Fatalf("code = %s, want FailedPrecondition", code)
+	}
+	got, err := rig.catalog.Get(uuid)
+	if err != nil {
+		t.Fatalf("catalog.Get: %v", err)
+	}
+	if got.Spec.TargetSandboxFingerprint != "" {
+		t.Errorf("failed launch persisted target %q", got.Spec.TargetSandboxFingerprint)
 	}
 }
 

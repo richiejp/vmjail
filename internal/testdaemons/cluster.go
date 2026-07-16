@@ -237,8 +237,8 @@ func readTail(path string, maxBytes int64, maxLines int) (string, error) {
 // NewCluster generates identities, cross-approves them, builds
 // the daft binaries (lazily, shared across tests in the same
 // process via sync.Once), spawns the orchestrator + sandboxd
-// subprocesses, and waits for the orchestrator's listener to be
-// reachable.
+// subprocesses, and waits for the orchestrator's listener and
+// sandboxd registration to be reachable.
 //
 // Registers Cleanup that SIGTERMs each daemon's process group
 // and waits for exit; Pdeathsig=SIGKILL guarantees that even a
@@ -358,8 +358,7 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	}
 	startDaemon(t, sbxOut, sbxEnv, sbxScrub, sandboxdBin,
 		"serve", "--orchestrator", url, "--config-dir", sbxDir)
-	// Sandboxd registration is asynchronous — the test asserts on
-	// daft node list output to decide when registration completed.
+	waitForNode(t, bins.daft, cliDir, url, sbxID.Fingerprint(), daemonReadyTimeout)
 
 	return &Cluster{
 		DaftBin:         bins.daft,
@@ -372,6 +371,29 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		ClientFP:        cliID.Fingerprint(),
 		ObserverDir:     observerDir,
 		sandboxdOut:     sbxOut,
+	}
+}
+
+func waitForNode(t *testing.T, daftBin, configDir, orchestratorURL string, fp identity.Fingerprint, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastOutput string
+	var lastErr error
+	//daft:lint:disable=forloopbound reason="bounded by deadline via the if-fatal below"
+	for {
+		cmd := exec.Command( //nolint:gosec // test-controlled binary and arguments.
+			daftBin, "--config-dir", configDir,
+			"node", "list", "--full", "--orchestrator", orchestratorURL,
+		)
+		out, err := cmd.CombinedOutput()
+		lastOutput, lastErr = string(out), err
+		if err == nil && strings.Contains(lastOutput, fp.String()) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("wait for sandboxd %s: %v after %s\n%s", fp, lastErr, timeout, lastOutput)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 

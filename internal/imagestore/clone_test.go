@@ -7,6 +7,8 @@ import (
 	"testing"
 )
 
+const missingCloneDigest = "sha256:nope"
+
 // requireReflink skips the calling test when the temp filesystem can't
 // reflink, since CloneBundle uses `cp --reflink=always`. Production
 // stores live on XFS/btrfs/ZFS; a CI runner whose TMPDIR is tmpfs or
@@ -133,7 +135,7 @@ func TestCloneBundleCleanupRemovesReadOnlyTree(t *testing.T) {
 	}
 }
 
-func TestNewSweepsOrphanClones(t *testing.T) {
+func TestSweepOrphanClonesIsExplicit(t *testing.T) {
 	root := t.TempDir()
 	s, err := New(root, 0)
 	if err != nil {
@@ -144,9 +146,16 @@ func TestNewSweepsOrphanClones(t *testing.T) {
 	if err := os.MkdirAll(orphan, 0o750); err != nil {
 		t.Fatalf("seed orphan clone: %v", err)
 	}
-	// Re-opening the store (a fresh sandboxd start) sweeps it.
+	// Re-opening the store must not sweep it: production opens stores while
+	// other dispatches are live.
 	if _, err := New(root, 0); err != nil {
 		t.Fatalf("New (reopen): %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, clonesDir, "d-orphan")); err != nil {
+		t.Fatalf("New removed a potentially-live clone: %v", err)
+	}
+	if err := s.SweepOrphanClones(); err != nil {
+		t.Fatalf("SweepOrphanClones: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, clonesDir, "d-orphan")); !os.IsNotExist(err) {
 		t.Errorf("orphan clone survived startup sweep: stat err = %v", err)
@@ -155,9 +164,47 @@ func TestNewSweepsOrphanClones(t *testing.T) {
 
 func TestCloneBundleMissingTemplate(t *testing.T) {
 	s := newTestStore(t)
-	bad := &Bundle{Digest: "sha256:nope", Path: filepath.Join(s.Root, bundlesDir, "absent")}
+	bad := &Bundle{Digest: missingCloneDigest, Path: filepath.Join(s.Root, bundlesDir, "absent")}
 	_, _, err := s.CloneBundle(bad)
 	if err == nil {
 		t.Fatal("CloneBundle of a missing template: want error, got nil")
+	}
+}
+
+func TestCloneBundleRejectsUnusableStoreRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(root, []byte("file"), 0o600); err != nil {
+		t.Fatalf("seed unusable root: %v", err)
+	}
+	s := &Store{Root: root}
+	_, _, err := s.CloneBundle(&Bundle{Digest: missingCloneDigest, Path: "/absent"})
+	if err == nil {
+		t.Fatal("CloneBundle with a file as store root: want error, got nil")
+	}
+}
+
+func TestCloneBundleRejectsUnwritableClonesDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses directory write permissions")
+	}
+	s := newTestStore(t)
+	parent := filepath.Join(s.Root, clonesDir)
+	if err := os.MkdirAll(parent, 0o500); err != nil {
+		t.Fatalf("mkdir clones parent: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) }) //nolint:gosec // restore owner access for TempDir cleanup.
+	_, _, err := s.CloneBundle(&Bundle{Digest: missingCloneDigest, Path: "/absent"})
+	if err == nil {
+		t.Fatal("CloneBundle with an unwritable clones dir: want error, got nil")
+	}
+}
+
+func TestSweepOrphanClonesRejectsUnusableStoreRoot(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(root, []byte("file"), 0o600); err != nil {
+		t.Fatalf("seed unusable root: %v", err)
+	}
+	if err := (&Store{Root: root}).SweepOrphanClones(); err == nil {
+		t.Fatal("SweepOrphanClones with a file as store root: want error, got nil")
 	}
 }

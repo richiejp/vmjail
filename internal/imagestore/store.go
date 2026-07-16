@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
-
-	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // Subdirectory names under Store.Root.
@@ -67,21 +65,23 @@ func New(root string, quota int64) (*Store, error) {
 			return nil, fmt.Errorf("imagestore: mkdir %s: %w", sub, err)
 		}
 	}
-	// Per-dispatch CoW clones (clonesDir) are ephemeral: each is removed
-	// by its dispatch's teardown. Any clone still on disk at startup is an
-	// orphan from a previous process that was hard-killed before its
-	// teardown ran (a SIGKILL skips Go defers), so sweep them here — New
-	// runs once per sandboxd start, before any dispatch, and a node owns
-	// its store exclusively. Best-effort: a sweep failure is logged, not
-	// fatal, since a stale clone wastes disk but doesn't break boot.
-	if err := forceRemoveAll(filepath.Join(root, clonesDir)); err != nil {
-		oops.Log("imagestore: sweep stale clones", err)
-	}
 	return &Store{
 		Root:  root,
 		Quota: quota,
 		nowFn: time.Now,
 	}, nil
+}
+
+// SweepOrphanClones removes per-dispatch clones left by a previous daemon
+// process that was killed before teardown ran. It must be called exactly once
+// during exclusive daemon startup, before dispatches are accepted. It is not
+// part of New because stores are also opened per operation and by management
+// commands; sweeping there could delete a running sandbox's rootfs.
+func (s *Store) SweepOrphanClones() error {
+	if err := forceRemoveAll(filepath.Join(s.Root, clonesDir)); err != nil {
+		return fmt.Errorf("imagestore: sweep stale clones: %w", err)
+	}
+	return nil
 }
 
 // metadata is the on-disk shape of meta.json. Versioned so future

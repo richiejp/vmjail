@@ -941,8 +941,8 @@ func proxyEnv(guestURL string) []string {
 // than owning them; the 256 MiB / single-vCPU baseline OOM-kills and
 // starves nix/container builds, which is the wart this removes. The
 // real-workload guard keeps the smoke-test fallback path on its own
-// (config-default) sizing, and the cfg.Memory/CPUs guards let an
-// explicit DAFT_MEMORY/DAFT_CPUS the assembler already applied win.
+// (config-default) sizing. Explicit workspace resource requests are
+// the sole operator override for real workloads.
 func applyResourceSizing(cfg *sandbox.Config, spec *sandboxv1.SandboxSpec) {
 	realWorkload := spec.GetImageRef() != "" || spec.GetDevcontainerPath() != ""
 	switch {

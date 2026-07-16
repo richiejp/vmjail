@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+
+	"github.com/richiejp/darkaifactory/internal/oops"
 )
 
 // clonesDir holds per-dispatch copy-on-write clones of unpacked bundle
@@ -45,7 +47,13 @@ func (s *Store) CloneBundle(b *Bundle) (*Bundle, func(), error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("imagestore: mkdir clone: %w", err)
 	}
-	cleanup := func() { _ = forceRemoveAll(dir) }
+	cleanup := func() {
+		if err := forceRemoveAll(dir); err != nil {
+			// Teardown callbacks predate clone cleanup and cannot return an
+			// error. Do not hide a leak that can eventually exhaust the store.
+			oops.Log("imagestore: remove clone "+dir, err)
+		}
+	}
 	dst := filepath.Join(dir, filepath.Base(b.Path))
 	if err := cloneTree(b.Path, dst); err != nil {
 		cleanup()

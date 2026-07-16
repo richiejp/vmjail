@@ -38,8 +38,6 @@ func BenchmarkConfigFromEnv(b *testing.B) {
 	b.Setenv(EnvCloudHypervisor, "/usr/bin/cloud-hypervisor")
 	b.Setenv(EnvKernel, "/boot/bzImage")
 	b.Setenv(EnvInitramfs, "/boot/initramfs.cpio.gz")
-	b.Setenv(EnvMemory, "512M")
-	b.Setenv(EnvCPUs, "4")
 	for b.Loop() {
 		_, _ = ConfigFromEnv(true)
 	}
