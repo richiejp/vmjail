@@ -133,7 +133,7 @@ you needed to commit earlier.
 ### Use the git hooks
 
 Run `make hooks` once per clone. The pre-commit hook delegates to
-`make verify`, which runs every gate this project has:
+`make verify`, which runs every pre-commit gate:
 
 - `make check` — fmt + lint + unit tests + coverage gate. The unit
   test step also replays every committed fuzz reproducer
@@ -240,16 +240,17 @@ work "e2e" hides the gap that a real-VM check would have caught.
 
 ### E2E tests on every commit
 
-The pre-commit hook runs the e2e tests in
-`internal/sandbox/integration_test.go` (build tag:
-`linux,integration`) on every commit, via `make integration`. The
-target name is historical; the tests it runs are e2e by the
-definition above. They:
+The pre-commit hook runs the e2e suites under `internal/sandbox/` and
+`internal/testdaemons/` (build tags: `linux,integration`) on every commit, via
+`make integration`. The target name is historical; the tests it runs are e2e
+by the definition above. They:
 
 - nix-build the artefacts (`cloud-hypervisor`, `kernel`, `virtiofsd`,
   `initramfs`, `hello-bundle`),
 - spawn real VMs via Cloud Hypervisor against `/dev/kvm`,
-- and assert the full pull → bundle → boot → run pipeline.
+- assert the full pull → bundle → boot → run pipeline, and
+- exercise full-cluster CLI workflows against real orchestrator, Node, agent,
+  networking, file-sync, exec, build, and observability paths.
 
 **Linux + KVM is required, not optional.** Every developer who
 can meaningfully contribute to this codebase has them — the whole

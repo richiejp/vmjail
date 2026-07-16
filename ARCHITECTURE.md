@@ -16,17 +16,20 @@ Four processes, each with one job:
 |---|---|---|
 | **`daft`** CLI | User-host client | mTLS leaf cert under `~/.config/daft` |
 | **Orchestrator** | Authority over Workspaces and Sandboxes; binds Sandboxes to Nodes; speaks to clients over Connect-RPC; owns Phase C ingress | mTLS, optionally an internal CA |
-| **`sandboxd`** | Per-Node daemon. Runs Sandboxes (VMs + containers), reports status. Single-binary bundle including the kernel + initramfs + VMM | mTLS leaf cert; fingerprint is the Node's canonical id |
-| **`daft-agent`** | In-VM init/agent. Spawns `crun`-managed containers, ships traces back, drives daft-fuse | vsock to its sandbox-host; no TLS inside the VM |
+| **`daft-sandboxd`** | Per-Node daemon. Runs Sandboxes (VMs + containers), reports status. Single-binary bundle including the kernel + initramfs + VMM | mTLS leaf cert; fingerprint is the Node's canonical id |
+| **`daft-agent`** | In-VM init/agent. Spawns `crun`-managed containers, ships traces, and consumes host-provided virtiofs/vsock services | vsock to its sandbox-host; no TLS inside the VM |
 
-The sandbox-host machine (the physical or cloud box running `sandboxd`) is a
+The sandbox-host machine (the physical or cloud box running `daft-sandboxd`) is a
 **Node**. Container boundaries inside the VM are not a security boundary —
 the VM is. Containers exist for filesystem/userland convenience.
 
 ## Resource model
 
-Three first-class resources. Each has the K8s-style triple
-**metadata + spec + status**:
+The target model has three first-class resources with the K8s-style triple
+**metadata + spec + status**. Workspace implements that model today. Sandbox
+has the wire shape but is currently a transient per-Launch object rather than
+a persisted orchestrator resource. Node registration is still a flat wire
+record; splitting it into metadata/spec/status is future work.
 
 - `metadata` — identity, labels, audit timestamps, generation.
 - `spec` — desired state. User-writable for Workspaces; controller-written
@@ -42,10 +45,12 @@ Multiple Launches reuse the same Workspace; each one produces a fresh
 
 ```
 Workspace
-├── metadata { uuid, name, owner_fingerprint, generation, labels,
-│              created_at, updated_at, deletion_timestamp, finalizers }
-├── spec     { image_ref, mounts[], env[], ports[], target_sandbox,
-│              gpu_request, isolation, pending_build_id }
+├── metadata { uuid, name, owner_fingerprint, generation,
+│              created_at, updated_at }
+├── spec     { image_ref, mounts[], env[], ports[], target_sandbox_fingerprint,
+│              gpu_request, isolation, memory_bytes, cpu_cores,
+│              nested_virtualization, privileged_fuse_mounts,
+│              privileged_build, devcontainer_path }
 └── status   { observed_generation, conditions[], current_sandbox_ref, lock }
 ```
 
@@ -58,13 +63,14 @@ filesystem" simultaneously — but the spec/status mechanics are identical.
 Short-lived, controller-derived. One Sandbox per Launch. A Sandbox is the
 **unit of execution**:
 
-- **Strict isolation** (`Sandbox.spec.isolation = STRICT`): exactly one VM
-  hosting exactly one container. Maps 1:1 to a single-container Pod.
-- **Shared isolation** (`Sandbox.spec.isolation = SHARED`): the scheduler may
-  pack multiple Sandboxes into one VM. Inter-Sandbox isolation in this mode
-  is whatever the container runtime provides; cross-Workspace packing is
-  permitted only between Sandboxes owned by the same identity. Default for
-  CPU-mode workspaces.
+- **Current execution**: every Sandbox watch event boots one VM containing one
+  container. The isolation value is carried on the wire but does not yet alter
+  scheduling or packing.
+- **Planned strict isolation** (`Sandbox.spec.isolation = STRICT`): one VM
+  hosting one container.
+- **Planned shared isolation** (`Sandbox.spec.isolation = SHARED`): multiple
+  trusted sibling workloads may share a GPU-bound VM. This is Phase D3-D5,
+  not a current security guarantee.
 
 A Sandbox is always one container. Multi-container per Sandbox — K8s's
 multi-container Pod semantics (init containers, sidecars, shared netns
@@ -74,10 +80,12 @@ deferred until and unless serious Kubernetes integration is undertaken
 
 ```
 Sandbox
-├── metadata { uid, workspace_ref, created_at, deletion_timestamp }
+├── metadata { uid, workspace, created_at, deletion_timestamp }
 ├── spec     { image_ref, mounts[], env[], ports[], gpu_request,
-│              isolation, node_ref }
-└── status   { phase (Pending|Running|Exited|Killed), exit_code,
+│              isolation, node, memory_bytes, cpu_cores,
+│              nested_virtualization, privileged_fuse_mounts,
+│              privileged_build, devcontainer_path }
+└── status   { phase (Pending|Running|Exited|Killed|Unknown), exit_code,
 │              conditions[], last_transition_time }
 ```
 
@@ -87,17 +95,20 @@ identity is the resource itself, not a side-channel string.
 
 ### Node
 
-Long-lived, registered. One Node per `sandboxd` process. Identity is the
-mTLS leaf-cert fingerprint of the `sandboxd` — `sandboxd` doesn't pick its
+Long-lived, registered. One Node per `daft-sandboxd` process. Identity is the
+mTLS leaf-cert fingerprint of `daft-sandboxd` — the daemon doesn't pick its
 own name. Capacity advertised at registration; runtime utilisation reported
 on heartbeats.
 
 ```
-Node
+Node (current flat registration)
+└── { fingerprint, hostname, version, resources,
+      registered_at, last_seen_at }
+
+Target shape
 ├── metadata { fingerprint, version, registered_at }
 ├── spec     { capacity (cpus, memory_bytes, gpus...) }
-└── status   { last_seen_at, current_load, live_sandboxes[],
-               conditions[] }
+└── status   { last_seen_at, current_load, live_sandboxes[], conditions[] }
 ```
 
 Closest K8s analog: Node, almost exactly.
@@ -113,13 +124,13 @@ ecosystem.
 | Resource names | `Workspace`, `Sandbox`, `Node` | PascalCase singular. URL/CLI plural is the lowercase wordform (`workspaces`, `sandboxes`, `nodes`). |
 | Proto field names | `lower_snake_case` | Generated Go uses lowerCamelCase getters (`GetImageRef()`). |
 | Cross-resource pointers | `*Ref` suffix: `WorkspaceRef`, `NodeRef`, `SandboxRef` | Carries the strong id plus any commonly-needed denormalised fields. |
-| Lifecycle state | `conditions[]` array, **not** an enum | Each Condition is `{type, status, reason, message, last_transition_time, observed_generation}`. Types and reasons are PascalCase tokens. |
-| Optimistic concurrency | `metadata.generation` | Increments on every spec change. `if_generation` preconditions on Update/Patch. |
+| Workspace lifecycle state | `conditions[]` array, **not** an enum | Each Condition is `{type, status, reason, message, last_transition_time, observed_generation}`. Types and reasons are PascalCase tokens. |
+| Change tracking | `metadata.generation` | Increments on every Workspace spec change. `if_generation` Update/Patch preconditions are a future API, not implemented today. |
 | Status freshness | `status.observed_generation` | Compared against `metadata.generation` to detect "edit pending" state. |
 | Operational enums | `Isolation`, `Protocol`, `Phase` | Proto-native (closed sets). Reserved 0 = UNSPECIFIED. |
 | Lifecycle "phase" string | `"Pending"`, `"Running"`, `"Exited"`, `"Killed"` | PascalCase string for forward-compat (new phases don't break old readers). Distinct from operational enums. |
-| Action verbs | `Launch`, `Stop`, `Validate` | Reserved for non-CRUD operations. CRUD is `Create`/`Get`/`List`/`Update`/`Patch`/`Delete`/`Watch`. |
-| Daemon binary names | `daft`, `sandboxd`, `daft-agent` | Independent of resource names — K8s precedent (kubelet ≠ Node). |
+| Action verbs | `Launch`, `Stop`, `Validate` | Reserved for non-CRUD operations. The current catalog exposes Create/Get/List plus focused spec-mutator RPCs; generic Update/Patch/Delete/Watch remain design vocabulary. |
+| Daemon binary names | `daft`, `daft-sandboxd`, `daft-agent` | Independent of resource names — K8s precedent (kubelet ≠ Node). |
 | Reserved field 0 | every enum starts at `*_UNSPECIFIED = 0` | Catches missing-field bugs at deserialisation. |
 
 What the rename explicitly fixed (vs the prior vocabulary):
@@ -145,9 +156,9 @@ user-host                    orchestrator                       node (sandboxd)
 daft workspace launch  ──▶   Workspace.Launch
                              ├── compose Sandbox.spec
                              │   from Workspace.spec
-                             ├── scheduler picks Node
-                             │   (sets Sandbox.spec.node_ref)
-                             ├── create Sandbox resource
+                             ├── resolve the targeted Node
+                             │   (or the sole registered Node)
+                             ├── construct a transient Sandbox
                              └── emit SandboxWatchEvent(ADDED)
                                  on this Node's watch stream
                                                           ─────▶ sandboxd sees
@@ -157,70 +168,68 @@ daft workspace launch  ──▶   Workspace.Launch
                                                                  runs the
                                                                  container
                                                           ◀───── periodic
-                                                                 Heartbeat:
-                                                                 NodeStatus +
+                                                                 Heartbeat with
                                                                  live_sandboxes
-                             ◀── reconciler diffs
-                                 Sandbox.status vs the
-                                 Node's reported set,
-                                 updates conditions and
-                                 Workspace.status
+                             ◀── reconciler compares the
+                                 Workspace's current Sandbox ref
+                                 with the Node's LiveSandbox set
+                                 and updates Workspace.status
 ```
+
+There is not yet a scheduler or persistent Sandbox store. B6 adds durable
+declarative state; GPU/shared-VM scheduling is Phase D.
 
 ### Watch + reconcile
 
-There is one server-streaming RPC in the system: `NodeControlService.
-RegisterNode`. Each `sandboxd` opens it once at startup and holds it for its
-lifetime. The orchestrator pushes `NodeEvent`s down it:
+`NodeControlService.RegisterNode` is the one long-lived downward control
+stream. Each `daft-sandboxd` opens it once at startup and holds it for its
+lifetime. Other server/bidirectional streams exist for observer output, port
+forwarding, and exec/attach data. The orchestrator pushes these `NodeEvent`
+variants down the registration stream:
 
 | Variant | Carries | When |
 |---|---|---|
 | `SubscriptionReady` | `accepted_at`, `protocol_version` | Once, first event on every stream. |
 | `SandboxWatchEvent` | `EventType (ADDED/MODIFIED/DELETED/BOOKMARK)`, `Sandbox` | Whenever a Sandbox bound to this Node changes. |
+| `OpenPortRequest` | session id + workspace/port | Ask the Node to open a reverse port stream. |
+| `AttachRequest` | session id + Sandbox/command/TTY shape | Ask the Node to open an exec stream. |
+| `ObserverRequest` | session id + Sandbox | Ask the Node to stream observer data. |
 
-The Node reacts to `SandboxWatchEvent`s the way a kubelet reacts to Pod
-watch events: bring local state into alignment with declared state. The
-event payload is the full Sandbox object, not a delta — the protocol is
-level-triggered, replay-safe, and idempotent.
+The Node reacts to `SandboxWatchEvent`s by bringing local state into alignment
+with the full Sandbox object. Full-object events make handling idempotent, but
+there is no resource-version cursor or persisted replay log yet; reconnect
+replay semantics depend on the future persistence work.
 
 ### Heartbeats as reconciliation
 
-`HeartbeatRequest` carries the Node's current `NodeStatus`, which includes
-`repeated SandboxStatus live_sandboxes`. Every heartbeat is therefore a full
-reconciliation tick:
+`HeartbeatRequest` carries `repeated LiveSandbox live_sandboxes`. Every
+heartbeat is therefore a liveness-reconciliation tick:
 
 1. Orchestrator diffs the Node's reported `live_sandboxes` against the set
    of Sandboxes it has bound to this Node.
-2. Sandboxes the orchestrator thinks are RUNNING but the Node doesn't know
-   about → mark `phase = Exited` (or `Killed` if context indicates) and
-   advance the workspace status.
-3. Sandboxes the Node reports but the orchestrator has marked terminal →
-   instruct the Node to stop them on the next event (cleanup of a leaked
-   instance).
+2. If an expected uid is absent for three consecutive heartbeats, clear the
+   Workspace's current Sandbox and set `Dispatched=False` with
+   `reason=SandboxLost`.
+3. A periodic sweep marks workspaces on Nodes beyond the heartbeat grace
+   period `NodeUnreachable`.
 
-This single mechanism handles: missed exit signals, sandboxd restart with
-amnesia, orchestrator restart, VM killed externally, host reboot. There is
-no separate "exit event" RPC — heartbeats are the safety net. A future
-optimisation could add a unary `ReportSandboxExit` for prompt notification
-without breaking this contract.
+Reported terminal phases also clear the Workspace reference. Orphan Sandbox
+cleanup and orchestrator-restart recovery are not implemented yet; the latter
+depends on B6 persistence. There is no separate exit-event RPC.
 
 ### Pre-action reconcile
 
-Before any status-sensitive RPC (`Launch`, `Stop`, status reads from the
-CLI), the orchestrator reconciles the target resource first. This closes
-the TOCTOU window between a stale cache and the action — e.g. Stop on a
-Sandbox that's already gone returns immediately rather than firing a
-pointless control event.
+`Launch` invokes the pre-action reconciler before reading status. Extending
+that hook to Stop and status reads remains follow-up work.
 
 ## Protocol
 
 - **Transport**: HTTP/2 over TLS 1.3, mTLS-authenticated. Connect-RPC
   (`connectrpc.com/connect`) for method dispatch. Browser- and
   curl-debuggable, no gRPC runtime.
-- **One persistent stream per Node**: `RegisterNode`. Downward-only, carries
-  `NodeEvent`s. No upward stream — Nodes that need to push to the
-  orchestrator use unary RPCs (`Heartbeat` today; `ReportSandboxExit` if it
-  lands later).
+- **One persistent control stream per Node**: `RegisterNode`. Downward-only,
+  carries `NodeEvent`s. Nodes use unary Heartbeat plus short-lived
+  bidirectional streams for port, attach, and observer sessions.
 - **Inside-VM**: virtio-vsock (`AF_VSOCK`), Connect-RPC over it. Lets a
   workload boot without a virtual NIC if it doesn't need one.
 - **Protocol versioning**: `ProtocolVersion{major, minor, patch}` exchanged
@@ -230,15 +239,16 @@ pointless control event.
 
 ## Identity and trust
 
-- **Self-signed Ed25519 mTLS** end-to-end. TOFU + `daft auth approve` on
-  first contact, with a timeout window.
+- **Self-signed Ed25519 mTLS** end-to-end. Trust is established explicitly
+  out of band with `daft auth approve`; automated first-contact approval is
+  not implemented.
 - **Caller identity = leaf-cert fingerprint**. There is no login RPC and no
   user/account abstraction. The TLS connection is the identity.
 - **The Node's fingerprint is its canonical id.** It can't rename itself
   by reconnecting — the cert is the thing.
 - **Workspace owner**: the fingerprint of the user-host that minted the
-  Workspace (`metadata.owner_fingerprint`). Adoption (Phase F1) lets a
-  second user-host attach to the same Workspace without changing the owner.
+  Workspace (`metadata.owner_fingerprint`). Cross-client adoption without
+  changing the owner is planned in Phase F1.
 - **Optional internal CA**: the orchestrator may later issue short-lived
   component certs for `sandboxd` registration, replacing the manual approve
   step for fleet deployment.
@@ -254,9 +264,14 @@ pointless control event.
 | `internal/nodectrl/` *(renamed from `sandboxctrl/`)* | Node registry, the in-memory side of `NodeControlService`. |
 | `internal/nodectrlclient/` *(renamed from `sandboxctrlclient/`)* | Sandboxd-side client: dials the orchestrator, holds the watch stream. |
 | `internal/workspacecatalog/` | Workspace store + state machine. |
-| `internal/sandboxstore/` *(new)* | Sandbox store (the per-Launch resource). |
 | `internal/sandbox/` | The VMM + agent supervision layer (the actual VM-booting code). |
 | `internal/sandboxexec/` | The Node's executor: consumes SandboxWatchEvents, drives `internal/sandbox`. |
+| `internal/reconciler/` | Heartbeat, pre-Launch, and periodic Workspace liveness reconciliation. |
+| `internal/workspacebroker/`, `internal/cas/` | Brokered file synchronization and content-addressed storage. |
+| `internal/sandboxgateway/`, `internal/sandboxattach/` | Reverse port and exec/attach session bridges. |
+| `internal/sandboxnet/`, `internal/mitmproxy/` | Per-VM networking, default-deny egress, and cached HTTP(S) proxying. |
+| `internal/observability/`, `internal/trace/` | Host resource observation and cross-component tracing. |
+| `internal/devcontainer/`, `internal/devcontainerspec/` | Devcontainer parsing, projection, and dispatch-time overlays. |
 | `internal/imagestore/` | OCI image cache on the Node. |
 | `proto/nodectrl/v1/` *(renamed from `sandboxctrl/v1/`)* | `NodeControlService` definitions. |
 | `proto/sandbox/v1/` *(new, split out)* | `Sandbox` resource definitions. |
@@ -271,9 +286,10 @@ pointless control event.
   until a) we want to be a real K8s runtime, or b) a user workflow
   demands it. Until then, "Sandbox = single-container Pod" is the contract
   and we make no decisions about Pod-internal semantics.
-- **Symmetric two-way file sync.** Workspace mounts are asymmetric
-  (push-only / pull-only / explicit `daft workspace pull`). Bidi-sync is
-  delegated to existing tools via the Phase H Docker-API endpoint
+- **Symmetric two-way file sync.** Workspace synchronization is explicit
+  push/pull, with read-only mounts excluded from pull. Per-client directional
+  flags are planned in Phase F. Bidi-sync would be delegated to existing tools
+  via the future Phase H Docker-API endpoint
   (Mutagen, VS Code Dev Containers, JetBrains Gateway).
 - **URL-as-identity / GVK addressing.** Connect-RPC method-per-RPC is
   fine for our scale; we don't need REST URLs or apiVersion negotiation.
@@ -380,9 +396,9 @@ dimension.
 | Pod-IP allocation (CNI) | Not exposed | ~500 Go lines + a CNI plugin invocation on Sandbox bring-up. |
 | Image pull as a separate service | Implemented monolithically per dispatch | Defer to containerd (Path 1) or extract a separate service. |
 | Volume drivers beyond bind | `Mount` covers hostPath-equivalent only | CSI integration if PVCs are required; ~1–2k. |
-| Exec / attach / port-forward streaming | Not exposed | New RPCs on `NodeControlService`; reuses the existing vsock channel inside the VM. |
-| Per-container resource limits | `GpuRequest` + isolation only | Pass through OCI runtime spec to `crun`; ~200 lines mapping. |
-| Stats per container | Heartbeat carries host load only | cAdvisor-equivalent inside the guest, surfaced through the heartbeat. |
+| Exec / attach / port-forward streaming | Implemented for single-container Sandboxes | Reuse these streams when adding multi-container addressing. |
+| Per-Sandbox VM resource limits | CPU and memory implemented; per-container limits not exposed | Pass through OCI runtime spec to `crun` for shared-VM containers. |
+| Stats per container | Heartbeat carries Sandbox phase, while host observation is streamed separately | Add per-container accounting for shared-VM mode. |
 | Logging | No stream | `GetContainerLogs(sandbox_uid)` server-streaming RPC. |
 | Security context | Mapped to `Isolation` | Pass OCI spec through; `crun` enforces. |
 

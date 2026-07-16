@@ -90,6 +90,34 @@ FastCDC, tracing) stay. The control surface above them changes
 shape: sandboxd becomes a daemon, the orchestrator owns workspace
 state, and the client drives everything from the user-host.
 
+### Current status (2026-07-16)
+
+The CPU workspace path is operational end to end: a Node registers with the
+orchestrator, a client creates and configures a Workspace, files are pushed to
+the Node CAS, Launch boots an image-backed microVM, `daft workspace exec`
+opens a PTY in the container, ports can be forwarded to the user host, live
+mount changes can be pulled back, and the Node reports liveness for
+reconciliation. The local `daft cluster up` path auto-wires identities and a
+single Node for development.
+
+Landed foundations: Phases A; B1-B5 (including the B4 resource-model rename
+and B5 reconciler); C1 and C3; D2 and the principal D6 workflow harness;
+I1-I3; J1, J2, and J6. The pinned Bun/Nix egress cassette is published as an
+OCI artifact and has been verified in offline replay.
+
+The main open work is durable control-plane and manifest persistence (B6),
+orchestrator-hosted ingress (C2), per-workspace egress/routing policy (C4),
+GPU discovery/scheduling and shared-VM lifecycle (D1/D3-D5), adoption and
+per-client mount mappings (F), freeze-on-disconnect (G), the optional Docker
+API compatibility surface (H), cache pin/mock/cache-correctness policy
+(I4-I6), and DNS/general hosted-cassette completion (J3-J5). Phase E remains
+deliberately deferred.
+
+The detailed slice history below preserves the names that existed when each
+slice landed. In particular, Phase A's `sandboxctrl`, `Dispatch`, and
+`dispatch_id` terminology is historical; B4 replaced it with `nodectrl`, the
+Sandbox resource, and `Sandbox.metadata.uid`.
+
 ### Two reference workflows
 
 Both are described from the **client on the user-host**. The
@@ -526,12 +554,12 @@ Phase B — **Workspace as a first-class orchestrator object**:
     on the never-EOF PTY — so chaining a second pane command after it
     would wedge the shell (a known `exec` lifecycle gap, separate from
     the S-series).
-- B4: **Resource-model reshape + K8s-style rename.** One pre-
+- B4 (landed): **Resource-model reshape + K8s-style rename.** One pre-
   deployment wire break that introduces the conventions documented
   in [ARCHITECTURE.md](ARCHITECTURE.md). No backwards-compat
   shims — nothing is field-deployed yet, so the break is free.
   Split into mechanical sub-slices to keep each commit reviewable:
-  - **B4a**: rename `sandboxctrl` → `nodectrl` end to end. Proto
+  - **B4a (landed)**: rename `sandboxctrl` → `nodectrl` end to end. Proto
     package `daft.sandboxctrl.v1` → `daft.nodectrl.v1`; directory
     `proto/sandboxctrl/v1/` → `proto/nodectrl/v1/`; Go packages
     `internal/sandboxctrl/` → `internal/nodectrl/`,
@@ -542,21 +570,19 @@ Phase B — **Workspace as a first-class orchestrator object**:
     `SandboxRegistration` → `Node`. CLI `daft sandbox list` →
     `daft node list`. Find-and-replace + `make proto`. No
     semantic changes.
-  - **B4b**: introduce the `Sandbox` resource (the new per-Launch
-    execution unit). New `proto/sandbox/v1/` defines `Sandbox`
-    with `metadata { uid, workspace_ref, created_at,
-    deletion_timestamp }`, `spec { image_ref, mounts, env, ports,
-    gpu_request, isolation, node_ref }`, and `status { phase,
-    exit_code, conditions[], last_transition_time }`. New
-    `internal/sandboxstore/` owns the orchestrator-side map of
-    Sandboxes by uid. The `Dispatch` message goes away; the
+  - **B4b (landed)**: introduce the `Sandbox` wire resource (the new
+    per-Launch execution unit). `proto/sandbox/v1/` defines its
+    metadata/spec/status shape. Launch constructs the full object and sends it
+    to the Node; the orchestrator currently retains only the Workspace's
+    `SandboxRef`, not a persistent Sandbox store. Durable first-class Sandbox
+    storage remains part of B6. The `Dispatch` message goes away; the
     `RegisterEvent` oneof becomes `NodeEvent` carrying
     `SubscriptionReady` or `SandboxWatchEvent{EventType, Sandbox}`.
     `Workspace.Launch` now creates a Sandbox resource and emits
     `SandboxWatchEvent(ADDED)` on the target Node's stream;
     `Workspace.current_dispatch_id` becomes
     `Workspace.status.current_sandbox_ref { uid, node_fingerprint }`.
-  - **B4c**: reshape `Workspace` into metadata/spec/status with
+  - **B4c (landed)**: reshape `Workspace` into metadata/spec/status with
     conditions and generation. `WorkspaceStatus` enum is
     deleted; `Workspace.status.conditions[]` replaces it
     (`Ready`, `Dispatched`, `Reconciled`, `ImageResolved`).
@@ -567,22 +593,22 @@ Phase B — **Workspace as a first-class orchestrator object**:
     enum. CLI `status` output renders the condition list and
     the "edit pending" indicator
     (`observed_generation < generation`).
-  - **B4d**: extend `Heartbeat` to carry `NodeStatus` with
-    `repeated SandboxStatus live_sandboxes`. Orchestrator's
-    heartbeat handler diffs the reported set against the
-    sandboxstore and updates Sandbox `status.phase` /
-    Workspace conditions accordingly. This is the
+  - **B4d (landed)**: extend `Heartbeat` with the Node's observed
+    `repeated LiveSandbox live_sandboxes`. Orchestrator's
+    heartbeat handler compares the reported set with each Workspace's current
+    Sandbox ref and updates Workspace conditions accordingly. Persisting and
+    updating standalone Sandbox status remains B6 work. This is the
     reconciliation primitive — pre-action reconcile and
     periodic sweep (B5) build on it. No new RPC; the
     extension is additive on the existing unary call.
-- B5: **Reconciler.** Pull the per-RPC diff logic from B4d into
-  `internal/reconciler/` and wire it at the four reconciliation
-  points described in ARCHITECTURE.md (pre-action, on heartbeat,
-  periodic sweep, startup). Phantom-Sandbox cleanup: any Sandbox
-  the orchestrator believes RUNNING that no Node reports for
-  three consecutive heartbeats is transitioned to `Killed` with
-  reason `SandboxLost`. Sweep cadence configurable; default
-  30 s.
+- B5 (landed): **Reconciler.** `internal/reconciler/` owns heartbeat
+  reconciliation, the periodic stale-Node sweep, and the pre-Launch hook.
+  Three consecutive heartbeats missing a Workspace's expected uid clear its
+  current Sandbox ref with reason `SandboxLost`; a Node beyond the grace
+  period clears its Workspaces with reason `NodeUnreachable`. The sweep starts
+  with the orchestrator and is the startup reconciliation seam B6 persistence
+  will use. Stop/status pre-action reconciliation and orphan-Sandbox teardown
+  remain follow-ups. Sweep cadence is configurable; default 30 s.
 - B6: **Persistence.** Badger-backed store for the *declarative*
   half of each resource (Workspace.spec, Workspace.metadata,
   Sandbox.spec.node_ref binding, Node.metadata). Runtime
@@ -595,7 +621,7 @@ Phase B — **Workspace as a first-class orchestrator object**:
   kill-9-mid-write integration test.
 
 Phase C — **Orchestrator-driven port ingress**:
-- C1: Sandbox-side: container `0.0.0.0:N` exposed back over the
+- C1 (landed): Sandbox-side: container `0.0.0.0:N` exposed back over the
   broker as a labeled stream (`workspace=<uuid>, port=N`).
   - C1.1 (landed): Agent in-VM port pump. `daft.port=<vsockPort>:<containerPort>`
     kernel cmdline (repeatable); the agent vsock-listens per token and
@@ -613,7 +639,7 @@ Phase C — **Orchestrator-driven port ingress**:
     zero-container-port entries are skipped. Validation rejects
     duplicate VsockPort, zero ports, and TracePort collisions before
     boot.
-  - C1.3 (in progress): Workspacebroker labeled-stream registration —
+  - C1.3 (landed): orchestrator-driven labeled stream registration —
     sandboxd registers each (workspace_uuid, container_port) with the
     orchestrator and bridges the labeled inbound stream to a
     DialGuestVsock call. Enables C2. Split into three sub-slices:
@@ -682,12 +708,12 @@ Phase C — **Orchestrator-driven port ingress**:
   Workspace.spec; opened on Launch, closed on Stop. TLS
   termination remains an option but isn't required — the raw-TCP
   forward is sufficient for most ingress.
-- C3: User-host port forward.
+- C3 (landed): User-host port forward.
   - C3.1 (landed): Orchestrator-side `ForwardPort` bidi RPC on
     `WorkspaceCatalogService` + `ForwardFrame{hello,data}` proto.
     The orchestrator handler reads the Hello (workspace handle +
     container_port), resolves the workspace, gates on
-    `status.current_sandbox`, calls `OpenPortBridge` on the
+    `status.current_sandbox_ref`, calls `OpenPortBridge` on the
     `WorkspacePortBridger` seam (production: NodeControlHandler;
     tests: a fake bridger), and `io.Copy`-splices the bidi stream
     with the resulting `net.Conn`. Errors:
@@ -710,7 +736,7 @@ Phase C — **Orchestrator-driven port ingress**:
   - C3.3 (landed): end-to-end test wiring CLI → orch → sandboxd
     → echo DialFunc. `TestWorkspaceForwardEndToEnd` brings up a
     real orchestrator (mTLS + HTTP/2 Connect, default
-    WorkspacePortBridger = the orchestrator's own SandboxControl
+    WorkspacePortBridger = the orchestrator's own NodeControl
     handler), a real `nodectrlclient` registered as a Node with a
     real `sandboxgateway.Bridger`, seeds a RUNNING workspace
     owned by the client identity, and runs
@@ -727,10 +753,11 @@ Phase C — **Orchestrator-driven port ingress**:
     TCP listener that drives `OpenPortBridge` from inbound
     traffic on an orchestrator-host interface) is the natural
     next step.
-- C4: Allowlist of egress destinations per workspace (the
-  "shadow services" hook): outbound from the container is
-  intercepted at the controller and either forwarded
-  upstream or routed back to the orchestrator for inspection.
+- C4: Per-workspace egress destinations and routing (the "shadow services"
+  hook). Phase J has landed generic default-deny interception and a mandatory
+  HTTP(S) proxy lane, but Workspace.spec does not yet carry a destination
+  allowlist or route table. This slice adds that user-controlled policy on top
+  of the Phase-J enforcement primitive.
 
 Phase D — **Attach + GPU**:
 
@@ -766,7 +793,7 @@ the user-host or in CI today.
   one-shot CLI path. Total ~80 lines, no test rewrites.
 - D1: Sandboxd resource advertisement: GPU BDFs + VRAM, current
   utilisation; orchestrator scheduler.
-- D2: **Interactive attach (CPU+GPU).** `daft workspace attach
+- D2 (landed): **Interactive exec (CPU+GPU).** `daft workspace exec
   <workspace> [-- cmd ...]` opens a PTY into the running
   container's sandbox. Structurally a clone of C3 — same
   session-id rendezvous via the orchestrator, same bidi-stream
@@ -3279,7 +3306,7 @@ MITM. That covers our package-fetch use cases and not much else,
 which is fine.
 
 Slices, cheapest-first:
-  - I1: **Record/replay cache for the test suite** — the smallest
+  - I1 (landed): **Record/replay cache for the test suite** — the smallest
     viable version of the whole idea, and the one with immediate
     payoff. `cas.Store`-backed key → entry index; cache-on-miss
     while online; an offline mode that serves only from cache and
@@ -3311,14 +3338,12 @@ Slices, cheapest-first:
     built by `testdaemons` (cluster `MitmProxyBin`). The proxy log
     shows the path explicitly: `… -> 200 bytes=22 … STORE` then
     `… HIT` on the offline pass.
-    **Not yet wired into `TestClusterWorkspaceBunDevServer`**, and it
-    can't fully de-flake it in I1: the bun *closure* substitution
-    from cache.nixos.org runs in the **nix-daemon**, which doesn't
-    inherit the proxy env (only the client-side flake fetch from
-    github/codeload would route through). Fully caching the bun test
-    needs the deferred daemon-env change (see the D6c.3 slice-2
-    "Remaining probes" note). The focused test above proves the
-    mechanism end-to-end without that dependency.
+    The Bun/Nix workflow now consumes this mechanism through the pinned OCI
+    egress-cache artifact described in K1/K2 below. Container environment
+    forwarding reaches `crun exec` and the nix daemon, and the published
+    cassette has been pulled anonymously and replayed fully offline with zero
+    misses. `TestClusterWorkspaceCachingProxy` remains the focused mechanism
+    test; `TestClusterWorkspaceBunDevServer` is the full-workflow proof.
   - I2: **Persistent CA + on-disk store** — **landed**. The blob
     store was already on disk (I1's `httpcache` persists the index +
     CAS), so this slice was the CA half: `daft-mitm-proxy --ca-dir`
@@ -3374,17 +3399,12 @@ Slices, cheapest-first:
     managers actually emit, not full RFC 9111. Add plain-HTTP
     support only if a real client needs it.
 
-Open question: relationship to D6c.3 slice 3 (host-mounted
-`/nix/store`). Both reduce remote dependence. The proxy cache is
-general across ecosystems and keeps a realistic live network path
-but costs HTTP cache semantics + a CA that's now a real trust
-anchor; the store mount is nix-only and fully offline but needs
-the host to pre-`nix copy`. Once I1 lands, re-evaluate whether
-slice 3 is still worth building or whether the proxy cache
-subsumes its motivation. nix content-verifies everything it
-fetches (narHash in flake.lock, `.narinfo` hashes), so a caching
-proxy can never corrupt nix — which makes the general path safe
-even for the ecosystem that already has a store to mount.
+Decision: the proxy cache is the default test-suite direction and currently
+subsumes the motivation for a host-mounted `/nix/store`. It works across
+ecosystems and the Bun cassette proves offline Nix replay. A store mount may
+still be reconsidered for a concrete non-HTTP or performance requirement, but
+it is not active plan work. Nix content-verifies fetched store objects; the
+proxy remains responsible for correct HTTP replay and trust-anchor handling.
 
 Phase J — **Hermetic egress: default-deny WAN + mandatory cached
 proxy/DNS for the test suite**:
@@ -3405,7 +3425,7 @@ Decisions taken (2026-05-24, with the user):
     The WAN block is the backstop: anything that ignores the env (a
     static binary, the nix-daemon) hits default-deny and **fails
     loudly** instead of leaking.
-  - **Hermeticity = hosted cassette store.** Recorded responses
+  - **Hermeticity target = hosted cassette store.** Recorded responses
     (httpcache CAS + DNS cache) are pushed/pulled from a remote over
     the existing mTLS stack so CI is hermetic without committing
     multi-hundred-MB closures to git. (Per-dev local cache and
@@ -4587,7 +4607,7 @@ Open questions:
       asserting the stored target is the resolved canonical fingerprint.
       (Also made the orchestrator-resolution tests hermetic against a
       developer's running local cluster by isolating `XDG_STATE_HOME`.)
-- [ ] **Pinned egress-replay cache for the bun e2e test (planned 2026-06-25).**
+- [x] **Pinned egress-replay cache for the bun e2e test (landed 2026-06-29).**
       `TestClusterWorkspaceBunDevServer` runs a real `nix develop -c bun run`
       and substitutes the bun dev-shell closure from cache.nixos.org through
       the egress MITM proxy. The harness points the proxy cache at a per-test
@@ -4622,8 +4642,8 @@ Open questions:
         online), or default (`t.TempDir()` + online, today's behaviour). Reads
         never touch disk (`httpcache.Lookup` bumps LastAccess in memory only),
         so one read-only dir is safe across concurrent clusters.
-      - **K2 (tooling landed 2026-06-25; first publish pending) — record +
-        publish.** New `internal/egresscache` packs a recorded cache dir into a
+      - **K2 (landed and published 2026-06-29) — record + publish.** New
+        `internal/egresscache` packs a recorded cache dir into a
         one-layer OCI image and pushes/pulls it (go-containerregistry/crane,
         zip-slip-safe extract, deterministic tar); `cmd/daft-egress-cache` is
         the thin CLI. Tag = first 16 hex of `sha256(bun-flake.lock)` (a lock

@@ -11,10 +11,10 @@ the same change.
 
 - See [CONTRIBUTING.md](CONTRIBUTING.md) for the contributor rules. They apply
   to agents too.
-- See [README.md](README.md) for the user-facing overview.
-- See [OBSERVABILITY.md](OBSERVABILITY.md) for the host-side `/proc` sampler
-  attached to every sandbox VM, the planned guest-side eBPF library, and
-  where to read the per-test resource trace when a sandbox test fails.
+- See [README](README) for the user-facing overview.
+- See [OBSERVABILITY.md](OBSERVABILITY.md) for the host-side `/proc`/cgroup
+  sampler, guest-side eBPF gadgets and build-progress summaries, and where to
+  read or stream a Sandbox's resource trace when a test fails.
 
 ## Repository layout
 

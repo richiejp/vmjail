@@ -1,25 +1,25 @@
 # Observability
 
-> Two-tier observability for sandbox VMs. Always on, designed to make
+> Two-tier observability for sandbox VMs. Enabled by default for
+> orchestrator-dispatched workloads, designed to make
 > "what was the VM doing when this test failed?" answerable from the
 > failing test's log without running anything inside the guest at the
 > moment of failure.
 
 ## TL;DR for agents
 
-1. Every sandbox VM that gets launched with `sandbox.Config.ObserverLogPath`
-   set has an in-process observer that samples its cloud-hypervisor
-   PID at 1 Hz into a JSON-lines file at that path. Tests and CLI
-   surfaces should set the path so the data is collected; only set
-   it to empty if you have a specific reason.
-2. The log survives the VM exiting. To debug a failing integration
-   test, look at `<test-tempdir>/.../observer-<sandbox>.jsonl` for
+1. A sandbox launched with `sandbox.Config.ObserverLogPath` set has an
+   in-process observer that samples its cloud-hypervisor PID, cgroup, and
+   sandbox network counters at 1 Hz into a JSON-lines file. Orchestrated
+   user-facing launches set this by default.
+2. The log survives the VM exiting. Use `daft sandbox observer-tail
+   [workspace]` to stream it, or on a failing integration test inspect
+   `<test-tempdir>/.../observer-<sandbox>.jsonl` for
    the host-side resource trace; in-guest profiler logs sitting
    alongside cover only what the guest's userspace can see.
-3. Cgroup-level metrics and an in-guest eBPF library are deliberate
-   follow-up work — see [Roadmap](#roadmap). Today's Tier 1 covers
-   the idle-vs-busy and "is the cloud-hypervisor process making
-   forward progress" questions.
+3. `daft sandbox observe [workspace]` renders the latest guest-side eBPF
+   build-progress summary. Open, exec, sleep, and I/O gadgets are landed;
+   the [Roadmap](#roadmap) tracks additional detail and refined heuristics.
 
 ## Why this exists
 
@@ -29,7 +29,7 @@ those 4 minutes. Was it CPU-bound? Blocked on virtio? Idle because
 the workload had already crashed? Were the host's resources saturated?
 Without telemetry, every failure becomes a follow-up interactive
 investigation — which contradicts the project's "fail fast, fail
-loud" ethos (CONTRIBUTING.md "Slowness is a bug").
+loud" ethos ([CONTRIBUTING.md: Slowness is a bug](CONTRIBUTING.md#slowness-is-a-bug)).
 
 The observer earns its keep when:
 
@@ -203,13 +203,12 @@ caller picks a location appropriate for its lifetime:
   dumps the tail of each log into the test output — the temp dir is
   wiped on cleanup, so the trace is surfaced there rather than left
   to be grabbed from a path that's about to vanish.
-- **`daft-sandboxd` user-facing launches:** placed under a
-  per-sandbox state dir, surfaced via a future
-  `daft sandbox observer-tail <name>` subcommand. Path lookup is
-  recorded on the sandbox object so an operator can `cat` it
-  directly.
-- **`daft sandbox hello`:** uses a tempdir under the user's cache
-  dir; surfaces the path on stdout at the end of the run.
+- **`daft-sandboxd` user-facing launches:** placed under
+  `$XDG_STATE_HOME/daft/sandboxes/<id>/observer.jsonl` (or the
+  `DAFT_STATE_DIR` override). Orchestrated launches key `<id>` by Sandbox uid;
+  debug `hello`/`run` launches mint an id and print the chosen path. Use
+  `daft sandbox observer-tail [workspace]` for cross-machine access to a
+  running Workspace's log.
 
 **What it does NOT do (yet):**
 
@@ -431,7 +430,7 @@ In rough order:
    `internal/sandboxdcli/state.go`; the filename is
    `observability.DefaultLogFilename` (one source of truth shared with
    item 3).
-3. **`daft sandbox observer-tail <workspace>` CLI surface** (landed) —
+3. **`daft sandbox observer-tail [workspace]` CLI surface** (landed) —
    streams a running sandbox's observer log to the user-host over the
    orchestrator, brokered exactly like `daft workspace exec` (attach):
    the client opens `WorkspaceCatalogService.ObserverTail`; the
@@ -442,7 +441,8 @@ In rough order:
    and tails the on-disk log (`internal/observertail`, which follows
    across the rename-based rotation) back to the client. `--follow`
    (default) stays open like `tail -f`; `--follow=false` dumps the
-   current log and exits. Read-only and mTLS-authenticated end to end
+   current log and exits. The Workspace may be omitted in a configured
+   Workspace directory. Read-only and mTLS-authenticated end to end
    (same peer-fingerprint model as attach).
 4. **`testdaemons.Cluster` integration** (landed) — `NewCluster`
    points the sandboxd subprocess's per-sandbox state root at a
@@ -547,7 +547,7 @@ In rough order:
        back a valid summary. The pure `Event`/`Aggregator` moved to
        build-constraint-free files so this wiring names them
        cross-platform without pulling in cilium/ebpf.
-   - **6c — `daft sandbox observe` CLI + broker.** Serve the latest
+   - **6c — `daft sandbox observe` CLI + broker (landed).** Serve the latest
      snapshot (and `--follow`) over the orchestrator→node broker via a
      dedicated `ObserveSummary` RPC; render a human/agent-readable
      summary with drill-down hints into the raw `opensnoop.log`.
@@ -584,9 +584,10 @@ In rough order:
        workspace dir (reuses `resolveWorkspaceNameDefault`). An empty
        payload (gadget starting, or observe opted out) renders as a clear
        "none yet" note. Coarse stuck/slow heuristics here; #6d refines.
-   - **6d — stuck/slow heuristics + in-sandbox build e2e.** Flag stalls
-     and pathological churn in the summary; an e2e runs a real build and
-     asserts the summary reflects forward progress and then a stall.
+   - **6d — refined stuck/slow heuristics + in-sandbox build e2e.** The CLI
+     already renders coarse starting/active/possibly-stalled states. Remaining
+     work is pathological-churn classification and a real-build e2e that
+     asserts progress followed by a deliberate stall.
 
    ENOENT / cache-miss tallies (landed) — the gadget now also hooks
    `sys_exit_openat` for the return value (enter→exit correlation via a
@@ -761,5 +762,5 @@ In rough order:
   specific guest-internal detail (PSI, per-process wchan, store-path
   counts) the host-side sampler can't see — open-snoop covers openat,
   not those.
-- `CONTRIBUTING.md` "Slowness is a bug" — the policy this
+- [CONTRIBUTING.md: Slowness is a bug](CONTRIBUTING.md#slowness-is-a-bug) — the policy this
   infrastructure exists to support.
