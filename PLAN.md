@@ -3771,7 +3771,13 @@ Slices:
   MCP exposes bounded `agent_status`, `agent_events`, `agent_result`, and
   `agent_cancel`; status deliberately omits the potentially large terminal
   result, and result refuses non-terminal runs. AgentRun creation/start schemas
-  and SecretDelivery channel implementation remain. Race-gate coverage added
+  and SecretDelivery channel implementation remain. The trusted-host
+  credential catalog now loads named Codex provider-native JSON auth stores
+  from owner-only regular files, resolves relative paths against the catalog,
+  freezes their bytes at startup, exposes them only through the redacted
+  `secretvalue` callback boundary, and destroys all shared buffers on shutdown.
+  It deliberately validates only the provider-native JSON envelope rather than
+  decoding or persisting token fields. Race-gate coverage added
   alongside this slice also closed Serve/Shutdown worker-publication races and
   made broker relays join both transport handlers before either response closes.
 - **L1 — read-only MCP.** Land `cmd/daft-mcp` over stdio with initialize,
