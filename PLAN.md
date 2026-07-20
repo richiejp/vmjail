@@ -3932,14 +3932,21 @@ Slices:
   the AgentRun UUID as the Node idempotency key. A successful start records the
   Node job ID and RUNNING atomically; an ambiguous transport failure deliberately
   returns the durable STARTING run so the forthcoming reconciler can retry the
-  exact request. Launching a missing current Sandbox, absence-grace recovery,
-  and the public profile-name-only MCP adapter remain. A Serve-lifetime recovery worker
+  exact request. Launching a missing current Sandbox and absence-grace recovery
+  remain. A Serve-lifetime recovery worker
   now retries STARTING jobs idempotently after orchestrator restart, polls
   RUNNING/CANCELING jobs, durably captures bounded terminal results before
   deleting Node-local job state, and marks runs LOST when the bound Node
   process instance changes. A disconnected Node is left retryable for now;
   the bounded absence/grace policy still needs to land before reconciliation
   is complete.
+  MCP now exposes `agent_start` with the intentionally narrow public schema:
+  Workspace UUID, immutable profile name, and bounded prompt only. The trusted
+  MCP host resolves that name from its already-validated AgentProfile snapshot
+  and sends the frozen digest and argv over the operator-side Start RPC; MCP
+  callers cannot inject an image, command, digest, credential reference, or
+  environment. The tool returns the durable AgentRun immediately and accurately
+  advertises a non-idempotent, non-destructive side effect.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->

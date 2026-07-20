@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/richiejp/darkaifactory/internal/agentprofile"
+	"github.com/richiejp/darkaifactory/internal/agentruncatalog"
 	"github.com/richiejp/darkaifactory/internal/daftclient"
 	agentrunv1 "github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
@@ -29,6 +30,7 @@ const (
 	workspaceGetTool     = "workspace_get"
 	workspaceListTool    = "workspace_list"
 	agentProfileListTool = "agent_profile_list"
+	agentStartTool       = "agent_start"
 	agentStatusTool      = "agent_status"
 	agentEventsTool      = "agent_events"
 	agentCancelTool      = "agent_cancel"
@@ -45,6 +47,7 @@ type Reader interface {
 	GetAgentRun(context.Context, string) (AgentRun, error)
 	AgentRunEvents(context.Context, string, uint64, uint32) (AgentEvents, error)
 	CancelAgentRun(context.Context, string) (AgentRun, error)
+	StartAgentRun(context.Context, string, agentprofile.Entry, string) (AgentRun, error)
 }
 
 type Node struct {
@@ -146,6 +149,12 @@ type agentRunInput struct {
 	UUID string `json:"uuid" jsonschema:"canonical AgentRun UUID"`
 }
 
+type agentStartInput struct {
+	WorkspaceUUID string `json:"workspace_uuid" jsonschema:"canonical workspace UUID"`
+	ProfileName   string `json:"profile_name" jsonschema:"immutable trusted-host AgentProfile name"`
+	Prompt        string `json:"prompt" jsonschema:"coding task, at most 262144 bytes"`
+}
+
 type agentEventsInput struct {
 	UUID        string `json:"uuid" jsonschema:"canonical AgentRun UUID"`
 	AfterCursor uint64 `json:"after_cursor,omitempty" jsonschema:"return events strictly after this cursor"`
@@ -181,7 +190,7 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 	server := mcp.NewServer(&mcp.Implementation{Name: "daft", Version: version}, nil)
 	annotations := &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(false)}
 	addAgentProfileListTool(server, annotations, profiles)
-	addAgentRunTools(server, annotations, reader)
+	addAgentRunTools(server, annotations, reader, profiles)
 	mcp.AddTool(server, &mcp.Tool{Name: nodeListTool, Description: "List live daft Nodes visible to the orchestrator.", Annotations: annotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listNodesOutput, error) {
 			nodes, truncated, err := readBounded(ctx, reader.ListNodes, func(node Node) string { return node.Fingerprint })
@@ -247,7 +256,28 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 	return server, nil
 }
 
-func addAgentRunTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations, reader Reader) {
+func addAgentRunTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations, reader Reader, profiles []agentprofile.Entry) {
+	byName := make(map[string]agentprofile.Entry, len(profiles))
+	for i := range profiles {
+		profile := profiles[i]
+		byName[profile.Profile.Name] = profile
+	}
+	startAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: false, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: agentStartTool, Description: "Start a durable coding-agent run from an immutable trusted-host profile.", Annotations: startAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input agentStartInput) (*mcp.CallToolResult, agentRunOutput, error) {
+			if input.WorkspaceUUID == "" || input.ProfileName == "" {
+				return nil, agentRunOutput{}, fmt.Errorf("workspace_uuid and profile_name are required")
+			}
+			if len(input.Prompt) > agentruncatalog.MaxPromptBytes {
+				return nil, agentRunOutput{}, fmt.Errorf("prompt exceeds %d bytes", agentruncatalog.MaxPromptBytes)
+			}
+			profile, ok := byName[input.ProfileName]
+			if !ok {
+				return nil, agentRunOutput{}, fmt.Errorf("unknown AgentProfile %q", input.ProfileName)
+			}
+			run, err := reader.StartAgentRun(ctx, input.WorkspaceUUID, profile, input.Prompt)
+			return nil, agentRunOutput{Run: run}, err
+		})
 	mcp.AddTool(server, &mcp.Tool{Name: agentStatusTool, Description: "Get durable status for one owned AgentRun.", Annotations: readAnnotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input agentRunInput) (*mcp.CallToolResult, agentRunOutput, error) {
 			if input.UUID == "" {
@@ -342,6 +372,7 @@ type operatorClient interface {
 }
 
 type agentRunClient interface {
+	Start(context.Context, *connect.Request[agentrunv1.StartAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error)
 	Get(context.Context, *connect.Request[agentrunv1.GetAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error)
 	Events(context.Context, *connect.Request[agentrunv1.AgentRunEventsRequest]) (*connect.Response[agentrunv1.AgentRunEventsResponse], error)
 	Cancel(context.Context, *connect.Request[agentrunv1.CancelAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error)
@@ -352,6 +383,17 @@ type ConnectReader struct {
 	workspace workspaceReader
 	operator  operatorClient
 	agentRuns agentRunClient
+}
+
+func (r ConnectReader) StartAgentRun(ctx context.Context, workspaceUUID string, profile agentprofile.Entry, prompt string) (AgentRun, error) {
+	response, err := r.agentRuns.Start(ctx, connect.NewRequest(&agentrunv1.StartAgentRunRequest{
+		WorkspaceUuid: workspaceUUID, ProfileName: profile.Profile.Name, ProfileDigest: profile.Digest,
+		Command: slices.Clone(profile.Profile.Command), Prompt: prompt,
+	}))
+	if err != nil {
+		return AgentRun{}, err
+	}
+	return mapAgentRun(response.Msg), nil
 }
 
 func NewConnectReader(client *daftclient.Client) (*ConnectReader, error) {

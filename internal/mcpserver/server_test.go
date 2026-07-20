@@ -10,6 +10,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/richiejp/darkaifactory/internal/agentprofile"
+	"github.com/richiejp/darkaifactory/internal/agentruncatalog"
 	"github.com/richiejp/darkaifactory/internal/daftclient"
 	agentrunv1 "github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
@@ -20,11 +21,17 @@ import (
 )
 
 const (
-	fingerprintKey = "fingerprint"
-	mcpTestVersion = "test"
-	uuidKey        = "uuid"
-	testRunValue   = "run"
-	doneValue      = "done"
+	fingerprintKey   = "fingerprint"
+	mcpTestVersion   = "test"
+	uuidKey          = "uuid"
+	testRunValue     = "run"
+	doneValue        = "done"
+	mcpTestProfile   = "codex"
+	mcpTestPrompt    = "fix it"
+	mcpTestWorkspace = "workspace"
+	profileNameKey   = "profile_name"
+	promptKey        = "prompt"
+	workspaceUUIDKey = "workspace_uuid"
 )
 
 type fakeReader struct {
@@ -41,6 +48,13 @@ type fakeReader struct {
 	agentRun       AgentRun
 	agentEvents    AgentEvents
 	agentErr       error
+	startedProfile agentprofile.Entry
+	startedPrompt  string
+}
+
+func (f *fakeReader) StartAgentRun(_ context.Context, workspace string, profile agentprofile.Entry, prompt string) (AgentRun, error) {
+	f.requestedUUID, f.startedProfile, f.startedPrompt = workspace, profile, prompt
+	return f.agentRun, f.agentErr
 }
 
 func (f *fakeReader) GetAgentRun(context.Context, string) (AgentRun, error) {
@@ -57,8 +71,8 @@ func (f *fakeReader) CancelAgentRun(context.Context, string) (AgentRun, error) {
 
 func TestAgentProfileListIsSortedAndOmitsCredentialProfileName(t *testing.T) {
 	profiles := []agentprofile.Entry{
-		{Profile: agentprofile.Profile{Name: "z", Provider: agentprofile.ProviderCodex, Command: []string{"codex"}, Credentials: agentprofile.CredentialsSection{Enable: true, Profile: "must-not-leak"}}, Digest: "sha256:z"},
-		{Profile: agentprofile.Profile{Name: "a", Provider: agentprofile.ProviderCodex, Command: []string{"codex"}}, Digest: "sha256:a"},
+		{Profile: agentprofile.Profile{Name: "z", Provider: agentprofile.ProviderCodex, Command: []string{mcpTestProfile}, Credentials: agentprofile.CredentialsSection{Enable: true, Profile: "must-not-leak"}}, Digest: "sha256:z"},
+		{Profile: agentprofile.Profile{Name: "a", Provider: agentprofile.ProviderCodex, Command: []string{mcpTestProfile}}, Digest: "sha256:a"},
 	}
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
 	server, err := NewWithProfiles(&fakeReader{}, profiles, mcpTestVersion)
@@ -83,6 +97,33 @@ func TestAgentProfileListIsSortedAndOmitsCredentialProfileName(t *testing.T) {
 	}
 	if _, leaked := requireMap(t, listed[1])["profile"]; leaked {
 		t.Fatalf("credential profile leaked: %#v", listed[1])
+	}
+}
+
+func TestAgentStartResolvesTrustedProfile(t *testing.T) {
+	entry := agentprofile.Entry{Profile: agentprofile.Profile{Name: mcpTestProfile, Provider: agentprofile.ProviderCodex, Command: []string{mcpTestProfile, "exec"}}, Digest: "sha256:profile"}
+	reader := &fakeReader{agentRun: AgentRun{UUID: testRunValue, State: "AGENT_RUN_STATE_STARTING"}}
+	session := connectClientProfiles(t, reader, []agentprofile.Entry{entry})
+	result := requireMap(t, callTool(t, session, agentStartTool, map[string]any{workspaceUUIDKey: mcpTestWorkspace, profileNameKey: mcpTestProfile, promptKey: mcpTestPrompt}).StructuredContent)
+	if requireMap(t, result[testRunValue])[uuidKey] != testRunValue {
+		t.Fatalf("start result = %#v", result)
+	}
+	if reader.requestedUUID != mcpTestWorkspace || reader.startedProfile.Digest != entry.Digest || reader.startedPrompt != mcpTestPrompt {
+		t.Fatalf("resolved start = workspace=%q profile=%#v prompt=%q", reader.requestedUUID, reader.startedProfile, reader.startedPrompt)
+	}
+	for name, arguments := range map[string]map[string]any{
+		"unknown profile": {workspaceUUIDKey: mcpTestWorkspace, profileNameKey: "missing", promptKey: mcpTestPrompt},
+		"oversize prompt": {workspaceUUIDKey: mcpTestWorkspace, profileNameKey: mcpTestProfile, promptKey: string(make([]byte, agentruncatalog.MaxPromptBytes+1))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			response, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: agentStartTool, Arguments: arguments})
+			if err != nil || !response.IsError {
+				t.Fatalf("CallTool = %#v, %v", response, err)
+			}
+		})
+	}
+	if response, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: agentStartTool, Arguments: map[string]any{profileNameKey: mcpTestProfile, promptKey: mcpTestPrompt}}); err == nil || response != nil {
+		t.Fatalf("missing workspace = %#v, %v", response, err)
 	}
 }
 
@@ -119,9 +160,13 @@ func (f *fakeReader) GetWorkspace(_ context.Context, uuid string) (Workspace, er
 }
 
 func connectClient(t *testing.T, reader Reader) *mcp.ClientSession {
+	return connectClientProfiles(t, reader, nil)
+}
+
+func connectClientProfiles(t *testing.T, reader Reader, profiles []agentprofile.Entry) *mcp.ClientSession {
 	t.Helper()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	server, err := New(reader, mcpTestVersion)
+	server, err := NewWithProfiles(reader, profiles, mcpTestVersion)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -154,7 +199,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceGetTool, workspaceListTool}
+	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceGetTool, workspaceListTool}
 	if len(result.Tools) != len(wantNames) {
 		t.Fatalf("got %d tools, want %d", len(result.Tools), len(wantNames))
 	}
@@ -176,6 +221,10 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 		case nodeRevokeTool, agentCancelTool:
 			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint || !tool.Annotations.IdempotentHint {
 				t.Errorf("revoke annotations = %#v", tool.Annotations)
+			}
+		case agentStartTool:
+			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint || tool.Annotations.IdempotentHint {
+				t.Errorf("agent start annotations = %#v", tool.Annotations)
 			}
 		default:
 			if !tool.Annotations.ReadOnlyHint {
@@ -221,7 +270,7 @@ func TestWorkspaceReads(t *testing.T) {
 	if reader.requestedUUID != uuid {
 		t.Errorf("requested UUID = %q, want %q", reader.requestedUUID, uuid)
 	}
-	workspace := requireMap(t, requireMap(t, getResult.StructuredContent)["workspace"])
+	workspace := requireMap(t, requireMap(t, getResult.StructuredContent)[mcpTestWorkspace])
 	if workspace["name"] != first {
 		t.Errorf("workspace name = %v, want %s", workspace["name"], first)
 	}
@@ -393,12 +442,20 @@ type fakeOperatorClient struct {
 }
 
 type fakeAgentRunClient struct {
-	run    *agentrunv1.AgentRun
-	events *agentrunv1.AgentRunEventsResponse
-	err    error
+	run          *agentrunv1.AgentRun
+	events       *agentrunv1.AgentRunEventsResponse
+	err          error
+	captureStart func(*agentrunv1.StartAgentRunRequest)
 }
 
 func (f fakeAgentRunClient) Get(context.Context, *connect.Request[agentrunv1.GetAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error) {
+	return connect.NewResponse(f.run), f.err
+}
+
+func (f fakeAgentRunClient) Start(_ context.Context, request *connect.Request[agentrunv1.StartAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error) {
+	if f.captureStart != nil {
+		f.captureStart(request.Msg)
+	}
 	return connect.NewResponse(f.run), f.err
 }
 
@@ -428,10 +485,11 @@ func (f *fakeWorkspaceReader) List(_ context.Context, request *connect.Request[w
 }
 
 func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
-	protoWorkspace := &workspacev1.Workspace{Metadata: &workspacev1.WorkspaceMetadata{Uuid: "workspace"}}
+	protoWorkspace := &workspacev1.Workspace{Metadata: &workspacev1.WorkspaceMetadata{Uuid: mcpTestWorkspace}}
 	workspaces := &fakeWorkspaceReader{
 		listResponse: &workspacev1.ListWorkspacesResponse{Workspaces: []*workspacev1.Workspace{protoWorkspace}},
 	}
+	var startRequest *agentrunv1.StartAgentRunRequest
 	reader := ConnectReader{
 		nodes: fakeNodeLister{response: &nodectrlv1.ListNodesResponse{Nodes: []*nodectrlv1.Node{{
 			Fingerprint: "fingerprint",
@@ -441,7 +499,7 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 		}}}},
 		workspace: workspaces,
 		operator:  fakeOperatorClient{status: &operatorv1.NodeStatus{Fingerprint: "fingerprint", Authorized: true}},
-		agentRuns: fakeAgentRunClient{run: &agentrunv1.AgentRun{Uuid: testRunValue, State: agentrunv1.AgentRunState_AGENT_RUN_STATE_SUCCEEDED, Result: doneValue}, events: &agentrunv1.AgentRunEventsResponse{Events: []*agentrunv1.AgentRunEvent{{Cursor: 1}}, NextCursor: 1}},
+		agentRuns: fakeAgentRunClient{run: &agentrunv1.AgentRun{Uuid: testRunValue, State: agentrunv1.AgentRunState_AGENT_RUN_STATE_SUCCEEDED, Result: doneValue}, events: &agentrunv1.AgentRunEventsResponse{Events: []*agentrunv1.AgentRunEvent{{Cursor: 1}}, NextCursor: 1}, captureStart: func(request *agentrunv1.StartAgentRunRequest) { startRequest = request }},
 	}
 	nodes, err := reader.ListNodes(t.Context())
 	if err != nil || len(nodes) != 1 || nodes[0].CPUs != 8 || nodes[0].MemoryBytes != 16 {
@@ -451,8 +509,8 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	if err != nil || len(listed) != 1 || !workspaces.mineOnly {
 		t.Fatalf("ListWorkspaces() = %#v, %v; mine_only=%v", listed, err, workspaces.mineOnly)
 	}
-	got, err := reader.GetWorkspace(t.Context(), "workspace")
-	if err != nil || got.UUID != "workspace" {
+	got, err := reader.GetWorkspace(t.Context(), mcpTestWorkspace)
+	if err != nil || got.UUID != mcpTestWorkspace {
 		t.Fatalf("GetWorkspace() = %#v, %v", got, err)
 	}
 	if _, err := reader.GetWorkspace(t.Context(), "someone-elses-workspace"); err == nil {
@@ -477,6 +535,13 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	if _, err := reader.CancelAgentRun(t.Context(), testRunValue); err != nil {
 		t.Fatalf("CancelAgentRun = %v", err)
 	}
+	profile := agentprofile.Entry{Profile: agentprofile.Profile{Name: mcpTestProfile, Command: []string{mcpTestProfile, "exec"}}, Digest: "sha256:profile"}
+	if _, err := reader.StartAgentRun(t.Context(), mcpTestWorkspace, profile, mcpTestPrompt); err != nil {
+		t.Fatalf("StartAgentRun = %v", err)
+	}
+	if startRequest.GetWorkspaceUuid() != mcpTestWorkspace || startRequest.GetProfileDigest() != profile.Digest || len(startRequest.GetCommand()) != 2 || startRequest.GetPrompt() != mcpTestPrompt {
+		t.Fatalf("Start request = %#v", startRequest)
+	}
 }
 
 func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
@@ -493,7 +558,7 @@ func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
 	if _, err := reader.ListWorkspaces(t.Context()); !errors.Is(err, wantErr) {
 		t.Errorf("ListWorkspaces error = %v", err)
 	}
-	if _, err := reader.GetWorkspace(t.Context(), "workspace"); !errors.Is(err, wantErr) {
+	if _, err := reader.GetWorkspace(t.Context(), mcpTestWorkspace); !errors.Is(err, wantErr) {
 		t.Errorf("GetWorkspace error = %v", err)
 	}
 	if _, err := reader.GetNode(t.Context(), "fingerprint"); !errors.Is(err, wantErr) {
@@ -507,6 +572,9 @@ func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
 	}
 	if _, err := reader.GetAgentRun(t.Context(), testRunValue); !errors.Is(err, wantErr) {
 		t.Errorf("GetAgentRun error = %v", err)
+	}
+	if _, err := reader.StartAgentRun(t.Context(), mcpTestWorkspace, agentprofile.Entry{}, "prompt"); !errors.Is(err, wantErr) {
+		t.Errorf("StartAgentRun error = %v", err)
 	}
 	if _, err := reader.AgentRunEvents(t.Context(), testRunValue, 0, 1); !errors.Is(err, wantErr) {
 		t.Errorf("AgentRunEvents error = %v", err)
