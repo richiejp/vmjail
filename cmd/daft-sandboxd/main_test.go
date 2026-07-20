@@ -16,16 +16,16 @@ const versionSubcommand = "version"
 // binName is argv[0] for the main() tests, in a const for goconst.
 const binName = "daft-sandboxd"
 
-// runMainCapturingStderr runs main() with argv [binName, version],
+// runMainCapturingStderr runs main() with argv [binName, args...],
 // os.Exit and os.Stderr redirected, and returns the captured exit code
 // and stderr. Restores the globals via Cleanup. Shared by the
 // startup-precondition failure tests so each only has to install its
 // own failing seam and assert the message.
-func runMainCapturingStderr(t *testing.T) (code int, stderr string) {
+func runMainCapturingStderr(t *testing.T, args ...string) (code int, stderr string) {
 	t.Helper()
 	oldArgs, oldExit := os.Args, osExit
 	t.Cleanup(func() { os.Args, osExit = oldArgs, oldExit })
-	os.Args = []string{binName, versionSubcommand}
+	os.Args = append([]string{binName}, args...)
 	code = -1
 	osExit = func(c int) { code = c }
 
@@ -122,6 +122,45 @@ func TestMainPassesArgvAndCallsOsExit(t *testing.T) {
 	}
 }
 
+func TestHostSetupCommandsSkipSandboxPreconditions(t *testing.T) {
+	oldArgs, oldExit := os.Args, osExit
+	oldCgroup, oldPrepare, oldUserns := cgroupReexec, prepareCgroupSubtree, usernsReexec
+	t.Cleanup(func() {
+		os.Args, osExit = oldArgs, oldExit
+		cgroupReexec, prepareCgroupSubtree, usernsReexec = oldCgroup, oldPrepare, oldUserns
+	})
+	called := false
+	cgroupReexec = func(io.Writer) error { called = true; return nil }
+	prepareCgroupSubtree = func() (string, error) { called = true; return "", nil }
+	usernsReexec = func(io.Writer) error { called = true; return nil }
+	os.Args = []string{binName, versionSubcommand}
+	code := -1
+	osExit = func(c int) { code = c }
+
+	main()
+
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0", code)
+	}
+	if called {
+		t.Fatal("version command ran sandbox runtime preconditions")
+	}
+}
+
+func TestIsHostSetupCommand(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{nil, {"auth", "show"}, {"version"}, {"--help"}, {"help"}} {
+		if !isHostSetupCommand(args) {
+			t.Errorf("isHostSetupCommand(%q) = false", args)
+		}
+	}
+	for _, args := range [][]string{{"serve"}, {"hello"}, {"debug", "run"}, {"unknown"}} {
+		if isHostSetupCommand(args) {
+			t.Errorf("isHostSetupCommand(%q) = true", args)
+		}
+	}
+}
+
 // TestMainExitsOnUsernsFailure pins the parent-side error path
 // of the userns wiring: if Reexec returns an error (e.g. the
 // host's /etc/subuid is malformed), main() reports it on
@@ -135,7 +174,7 @@ func TestMainExitsOnUsernsFailure(t *testing.T) {
 	usernsReexec = func(io.Writer) error { return errors.New("synthetic") }
 	t.Cleanup(func() { usernsReexec = prev })
 
-	code, stderr := runMainCapturingStderr(t)
+	code, stderr := runMainCapturingStderr(t, "serve")
 	if code != 1 {
 		t.Errorf("osExit code = %d, want 1", code)
 	}
@@ -156,7 +195,7 @@ func TestMainFailsClosedOnSubtreeFailure(t *testing.T) {
 	prepareCgroupSubtree = func() (string, error) { return "", errors.New("synthetic-subtree") }
 	t.Cleanup(func() { prepareCgroupSubtree = prev })
 
-	code, stderr := runMainCapturingStderr(t)
+	code, stderr := runMainCapturingStderr(t, "serve")
 	if code != 1 {
 		t.Errorf("osExit code = %d, want 1 (fail-closed)", code)
 	}
@@ -179,7 +218,7 @@ func TestMainContinuesWhenCgroupLimitsDisabled(t *testing.T) {
 	prepareCgroupSubtree = func() (string, error) { return "", errors.New("synthetic-subtree") }
 	t.Cleanup(func() { prepareCgroupSubtree = prev })
 
-	code, stderr := runMainCapturingStderr(t)
+	code, stderr := runMainCapturingStderr(t, "serve", "--help")
 	if code != 0 {
 		t.Errorf("osExit code = %d, want 0 (opt-out warn-and-continue)", code)
 	}
@@ -199,7 +238,7 @@ func TestMainExitsOnCgroupFailure(t *testing.T) {
 	cgroupReexec = func(io.Writer) error { return errors.New("synthetic-cgroup") }
 	t.Cleanup(func() { cgroupReexec = prev })
 
-	code, stderr := runMainCapturingStderr(t)
+	code, stderr := runMainCapturingStderr(t, "serve")
 	if code != 1 {
 		t.Errorf("osExit code = %d, want 1", code)
 	}

@@ -38,6 +38,15 @@ var (
 )
 
 func main() {
+	// Identity bootstrap and release inspection must also work on a fresh host
+	// whose service manager has not yet created a delegated cgroup/userns. They
+	// never boot or manipulate a sandbox, so running the VM preconditions for
+	// them would make installation impossible on non-systemd hosts.
+	if isHostSetupCommand(os.Args[1:]) {
+		osExit(run(os.Args[1:], os.Stdout, os.Stderr))
+		return
+	}
+
 	// Guarantee a delegated cgroup v2 subtree BEFORE anything else: if
 	// our inherited cgroup isn't delegated, re-exec under a systemd-run
 	// scope (which hands back a delegated subtree) so the per-VM
@@ -95,6 +104,18 @@ func main() {
 		return
 	}
 	osExit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+func isHostSetupCommand(args []string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	switch args[0] {
+	case "auth", "version", "help", "--help", "-h":
+		return true
+	default:
+		return false
+	}
 }
 
 func run(args []string, stdout, stderr io.Writer) int {

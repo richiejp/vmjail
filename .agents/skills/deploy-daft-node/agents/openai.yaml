@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deploy daft Node"
+  short_description: "Install and register daft nodes over SSH"
+  default_prompt: "Use $deploy-daft-node to install or update daft on a remote node and connect it to the orchestrator."

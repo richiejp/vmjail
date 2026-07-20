@@ -3802,6 +3802,12 @@ Slices:
   It may not infer sudo permission or weaken a missing prerequisite. Cover
   fresh install, no-op, upgrade, incompatible host, interrupted upload,
   failed start, and rollback across representative supervisor fixtures.
+  **In progress (2026-07-20):** the repository-local skill and its portable
+  probe, artifact inspection, atomic stage/no-op/rollback, and local
+  verification primitives are implemented. The sandbox-host's non-runtime
+  `version` and `auth` commands now bypass VM cgroup/userns preconditions so
+  bootstrapping works before a supervisor is installed. Fixture and isolated
+  forward tests cover the workflow; supervisor-specific failure fixtures remain.
 - **L4 — detached execution and agent startup.** Implement AgentProfile loading
   and `agent_start` for Codex; Claude Code is deferred. Named enabler first:
   exit-code/exit-reason
