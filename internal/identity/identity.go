@@ -23,6 +23,7 @@ type Role string
 
 const (
 	RoleClient       Role = "client"
+	RoleOperator     Role = "operator"
 	RoleOrchestrator Role = "orchestrator"
 	RoleSandboxHost  Role = "sandbox-host"
 )
@@ -33,7 +34,7 @@ const (
 // classify.
 func (r Role) Valid() bool {
 	switch r {
-	case RoleClient, RoleOrchestrator, RoleSandboxHost:
+	case RoleClient, RoleOperator, RoleOrchestrator, RoleSandboxHost:
 		return true
 	}
 	return false

@@ -41,7 +41,7 @@ func TestGenerateRejectsUnknownRole(t *testing.T) {
 }
 
 func TestRoleValid(t *testing.T) {
-	for _, r := range []Role{RoleClient, RoleOrchestrator, RoleSandboxHost} {
+	for _, r := range []Role{RoleClient, RoleOperator, RoleOrchestrator, RoleSandboxHost} {
 		if !r.Valid() {
 			t.Errorf("%q should be valid", r)
 		}

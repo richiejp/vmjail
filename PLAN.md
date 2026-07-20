@@ -3610,7 +3610,7 @@ Open questions:
     design its lane rather than widening the allowlist reflexively.
 
 Phase L — **Overseer MCP, fleet deployment, and sandboxed agent runs**
-(planned 2026-07-19; slices reconciled against the codebase 2026-07-19):
+(planned 2026-07-19; slices reconciled against the codebase 2026-07-20):
 
 Goal: one long-lived overseer coding agent on a trusted user-host can discover
 and update a fleet of daft Nodes, create isolated project Workspaces on chosen
@@ -3644,6 +3644,12 @@ Decisions:
   structured MCP content. Tools are coarse, declarative, and idempotent; do
   not mirror every Cobra flag and do not expose `ssh`, `sh`, or arbitrary host
   file access.
+- **Operator authority is a server-side peer-store role.** The orchestrator
+  records `operator` against the MCP client's pinned certificate fingerprint;
+  certificate names and self-asserted roles are never trusted. A dedicated
+  operator RPC service owns node authorization and revocation. Node-control
+  RPCs independently require `sandbox-host`, and revocation terminates an
+  already-open registration rather than merely rejecting its next TLS dial.
 - **Node installation is an overseer skill, not an MCP operation.** Linux
   hosts differ too much in init system, privilege model, cgroup delegation,
   and filesystem layout for a fixed MCP deployment schema to make the right
@@ -3780,6 +3786,9 @@ Slices:
   transient local `vendor/` trees as intended, so dependency changes are always
   checked against the pinned `vendorHash` rather than accidentally consuming a
   developer's ignored vendor snapshot.
+  The operator mutation slice is now in progress: peer-store changes are
+  transactional with respect to persistence and its role field is becoming an
+  authoritative per-request permission rather than descriptive metadata.
 - **L2 — declarative Workspace lifecycle.** Add `workspace_apply`, validate,
   push, launch, stop, and status. This is an orchestrator slice as much as an
   MCP one: no apply/update RPC exists (only the fine-grained

@@ -137,7 +137,7 @@ func newAuthApproveCmd() *cobra.Command {
 				return err
 			}
 			if role != "" && !identity.Role(role).Valid() {
-				return fmt.Errorf("daft-orchestrator: unknown role %q (want client / orchestrator / sandbox-host)", role)
+				return fmt.Errorf("daft-orchestrator: unknown role %q (want client / operator / orchestrator / sandbox-host)", role)
 			}
 			dir, err := authConfigDir(cmd)
 			if err != nil {
@@ -160,7 +160,7 @@ func newAuthApproveCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&label, "label", "", "human-readable label for this peer")
 	cmd.Flags().StringVar(&role, "role", "",
-		"peer role: client | orchestrator | sandbox-host")
+		"peer role: client | operator | orchestrator | sandbox-host")
 	return cmd
 }
 

@@ -17,7 +17,8 @@ import (
 
 // Peer is one approved counterparty: who they are (Label/Role) and
 // when we approved them. The fingerprint is the trust anchor; Label
-// and Role are descriptive only and may be edited freely.
+// and Role are orchestrator-managed authorization attributes. The certificate
+// itself does not assert either value.
 type Peer struct {
 	Fingerprint Fingerprint `json:"fingerprint"`
 	Label       string      `json:"label,omitempty"`
@@ -57,6 +58,15 @@ func OpenPeerStore(path string) (*PeerStore, error) {
 		return nil, fmt.Errorf("identity: parse peer store: %w", err)
 	}
 	for _, p := range list {
+		if p.Fingerprint == (Fingerprint{}) {
+			return nil, errors.New("identity: peer store contains zero fingerprint")
+		}
+		if p.Role != "" && !p.Role.Valid() {
+			return nil, fmt.Errorf("identity: peer store contains invalid role %q", p.Role)
+		}
+		if _, exists := s.peers[p.Fingerprint]; exists {
+			return nil, fmt.Errorf("identity: peer store contains duplicate fingerprint %s", p.Fingerprint)
+		}
 		s.peers[p.Fingerprint] = p
 	}
 	return s, nil
@@ -68,13 +78,23 @@ func (s *PeerStore) Add(p Peer) error {
 	if p.Fingerprint == (Fingerprint{}) {
 		return errors.New("identity: cannot add peer with zero fingerprint")
 	}
+	if p.Role != "" && !p.Role.Valid() {
+		return fmt.Errorf("identity: cannot add peer with invalid role %q", p.Role)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if p.ApprovedAt.IsZero() {
+	if existing, ok := s.peers[p.Fingerprint]; ok {
+		p.ApprovedAt = existing.ApprovedAt
+	} else if p.ApprovedAt.IsZero() {
 		p.ApprovedAt = time.Now().UTC()
 	}
-	s.peers[p.Fingerprint] = p
-	return s.saveLocked()
+	next := clonePeers(s.peers)
+	next[p.Fingerprint] = p
+	if err := s.saveLocked(next); err != nil {
+		return err
+	}
+	s.peers = next
+	return nil
 }
 
 // Remove deletes the entry if present. A missing fingerprint is not
@@ -86,8 +106,13 @@ func (s *PeerStore) Remove(fp Fingerprint) error {
 	if _, ok := s.peers[fp]; !ok {
 		return nil
 	}
-	delete(s.peers, fp)
-	return s.saveLocked()
+	next := clonePeers(s.peers)
+	delete(next, fp)
+	if err := s.saveLocked(next); err != nil {
+		return err
+	}
+	s.peers = next
+	return nil
 }
 
 // Lookup returns the stored peer if any. Used at handshake time on
@@ -144,12 +169,12 @@ func NewMemoryPeerStore(fps ...Fingerprint) *PeerStore {
 // saveLocked rewrites the JSON file atomically. The mutex is the
 // caller's responsibility. In-memory stores (empty path) skip
 // persistence entirely.
-func (s *PeerStore) saveLocked() error {
+func (s *PeerStore) saveLocked(peers map[Fingerprint]Peer) error {
 	if s.path == "" {
 		return nil
 	}
-	list := make([]Peer, 0, len(s.peers))
-	for _, p := range s.peers {
+	list := make([]Peer, 0, len(peers))
+	for _, p := range peers {
 		list = append(list, p)
 	}
 	slices.SortFunc(list, func(a, b Peer) int {
@@ -178,8 +203,24 @@ func (s *PeerStore) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), dirPerm); err != nil {
 		return fmt.Errorf("identity: mkdir peer store: %w", err)
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, filePerm); err != nil {
+	tmpFile, err := os.CreateTemp(filepath.Dir(s.path), ".peers-*.tmp")
+	if err != nil {
+		return fmt.Errorf("identity: write peer store: %w", err)
+	}
+	tmp := tmpFile.Name()
+	err = tmpFile.Chmod(filePerm)
+	if err == nil {
+		_, err = tmpFile.Write(data)
+	}
+	if err == nil {
+		err = tmpFile.Sync()
+	}
+	closeErr := tmpFile.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		oops.Skip("identity: remove partial peer store", os.Remove(tmp), os.ErrNotExist)
 		return fmt.Errorf("identity: write peer store: %w", err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {
@@ -187,5 +228,25 @@ func (s *PeerStore) saveLocked() error {
 			os.Remove(tmp), os.ErrNotExist)
 		return fmt.Errorf("identity: rename peer store: %w", err)
 	}
+	dir, err := os.Open(filepath.Dir(s.path))
+	if err != nil {
+		return fmt.Errorf("identity: open peer store directory: %w", err)
+	}
+	err = dir.Sync()
+	closeErr = dir.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return fmt.Errorf("identity: sync peer store directory: %w", err)
+	}
 	return nil
+}
+
+func clonePeers(peers map[Fingerprint]Peer) map[Fingerprint]Peer {
+	cloned := make(map[Fingerprint]Peer, len(peers))
+	for fp, peer := range peers {
+		cloned[fp] = peer
+	}
+	return cloned
 }

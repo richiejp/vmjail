@@ -37,6 +37,29 @@ func TestOpenPeerStoreRejectsMalformedJSON(t *testing.T) {
 	}
 }
 
+func TestOpenPeerStoreRejectsInvalidEntries(t *testing.T) {
+	id, _ := Generate(RoleClient)
+	tests := []struct {
+		name string
+		data string
+	}{
+		{name: "zero fingerprint", data: `[{"role":"client"}]`},
+		{name: "invalid role", data: `[{"fingerprint":"` + id.Fingerprint().String() + `","role":"root"}]`},
+		{name: "duplicate", data: `[{"fingerprint":"` + id.Fingerprint().String() + `"},{"fingerprint":"` + id.Fingerprint().String() + `"}]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "peers.json")
+			if err := os.WriteFile(path, []byte(tt.data), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			if _, err := OpenPeerStore(path); err == nil {
+				t.Fatal("expected invalid entry error")
+			}
+		})
+	}
+}
+
 func TestPeerStoreAddLookupRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "peers.json")
 	s, err := OpenPeerStore(path)
@@ -94,6 +117,31 @@ func TestPeerStoreAddPreservesProvidedTimestamp(t *testing.T) {
 	got, _ := s.Lookup(id.Fingerprint())
 	if !got.ApprovedAt.Equal(when) {
 		t.Errorf("ApprovedAt = %v, want %v", got.ApprovedAt, when)
+	}
+}
+
+func TestPeerStoreAddPreservesOriginalApprovalTimestamp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "peers.json")
+	s, _ := OpenPeerStore(path)
+	id, _ := Generate(RoleClient)
+	original := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	if err := s.Add(Peer{Fingerprint: id.Fingerprint(), ApprovedAt: original}); err != nil {
+		t.Fatalf("first Add: %v", err)
+	}
+	if err := s.Add(Peer{Fingerprint: id.Fingerprint(), Label: "renamed", ApprovedAt: original.Add(time.Hour)}); err != nil {
+		t.Fatalf("second Add: %v", err)
+	}
+	got, _ := s.Lookup(id.Fingerprint())
+	if !got.ApprovedAt.Equal(original) {
+		t.Errorf("ApprovedAt = %v, want original %v", got.ApprovedAt, original)
+	}
+}
+
+func TestPeerStoreAddRejectsInvalidRole(t *testing.T) {
+	s, _ := OpenPeerStore(filepath.Join(t.TempDir(), "peers.json"))
+	id, _ := Generate(RoleClient)
+	if err := s.Add(Peer{Fingerprint: id.Fingerprint(), Role: Role("root")}); err == nil {
+		t.Fatal("expected invalid role error")
 	}
 }
 
@@ -201,12 +249,40 @@ func TestPeerStoreAddFailsWhenStorePathIsADir(t *testing.T) {
 		t.Fatalf("OpenPeerStore: %v", err)
 	}
 	// #nosec G301 — test-only, dir under t.TempDir().
-	if err := os.MkdirAll(filepath.Join(storePath, "child"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(storePath, "child"), 0o750); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	id, _ := Generate(RoleClient)
 	if err := s.Add(Peer{Fingerprint: id.Fingerprint()}); err == nil {
 		t.Fatal("expected error when store path is a dir")
+	}
+	if _, ok := s.Lookup(id.Fingerprint()); ok {
+		t.Fatal("failed Add changed the live approval set")
+	}
+}
+
+func TestPeerStoreFailedRemovePreservesLiveApproval(t *testing.T) {
+	root := t.TempDir()
+	storePath := filepath.Join(root, "peers.json")
+	s, err := OpenPeerStore(storePath)
+	if err != nil {
+		t.Fatalf("OpenPeerStore: %v", err)
+	}
+	id, _ := Generate(RoleClient)
+	if err := s.Add(Peer{Fingerprint: id.Fingerprint()}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := os.Remove(storePath); err != nil {
+		t.Fatalf("Remove store file: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(storePath, "child"), 0o750); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
+	if err := s.Remove(id.Fingerprint()); err == nil {
+		t.Fatal("Remove succeeded with blocked persistence path")
+	}
+	if _, ok := s.Lookup(id.Fingerprint()); !ok {
+		t.Fatal("failed Remove changed the live approval set")
 	}
 }
 
