@@ -35,6 +35,8 @@ const (
 // reflection-formatted method names, remove the leading slash and convert the remaining slash to a
 // period.
 const (
+	// AgentRunServiceStartProcedure is the fully-qualified name of the AgentRunService's Start RPC.
+	AgentRunServiceStartProcedure = "/daft.agentrun.v1.AgentRunService/Start"
 	// AgentRunServiceGetProcedure is the fully-qualified name of the AgentRunService's Get RPC.
 	AgentRunServiceGetProcedure = "/daft.agentrun.v1.AgentRunService/Get"
 	// AgentRunServiceListProcedure is the fully-qualified name of the AgentRunService's List RPC.
@@ -47,6 +49,7 @@ const (
 
 // AgentRunServiceClient is a client for the daft.agentrun.v1.AgentRunService service.
 type AgentRunServiceClient interface {
+	Start(context.Context, *connect.Request[v1.StartAgentRunRequest]) (*connect.Response[v1.AgentRun], error)
 	Get(context.Context, *connect.Request[v1.GetAgentRunRequest]) (*connect.Response[v1.AgentRun], error)
 	List(context.Context, *connect.Request[v1.ListAgentRunsRequest]) (*connect.Response[v1.ListAgentRunsResponse], error)
 	Events(context.Context, *connect.Request[v1.AgentRunEventsRequest]) (*connect.Response[v1.AgentRunEventsResponse], error)
@@ -64,6 +67,12 @@ func NewAgentRunServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 	baseURL = strings.TrimRight(baseURL, "/")
 	agentRunServiceMethods := v1.File_agentrun_v1_agentrun_proto.Services().ByName("AgentRunService").Methods()
 	return &agentRunServiceClient{
+		start: connect.NewClient[v1.StartAgentRunRequest, v1.AgentRun](
+			httpClient,
+			baseURL+AgentRunServiceStartProcedure,
+			connect.WithSchema(agentRunServiceMethods.ByName("Start")),
+			connect.WithClientOptions(opts...),
+		),
 		get: connect.NewClient[v1.GetAgentRunRequest, v1.AgentRun](
 			httpClient,
 			baseURL+AgentRunServiceGetProcedure,
@@ -93,10 +102,16 @@ func NewAgentRunServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 
 // agentRunServiceClient implements AgentRunServiceClient.
 type agentRunServiceClient struct {
+	start  *connect.Client[v1.StartAgentRunRequest, v1.AgentRun]
 	get    *connect.Client[v1.GetAgentRunRequest, v1.AgentRun]
 	list   *connect.Client[v1.ListAgentRunsRequest, v1.ListAgentRunsResponse]
 	events *connect.Client[v1.AgentRunEventsRequest, v1.AgentRunEventsResponse]
 	cancel *connect.Client[v1.CancelAgentRunRequest, v1.AgentRun]
+}
+
+// Start calls daft.agentrun.v1.AgentRunService.Start.
+func (c *agentRunServiceClient) Start(ctx context.Context, req *connect.Request[v1.StartAgentRunRequest]) (*connect.Response[v1.AgentRun], error) {
+	return c.start.CallUnary(ctx, req)
 }
 
 // Get calls daft.agentrun.v1.AgentRunService.Get.
@@ -121,6 +136,7 @@ func (c *agentRunServiceClient) Cancel(ctx context.Context, req *connect.Request
 
 // AgentRunServiceHandler is an implementation of the daft.agentrun.v1.AgentRunService service.
 type AgentRunServiceHandler interface {
+	Start(context.Context, *connect.Request[v1.StartAgentRunRequest]) (*connect.Response[v1.AgentRun], error)
 	Get(context.Context, *connect.Request[v1.GetAgentRunRequest]) (*connect.Response[v1.AgentRun], error)
 	List(context.Context, *connect.Request[v1.ListAgentRunsRequest]) (*connect.Response[v1.ListAgentRunsResponse], error)
 	Events(context.Context, *connect.Request[v1.AgentRunEventsRequest]) (*connect.Response[v1.AgentRunEventsResponse], error)
@@ -134,6 +150,12 @@ type AgentRunServiceHandler interface {
 // and JSON codecs. They also support gzip compression.
 func NewAgentRunServiceHandler(svc AgentRunServiceHandler, opts ...connect.HandlerOption) (string, http.Handler) {
 	agentRunServiceMethods := v1.File_agentrun_v1_agentrun_proto.Services().ByName("AgentRunService").Methods()
+	agentRunServiceStartHandler := connect.NewUnaryHandler(
+		AgentRunServiceStartProcedure,
+		svc.Start,
+		connect.WithSchema(agentRunServiceMethods.ByName("Start")),
+		connect.WithHandlerOptions(opts...),
+	)
 	agentRunServiceGetHandler := connect.NewUnaryHandler(
 		AgentRunServiceGetProcedure,
 		svc.Get,
@@ -160,6 +182,8 @@ func NewAgentRunServiceHandler(svc AgentRunServiceHandler, opts ...connect.Handl
 	)
 	return "/daft.agentrun.v1.AgentRunService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case AgentRunServiceStartProcedure:
+			agentRunServiceStartHandler.ServeHTTP(w, r)
 		case AgentRunServiceGetProcedure:
 			agentRunServiceGetHandler.ServeHTTP(w, r)
 		case AgentRunServiceListProcedure:
@@ -176,6 +200,10 @@ func NewAgentRunServiceHandler(svc AgentRunServiceHandler, opts ...connect.Handl
 
 // UnimplementedAgentRunServiceHandler returns CodeUnimplemented from all methods.
 type UnimplementedAgentRunServiceHandler struct{}
+
+func (UnimplementedAgentRunServiceHandler) Start(context.Context, *connect.Request[v1.StartAgentRunRequest]) (*connect.Response[v1.AgentRun], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.agentrun.v1.AgentRunService.Start is not implemented"))
+}
 
 func (UnimplementedAgentRunServiceHandler) Get(context.Context, *connect.Request[v1.GetAgentRunRequest]) (*connect.Response[v1.AgentRun], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.agentrun.v1.AgentRunService.Get is not implemented"))

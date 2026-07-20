@@ -8,10 +8,21 @@ import "google/protobuf/timestamp.proto";
 option go_package = "github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1;agentrunv1";
 
 service AgentRunService {
+  rpc Start(StartAgentRunRequest) returns (AgentRun) {}
   rpc Get(GetAgentRunRequest) returns (AgentRun) {}
   rpc List(ListAgentRunsRequest) returns (ListAgentRunsResponse) {}
   rpc Events(AgentRunEventsRequest) returns (AgentRunEventsResponse) {}
   rpc Cancel(CancelAgentRunRequest) returns (AgentRun) {}
+}
+
+// StartAgentRunRequest is sent only by the trusted operator client after it
+// resolves a named AgentProfile. MCP callers never supply command or digest.
+message StartAgentRunRequest {
+  string workspace_uuid = 1;
+  string profile_name = 2;
+  string profile_digest = 3;
+  repeated string command = 4;
+  string prompt = 5;
 }
 
 enum AgentRunState {

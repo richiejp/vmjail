@@ -59,7 +59,7 @@ func agentRunRequest[T any](message *T, owner identity.Fingerprint) *connect.Req
 
 func createAgentRun(t *testing.T, store *agentruncatalog.Store, owner identity.Fingerprint, uuid string) agentruncatalog.Run {
 	t.Helper()
-	run, err := store.Create(agentruncatalog.CreateInput{UUID: uuid, WorkspaceUUID: "workspace", ProfileName: "codex", ProfileDigest: "sha256:profile", OwnerFingerprint: owner})
+	run, err := store.Create(agentruncatalog.CreateInput{Command: []string{"codex"}, UUID: uuid, WorkspaceUUID: "workspace", ProfileName: "codex", ProfileDigest: "sha256:profile", OwnerFingerprint: owner})
 	if err != nil {
 		t.Fatal(err)
 	}

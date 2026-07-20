@@ -23,6 +23,8 @@ const (
 	MaxMessageBytes = 16 << 10
 	MaxResultBytes  = 1 << 20
 	MaxIDBytes      = 128
+	MaxCommandArgs  = 64
+	MaxCommandBytes = 16 << 10
 	// MaxEventsPerRun is a structural bound: the acyclic state machine permits
 	// creation plus at most four transitions before reaching a terminal state.
 	MaxEventsPerRun = 5
@@ -52,6 +54,7 @@ type Run struct {
 	ProfileName      string               `json:"profile_name"`
 	ProfileDigest    string               `json:"profile_digest"`
 	Prompt           string               `json:"prompt"`
+	Command          []string             `json:"command"`
 	State            State                `json:"state"`
 	SandboxUID       string               `json:"sandbox_uid,omitempty"`
 	NodeFingerprint  identity.Fingerprint `json:"node_fingerprint,omitempty"`
@@ -78,6 +81,7 @@ type Event struct {
 
 type CreateInput struct {
 	UUID, WorkspaceUUID, ProfileName, ProfileDigest, Prompt string
+	Command                                                 []string
 	OwnerFingerprint                                        identity.Fingerprint
 }
 
@@ -130,8 +134,11 @@ func (s *Store) Create(in CreateInput) (Run, error) {
 	if len(in.Prompt) > MaxPromptBytes {
 		return Run{}, fmt.Errorf("%w: prompt exceeds %d bytes", ErrInvalid, MaxPromptBytes)
 	}
+	if err := validateCommand(in.Command); err != nil {
+		return Run{}, err
+	}
 	now := s.now().UTC()
-	r := Run{UUID: in.UUID, OwnerFingerprint: in.OwnerFingerprint, WorkspaceUUID: in.WorkspaceUUID, ProfileName: in.ProfileName, ProfileDigest: in.ProfileDigest, Prompt: in.Prompt, State: StateQueued, CreatedAt: now, UpdatedAt: now, LastEventCursor: 1}
+	r := Run{UUID: in.UUID, OwnerFingerprint: in.OwnerFingerprint, WorkspaceUUID: in.WorkspaceUUID, ProfileName: in.ProfileName, ProfileDigest: in.ProfileDigest, Prompt: in.Prompt, Command: slices.Clone(in.Command), State: StateQueued, CreatedAt: now, UpdatedAt: now, LastEventCursor: 1}
 	e := Event{RunUUID: r.UUID, Cursor: 1, Timestamp: now, State: r.State, Message: "run queued"}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -142,7 +149,7 @@ func (s *Store) Create(in CreateInput) (Run, error) {
 		return Run{}, err
 	}
 	s.runs[r.UUID] = r
-	return r, nil
+	return cloneRun(r), nil
 }
 
 func (s *Store) Get(owner identity.Fingerprint, uuid string) (Run, error) {
@@ -155,7 +162,7 @@ func (s *Store) Get(owner identity.Fingerprint, uuid string) (Run, error) {
 	if r.OwnerFingerprint != owner {
 		return Run{}, ErrNotOwner
 	}
-	return r, nil
+	return cloneRun(r), nil
 }
 
 func (s *Store) List(owner identity.Fingerprint) []Run {
@@ -165,7 +172,24 @@ func (s *Store) List(owner identity.Fingerprint) []Run {
 	for uuid := range s.runs {
 		r := s.runs[uuid]
 		if r.OwnerFingerprint == owner {
-			out = append(out, r)
+			out = append(out, cloneRun(r))
+		}
+	}
+	slices.SortFunc(out, func(a, b Run) int { return cmp.Compare(a.UUID, b.UUID) })
+	return out
+}
+
+// Active returns a stable copy of every non-terminal run. It is intentionally
+// not owner-scoped: only the internal reconciliation controller uses it, while
+// all externally reachable reads continue to require the authenticated owner.
+func (s *Store) Active() []Run {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Run, 0)
+	for uuid := range s.runs {
+		run := s.runs[uuid]
+		if !run.State.Terminal() {
+			out = append(out, cloneRun(run))
 		}
 	}
 	slices.SortFunc(out, func(a, b Run) int { return cmp.Compare(a.UUID, b.UUID) })
@@ -256,7 +280,24 @@ func (s *Store) Transition(owner identity.Fingerprint, uuid string, in Transitio
 		return Run{}, err
 	}
 	s.runs[uuid] = next
-	return next, nil
+	return cloneRun(next), nil
+}
+
+func cloneRun(run Run) Run {
+	run.Command = slices.Clone(run.Command)
+	return run
+}
+
+func validateCommand(command []string) error {
+	if len(command) == 0 || len(command) > MaxCommandArgs {
+		return fmt.Errorf("%w: command must contain 1..%d arguments", ErrInvalid, MaxCommandArgs)
+	}
+	for _, arg := range command {
+		if arg == "" || len(arg) > MaxCommandBytes {
+			return fmt.Errorf("%w: command argument is empty or exceeds %d bytes", ErrInvalid, MaxCommandBytes)
+		}
+	}
+	return nil
 }
 
 func validTransition(from, to State) bool {

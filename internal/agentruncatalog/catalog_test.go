@@ -22,6 +22,8 @@ const (
 	testSandboxUID    = "sandbox"
 	testBadUUID       = "bad"
 	testJobID         = "job"
+	testRunA          = "run-a"
+	testMutated       = "mutated"
 )
 
 func testOwner(b byte) identity.Fingerprint {
@@ -42,7 +44,7 @@ func TestRunTransitionsPersistWithEvents(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	owner := testOwner(1)
-	run, err := store.Create(CreateInput{UUID: "run-1", WorkspaceUUID: "workspace-1", ProfileName: testProfileName, ProfileDigest: "sha256:profile", Prompt: "fix it", OwnerFingerprint: owner})
+	run, err := store.Create(CreateInput{Command: []string{testProfileName}, UUID: "run-1", WorkspaceUUID: "workspace-1", ProfileName: testProfileName, ProfileDigest: "sha256:profile", Prompt: "fix it", OwnerFingerprint: owner})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -123,26 +125,80 @@ func TestRunOwnershipValidationAndOrdering(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner, other := testOwner(1), testOwner(2)
-	for _, uuid := range []string{"run-b", "run-a"} {
-		if _, err := store.Create(CreateInput{UUID: uuid, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); err != nil {
+	for _, uuid := range []string{"run-b", testRunA} {
+		if _, err := store.Create(CreateInput{Command: []string{testProfileName}, UUID: uuid, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.Get(other, "run-a"); !errors.Is(err, ErrNotOwner) {
+	if _, err := store.Get(other, testRunA); !errors.Is(err, ErrNotOwner) {
 		t.Fatalf("Get other = %v", err)
 	}
-	if _, err := store.Events(other, "run-a", 0, 10); !errors.Is(err, ErrNotOwner) {
+	if _, err := store.Events(other, testRunA, 0, 10); !errors.Is(err, ErrNotOwner) {
 		t.Fatalf("Events other = %v", err)
 	}
-	if got := store.List(owner); len(got) != 2 || got[0].UUID != "run-a" {
+	if got := store.List(owner); len(got) != 2 || got[0].UUID != testRunA {
 		t.Fatalf("List = %#v", got)
 	}
-	bad := CreateInput{UUID: testBadUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner, Prompt: string(make([]byte, MaxPromptBytes+1))}
+	listed := store.List(owner)
+	listed[0].Command[0] = testMutated
+	got, err := store.Get(owner, testRunA)
+	if err != nil || got.Command[0] != testProfileName {
+		t.Fatalf("stored command changed through List: %#v, %v", got.Command, err)
+	}
+	if active := store.Active(); len(active) != 2 || active[0].UUID != testRunA {
+		t.Fatalf("Active = %#v", active)
+	}
+	bad := CreateInput{Command: []string{testProfileName}, UUID: testBadUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner, Prompt: string(make([]byte, MaxPromptBytes+1))}
 	if _, err := store.Create(bad); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("oversize prompt = %v", err)
 	}
 	if _, err := store.Events(owner, "run-a", 0, 0); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("zero limit = %v", err)
+	}
+}
+
+func TestCreateValidatesAndCopiesCommand(t *testing.T) {
+	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = control.Close() }()
+	store, err := Open(control.DB(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := CreateInput{UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: testOwner(1)}
+	for name, command := range map[string][]string{
+		"empty":              nil,
+		"empty argument":     {testProfileName, ""},
+		"oversize argument":  {string(make([]byte, MaxCommandBytes+1))},
+		"too many arguments": make([]string, MaxCommandArgs+1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			in := base
+			in.Command = command
+			if _, err := store.Create(in); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Create = %v", err)
+			}
+		})
+	}
+	command := []string{testProfileName, "exec"}
+	base.Command = command
+	run, err := store.Create(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command[0] = testMutated
+	run.Command[1] = testMutated
+	got, err := store.Get(base.OwnerFingerprint, base.UUID)
+	if err != nil || got.Command[0] != testProfileName || got.Command[1] != "exec" {
+		t.Fatalf("stored command = %#v, %v", got.Command, err)
+	}
+	if _, err := store.Transition(base.OwnerFingerprint, base.UUID, TransitionInput{From: []State{StateQueued}, To: StateFailed}); err != nil {
+		t.Fatal(err)
+	}
+	if active := store.Active(); len(active) != 0 {
+		t.Fatalf("terminal Active = %#v", active)
 	}
 }
 
@@ -174,7 +230,7 @@ func TestEventHistoryHasStructuralFiveEventBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner, node := testOwner(1), testOwner(2)
-	run, err := store.Create(CreateInput{UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner})
+	run, err := store.Create(CreateInput{Command: []string{testProfileName}, UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,7 +312,7 @@ func TestCatalogRejectsInvalidOperations(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := testOwner(1)
-	valid := CreateInput{UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}
+	valid := CreateInput{Command: []string{testProfileName}, UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}
 	invalid := valid
 	invalid.UUID = ""
 	if _, err := store.Create(invalid); !errors.Is(err, ErrInvalid) {
@@ -293,7 +349,7 @@ func TestCatalogRejectsInvalidOperations(t *testing.T) {
 	if _, err := store.Transition(owner, testRunUUID, TransitionInput{From: []State{StateQueued}, To: StateFailed}); err == nil {
 		t.Fatal("Transition on closed database succeeded")
 	}
-	if _, err := store.Create(CreateInput{UUID: "closed", WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); err == nil {
+	if _, err := store.Create(CreateInput{Command: []string{testProfileName}, UUID: "closed", WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); err == nil {
 		t.Fatal("Create on closed database succeeded")
 	}
 }
@@ -312,7 +368,7 @@ func TestCreateRejectsOversizeID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	in := CreateInput{UUID: string(make([]byte, MaxIDBytes+1)), WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: testOwner(1)}
+	in := CreateInput{Command: []string{testProfileName}, UUID: string(make([]byte, MaxIDBytes+1)), WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: testOwner(1)}
 	if _, err := store.Create(in); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Create with oversized ID = %v", err)
 	}
@@ -337,7 +393,7 @@ func TestCreateDetectsRunInsertedAfterLoad(t *testing.T) {
 	if err := control.DB().Update(seedRunAt(testRunUUID, run)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Create(CreateInput{UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); !errors.Is(err, ErrConflict) {
+	if _, err := store.Create(CreateInput{Command: []string{testProfileName}, UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("Create externally inserted UUID = %v", err)
 	}
 }
@@ -415,7 +471,7 @@ func TestEventsRejectCorruptEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := testOwner(1)
-	if _, err := store.Create(CreateInput{UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); err != nil {
+	if _, err := store.Create(CreateInput{Command: []string{testProfileName}, UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); err != nil {
 		t.Fatal(err)
 	}
 	key := []byte(fmt.Sprintf("%s%s/%020d", eventPrefix, testRunUUID, 1))
@@ -442,7 +498,7 @@ func TestEventsRejectWrongRecordVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := testOwner(1)
-	if _, err := store.Create(CreateInput{UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); err != nil {
+	if _, err := store.Create(CreateInput{Command: []string{testProfileName}, UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); err != nil {
 		t.Fatal(err)
 	}
 	value, err := json.Marshal(persisted[Event]{Version: recordVersion + 1, Value: Event{RunUUID: testRunUUID, Cursor: 1, State: StateQueued}})
@@ -468,7 +524,7 @@ func TestOpenRejectsMismatchedLastEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	owner := testOwner(1)
-	if _, err := store.Create(CreateInput{UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); err != nil {
+	if _, err := store.Create(CreateInput{Command: []string{testProfileName}, UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); err != nil {
 		t.Fatal(err)
 	}
 	event := Event{RunUUID: testRunUUID, Cursor: 1, State: StateFailed}

@@ -3919,7 +3919,13 @@ Slices:
   addition to its stable certificate fingerprint. This supplies the missing
   evidence AgentRun reconciliation needs to classify process-local detached
   jobs as LOST after sandboxd restarts while tolerating transport reconnects
-  to the same daemon process.
+  to the same daemon process. The trusted operator start contract now carries
+  the already-resolved profile digest and fixed argv (the public MCP caller
+  still supplies only a profile name and prompt), and the durable AgentRun
+  record freezes that argv so a restarted orchestrator can retry the same
+  idempotent Node job without reloading mutable host configuration. Legacy
+  active records created before this snapshot field existed remain readable
+  but reconciliation must mark them LOST rather than guess a launch command.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->
