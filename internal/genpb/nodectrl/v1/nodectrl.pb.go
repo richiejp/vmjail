@@ -366,7 +366,12 @@ type RegisterNodeRequest struct {
 	// Best-effort: empty when the host can't report one. Not an
 	// identifier — the fingerprint stays canonical; the hostname is a
 	// convenience alias that may collide across hosts.
-	Hostname      string `protobuf:"bytes,4,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	Hostname string `protobuf:"bytes,4,opt,name=hostname,proto3" json:"hostname,omitempty"`
+	// Random identity for this sandboxd process lifetime. Unlike the certificate
+	// fingerprint it changes after every daemon restart, allowing durable
+	// AgentRuns to distinguish a reconnect from loss of the Node's in-memory
+	// detached-job table.
+	InstanceId    string `protobuf:"bytes,5,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -425,6 +430,13 @@ func (x *RegisterNodeRequest) GetProtocolVersion() *ProtocolVersion {
 func (x *RegisterNodeRequest) GetHostname() string {
 	if x != nil {
 		return x.Hostname
+	}
+	return ""
+}
+
+func (x *RegisterNodeRequest) GetInstanceId() string {
+	if x != nil {
+		return x.InstanceId
 	}
 	return ""
 }
@@ -2487,12 +2499,14 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\x05patch\x18\x03 \x01(\rR\x05patch\"F\n" +
 	"\rHostResources\x12\x12\n" +
 	"\x04cpus\x18\x01 \x01(\rR\x04cpus\x12!\n" +
-	"\fmemory_bytes\x18\x02 \x01(\x04R\vmemoryBytes\"\xd8\x01\n" +
+	"\fmemory_bytes\x18\x02 \x01(\x04R\vmemoryBytes\"\xf9\x01\n" +
 	"\x13RegisterNodeRequest\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12=\n" +
 	"\tresources\x18\x02 \x01(\v2\x1f.daft.nodectrl.v1.HostResourcesR\tresources\x12L\n" +
 	"\x10protocol_version\x18\x03 \x01(\v2!.daft.nodectrl.v1.ProtocolVersionR\x0fprotocolVersion\x12\x1a\n" +
-	"\bhostname\x18\x04 \x01(\tR\bhostname\"\x98\x03\n" +
+	"\bhostname\x18\x04 \x01(\tR\bhostname\x12\x1f\n" +
+	"\vinstance_id\x18\x05 \x01(\tR\n" +
+	"instanceId\"\x98\x03\n" +
 	"\tNodeEvent\x12;\n" +
 	"\x05ready\x18\x01 \x01(\v2#.daft.nodectrl.v1.SubscriptionReadyH\x00R\x05ready\x12?\n" +
 	"\asandbox\x18\x02 \x01(\v2#.daft.nodectrl.v1.SandboxWatchEventH\x00R\asandbox\x12@\n" +

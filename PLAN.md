@@ -3915,6 +3915,11 @@ Slices:
   now landed. Owner-scoped AgentRun status/events/result/cancel wire and MCP
   tools are landed as well. AgentRun reconciliation, secret delivery, and
   `agent_start` remain.
+  Node registration now carries a random process-lifetime instance UUID in
+  addition to its stable certificate fingerprint. This supplies the missing
+  evidence AgentRun reconciliation needs to classify process-local detached
+  jobs as LOST after sandboxd restarts while tolerating transport reconnects
+  to the same daemon process.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->

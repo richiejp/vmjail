@@ -61,6 +61,21 @@ func TestRegisterPreservesRegisteredAt(t *testing.T) {
 	}
 }
 
+func TestRegisterInstanceReplacesProcessIdentity(t *testing.T) {
+	r := nodectrl.NewRegistry(nil)
+	r.RegisterInstance(fp(1), "process-a", "node", "v0.1.0", nodectrl.Resources{})
+	entry, ok := r.Lookup(fp(1))
+	if !ok || entry.InstanceID != "process-a" {
+		t.Fatalf("first entry = %+v, ok=%v, want process-a", entry, ok)
+	}
+
+	r.RegisterInstance(fp(1), "process-b", "node", "v0.1.0", nodectrl.Resources{})
+	entry, ok = r.Lookup(fp(1))
+	if !ok || entry.InstanceID != "process-b" {
+		t.Fatalf("replacement entry = %+v, ok=%v, want process-b", entry, ok)
+	}
+}
+
 func TestHeartbeatRefreshesLastSeen(t *testing.T) {
 	t0 := time.Date(2026, 5, 13, 12, 0, 0, 0, time.UTC)
 	t1 := t0.Add(30 * time.Second)

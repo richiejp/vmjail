@@ -21,7 +21,7 @@ import "fmt"
 // handshake meaningful from day one. Wire breaks bump the major.
 const (
 	ProtocolVersionMajor uint32 = 1
-	ProtocolVersionMinor uint32 = 0
+	ProtocolVersionMinor uint32 = 1
 	ProtocolVersionPatch uint32 = 0
 )
 

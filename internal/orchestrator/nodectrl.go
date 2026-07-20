@@ -23,6 +23,8 @@ import (
 // ErrSandboxEventBacklog and must retry or pick another Node.
 const sandboxEventBacklog = 16
 
+const maxNodeInstanceIDBytes = 128
+
 // ErrNodeNotConnected is returned by PublishSandboxEvent when the
 // addressed fingerprint has no open RegisterNode stream. The caller
 // must pick a different Node or wait for the original to reconnect.
@@ -247,9 +249,14 @@ func (h *NodeControlHandler) RegisterNode(
 	); err != nil {
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	}
+	instanceID := req.Msg.GetInstanceId()
+	if instanceID == "" || len(instanceID) > maxNodeInstanceIDBytes {
+		return connect.NewError(connect.CodeInvalidArgument,
+			errors.New("orchestrator: node instance ID is empty or too long"))
+	}
 
 	resources := resourcesFromProto(req.Msg.GetResources())
-	acceptedAt := h.reg.Register(fp, req.Msg.GetHostname(), req.Msg.GetVersion(), resources)
+	acceptedAt := h.reg.RegisterInstance(fp, instanceID, req.Msg.GetHostname(), req.Msg.GetVersion(), resources)
 	registration := h.attachRegistration(fp)
 	defer h.detachRegistration(fp, registration)
 

@@ -12,6 +12,8 @@ package nodectrlclient
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -88,6 +90,9 @@ type Config struct {
 	// registration for human-friendly node selection/display. Empty is
 	// fine (the fingerprint is the canonical id).
 	Hostname string
+	// InstanceID identifies this sandboxd process lifetime. Empty causes New to
+	// mint a random UUID; tests may inject a deterministic value.
+	InstanceID string
 	// HeartbeatInterval is the ticker cadence. Zero ⇒
 	// DefaultHeartbeatInterval.
 	HeartbeatInterval time.Duration
@@ -164,6 +169,10 @@ type Client struct {
 // New builds a Client. Returns an error if cfg is missing required
 // fields or the TLS template can't be built.
 func New(cfg Config) (*Client, error) {
+	return newWithRandom(cfg, rand.Reader)
+}
+
+func newWithRandom(cfg Config, random io.Reader) (*Client, error) {
 	if cfg.URL == "" {
 		return nil, errors.New("nodectrlclient: empty URL")
 	}
@@ -172,6 +181,16 @@ func New(cfg Config) (*Client, error) {
 	}
 	if cfg.Peers == nil {
 		return nil, errors.New("nodectrlclient: nil peer store")
+	}
+	if cfg.InstanceID == "" {
+		var instanceErr error
+		cfg.InstanceID, instanceErr = mintInstanceID(random)
+		if instanceErr != nil {
+			return nil, instanceErr
+		}
+	}
+	if len(cfg.InstanceID) > 128 {
+		return nil, errors.New("nodectrlclient: instance ID is too long")
 	}
 	tlsCfg, err := identity.ClientTLSConfig(cfg.Identity, cfg.Peers, "")
 	if err != nil {
@@ -215,6 +234,7 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources nodectrl.Resour
 		&nodectrlv1.RegisterNodeRequest{
 			Version:         c.cfg.Version,
 			Hostname:        c.cfg.Hostname,
+			InstanceId:      c.cfg.InstanceID,
 			Resources:       resourcesToProto(resources),
 			ProtocolVersion: localProtocolVersionProto(),
 		},
@@ -255,16 +275,35 @@ func (c *Client) RegisterAndServe(ctx context.Context, resources nodectrl.Resour
 		case <-done:
 			return nil
 		case err := <-streamErr:
+			if ctx.Err() != nil {
+				return nil
+			}
 			if err == nil {
 				return errors.New("nodectrlclient: registration stream closed by server")
 			}
 			return fmt.Errorf("nodectrlclient: registration stream: %w", err)
 		case <-ticker.C:
 			if err := c.sendHeartbeat(ctx, resources); err != nil {
+				// Cancellation can race with a ready ticker. The caller's
+				// teardown remains clean regardless of which select arm won.
+				if ctx.Err() != nil {
+					return nil
+				}
 				return err
 			}
 		}
 	}
+}
+
+func mintInstanceID(random io.Reader) (string, error) {
+	var b [16]byte
+	if _, err := io.ReadFull(random, b[:]); err != nil {
+		return "", fmt.Errorf("nodectrlclient: mint instance ID: %w", err)
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	h := hex.EncodeToString(b[:])
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32], nil
 }
 
 // consumeStream drains the RegisterNode stream for the lifetime of

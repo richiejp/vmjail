@@ -281,6 +281,7 @@ func TestRegisterNodeRecordsEntryAndForgetsOnDisconnect(t *testing.T) {
 	stream, err := rig.client.RegisterNode(ctx, connect.NewRequest(
 		&nodectrlv1.RegisterNodeRequest{
 			Version:         "v0.0.0",
+			InstanceId:      "test-node-process-1",
 			Resources:       &nodectrlv1.HostResources{Cpus: 2, MemoryBytes: 1 << 30},
 			ProtocolVersion: testProtocolVersion(),
 		},
@@ -303,6 +304,9 @@ func TestRegisterNodeRecordsEntryAndForgetsOnDisconnect(t *testing.T) {
 	}
 	if entry.Resources.CPUs != 2 {
 		t.Errorf("Resources.CPUs = %d, want 2", entry.Resources.CPUs)
+	}
+	if entry.InstanceID != "test-node-process-1" {
+		t.Errorf("InstanceID = %q, want test-node-process-1", entry.InstanceID)
 	}
 
 	// Heartbeat over the same connection.
@@ -364,6 +368,7 @@ func TestDispatchReachesActiveStream(t *testing.T) {
 	stream, err := rig.client.RegisterNode(ctx, connect.NewRequest(
 		&nodectrlv1.RegisterNodeRequest{
 			Version:         "v0",
+			InstanceId:      "test-node-process-2",
 			ProtocolVersion: testProtocolVersion(),
 		},
 	))
@@ -554,6 +559,33 @@ func TestRegisterNodeRejectsMissingProtocolVersion(t *testing.T) {
 	}
 }
 
+func TestRegisterNodeRejectsMissingInstanceID(t *testing.T) {
+	rig := newSandboxCtrlRig(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	stream, err := rig.client.RegisterNode(ctx, connect.NewRequest(
+		&nodectrlv1.RegisterNodeRequest{
+			Version:         "v0",
+			ProtocolVersion: testProtocolVersion(),
+		},
+	))
+	if err != nil {
+		t.Fatalf("RegisterNode: %v", err)
+	}
+	t.Cleanup(func() { _ = stream.Close() })
+
+	if stream.Receive() {
+		t.Fatalf("expected stream close, got event %+v", stream.Msg())
+	}
+	if code := connect.CodeOf(stream.Err()); code != connect.CodeInvalidArgument {
+		t.Errorf("err code = %s, want InvalidArgument (err=%v)", code, stream.Err())
+	}
+	if _, ok := rig.reg.Lookup(rig.sbID.Fingerprint()); ok {
+		t.Error("registry recorded a peer without an instance ID")
+	}
+}
+
 // TestSubscriptionReadyCarriesProtocolVersion pins that the
 // orchestrator echoes its own ProtocolVersion in the first event
 // so the sandboxd can check the other direction.
@@ -565,6 +597,7 @@ func TestSubscriptionReadyCarriesProtocolVersion(t *testing.T) {
 	stream, err := rig.client.RegisterNode(ctx, connect.NewRequest(
 		&nodectrlv1.RegisterNodeRequest{
 			Version:         "v0",
+			InstanceId:      "test-node-process-3",
 			ProtocolVersion: testProtocolVersion(),
 		},
 	))

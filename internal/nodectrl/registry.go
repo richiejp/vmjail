@@ -39,6 +39,10 @@ type Resources struct {
 // these; tests and the (Slice A2) ListNodes RPC read them.
 type Entry struct {
 	Fingerprint identity.Fingerprint
+	// InstanceID changes on every sandboxd process start. Durable controllers
+	// use it to detect that process-local resources such as detached jobs were
+	// lost even when the same certificate reconnects.
+	InstanceID string
 	// Hostname is the sandbox-host's OS hostname, reported at
 	// registration. A human-friendly alias for selection/display; may
 	// be empty and may collide across hosts. The fingerprint is the
@@ -79,6 +83,13 @@ func NewRegistry(now func() time.Time) *Registry {
 // the original RegisteredAt is preserved if the caller wants to
 // observe "first seen" via Snapshot.
 func (r *Registry) Register(fp identity.Fingerprint, hostname, version string, res Resources) time.Time {
+	return r.RegisterInstance(fp, "", hostname, version, res)
+}
+
+// RegisterInstance is Register with the process-lifetime Node identity carried
+// by current protocol peers. Register remains as a compatibility helper for
+// in-process callers that do not model a live daemon.
+func (r *Registry) RegisterInstance(fp identity.Fingerprint, instanceID, hostname, version string, res Resources) time.Time {
 	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -88,6 +99,7 @@ func (r *Registry) Register(fp identity.Fingerprint, hostname, version string, r
 	}
 	r.all[fp] = Entry{
 		Fingerprint:  fp,
+		InstanceID:   instanceID,
 		Hostname:     hostname,
 		Version:      version,
 		Resources:    res,

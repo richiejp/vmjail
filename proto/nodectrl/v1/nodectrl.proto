@@ -135,6 +135,11 @@ message RegisterNodeRequest {
   // identifier — the fingerprint stays canonical; the hostname is a
   // convenience alias that may collide across hosts.
   string hostname = 4;
+  // Random identity for this sandboxd process lifetime. Unlike the certificate
+  // fingerprint it changes after every daemon restart, allowing durable
+  // AgentRuns to distinguish a reconnect from loss of the Node's in-memory
+  // detached-job table.
+  string instance_id = 5;
 }
 
 // NodeEvent is the envelope for events pushed on the RegisterNode

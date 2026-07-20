@@ -3,6 +3,7 @@ package trace
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,19 @@ import (
 	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
 )
+
+type failAtWriter struct {
+	writes int
+	failAt int
+}
+
+func (w *failAtWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failAt {
+		return 0, io.ErrClosedPipe
+	}
+	return len(p), nil
+}
 
 // These tests fill gaps the main suite leaves uncovered: rare enum
 // branches, accessors that aren't on the hot path of the e2e tests,
@@ -168,6 +182,29 @@ func TestKindAndStatusStrings(t *testing.T) {
 	}
 	if got := SpanKindInternal.String(); got != "internal" {
 		t.Errorf("SpanKindInternal.String = %q", got)
+	}
+}
+
+func TestFormatTextPropagatesWriterFailures(t *testing.T) {
+	if err := FormatText(&failAtWriter{failAt: 1}, nil); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("empty trace error = %v, want closed pipe", err)
+	}
+
+	tr := New("test")
+	_, first := tr.Start(context.Background(), "first")
+	first.SetAttribute("key", "value")
+	first.End()
+	if err := FormatText(&failAtWriter{failAt: 1}, tr.Snapshot()); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("header error = %v, want closed pipe", err)
+	}
+	if err := FormatText(&failAtWriter{failAt: 3}, tr.Snapshot()); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("attribute error = %v, want closed pipe", err)
+	}
+
+	_, second := tr.Start(context.Background(), "second")
+	second.End()
+	if err := FormatText(&failAtWriter{failAt: 4}, tr.Snapshot()); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("trace separator error = %v, want closed pipe", err)
 	}
 }
 
