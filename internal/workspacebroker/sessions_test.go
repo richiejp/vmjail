@@ -99,6 +99,25 @@ func TestReserveAndPairHappyPath(t *testing.T) {
 	bp.Close()
 	ar.pairing.Close()
 
+	// Finish is a two-sided barrier: the first handler cannot return until
+	// its partner has also stopped using its stream.
+	firstFinished := make(chan struct{})
+	go func() {
+		ar.pairing.Finish()
+		close(firstFinished)
+	}()
+	select {
+	case <-firstFinished:
+		t.Fatal("first Finish returned before its partner")
+	case <-time.After(20 * time.Millisecond):
+	}
+	bp.Finish()
+	select {
+	case <-firstFinished:
+	case <-time.After(time.Second):
+		t.Fatal("paired Finish calls did not complete")
+	}
+
 	if b.Count() != 0 {
 		t.Errorf("Count after pair = %d, want 0", b.Count())
 	}

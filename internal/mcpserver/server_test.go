@@ -11,6 +11,7 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/agentprofile"
 	"github.com/richiejp/darkaifactory/internal/daftclient"
+	agentrunv1 "github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	operatorv1 "github.com/richiejp/darkaifactory/internal/genpb/operator/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
@@ -21,6 +22,9 @@ import (
 const (
 	fingerprintKey = "fingerprint"
 	mcpTestVersion = "test"
+	uuidKey        = "uuid"
+	testRunValue   = "run"
+	doneValue      = "done"
 )
 
 type fakeReader struct {
@@ -34,6 +38,21 @@ type fakeReader struct {
 	listWorkCalled int
 	operatorNode   Node
 	operatorErr    error
+	agentRun       AgentRun
+	agentEvents    AgentEvents
+	agentErr       error
+}
+
+func (f *fakeReader) GetAgentRun(context.Context, string) (AgentRun, error) {
+	return f.agentRun, f.agentErr
+}
+
+func (f *fakeReader) AgentRunEvents(context.Context, string, uint64, uint32) (AgentEvents, error) {
+	return f.agentEvents, f.agentErr
+}
+
+func (f *fakeReader) CancelAgentRun(context.Context, string) (AgentRun, error) {
+	return f.agentRun, f.agentErr
 }
 
 func TestAgentProfileListIsSortedAndOmitsCredentialProfileName(t *testing.T) {
@@ -135,7 +154,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	wantNames := []string{agentProfileListTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceGetTool, workspaceListTool}
+	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceGetTool, workspaceListTool}
 	if len(result.Tools) != len(wantNames) {
 		t.Fatalf("got %d tools, want %d", len(result.Tools), len(wantNames))
 	}
@@ -154,7 +173,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint || !tool.Annotations.IdempotentHint {
 				t.Errorf("authorize annotations = %#v", tool.Annotations)
 			}
-		case nodeRevokeTool:
+		case nodeRevokeTool, agentCancelTool:
 			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint || !tool.Annotations.IdempotentHint {
 				t.Errorf("revoke annotations = %#v", tool.Annotations)
 			}
@@ -194,11 +213,11 @@ func TestWorkspaceReads(t *testing.T) {
 	session := connectClient(t, reader)
 	listResult := callTool(t, session, workspaceListTool, map[string]any{})
 	workspaces := requireSlice(t, requireMap(t, listResult.StructuredContent)["workspaces"])
-	if got := requireMap(t, workspaces[0])["uuid"]; got != "a" {
+	if got := requireMap(t, workspaces[0])[uuidKey]; got != "a" {
 		t.Errorf("first workspace UUID = %v, want a", got)
 	}
 	const uuid = "123e4567-e89b-12d3-a456-426614174000"
-	getResult := callTool(t, session, workspaceGetTool, map[string]any{"uuid": uuid})
+	getResult := callTool(t, session, workspaceGetTool, map[string]any{uuidKey: uuid})
 	if reader.requestedUUID != uuid {
 		t.Errorf("requested UUID = %q, want %q", reader.requestedUUID, uuid)
 	}
@@ -232,6 +251,41 @@ func TestNodeMutationToolsValidateAndReturnStatus(t *testing.T) {
 	}
 }
 
+func TestAgentRunToolsBoundContextAndSeparateResult(t *testing.T) {
+	reader := &fakeReader{
+		agentRun:    AgentRun{UUID: testRunValue, State: "AGENT_RUN_STATE_SUCCEEDED", Terminal: true, ExitCodeSet: true, Result: "final answer", LastEventCursor: 2},
+		agentEvents: AgentEvents{Events: []AgentEvent{{Cursor: 2, State: "AGENT_RUN_STATE_SUCCEEDED", Message: doneValue}}, NextCursor: 2, LastEventCursor: 2, Terminal: true},
+	}
+	session := connectClient(t, reader)
+	status := requireMap(t, callTool(t, session, agentStatusTool, map[string]any{uuidKey: testRunValue}).StructuredContent)
+	run := requireMap(t, status[testRunValue])
+	if _, leaked := run["result"]; leaked {
+		t.Fatalf("status leaked result: %#v", run)
+	}
+	events := requireMap(t, callTool(t, session, agentEventsTool, map[string]any{uuidKey: testRunValue, "after_cursor": 1, "limit": 1}).StructuredContent)
+	if events["next_cursor"] != float64(2) || len(requireSlice(t, events["events"])) != 1 {
+		t.Fatalf("events = %#v", events)
+	}
+	result := requireMap(t, callTool(t, session, agentResultTool, map[string]any{uuidKey: testRunValue}).StructuredContent)
+	if result["result"] != "final answer" {
+		t.Fatalf("result = %#v", result)
+	}
+	canceled := requireMap(t, callTool(t, session, agentCancelTool, map[string]any{uuidKey: testRunValue}).StructuredContent)
+	if requireMap(t, canceled[testRunValue])[uuidKey] != testRunValue {
+		t.Fatalf("cancel = %#v", canceled)
+	}
+
+	reader.agentRun.Terminal = false
+	nonterminal, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: agentResultTool, Arguments: map[string]any{uuidKey: testRunValue}})
+	if err != nil || !nonterminal.IsError {
+		t.Fatalf("nonterminal result = %#v, %v", nonterminal, err)
+	}
+	oversize, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: agentEventsTool, Arguments: map[string]any{uuidKey: testRunValue, "limit": maxResults + 1}})
+	if err != nil || !oversize.IsError {
+		t.Fatalf("oversize events = %#v, %v", oversize, err)
+	}
+}
+
 func requireMap(t *testing.T, value any) map[string]any {
 	t.Helper()
 	result, ok := value.(map[string]any)
@@ -259,10 +313,14 @@ func TestToolErrorsAreReturnedToTheMCPCaller(t *testing.T) {
 	}{
 		{name: nodeListTool, reader: &fakeReader{listNodesErr: errors.New("nodes unavailable")}, args: map[string]any{}},
 		{name: workspaceListTool, reader: &fakeReader{listWorkErr: errors.New("catalog unavailable")}, args: map[string]any{}},
-		{name: workspaceGetTool, reader: &fakeReader{getWorkErr: errors.New("not found")}, args: map[string]any{"uuid": "missing"}},
+		{name: workspaceGetTool, reader: &fakeReader{getWorkErr: errors.New("not found")}, args: map[string]any{uuidKey: "missing"}},
 		{name: nodeStatusTool, reader: &fakeReader{operatorErr: errors.New("status unavailable")}, args: validFingerprintArgs(t)},
 		{name: nodeAuthorizeTool, reader: &fakeReader{operatorErr: errors.New("authorize unavailable")}, args: validFingerprintArgs(t)},
 		{name: nodeRevokeTool, reader: &fakeReader{operatorErr: errors.New("revoke unavailable")}, args: validFingerprintArgs(t)},
+		{name: agentStatusTool, reader: &fakeReader{agentErr: errors.New("run unavailable")}, args: map[string]any{uuidKey: testRunValue}},
+		{name: agentEventsTool, reader: &fakeReader{agentErr: errors.New("events unavailable")}, args: map[string]any{uuidKey: testRunValue}},
+		{name: agentCancelTool, reader: &fakeReader{agentErr: errors.New("cancel unavailable")}, args: map[string]any{uuidKey: testRunValue}},
+		{name: agentResultTool, reader: &fakeReader{agentErr: errors.New("result unavailable")}, args: map[string]any{uuidKey: testRunValue}},
 		{name: workspaceGetTool, reader: &fakeReader{}, args: map[string]any{}, protocolErr: true},
 	}
 	for _, test := range tests {
@@ -334,6 +392,24 @@ type fakeOperatorClient struct {
 	err    error
 }
 
+type fakeAgentRunClient struct {
+	run    *agentrunv1.AgentRun
+	events *agentrunv1.AgentRunEventsResponse
+	err    error
+}
+
+func (f fakeAgentRunClient) Get(context.Context, *connect.Request[agentrunv1.GetAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error) {
+	return connect.NewResponse(f.run), f.err
+}
+
+func (f fakeAgentRunClient) Events(context.Context, *connect.Request[agentrunv1.AgentRunEventsRequest]) (*connect.Response[agentrunv1.AgentRunEventsResponse], error) {
+	return connect.NewResponse(f.events), f.err
+}
+
+func (f fakeAgentRunClient) Cancel(context.Context, *connect.Request[agentrunv1.CancelAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error) {
+	return connect.NewResponse(f.run), f.err
+}
+
 func (f fakeOperatorClient) AuthorizeNode(context.Context, *connect.Request[operatorv1.AuthorizeNodeRequest]) (*connect.Response[operatorv1.NodeStatus], error) {
 	return connect.NewResponse(f.status), f.err
 }
@@ -365,6 +441,7 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 		}}}},
 		workspace: workspaces,
 		operator:  fakeOperatorClient{status: &operatorv1.NodeStatus{Fingerprint: "fingerprint", Authorized: true}},
+		agentRuns: fakeAgentRunClient{run: &agentrunv1.AgentRun{Uuid: testRunValue, State: agentrunv1.AgentRunState_AGENT_RUN_STATE_SUCCEEDED, Result: doneValue}, events: &agentrunv1.AgentRunEventsResponse{Events: []*agentrunv1.AgentRunEvent{{Cursor: 1}}, NextCursor: 1}},
 	}
 	nodes, err := reader.ListNodes(t.Context())
 	if err != nil || len(nodes) != 1 || nodes[0].CPUs != 8 || nodes[0].MemoryBytes != 16 {
@@ -391,6 +468,15 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	if _, err := reader.RevokeNode(t.Context(), "fingerprint"); err != nil {
 		t.Fatalf("RevokeNode: %v", err)
 	}
+	if run, err := reader.GetAgentRun(t.Context(), testRunValue); err != nil || !run.Terminal || run.Result != doneValue {
+		t.Fatalf("GetAgentRun = %#v, %v", run, err)
+	}
+	if events, err := reader.AgentRunEvents(t.Context(), testRunValue, 0, 1); err != nil || events.NextCursor != 1 || len(events.Events) != 1 {
+		t.Fatalf("AgentRunEvents = %#v, %v", events, err)
+	}
+	if _, err := reader.CancelAgentRun(t.Context(), testRunValue); err != nil {
+		t.Fatalf("CancelAgentRun = %v", err)
+	}
 }
 
 func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
@@ -399,6 +485,7 @@ func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
 		nodes:     fakeNodeLister{response: &nodectrlv1.ListNodesResponse{}, err: wantErr},
 		workspace: &fakeWorkspaceReader{listResponse: &workspacev1.ListWorkspacesResponse{}, err: wantErr},
 		operator:  fakeOperatorClient{status: &operatorv1.NodeStatus{}, err: wantErr},
+		agentRuns: fakeAgentRunClient{run: &agentrunv1.AgentRun{}, events: &agentrunv1.AgentRunEventsResponse{}, err: wantErr},
 	}
 	if _, err := reader.ListNodes(t.Context()); !errors.Is(err, wantErr) {
 		t.Errorf("ListNodes error = %v", err)
@@ -417,6 +504,15 @@ func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
 	}
 	if _, err := reader.RevokeNode(t.Context(), "fingerprint"); !errors.Is(err, wantErr) {
 		t.Errorf("RevokeNode error = %v", err)
+	}
+	if _, err := reader.GetAgentRun(t.Context(), testRunValue); !errors.Is(err, wantErr) {
+		t.Errorf("GetAgentRun error = %v", err)
+	}
+	if _, err := reader.AgentRunEvents(t.Context(), testRunValue, 0, 1); !errors.Is(err, wantErr) {
+		t.Errorf("AgentRunEvents error = %v", err)
+	}
+	if _, err := reader.CancelAgentRun(t.Context(), testRunValue); !errors.Is(err, wantErr) {
+		t.Errorf("CancelAgentRun error = %v", err)
 	}
 }
 

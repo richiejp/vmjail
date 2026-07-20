@@ -44,6 +44,30 @@ type fakeJobProcess struct {
 	canceled   chan struct{}
 }
 
+type gatedJobReader struct {
+	started chan<- struct{}
+	release <-chan struct{}
+}
+
+func (r gatedJobReader) Read([]byte) (int, error) {
+	r.started <- struct{}{}
+	<-r.release
+	return 0, io.EOF
+}
+
+type drainOrderedJobProcess struct {
+	stdout, stderr io.Reader
+	waitCalled     chan struct{}
+}
+
+func (p *drainOrderedJobProcess) Stdout() io.Reader { return p.stdout }
+func (p *drainOrderedJobProcess) Stderr() io.Reader { return p.stderr }
+func (p *drainOrderedJobProcess) Wait() (int32, error) {
+	close(p.waitCalled)
+	return 0, nil
+}
+func (p *drainOrderedJobProcess) Cancel() error { return nil }
+
 func (p *fakeJobProcess) Stdout() io.Reader { return p.stdout }
 func (p *fakeJobProcess) Stderr() io.Reader { return p.stderr }
 func (p *fakeJobProcess) Wait() (int32, error) {
@@ -99,6 +123,37 @@ func TestHandleJobSeparatesOutputAndExit(t *testing.T) {
 		t.Fatalf("request = %+v", req)
 	}
 	<-done
+}
+
+func TestHandleJobDrainsOutputBeforeWait(t *testing.T) {
+	host, guest := net.Pipe()
+	defer func() { _ = host.Close() }()
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	waitCalled := make(chan struct{})
+	reader := gatedJobReader{started: started, release: release}
+	proc := &drainOrderedJobProcess{stdout: reader, stderr: reader, waitCalled: waitCalled}
+	go handleJob(t.Context(), io.Discard, guest, &fakeJobExec{process: proc}, containerProcess{})
+	if err := WriteJobHello(host, &agentv1.JobHello{Command: []string{"short-lived"}}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	<-started
+	select {
+	case <-waitCalled:
+		t.Fatal("Wait called before stdout and stderr reached EOF")
+	default:
+	}
+	close(release)
+	frame, err := ReadJobFrame(host)
+	if err != nil || frame.GetExit() == nil {
+		t.Fatalf("exit frame = %+v, %v", frame, err)
+	}
+	select {
+	case <-waitCalled:
+	case <-time.After(time.Second):
+		t.Fatal("Wait was not called after output drained")
+	}
 }
 
 func TestHandleJobReportsStartAndWaitFailures(t *testing.T) {

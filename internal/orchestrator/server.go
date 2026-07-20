@@ -28,6 +28,7 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/agentruncatalog"
 	"github.com/richiejp/darkaifactory/internal/component"
+	"github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1/agentrunv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/operator/v1/operatorv1connect"
@@ -167,13 +168,15 @@ type Server struct {
 	agentRunCatalog  *agentruncatalog.Store
 	reconciler       *reconciler.Reconciler
 
+	backgroundMu       sync.Mutex
+	backgroundStop     sync.Once
+	backgroundStopping bool
+
 	reaperStart  sync.Once
-	reaperStop   sync.Once
 	reaperCancel context.CancelFunc
 	reaperDone   chan struct{}
 
 	reconcilerStart  sync.Once
-	reconcilerStop   sync.Once
 	reconcilerCancel context.CancelFunc
 	reconcilerDone   chan struct{}
 }
@@ -239,6 +242,7 @@ func New(cfg Config) (*Server, error) {
 	if wcErr != nil {
 		return nil, wcErr
 	}
+	agentRunCtrl := NewAgentRunHandler(cfg.AgentRunCatalog, sandboxCtrl)
 	// Reconciler (Slice B5) owns per-heartbeat reconcile, the
 	// missing-heartbeat threshold → SandboxLost, periodic sweep
 	// for unreachable Nodes, and the Launch/Stop pre-action hook.
@@ -258,7 +262,7 @@ func New(cfg Config) (*Server, error) {
 		}
 		return inner.Addr()
 	}
-	if err := registerServices(mux, interceptor, tracer, matcher, sandboxCtrl, operatorCtrl, workspaceCtrl, getRelayEndpoint, cfg.RegistrySeeds); err != nil {
+	if err := registerServices(mux, interceptor, tracer, matcher, sandboxCtrl, operatorCtrl, workspaceCtrl, agentRunCtrl, getRelayEndpoint, cfg.RegistrySeeds); err != nil {
 		return nil, err
 	}
 	handler := withPeerMiddleware(mux)
@@ -364,6 +368,7 @@ func registerServices(
 	sandboxCtrl *NodeControlHandler,
 	operatorCtrl *OperatorHandler,
 	workspaceCtrl *WorkspaceCatalogHandler,
+	agentRunCtrl *AgentRunHandler,
 	relayEndpointFn func() string,
 	registrySeeds []RegistrySeed,
 ) error {
@@ -405,6 +410,11 @@ func registerServices(
 		workspaceCtrl, interceptor,
 	)
 	mux.Handle(workspaceCtrlPath, workspaceCtrlConnectHandler)
+
+	agentRunPath, agentRunConnectHandler := agentrunv1connect.NewAgentRunServiceHandler(
+		agentRunCtrl, interceptor,
+	)
+	mux.Handle(agentRunPath, agentRunConnectHandler)
 
 	// Embedded OCI registry (PLAN.md item 8): served on the same mTLS
 	// endpoint, so the existing peer gate is its access control — only
@@ -498,13 +508,18 @@ func (s *Server) Serve() error {
 // HTTP server so neither can race a teardown that's about to lose
 // its span sources.
 func (s *Server) Shutdown(ctx context.Context) error {
-	s.stopReconciler()
-	s.stopReaper()
+	s.stopBackground()
 	return s.inner.Shutdown(ctx)
 }
 
 func (s *Server) startReconciler() {
 	s.reconcilerStart.Do(func() {
+		s.backgroundMu.Lock()
+		defer s.backgroundMu.Unlock()
+
+		if s.backgroundStopping {
+			return
+		}
 		if s.reconciler == nil {
 			return
 		}
@@ -513,42 +528,49 @@ func (s *Server) startReconciler() {
 		ctx, cancel := context.WithCancel(context.Background()) //nolint:contextcheck // see above
 		s.reconcilerCancel = cancel
 		s.reconcilerDone = make(chan struct{})
+		done := s.reconcilerDone
 		go func() {
-			defer close(s.reconcilerDone)
+			defer close(done)
 			_ = s.reconciler.Run(ctx)
 		}()
 	})
 }
 
-func (s *Server) stopReconciler() {
-	s.reconcilerStop.Do(func() {
-		if s.reconcilerCancel == nil {
-			return
-		}
-		s.reconcilerCancel()
-		<-s.reconcilerDone
-	})
-}
-
 func (s *Server) startReaper() {
 	s.reaperStart.Do(func() {
+		s.backgroundMu.Lock()
+		defer s.backgroundMu.Unlock()
+
+		if s.backgroundStopping {
+			return
+		}
 		// Reaper lifetime is Serve→Shutdown, not request-scoped.
 		ctx, cancel := context.WithCancel(context.Background()) //nolint:contextcheck // see above
 		s.reaperCancel = cancel
 		s.reaperDone = make(chan struct{})
+		done := s.reaperDone
 		go func() {
-			defer close(s.reaperDone)
+			defer close(done)
 			s.reaper.Run(ctx)
 		}()
 	})
 }
 
-func (s *Server) stopReaper() {
-	s.reaperStop.Do(func() {
-		if s.reaperCancel == nil {
-			return
+func (s *Server) stopBackground() {
+	s.backgroundStop.Do(func() {
+		s.backgroundMu.Lock()
+		s.backgroundStopping = true
+		reconcilerCancel, reconcilerDone := s.reconcilerCancel, s.reconcilerDone
+		reaperCancel, reaperDone := s.reaperCancel, s.reaperDone
+		s.backgroundMu.Unlock()
+
+		if reconcilerCancel != nil {
+			reconcilerCancel()
+			<-reconcilerDone
 		}
-		s.reaperCancel()
-		<-s.reaperDone
+		if reaperCancel != nil {
+			reaperCancel()
+			<-reaperDone
+		}
 	})
 }

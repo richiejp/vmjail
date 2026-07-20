@@ -23,6 +23,9 @@ const (
 	MaxMessageBytes = 16 << 10
 	MaxResultBytes  = 1 << 20
 	MaxIDBytes      = 128
+	// MaxEventsPerRun is a structural bound: the acyclic state machine permits
+	// creation plus at most four transitions before reaching a terminal state.
+	MaxEventsPerRun = 5
 )
 
 type State string
@@ -220,6 +223,9 @@ func (s *Store) Transition(owner identity.Fingerprint, uuid string, in Transitio
 	next.State = in.To
 	next.UpdatedAt = now
 	next.LastEventCursor++
+	if next.LastEventCursor > MaxEventsPerRun {
+		return Run{}, fmt.Errorf("%w: event retention invariant exceeded", ErrInvalid)
+	}
 	if in.SandboxUID != "" {
 		next.SandboxUID = in.SandboxUID
 	}
@@ -313,7 +319,7 @@ func (s *Store) load() error {
 				return err
 			}
 			r := p.Value
-			if p.Version != recordVersion || r.UUID == "" || r.WorkspaceUUID == "" || r.ProfileName == "" || r.ProfileDigest == "" || string(it.Item().Key()) != runPrefix+r.UUID || r.OwnerFingerprint.IsZero() || !validState(r.State) || r.LastEventCursor == 0 || len(r.Prompt) > MaxPromptBytes || len(r.Result) > MaxResultBytes {
+			if p.Version != recordVersion || r.UUID == "" || r.WorkspaceUUID == "" || r.ProfileName == "" || r.ProfileDigest == "" || string(it.Item().Key()) != runPrefix+r.UUID || r.OwnerFingerprint.IsZero() || !validState(r.State) || r.LastEventCursor == 0 || r.LastEventCursor > MaxEventsPerRun || len(r.Prompt) > MaxPromptBytes || len(r.Result) > MaxResultBytes {
 				return fmt.Errorf("agentruncatalog: invalid run record %q", it.Item().KeyCopy(nil))
 			}
 			if err := validateBindings(r); err != nil {

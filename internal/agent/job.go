@@ -131,8 +131,12 @@ func handleJob(ctx context.Context, w io.Writer, conn net.Conn, executor ExecJob
 	pumps.Add(2)
 	go pumpJobOutput(process.Stdout(), true, conn, &writeMu, process, &pumps)
 	go pumpJobOutput(process.Stderr(), false, conn, &writeMu, process, &pumps)
-	code, waitErr := process.Wait()
+	// StdoutPipe and StderrPipe require their readers to reach EOF before Wait:
+	// exec.Cmd.Wait closes both pipes and can otherwise discard a short-lived
+	// command's final output. Process exit closes the writers, so both pumps can
+	// finish before the process is reaped.
 	pumps.Wait()
+	code, waitErr := process.Wait()
 	exit := &agentv1.JobExit{Code: code}
 	if waitErr != nil {
 		exit.Code = 1

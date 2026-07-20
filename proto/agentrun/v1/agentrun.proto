@@ -1,0 +1,82 @@
+// AgentRunService exposes durable, owner-scoped coding-agent process state.
+syntax = "proto3";
+
+package daft.agentrun.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1;agentrunv1";
+
+service AgentRunService {
+  rpc Get(GetAgentRunRequest) returns (AgentRun) {}
+  rpc List(ListAgentRunsRequest) returns (ListAgentRunsResponse) {}
+  rpc Events(AgentRunEventsRequest) returns (AgentRunEventsResponse) {}
+  rpc Cancel(CancelAgentRunRequest) returns (AgentRun) {}
+}
+
+enum AgentRunState {
+  AGENT_RUN_STATE_UNSPECIFIED = 0;
+  AGENT_RUN_STATE_QUEUED = 1;
+  AGENT_RUN_STATE_STARTING = 2;
+  AGENT_RUN_STATE_RUNNING = 3;
+  AGENT_RUN_STATE_CANCELING = 4;
+  AGENT_RUN_STATE_SUCCEEDED = 5;
+  AGENT_RUN_STATE_FAILED = 6;
+  AGENT_RUN_STATE_CANCELED = 7;
+  AGENT_RUN_STATE_LOST = 8;
+}
+
+message AgentRun {
+  string uuid = 1;
+  string workspace_uuid = 2;
+  string profile_name = 3;
+  string profile_digest = 4;
+  AgentRunState state = 5;
+  string sandbox_uid = 6;
+  string node_fingerprint = 7;
+  string node_instance_id = 8;
+  string node_job_id = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  google.protobuf.Timestamp started_at = 12;
+  google.protobuf.Timestamp completed_at = 13;
+  int32 exit_code = 14;
+  bool exit_code_set = 15;
+  string reason = 16;
+  string result = 17;
+  uint64 last_event_cursor = 18;
+}
+
+message AgentRunEvent {
+  uint64 cursor = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  AgentRunState state = 3;
+  string message = 4;
+}
+
+message GetAgentRunRequest { string uuid = 1; }
+
+message ListAgentRunsRequest {
+  uint32 page_size = 1;
+  string page_token = 2;
+}
+
+message ListAgentRunsResponse {
+  repeated AgentRun runs = 1;
+  string next_page_token = 2;
+}
+
+message AgentRunEventsRequest {
+  string uuid = 1;
+  uint64 after_cursor = 2;
+  uint32 limit = 3;
+}
+
+message AgentRunEventsResponse {
+  repeated AgentRunEvent events = 1;
+  uint64 next_cursor = 2;
+  uint64 last_event_cursor = 3;
+  bool terminal = 4;
+}
+
+message CancelAgentRunRequest { string uuid = 1; }

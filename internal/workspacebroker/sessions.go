@@ -44,9 +44,14 @@ type DataStream interface {
 type Pairing struct {
 	Partner DataStream
 	Done    <-chan struct{}
-	// Close is idempotent. Each Relay handler must defer it on
-	// exit so the partner's splice loop unblocks promptly.
+	// Close is idempotent and unblocks both splice loops. Non-transport
+	// callers may use it when they do not need the Finish barrier.
 	Close func()
+	// Finish signals Close, then waits until both paired handlers have
+	// finished using each other's streams. Transport handlers must defer
+	// Finish rather than Close so one side cannot close its response writer
+	// while the other side is still sending to it.
+	Finish func()
 }
 
 // SessionBroker rendezvouses two Relay halves by session_id.
@@ -83,6 +88,8 @@ type parkedRelay struct {
 	done chan struct{}
 	// closeOnce guards done's close.
 	closeOnce *sync.Once
+	// handlers is a two-party completion barrier for the paired transports.
+	handlers *sync.WaitGroup
 }
 
 // NewSessionBroker returns an empty broker with DefaultSessionTTL.
@@ -155,17 +162,21 @@ func (b *SessionBroker) Pair(ctx context.Context, sessionID string, fp identity.
 			Partner: parked.stream,
 			Done:    parked.done,
 			Close:   makeCloser(parked.done, parked.closeOnce),
+			Finish:  makeFinisher(parked.done, parked.closeOnce, parked.handlers),
 		}, nil
 	}
 	// First arrival: park and wait.
 	ready := make(chan DataStream, 1)
 	done := make(chan struct{})
 	once := &sync.Once{}
+	handlers := &sync.WaitGroup{}
+	handlers.Add(2)
 	sess.parked = &parkedRelay{
 		stream:    mine,
 		ready:     ready,
 		done:      done,
 		closeOnce: once,
+		handlers:  handlers,
 	}
 	b.mu.Unlock()
 
@@ -175,6 +186,7 @@ func (b *SessionBroker) Pair(ctx context.Context, sessionID string, fp identity.
 			Partner: partner,
 			Done:    done,
 			Close:   makeCloser(done, once),
+			Finish:  makeFinisher(done, once, handlers),
 		}, nil
 	case <-ctx.Done():
 		b.cancelParked(sessionID, ready)
@@ -185,6 +197,17 @@ func (b *SessionBroker) Pair(ctx context.Context, sessionID string, fp identity.
 func makeCloser(done chan struct{}, once *sync.Once) func() {
 	return func() {
 		once.Do(func() { close(done) })
+	}
+}
+
+func makeFinisher(done chan struct{}, closeOnce *sync.Once, handlers *sync.WaitGroup) func() {
+	finishOnce := &sync.Once{}
+	return func() {
+		finishOnce.Do(func() {
+			closeOnce.Do(func() { close(done) })
+			handlers.Done()
+			handlers.Wait()
+		})
 	}
 }
 

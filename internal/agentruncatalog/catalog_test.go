@@ -20,6 +20,8 @@ const (
 	testWorkspaceUUID = "workspace"
 	testRunUUID       = "run"
 	testSandboxUID    = "sandbox"
+	testBadUUID       = "bad"
+	testJobID         = "job"
 )
 
 func testOwner(b byte) identity.Fingerprint {
@@ -135,7 +137,7 @@ func TestRunOwnershipValidationAndOrdering(t *testing.T) {
 	if got := store.List(owner); len(got) != 2 || got[0].UUID != "run-a" {
 		t.Fatalf("List = %#v", got)
 	}
-	bad := CreateInput{UUID: "bad", WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner, Prompt: string(make([]byte, MaxPromptBytes+1))}
+	bad := CreateInput{UUID: testBadUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner, Prompt: string(make([]byte, MaxPromptBytes+1))}
 	if _, err := store.Create(bad); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("oversize prompt = %v", err)
 	}
@@ -158,6 +160,43 @@ func TestAllLegalAndIllegalTransitions(t *testing.T) {
 				t.Errorf("validTransition(%s,%s) = %v, want %v", from, to, got, want)
 			}
 		}
+	}
+}
+
+func TestEventHistoryHasStructuralFiveEventBound(t *testing.T) {
+	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = control.Close() }()
+	store, err := Open(control.DB(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, node := testOwner(1), testOwner(2)
+	run, err := store.Create(CreateInput{UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = store.Transition(owner, run.UUID, TransitionInput{From: []State{StateQueued}, To: StateStarting, SandboxUID: testSandboxUID, NodeFingerprint: node, NodeInstanceID: testNodeInstance})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = store.Transition(owner, run.UUID, TransitionInput{From: []State{StateStarting}, To: StateRunning, NodeJobID: testJobID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = store.Transition(owner, run.UUID, TransitionInput{From: []State{StateRunning}, To: StateCanceling})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = store.Transition(owner, run.UUID, TransitionInput{From: []State{StateCanceling}, To: StateCanceled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := store.Events(owner, run.UUID, 0, MaxEventsPerRun)
+	if err != nil || len(events) != MaxEventsPerRun || run.LastEventCursor != MaxEventsPerRun {
+		t.Fatalf("events = %#v, run=%#v, err=%v", events, run, err)
 	}
 }
 
@@ -304,7 +343,7 @@ func TestCreateDetectsRunInsertedAfterLoad(t *testing.T) {
 }
 
 func TestValidateBindings(t *testing.T) {
-	bound := Run{SandboxUID: testSandboxUID, NodeFingerprint: testOwner(1), NodeInstanceID: testNodeInstance, NodeJobID: "job", ExitCodeSet: true}
+	bound := Run{SandboxUID: testSandboxUID, NodeFingerprint: testOwner(1), NodeInstanceID: testNodeInstance, NodeJobID: testJobID, ExitCodeSet: true}
 	tests := []struct {
 		name string
 		run  Run
@@ -316,7 +355,7 @@ func TestValidateBindings(t *testing.T) {
 		{name: "running", run: withState(bound, StateRunning), ok: true},
 		{name: "running no job", run: withState(Run{SandboxUID: testSandboxUID, NodeFingerprint: testOwner(1), NodeInstanceID: testNodeInstance}, StateRunning)},
 		{name: "succeeded", run: withState(bound, StateSucceeded), ok: true},
-		{name: "succeeded no exit", run: withState(Run{SandboxUID: testSandboxUID, NodeFingerprint: testOwner(1), NodeInstanceID: testNodeInstance, NodeJobID: "job"}, StateSucceeded)},
+		{name: "succeeded no exit", run: withState(Run{SandboxUID: testSandboxUID, NodeFingerprint: testOwner(1), NodeInstanceID: testNodeInstance, NodeJobID: testJobID}, StateSucceeded)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -337,9 +376,10 @@ func TestOpenRejectsCorruptRecords(t *testing.T) {
 		name string
 		seed func(*badger.Txn) error
 	}{
-		{name: "invalid json", seed: func(txn *badger.Txn) error { return txn.Set([]byte(runPrefix+"bad"), []byte("{")) }},
+		{name: "invalid json", seed: func(txn *badger.Txn) error { return txn.Set([]byte(runPrefix+testBadUUID), []byte("{")) }},
 		{name: "key mismatch", seed: seedRun(Run{UUID: "other", WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: testOwner(1), State: StateQueued, LastEventCursor: 1})},
-		{name: "missing event", seed: seedRun(Run{UUID: "bad", WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: testOwner(1), State: StateQueued, LastEventCursor: 1})},
+		{name: "missing event", seed: seedRun(Run{UUID: testBadUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: testOwner(1), State: StateQueued, LastEventCursor: 1})},
+		{name: "event bound exceeded", seed: seedRun(Run{UUID: testBadUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: testOwner(1), State: StateQueued, LastEventCursor: MaxEventsPerRun + 1})},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -449,7 +489,7 @@ func TestOpenRejectsMismatchedLastEvent(t *testing.T) {
 }
 
 func seedRun(run Run) func(*badger.Txn) error {
-	return seedRunAt("bad", run)
+	return seedRunAt(testBadUUID, run)
 }
 
 func seedRunAt(keyUUID string, run Run) func(*badger.Txn) error {

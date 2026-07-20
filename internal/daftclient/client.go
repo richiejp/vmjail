@@ -12,6 +12,7 @@ import (
 	"golang.org/x/net/http2"
 
 	"github.com/richiejp/darkaifactory/internal/clientconfig"
+	"github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1/agentrunv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/operator/v1/operatorv1connect"
@@ -36,6 +37,7 @@ type Client struct {
 	Nodes     nodectrlv1connect.NodeControlServiceClient
 	Operator  operatorv1connect.OperatorServiceClient
 	Health    healthv1connect.HealthServiceClient
+	AgentRuns agentrunv1connect.AgentRunServiceClient
 
 	transport *http2.Transport
 }
@@ -92,6 +94,7 @@ func open(cfg Config, bootstrap bool) (*Client, error) {
 		Nodes:     nodectrlv1connect.NewNodeControlServiceClient(httpClient, baseURL, cfg.Options...),
 		Operator:  operatorv1connect.NewOperatorServiceClient(httpClient, baseURL, cfg.Options...),
 		Health:    healthv1connect.NewHealthServiceClient(httpClient, baseURL, cfg.Options...),
+		AgentRuns: agentrunv1connect.NewAgentRunServiceClient(httpClient, baseURL, cfg.Options...),
 		transport: transport,
 	}, nil
 }

@@ -114,6 +114,10 @@ API compatibility surface (H), cache pin/mock/cache-correctness policy
 fleet deployment, and agent-run surface (L). Phase E remains deliberately
 deferred.
 
+The AgentRun transport now drains guest stdout and stderr before reaping the
+command. This preserves the final output of short-lived agent commands; the
+full KVM gate exposed the previous `exec.Cmd.Wait`/pipe-close race.
+
 The detailed slice history below preserves the names that existed when each
 slice landed. In particular, Phase A's `sandboxctrl`, `Dispatch`, and
 `dispatch_id` terminology is historical; B4 replaced it with `nodectrl`, the
@@ -3759,9 +3763,17 @@ Slices:
   type redacts every ordinary serialization/formatting path, reveals only a
   temporary callback buffer, and zeroes both temporary and retained buffers.
   The MCP `agent_profile_list` tool exposes the frozen launch policy and digest
-  but deliberately omits the host credential-profile name. AgentRun wire/MCP
-  schemas, event retention policy, and SecretDelivery channel implementation
-  remain.
+  but deliberately omits the host credential-profile name. AgentRuns now have
+  an owner-scoped Connect wire service for get, cursor-paged events,
+  server-paged recovery listing, and idempotent cancellation. Their acyclic
+  state machine structurally bounds retained history to creation plus at most
+  four transitions, so all events remain durable without an unbounded journal.
+  MCP exposes bounded `agent_status`, `agent_events`, `agent_result`, and
+  `agent_cancel`; status deliberately omits the potentially large terminal
+  result, and result refuses non-terminal runs. AgentRun creation/start schemas
+  and SecretDelivery channel implementation remain. Race-gate coverage added
+  alongside this slice also closed Serve/Shutdown worker-publication races and
+  made broker relays join both transport handlers before either response closes.
 - **L1 — read-only MCP.** Land `cmd/daft-mcp` over stdio with initialize,
   tool discovery and ownership-safe Node/Workspace reads. The first release is
   deliberately only `node_list`, `workspace_list` (forced to the authenticated
@@ -3900,8 +3912,9 @@ Slices:
   covers the manager, guest runner, idempotent start retry, bounded output,
   structured exit and terminal deletion. Detached Node execution is now wired
   end to end. Immutable AgentProfile loading and read-only MCP discovery are
-  now landed. AgentRun reconciliation, secret delivery, and the mutating/status
-  MCP agent tools remain.
+  now landed. Owner-scoped AgentRun status/events/result/cancel wire and MCP
+  tools are landed as well. AgentRun reconciliation, secret delivery, and
+  `agent_start` remain.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->

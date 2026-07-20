@@ -198,7 +198,7 @@ func (h *BrokerHandler) Relay(
 	if err != nil {
 		return mapSessionErr(err)
 	}
-	defer pairing.Close()
+	defer pairing.Finish()
 
 	return workspacebroker.Splice(ctx, adapter, pairing.Partner, pairing.Done)
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/agentprofile"
 	"github.com/richiejp/darkaifactory/internal/daftclient"
+	agentrunv1 "github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	operatorv1 "github.com/richiejp/darkaifactory/internal/genpb/operator/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
@@ -28,6 +29,10 @@ const (
 	workspaceGetTool     = "workspace_get"
 	workspaceListTool    = "workspace_list"
 	agentProfileListTool = "agent_profile_list"
+	agentStatusTool      = "agent_status"
+	agentEventsTool      = "agent_events"
+	agentCancelTool      = "agent_cancel"
+	agentResultTool      = "agent_result"
 )
 
 type Reader interface {
@@ -37,6 +42,9 @@ type Reader interface {
 	GetNode(context.Context, string) (Node, error)
 	AuthorizeNode(context.Context, string, string) (Node, error)
 	RevokeNode(context.Context, string) (Node, error)
+	GetAgentRun(context.Context, string) (AgentRun, error)
+	AgentRunEvents(context.Context, string, uint64, uint32) (AgentEvents, error)
+	CancelAgentRun(context.Context, string) (AgentRun, error)
 }
 
 type Node struct {
@@ -56,6 +64,36 @@ type Workspace struct {
 	Generation         uint64 `json:"generation"`
 	ObservedGeneration uint64 `json:"observed_generation"`
 	CurrentSandboxUUID string `json:"current_sandbox_uuid,omitempty"`
+}
+
+type AgentRun struct {
+	UUID            string `json:"uuid"`
+	WorkspaceUUID   string `json:"workspace_uuid"`
+	ProfileName     string `json:"profile_name"`
+	ProfileDigest   string `json:"profile_digest"`
+	State           string `json:"state"`
+	Terminal        bool   `json:"terminal"`
+	SandboxUID      string `json:"sandbox_uid,omitempty"`
+	NodeFingerprint string `json:"node_fingerprint,omitempty"`
+	NodeJobID       string `json:"node_job_id,omitempty"`
+	ExitCode        int32  `json:"exit_code,omitempty"`
+	ExitCodeSet     bool   `json:"exit_code_set,omitempty"`
+	Reason          string `json:"reason,omitempty"`
+	Result          string `json:"-"`
+	LastEventCursor uint64 `json:"last_event_cursor"`
+}
+
+type AgentEvent struct {
+	Cursor  uint64 `json:"cursor"`
+	State   string `json:"state"`
+	Message string `json:"message,omitempty"`
+}
+
+type AgentEvents struct {
+	Events          []AgentEvent `json:"events"`
+	NextCursor      uint64       `json:"next_cursor"`
+	LastEventCursor uint64       `json:"last_event_cursor"`
+	Terminal        bool         `json:"terminal"`
 }
 
 type listNodesOutput struct {
@@ -104,6 +142,31 @@ type nodeOutput struct {
 	Node Node `json:"node"`
 }
 
+type agentRunInput struct {
+	UUID string `json:"uuid" jsonschema:"canonical AgentRun UUID"`
+}
+
+type agentEventsInput struct {
+	UUID        string `json:"uuid" jsonschema:"canonical AgentRun UUID"`
+	AfterCursor uint64 `json:"after_cursor,omitempty" jsonschema:"return events strictly after this cursor"`
+	Limit       uint32 `json:"limit,omitempty" jsonschema:"maximum events to return, 1 to 200; default 50"`
+}
+
+type (
+	agentRunOutput struct {
+		Run AgentRun `json:"run"`
+	}
+	agentEventsOutput struct{ AgentEvents }
+	agentResultOutput struct {
+		UUID        string `json:"uuid"`
+		State       string `json:"state"`
+		ExitCode    int32  `json:"exit_code,omitempty"`
+		ExitCodeSet bool   `json:"exit_code_set"`
+		Reason      string `json:"reason,omitempty"`
+		Result      string `json:"result,omitempty"`
+	}
+)
+
 func New(reader Reader, version string) (*mcp.Server, error) {
 	return NewWithProfiles(reader, nil, version)
 }
@@ -118,6 +181,7 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 	server := mcp.NewServer(&mcp.Implementation{Name: "daft", Version: version}, nil)
 	annotations := &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(false)}
 	addAgentProfileListTool(server, annotations, profiles)
+	addAgentRunTools(server, annotations, reader)
 	mcp.AddTool(server, &mcp.Tool{Name: nodeListTool, Description: "List live daft Nodes visible to the orchestrator.", Annotations: annotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listNodesOutput, error) {
 			nodes, truncated, err := readBounded(ctx, reader.ListNodes, func(node Node) string { return node.Fingerprint })
@@ -183,6 +247,51 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 	return server, nil
 }
 
+func addAgentRunTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations, reader Reader) {
+	mcp.AddTool(server, &mcp.Tool{Name: agentStatusTool, Description: "Get durable status for one owned AgentRun.", Annotations: readAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input agentRunInput) (*mcp.CallToolResult, agentRunOutput, error) {
+			if input.UUID == "" {
+				return nil, agentRunOutput{}, fmt.Errorf("uuid is required")
+			}
+			run, err := reader.GetAgentRun(ctx, input.UUID)
+			return nil, agentRunOutput{Run: run}, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: agentEventsTool, Description: "Read a bounded resumable page of durable AgentRun events.", Annotations: readAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input agentEventsInput) (*mcp.CallToolResult, agentEventsOutput, error) {
+			if input.UUID == "" {
+				return nil, agentEventsOutput{}, fmt.Errorf("uuid is required")
+			}
+			if input.Limit > uint32(maxResults) {
+				return nil, agentEventsOutput{}, fmt.Errorf("limit exceeds %d", maxResults)
+			}
+			events, err := reader.AgentRunEvents(ctx, input.UUID, input.AfterCursor, input.Limit)
+			return nil, agentEventsOutput{AgentEvents: events}, err
+		})
+	cancelAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: agentCancelTool, Description: "Request idempotent cancellation of one owned AgentRun.", Annotations: cancelAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input agentRunInput) (*mcp.CallToolResult, agentRunOutput, error) {
+			if input.UUID == "" {
+				return nil, agentRunOutput{}, fmt.Errorf("uuid is required")
+			}
+			run, err := reader.CancelAgentRun(ctx, input.UUID)
+			return nil, agentRunOutput{Run: run}, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: agentResultTool, Description: "Read the bounded terminal result of one owned AgentRun.", Annotations: readAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input agentRunInput) (*mcp.CallToolResult, agentResultOutput, error) {
+			if input.UUID == "" {
+				return nil, agentResultOutput{}, fmt.Errorf("uuid is required")
+			}
+			run, err := reader.GetAgentRun(ctx, input.UUID)
+			if err != nil {
+				return nil, agentResultOutput{}, err
+			}
+			if !run.Terminal {
+				return nil, agentResultOutput{}, fmt.Errorf("AgentRun %s is not terminal", input.UUID)
+			}
+			return nil, agentResultOutput{UUID: run.UUID, State: run.State, ExitCode: run.ExitCode, ExitCodeSet: run.ExitCodeSet, Reason: run.Reason, Result: run.Result}, nil
+		})
+}
+
 func addAgentProfileListTool(server *mcp.Server, annotations *mcp.ToolAnnotations, profiles []agentprofile.Entry) {
 	profileOutputs := make([]agentProfileOutput, len(profiles))
 	for i := range profiles {
@@ -232,17 +341,58 @@ type operatorClient interface {
 	GetNode(context.Context, *connect.Request[operatorv1.GetNodeRequest]) (*connect.Response[operatorv1.NodeStatus], error)
 }
 
+type agentRunClient interface {
+	Get(context.Context, *connect.Request[agentrunv1.GetAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error)
+	Events(context.Context, *connect.Request[agentrunv1.AgentRunEventsRequest]) (*connect.Response[agentrunv1.AgentRunEventsResponse], error)
+	Cancel(context.Context, *connect.Request[agentrunv1.CancelAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error)
+}
+
 type ConnectReader struct {
 	nodes     nodeLister
 	workspace workspaceReader
 	operator  operatorClient
+	agentRuns agentRunClient
 }
 
 func NewConnectReader(client *daftclient.Client) (*ConnectReader, error) {
-	if client == nil || client.Nodes == nil || client.Workspace == nil || client.Operator == nil {
+	if client == nil || client.Nodes == nil || client.Workspace == nil || client.Operator == nil || client.AgentRuns == nil {
 		return nil, fmt.Errorf("mcpserver: daft client is required")
 	}
-	return &ConnectReader{nodes: client.Nodes, workspace: client.Workspace, operator: client.Operator}, nil
+	return &ConnectReader{nodes: client.Nodes, workspace: client.Workspace, operator: client.Operator, agentRuns: client.AgentRuns}, nil
+}
+
+func (r ConnectReader) GetAgentRun(ctx context.Context, uuid string) (AgentRun, error) {
+	response, err := r.agentRuns.Get(ctx, connect.NewRequest(&agentrunv1.GetAgentRunRequest{Uuid: uuid}))
+	if err != nil {
+		return AgentRun{}, err
+	}
+	return mapAgentRun(response.Msg), nil
+}
+
+func (r ConnectReader) AgentRunEvents(ctx context.Context, uuid string, after uint64, limit uint32) (AgentEvents, error) {
+	response, err := r.agentRuns.Events(ctx, connect.NewRequest(&agentrunv1.AgentRunEventsRequest{Uuid: uuid, AfterCursor: after, Limit: limit}))
+	if err != nil {
+		return AgentEvents{}, err
+	}
+	out := AgentEvents{NextCursor: response.Msg.GetNextCursor(), LastEventCursor: response.Msg.GetLastEventCursor(), Terminal: response.Msg.GetTerminal(), Events: make([]AgentEvent, len(response.Msg.GetEvents()))}
+	for i, event := range response.Msg.GetEvents() {
+		out.Events[i] = AgentEvent{Cursor: event.GetCursor(), State: event.GetState().String(), Message: event.GetMessage()}
+	}
+	return out, nil
+}
+
+func (r ConnectReader) CancelAgentRun(ctx context.Context, uuid string) (AgentRun, error) {
+	response, err := r.agentRuns.Cancel(ctx, connect.NewRequest(&agentrunv1.CancelAgentRunRequest{Uuid: uuid}))
+	if err != nil {
+		return AgentRun{}, err
+	}
+	return mapAgentRun(response.Msg), nil
+}
+
+func mapAgentRun(run *agentrunv1.AgentRun) AgentRun {
+	state := run.GetState()
+	terminal := state == agentrunv1.AgentRunState_AGENT_RUN_STATE_SUCCEEDED || state == agentrunv1.AgentRunState_AGENT_RUN_STATE_FAILED || state == agentrunv1.AgentRunState_AGENT_RUN_STATE_CANCELED || state == agentrunv1.AgentRunState_AGENT_RUN_STATE_LOST
+	return AgentRun{UUID: run.GetUuid(), WorkspaceUUID: run.GetWorkspaceUuid(), ProfileName: run.GetProfileName(), ProfileDigest: run.GetProfileDigest(), State: state.String(), Terminal: terminal, SandboxUID: run.GetSandboxUid(), NodeFingerprint: run.GetNodeFingerprint(), NodeJobID: run.GetNodeJobId(), ExitCode: run.GetExitCode(), ExitCodeSet: run.GetExitCodeSet(), Reason: run.GetReason(), Result: run.GetResult(), LastEventCursor: run.GetLastEventCursor()}
 }
 
 func (r ConnectReader) GetNode(ctx context.Context, fingerprint string) (Node, error) {
