@@ -133,7 +133,7 @@ func (h *NodeControlHandler) pushAttachRequest(
 		},
 	}
 	select {
-	case ch <- ev:
+	case ch.events <- ev:
 		return nil
 	default:
 		return ErrSandboxEventBacklog
@@ -148,6 +148,9 @@ func (h *NodeControlHandler) AttachStream(
 	ctx context.Context,
 	stream *connect.BidiStream[nodectrlv1.AttachStreamMessage, nodectrlv1.AttachStreamMessage],
 ) error {
+	if _, err := h.requireNode(stream.RequestHeader()); err != nil {
+		return err
+	}
 	return h.runAttachStream(ctx, stream)
 }
 

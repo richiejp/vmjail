@@ -12,13 +12,18 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/daftclient"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	operatorv1 "github.com/richiejp/darkaifactory/internal/genpb/operator/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
 const maxResults = 200
 
 const (
 	nodeListTool      = "node_list"
+	nodeStatusTool    = "node_registration_status"
+	nodeAuthorizeTool = "node_authorize"
+	nodeRevokeTool    = "node_revoke"
 	workspaceGetTool  = "workspace_get"
 	workspaceListTool = "workspace_list"
 )
@@ -27,6 +32,9 @@ type Reader interface {
 	ListNodes(context.Context) ([]Node, error)
 	ListWorkspaces(context.Context) ([]Workspace, error)
 	GetWorkspace(context.Context, string) (Workspace, error)
+	GetNode(context.Context, string) (Node, error)
+	AuthorizeNode(context.Context, string, string) (Node, error)
+	RevokeNode(context.Context, string) (Node, error)
 }
 
 type Node struct {
@@ -35,6 +43,9 @@ type Node struct {
 	Version     string `json:"version,omitempty"`
 	CPUs        uint32 `json:"cpus,omitempty"`
 	MemoryBytes uint64 `json:"memory_bytes,omitempty"`
+	Label       string `json:"label,omitempty"`
+	Authorized  bool   `json:"authorized"`
+	Connected   bool   `json:"connected"`
 }
 
 type Workspace struct {
@@ -63,6 +74,19 @@ type getWorkspaceOutput struct {
 	Workspace Workspace `json:"workspace"`
 }
 
+type nodeFingerprintInput struct {
+	Fingerprint string `json:"fingerprint" jsonschema:"canonical sha256 certificate fingerprint"`
+}
+
+type authorizeNodeInput struct {
+	Fingerprint string `json:"fingerprint" jsonschema:"canonical sha256 certificate fingerprint"`
+	Label       string `json:"label,omitempty" jsonschema:"human-readable node label, at most 128 bytes"`
+}
+
+type nodeOutput struct {
+	Node Node `json:"node"`
+}
+
 func New(reader Reader, version string) (*mcp.Server, error) {
 	if reader == nil {
 		return nil, fmt.Errorf("mcpserver: reader is required")
@@ -79,6 +103,41 @@ func New(reader Reader, version string) (*mcp.Server, error) {
 				return nil, listNodesOutput{}, fmt.Errorf("list nodes: %w", err)
 			}
 			return nil, listNodesOutput{Nodes: nodes, Truncated: truncated}, nil
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: nodeStatusTool, Description: "Get durable authorization and live registration status for one Node.", Annotations: annotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input nodeFingerprintInput) (*mcp.CallToolResult, nodeOutput, error) {
+			if err := validateFingerprint(input.Fingerprint); err != nil {
+				return nil, nodeOutput{}, err
+			}
+			node, err := reader.GetNode(ctx, input.Fingerprint)
+			if err != nil {
+				return nil, nodeOutput{}, fmt.Errorf("get node status: %w", err)
+			}
+			return nil, nodeOutput{Node: node}, nil
+		})
+	authorizeAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: nodeAuthorizeTool, Description: "Authorize one expected sandbox Node certificate fingerprint.", Annotations: authorizeAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input authorizeNodeInput) (*mcp.CallToolResult, nodeOutput, error) {
+			if err := validateFingerprint(input.Fingerprint); err != nil {
+				return nil, nodeOutput{}, err
+			}
+			node, err := reader.AuthorizeNode(ctx, input.Fingerprint, input.Label)
+			if err != nil {
+				return nil, nodeOutput{}, fmt.Errorf("authorize node: %w", err)
+			}
+			return nil, nodeOutput{Node: node}, nil
+		})
+	revokeAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: nodeRevokeTool, Description: "Revoke a sandbox Node and terminate its live registration.", Annotations: revokeAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input nodeFingerprintInput) (*mcp.CallToolResult, nodeOutput, error) {
+			if err := validateFingerprint(input.Fingerprint); err != nil {
+				return nil, nodeOutput{}, err
+			}
+			node, err := reader.RevokeNode(ctx, input.Fingerprint)
+			if err != nil {
+				return nil, nodeOutput{}, fmt.Errorf("revoke node: %w", err)
+			}
+			return nil, nodeOutput{Node: node}, nil
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: workspaceListTool, Description: "List Workspaces owned by the authenticated client.", Annotations: annotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listWorkspacesOutput, error) {
@@ -128,16 +187,58 @@ type workspaceReader interface {
 	List(context.Context, *connect.Request[workspacev1.ListWorkspacesRequest]) (*connect.Response[workspacev1.ListWorkspacesResponse], error)
 }
 
+type operatorClient interface {
+	AuthorizeNode(context.Context, *connect.Request[operatorv1.AuthorizeNodeRequest]) (*connect.Response[operatorv1.NodeStatus], error)
+	RevokeNode(context.Context, *connect.Request[operatorv1.RevokeNodeRequest]) (*connect.Response[operatorv1.NodeStatus], error)
+	GetNode(context.Context, *connect.Request[operatorv1.GetNodeRequest]) (*connect.Response[operatorv1.NodeStatus], error)
+}
+
 type ConnectReader struct {
 	nodes     nodeLister
 	workspace workspaceReader
+	operator  operatorClient
 }
 
 func NewConnectReader(client *daftclient.Client) (*ConnectReader, error) {
-	if client == nil || client.Nodes == nil || client.Workspace == nil {
+	if client == nil || client.Nodes == nil || client.Workspace == nil || client.Operator == nil {
 		return nil, fmt.Errorf("mcpserver: daft client is required")
 	}
-	return &ConnectReader{nodes: client.Nodes, workspace: client.Workspace}, nil
+	return &ConnectReader{nodes: client.Nodes, workspace: client.Workspace, operator: client.Operator}, nil
+}
+
+func (r ConnectReader) GetNode(ctx context.Context, fingerprint string) (Node, error) {
+	response, err := r.operator.GetNode(ctx, connect.NewRequest(&operatorv1.GetNodeRequest{Fingerprint: fingerprint}))
+	if err != nil {
+		return Node{}, err
+	}
+	return mapOperatorNode(response.Msg), nil
+}
+
+func (r ConnectReader) AuthorizeNode(ctx context.Context, fingerprint, label string) (Node, error) {
+	response, err := r.operator.AuthorizeNode(ctx, connect.NewRequest(&operatorv1.AuthorizeNodeRequest{Fingerprint: fingerprint, Label: label}))
+	if err != nil {
+		return Node{}, err
+	}
+	return mapOperatorNode(response.Msg), nil
+}
+
+func (r ConnectReader) RevokeNode(ctx context.Context, fingerprint string) (Node, error) {
+	response, err := r.operator.RevokeNode(ctx, connect.NewRequest(&operatorv1.RevokeNodeRequest{Fingerprint: fingerprint}))
+	if err != nil {
+		return Node{}, err
+	}
+	return mapOperatorNode(response.Msg), nil
+}
+
+func mapOperatorNode(node *operatorv1.NodeStatus) Node {
+	return Node{Fingerprint: node.GetFingerprint(), Label: node.GetLabel(), Authorized: node.GetAuthorized(), Connected: node.GetConnected(), Hostname: node.GetHostname(), Version: node.GetVersion(), CPUs: node.GetResources().GetCpus(), MemoryBytes: node.GetResources().GetMemoryBytes()}
+}
+
+func validateFingerprint(value string) error {
+	if _, err := identity.ParseFingerprint(value); err != nil {
+		return fmt.Errorf("fingerprint: %w", err)
+	}
+	return nil
 }
 
 func (r ConnectReader) ListNodes(ctx context.Context) ([]Node, error) {

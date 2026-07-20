@@ -274,10 +274,10 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	// Four-way cross-approval: each side trusts the others it
 	// will interact with. Orchestrator talks to sandboxd + client;
 	// sandboxd + client both dial the orchestrator.
-	approvePeer(t, orchDir, sbxID.Fingerprint())
-	approvePeer(t, orchDir, cliID.Fingerprint())
-	approvePeer(t, sbxDir, orchID.Fingerprint())
-	approvePeer(t, cliDir, orchID.Fingerprint())
+	approvePeer(t, orchDir, sbxID.Fingerprint(), identity.RoleSandboxHost)
+	approvePeer(t, orchDir, cliID.Fingerprint(), identity.RoleClient)
+	approvePeer(t, sbxDir, orchID.Fingerprint(), identity.RoleOrchestrator)
+	approvePeer(t, cliDir, orchID.Fingerprint(), identity.RoleOrchestrator)
 
 	observerDir := newObserverStateDir(t, base)
 
@@ -665,13 +665,13 @@ func mustLoadOrGen(t *testing.T, dir string, role identity.Role) *identity.Ident
 	return id
 }
 
-func approvePeer(t *testing.T, dir string, fp identity.Fingerprint) {
+func approvePeer(t *testing.T, dir string, fp identity.Fingerprint, role identity.Role) {
 	t.Helper()
 	store, err := identity.OpenPeerStore(filepath.Join(dir, peersFile))
 	if err != nil {
 		t.Fatalf("OpenPeerStore(%s): %v", dir, err)
 	}
-	if err := store.Add(identity.Peer{Fingerprint: fp}); err != nil {
+	if err := store.Add(identity.Peer{Fingerprint: fp, Role: role}); err != nil {
 		t.Fatalf("PeerStore.Add(%s, %s): %v", dir, fp, err)
 	}
 }

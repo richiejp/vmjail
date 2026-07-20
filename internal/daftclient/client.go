@@ -14,6 +14,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/clientconfig"
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
+	"github.com/richiejp/darkaifactory/internal/genpb/operator/v1/operatorv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
@@ -33,6 +34,7 @@ type Client struct {
 	Resolved  clientconfig.Resolved
 	Workspace workspacev1connect.WorkspaceCatalogServiceClient
 	Nodes     nodectrlv1connect.NodeControlServiceClient
+	Operator  operatorv1connect.OperatorServiceClient
 	Health    healthv1connect.HealthServiceClient
 
 	transport *http2.Transport
@@ -88,6 +90,7 @@ func open(cfg Config, bootstrap bool) (*Client, error) {
 		Resolved:  resolved,
 		Workspace: workspacev1connect.NewWorkspaceCatalogServiceClient(httpClient, baseURL, cfg.Options...),
 		Nodes:     nodectrlv1connect.NewNodeControlServiceClient(httpClient, baseURL, cfg.Options...),
+		Operator:  operatorv1connect.NewOperatorServiceClient(httpClient, baseURL, cfg.Options...),
 		Health:    healthv1connect.NewHealthServiceClient(httpClient, baseURL, cfg.Options...),
 		transport: transport,
 	}, nil

@@ -1,10 +1,30 @@
 package orchestrator
 
 import (
+	"errors"
 	"net/http"
 
+	"connectrpc.com/connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
+
+func requirePeerRole(h http.Header, peers *identity.PeerStore, role identity.Role) (identity.Fingerprint, error) {
+	fp, ok := PeerFingerprintFromRequestHeader(h)
+	if !ok {
+		return identity.Fingerprint{}, connect.NewError(connect.CodeUnauthenticated,
+			errors.New("orchestrator: no mTLS peer identity"))
+	}
+	peer, ok := peers.Lookup(fp)
+	if !ok {
+		return identity.Fingerprint{}, connect.NewError(connect.CodeUnauthenticated,
+			errors.New("orchestrator: peer authorization was removed"))
+	}
+	if peer.Role != role {
+		return identity.Fingerprint{}, connect.NewError(connect.CodePermissionDenied,
+			errors.New("orchestrator: peer role is not authorized for this operation"))
+	}
+	return fp, nil
+}
 
 // peerFingerprintHeader is the internal header name that
 // withPeerMiddleware stamps with the mTLS leaf-cert fingerprint

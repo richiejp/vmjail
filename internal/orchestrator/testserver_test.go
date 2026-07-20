@@ -40,7 +40,7 @@ func newOrchTestEnv(t *testing.T, callerRole identity.Role, cfg Config) *orchTes
 	if err != nil {
 		t.Fatalf("OpenPeerStore srv: %v", err)
 	}
-	if err := srvPeers.Add(identity.Peer{Fingerprint: callerID.Fingerprint()}); err != nil {
+	if err := srvPeers.Add(identity.Peer{Fingerprint: callerID.Fingerprint(), Role: callerRole}); err != nil {
 		t.Fatalf("srv approve caller: %v", err)
 	}
 	cfg.Identity = srvID

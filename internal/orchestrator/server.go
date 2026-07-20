@@ -29,6 +29,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/component"
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
+	"github.com/richiejp/darkaifactory/internal/genpb/operator/v1/operatorv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
@@ -220,9 +221,9 @@ func New(cfg Config) (*Server, error) {
 	if workspaceCat == nil {
 		workspaceCat = workspacecatalog.NewStore(nil)
 	}
-	sandboxCtrl, scErr := NewNodeControlHandler(nodeReg)
-	if scErr != nil {
-		return nil, scErr
+	sandboxCtrl, operatorCtrl, controlErr := newControlHandlers(nodeReg, cfg.Peers)
+	if controlErr != nil {
+		return nil, controlErr
 	}
 	workspaceDispatcher := cfg.WorkspaceDispatcher
 	if workspaceDispatcher == nil {
@@ -251,7 +252,7 @@ func New(cfg Config) (*Server, error) {
 		}
 		return inner.Addr()
 	}
-	if err := registerServices(mux, interceptor, tracer, matcher, sandboxCtrl, workspaceCtrl, getRelayEndpoint, cfg.RegistrySeeds); err != nil {
+	if err := registerServices(mux, interceptor, tracer, matcher, sandboxCtrl, operatorCtrl, workspaceCtrl, getRelayEndpoint, cfg.RegistrySeeds); err != nil {
 		return nil, err
 	}
 	handler := withPeerMiddleware(mux)
@@ -347,6 +348,7 @@ func registerServices(
 	tracer *trace.Tracer,
 	matcher *workspacebroker.Matcher,
 	sandboxCtrl *NodeControlHandler,
+	operatorCtrl *OperatorHandler,
 	workspaceCtrl *WorkspaceCatalogHandler,
 	relayEndpointFn func() string,
 	registrySeeds []RegistrySeed,
@@ -379,6 +381,11 @@ func registerServices(
 		sandboxCtrl, interceptor,
 	)
 	mux.Handle(sandboxCtrlPath, sandboxCtrlConnectHandler)
+
+	operatorPath, operatorConnectHandler := operatorv1connect.NewOperatorServiceHandler(
+		operatorCtrl, interceptor,
+	)
+	mux.Handle(operatorPath, operatorConnectHandler)
 
 	workspaceCtrlPath, workspaceCtrlConnectHandler := workspacev1connect.NewWorkspaceCatalogServiceHandler(
 		workspaceCtrl, interceptor,

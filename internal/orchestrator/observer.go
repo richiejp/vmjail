@@ -249,7 +249,7 @@ func (h *NodeControlHandler) pushObserverRequest(
 		},
 	}
 	select {
-	case ch <- ev:
+	case ch.events <- ev:
 		return nil
 	default:
 		return ErrSandboxEventBacklog
@@ -264,6 +264,9 @@ func (h *NodeControlHandler) ObserverStream(
 	ctx context.Context,
 	stream *connect.BidiStream[nodectrlv1.ObserverStreamMessage, nodectrlv1.ObserverStreamMessage],
 ) error {
+	if _, err := h.requireNode(stream.RequestHeader()); err != nil {
+		return err
+	}
 	return h.runObserverStream(ctx, stream)
 }
 

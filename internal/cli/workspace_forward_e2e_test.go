@@ -182,10 +182,10 @@ func buildSrvPeers(t *testing.T, sbID, cliID *identity.Identity) *identity.PeerS
 	if err != nil {
 		t.Fatalf("OpenPeerStore srv: %v", err)
 	}
-	if err := srvPeers.Add(identity.Peer{Fingerprint: sbID.Fingerprint()}); err != nil {
+	if err := srvPeers.Add(identity.Peer{Fingerprint: sbID.Fingerprint(), Role: identity.RoleSandboxHost}); err != nil {
 		t.Fatalf("approve sb: %v", err)
 	}
-	if err := srvPeers.Add(identity.Peer{Fingerprint: cliID.Fingerprint()}); err != nil {
+	if err := srvPeers.Add(identity.Peer{Fingerprint: cliID.Fingerprint(), Role: identity.RoleClient}); err != nil {
 		t.Fatalf("approve cli: %v", err)
 	}
 	return srvPeers

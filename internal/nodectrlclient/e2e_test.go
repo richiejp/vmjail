@@ -95,7 +95,7 @@ func newE2ERig(t *testing.T) *e2eRig {
 	if err != nil {
 		t.Fatalf("OpenPeerStore srv: %v", err)
 	}
-	if err := srvPeers.Add(identity.Peer{Fingerprint: sbID.Fingerprint()}); err != nil {
+	if err := srvPeers.Add(identity.Peer{Fingerprint: sbID.Fingerprint(), Role: identity.RoleSandboxHost}); err != nil {
 		t.Fatalf("srv approve sb: %v", err)
 	}
 	reg := nodectrl.NewRegistry(nil)

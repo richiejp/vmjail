@@ -11,9 +11,13 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/daftclient"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	operatorv1 "github.com/richiejp/darkaifactory/internal/genpb/operator/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/identity"
 )
+
+const fingerprintKey = "fingerprint"
 
 type fakeReader struct {
 	nodes          []Node
@@ -24,6 +28,26 @@ type fakeReader struct {
 	getWorkErr     error
 	requestedUUID  string
 	listWorkCalled int
+	operatorNode   Node
+	operatorErr    error
+}
+
+func (f *fakeReader) GetNode(context.Context, string) (Node, error) {
+	return f.operatorNode, f.operatorErr
+}
+
+func (f *fakeReader) AuthorizeNode(_ context.Context, fingerprint, label string) (Node, error) {
+	f.operatorNode.Fingerprint = fingerprint
+	f.operatorNode.Label = label
+	f.operatorNode.Authorized = true
+	return f.operatorNode, f.operatorErr
+}
+
+func (f *fakeReader) RevokeNode(_ context.Context, fingerprint string) (Node, error) {
+	f.operatorNode.Fingerprint = fingerprint
+	f.operatorNode.Authorized = false
+	f.operatorNode.Connected = false
+	return f.operatorNode, f.operatorErr
 }
 
 func (f *fakeReader) ListNodes(context.Context) ([]Node, error) {
@@ -76,7 +100,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	wantNames := []string{nodeListTool, workspaceGetTool, workspaceListTool}
+	wantNames := []string{nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceGetTool, workspaceListTool}
 	if len(result.Tools) != len(wantNames) {
 		t.Fatalf("got %d tools, want %d", len(result.Tools), len(wantNames))
 	}
@@ -84,11 +108,25 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 		if tool.Name != wantNames[i] {
 			t.Errorf("tool %d name = %q, want %q", i, tool.Name, wantNames[i])
 		}
-		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint || tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
-			t.Errorf("tool %q annotations = %#v, want read-only closed-world", tool.Name, tool.Annotations)
+		if tool.Annotations == nil || tool.Annotations.OpenWorldHint == nil || *tool.Annotations.OpenWorldHint {
+			t.Errorf("tool %q annotations = %#v, want closed-world", tool.Name, tool.Annotations)
 		}
 		if tool.InputSchema == nil || tool.OutputSchema == nil {
 			t.Errorf("tool %q is missing an inferred schema", tool.Name)
+		}
+		switch tool.Name {
+		case nodeAuthorizeTool:
+			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint || !tool.Annotations.IdempotentHint {
+				t.Errorf("authorize annotations = %#v", tool.Annotations)
+			}
+		case nodeRevokeTool:
+			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint || !tool.Annotations.IdempotentHint {
+				t.Errorf("revoke annotations = %#v", tool.Annotations)
+			}
+		default:
+			if !tool.Annotations.ReadOnlyHint {
+				t.Errorf("tool %q must be read-only", tool.Name)
+			}
 		}
 	}
 }
@@ -135,6 +173,30 @@ func TestWorkspaceReads(t *testing.T) {
 	}
 }
 
+func TestNodeMutationToolsValidateAndReturnStatus(t *testing.T) {
+	id, _ := identity.Generate(identity.RoleSandboxHost)
+	fingerprint := id.Fingerprint().String()
+	reader := &fakeReader{operatorNode: Node{Connected: true}}
+	session := connectClient(t, reader)
+	authorized := callTool(t, session, nodeAuthorizeTool, map[string]any{fingerprintKey: fingerprint, "label": "builder"})
+	node := requireMap(t, requireMap(t, authorized.StructuredContent)["node"])
+	if node["authorized"] != true || node["label"] != "builder" {
+		t.Fatalf("authorize output = %#v", node)
+	}
+	status := callTool(t, session, nodeStatusTool, map[string]any{fingerprintKey: fingerprint})
+	if requireMap(t, requireMap(t, status.StructuredContent)["node"])["connected"] != true {
+		t.Fatalf("status output = %#v", status.StructuredContent)
+	}
+	revoked := callTool(t, session, nodeRevokeTool, map[string]any{fingerprintKey: fingerprint})
+	if requireMap(t, requireMap(t, revoked.StructuredContent)["node"])["authorized"] != false {
+		t.Fatalf("revoke output = %#v", revoked.StructuredContent)
+	}
+	invalid, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: nodeStatusTool, Arguments: map[string]any{fingerprintKey: "bad"}})
+	if err != nil || !invalid.IsError {
+		t.Fatalf("invalid fingerprint = %#v, %v; want tool error", invalid, err)
+	}
+}
+
 func requireMap(t *testing.T, value any) map[string]any {
 	t.Helper()
 	result, ok := value.(map[string]any)
@@ -163,6 +225,9 @@ func TestToolErrorsAreReturnedToTheMCPCaller(t *testing.T) {
 		{name: nodeListTool, reader: &fakeReader{listNodesErr: errors.New("nodes unavailable")}, args: map[string]any{}},
 		{name: workspaceListTool, reader: &fakeReader{listWorkErr: errors.New("catalog unavailable")}, args: map[string]any{}},
 		{name: workspaceGetTool, reader: &fakeReader{getWorkErr: errors.New("not found")}, args: map[string]any{"uuid": "missing"}},
+		{name: nodeStatusTool, reader: &fakeReader{operatorErr: errors.New("status unavailable")}, args: validFingerprintArgs(t)},
+		{name: nodeAuthorizeTool, reader: &fakeReader{operatorErr: errors.New("authorize unavailable")}, args: validFingerprintArgs(t)},
+		{name: nodeRevokeTool, reader: &fakeReader{operatorErr: errors.New("revoke unavailable")}, args: validFingerprintArgs(t)},
 		{name: workspaceGetTool, reader: &fakeReader{}, args: map[string]any{}, protocolErr: true},
 	}
 	for _, test := range tests {
@@ -183,6 +248,15 @@ func TestToolErrorsAreReturnedToTheMCPCaller(t *testing.T) {
 			}
 		})
 	}
+}
+
+func validFingerprintArgs(t *testing.T) map[string]any {
+	t.Helper()
+	id, err := identity.Generate(identity.RoleSandboxHost)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	return map[string]any{fingerprintKey: id.Fingerprint().String()}
 }
 
 func TestMapWorkspacesHandlesCompleteAndMissingMessages(t *testing.T) {
@@ -220,6 +294,23 @@ type fakeWorkspaceReader struct {
 	mineOnly     bool
 }
 
+type fakeOperatorClient struct {
+	status *operatorv1.NodeStatus
+	err    error
+}
+
+func (f fakeOperatorClient) AuthorizeNode(context.Context, *connect.Request[operatorv1.AuthorizeNodeRequest]) (*connect.Response[operatorv1.NodeStatus], error) {
+	return connect.NewResponse(f.status), f.err
+}
+
+func (f fakeOperatorClient) RevokeNode(context.Context, *connect.Request[operatorv1.RevokeNodeRequest]) (*connect.Response[operatorv1.NodeStatus], error) {
+	return connect.NewResponse(f.status), f.err
+}
+
+func (f fakeOperatorClient) GetNode(context.Context, *connect.Request[operatorv1.GetNodeRequest]) (*connect.Response[operatorv1.NodeStatus], error) {
+	return connect.NewResponse(f.status), f.err
+}
+
 func (f *fakeWorkspaceReader) List(_ context.Context, request *connect.Request[workspacev1.ListWorkspacesRequest]) (*connect.Response[workspacev1.ListWorkspacesResponse], error) {
 	f.mineOnly = request.Msg.GetMineOnly()
 	return connect.NewResponse(f.listResponse), f.err
@@ -238,6 +329,7 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 			Resources:   &nodectrlv1.HostResources{Cpus: 8, MemoryBytes: 16},
 		}}}},
 		workspace: workspaces,
+		operator:  fakeOperatorClient{status: &operatorv1.NodeStatus{Fingerprint: "fingerprint", Authorized: true}},
 	}
 	nodes, err := reader.ListNodes(t.Context())
 	if err != nil || len(nodes) != 1 || nodes[0].CPUs != 8 || nodes[0].MemoryBytes != 16 {
@@ -254,6 +346,16 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	if _, err := reader.GetWorkspace(t.Context(), "someone-elses-workspace"); err == nil {
 		t.Fatal("GetWorkspace returned a workspace outside the owned list")
 	}
+	status, err := reader.GetNode(t.Context(), "fingerprint")
+	if err != nil || !status.Authorized {
+		t.Fatalf("GetNode() = %#v, %v", status, err)
+	}
+	if _, err := reader.AuthorizeNode(t.Context(), "fingerprint", "node"); err != nil {
+		t.Fatalf("AuthorizeNode: %v", err)
+	}
+	if _, err := reader.RevokeNode(t.Context(), "fingerprint"); err != nil {
+		t.Fatalf("RevokeNode: %v", err)
+	}
 }
 
 func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
@@ -261,6 +363,7 @@ func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
 	reader := ConnectReader{
 		nodes:     fakeNodeLister{response: &nodectrlv1.ListNodesResponse{}, err: wantErr},
 		workspace: &fakeWorkspaceReader{listResponse: &workspacev1.ListWorkspacesResponse{}, err: wantErr},
+		operator:  fakeOperatorClient{status: &operatorv1.NodeStatus{}, err: wantErr},
 	}
 	if _, err := reader.ListNodes(t.Context()); !errors.Is(err, wantErr) {
 		t.Errorf("ListNodes error = %v", err)
@@ -270,6 +373,15 @@ func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
 	}
 	if _, err := reader.GetWorkspace(t.Context(), "workspace"); !errors.Is(err, wantErr) {
 		t.Errorf("GetWorkspace error = %v", err)
+	}
+	if _, err := reader.GetNode(t.Context(), "fingerprint"); !errors.Is(err, wantErr) {
+		t.Errorf("GetNode error = %v", err)
+	}
+	if _, err := reader.AuthorizeNode(t.Context(), "fingerprint", "node"); !errors.Is(err, wantErr) {
+		t.Errorf("AuthorizeNode error = %v", err)
+	}
+	if _, err := reader.RevokeNode(t.Context(), "fingerprint"); !errors.Is(err, wantErr) {
+		t.Errorf("RevokeNode error = %v", err)
 	}
 }
 

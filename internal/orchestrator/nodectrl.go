@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"net/http"
 	"sync"
 
 	"connectrpc.com/connect"
@@ -64,10 +65,11 @@ type LivenessReconciler interface {
 type NodeControlHandler struct {
 	nodectrlv1connect.UnimplementedNodeControlServiceHandler
 	reg        *nodectrl.Registry
+	peers      *identity.PeerStore
 	reconciler LivenessReconciler
 
 	mu      sync.Mutex
-	streams map[identity.Fingerprint]chan *nodectrlv1.NodeEvent
+	streams map[identity.Fingerprint]*nodeRegistration
 	// pendingPorts is the session_id → pending-OpenPortBridge map
 	// (Slice C1.3c.2). Populated by OpenPortBridge before pushing
 	// the OpenPortRequest event; drained by OpenPortStream when the
@@ -85,6 +87,11 @@ type NodeControlHandler struct {
 	pendingObservers map[string]*pendingObserver
 }
 
+type nodeRegistration struct {
+	events  chan *nodectrlv1.NodeEvent
+	revoked chan struct{}
+}
+
 // SetReconciler wires the LivenessReconciler invoked on every
 // Heartbeat. Called by Server.New after the WorkspaceCatalogHandler
 // is constructed — handler-construction order means the reconciler
@@ -96,17 +103,34 @@ func (h *NodeControlHandler) SetReconciler(r LivenessReconciler) {
 // NewNodeControlHandler returns a handler that records registrations
 // and heartbeats into reg. Returns an error if reg is nil — the
 // orchestrator's wiring would be malformed.
-func NewNodeControlHandler(reg *nodectrl.Registry) (*NodeControlHandler, error) {
+func NewNodeControlHandler(reg *nodectrl.Registry, peerStores ...*identity.PeerStore) (*NodeControlHandler, error) {
 	if reg == nil {
 		return nil, errors.New("orchestrator: nil nodectrl registry")
 	}
+	var peers *identity.PeerStore
+	if len(peerStores) > 0 {
+		peers = peerStores[0]
+	}
 	return &NodeControlHandler{
 		reg:              reg,
-		streams:          map[identity.Fingerprint]chan *nodectrlv1.NodeEvent{},
+		peers:            peers,
+		streams:          map[identity.Fingerprint]*nodeRegistration{},
 		pendingPorts:     map[string]*pendingPort{},
 		pendingAttaches:  map[string]*pendingAttach{},
 		pendingObservers: map[string]*pendingObserver{},
 	}, nil
+}
+
+func (h *NodeControlHandler) requireNode(header http.Header) (identity.Fingerprint, error) {
+	if h.peers != nil {
+		return requirePeerRole(header, h.peers, identity.RoleSandboxHost)
+	}
+	fp, ok := PeerFingerprintFromRequestHeader(header)
+	if !ok {
+		return identity.Fingerprint{}, connect.NewError(connect.CodeUnauthenticated,
+			errors.New("orchestrator: no mTLS peer identity"))
+	}
+	return fp, nil
 }
 
 // PublishSandboxEvent pushes a SandboxWatchEvent to the addressed
@@ -124,7 +148,7 @@ func (h *NodeControlHandler) PublishSandboxEvent(
 	assert.True(uid != "",
 		"PublishSandboxEvent requires a non-empty Sandbox.metadata.uid; the orchestrator scheduler is the sole caller and must mint one before calling")
 	h.mu.Lock()
-	ch, ok := h.streams[fp]
+	registration, ok := h.streams[fp]
 	h.mu.Unlock()
 	if !ok {
 		return ErrNodeNotConnected
@@ -138,7 +162,7 @@ func (h *NodeControlHandler) PublishSandboxEvent(
 		},
 	}
 	select {
-	case ch <- ev:
+	case registration.events <- ev:
 		return nil
 	default:
 		return ErrSandboxEventBacklog
@@ -146,16 +170,48 @@ func (h *NodeControlHandler) PublishSandboxEvent(
 }
 
 func (h *NodeControlHandler) attachStream(fp identity.Fingerprint) chan *nodectrlv1.NodeEvent {
-	ch := make(chan *nodectrlv1.NodeEvent, sandboxEventBacklog)
+	return h.attachRegistration(fp).events
+}
+
+func (h *NodeControlHandler) attachRegistration(fp identity.Fingerprint) *nodeRegistration {
+	registration := &nodeRegistration{
+		events:  make(chan *nodectrlv1.NodeEvent, sandboxEventBacklog),
+		revoked: make(chan struct{}),
+	}
 	h.mu.Lock()
-	h.streams[fp] = ch
+	if previous, ok := h.streams[fp]; ok {
+		close(previous.revoked)
+	}
+	h.streams[fp] = registration
 	h.mu.Unlock()
-	return ch
+	return registration
 }
 
 func (h *NodeControlHandler) detachStream(fp identity.Fingerprint) {
 	h.mu.Lock()
 	delete(h.streams, fp)
+	h.mu.Unlock()
+}
+
+func (h *NodeControlHandler) detachRegistration(fp identity.Fingerprint, registration *nodeRegistration) {
+	h.mu.Lock()
+	if h.streams[fp] == registration {
+		delete(h.streams, fp)
+		h.reg.Forget(fp)
+	}
+	h.mu.Unlock()
+}
+
+// RevokeRegistration immediately disconnects an already-authorized Node. TLS
+// revocation alone cannot terminate an established HTTP/2 stream.
+func (h *NodeControlHandler) RevokeRegistration(fp identity.Fingerprint) {
+	h.mu.Lock()
+	registration, ok := h.streams[fp]
+	if ok {
+		delete(h.streams, fp)
+		close(registration.revoked)
+	}
+	h.reg.Forget(fp)
 	h.mu.Unlock()
 }
 
@@ -170,10 +226,9 @@ func (h *NodeControlHandler) RegisterNode(
 	req *connect.Request[nodectrlv1.RegisterNodeRequest],
 	stream *connect.ServerStream[nodectrlv1.NodeEvent],
 ) error {
-	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
-	if !ok {
-		return connect.NewError(connect.CodeUnauthenticated,
-			errors.New("orchestrator: no mTLS peer identity"))
+	fp, err := h.requireNode(req.Header())
+	if err != nil {
+		return err
 	}
 
 	// Wire-protocol negotiation runs before any state mutation so a
@@ -189,10 +244,8 @@ func (h *NodeControlHandler) RegisterNode(
 
 	resources := resourcesFromProto(req.Msg.GetResources())
 	acceptedAt := h.reg.Register(fp, req.Msg.GetHostname(), req.Msg.GetVersion(), resources)
-	defer h.reg.Forget(fp)
-
-	events := h.attachStream(fp)
-	defer h.detachStream(fp)
+	registration := h.attachRegistration(fp)
+	defer h.detachRegistration(fp, registration)
 
 	ready := &nodectrlv1.NodeEvent{
 		Event: &nodectrlv1.NodeEvent_Ready{
@@ -218,7 +271,10 @@ func (h *NodeControlHandler) RegisterNode(
 		select {
 		case <-done:
 			return nil
-		case ev := <-events:
+		case <-registration.revoked:
+			return connect.NewError(connect.CodePermissionDenied,
+				errors.New("orchestrator: node authorization revoked"))
+		case ev := <-registration.events:
 			if err := stream.Send(ev); err != nil {
 				return err
 			}
@@ -234,10 +290,9 @@ func (h *NodeControlHandler) Heartbeat(
 	_ context.Context,
 	req *connect.Request[nodectrlv1.HeartbeatRequest],
 ) (*connect.Response[nodectrlv1.HeartbeatResponse], error) {
-	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
-	if !ok {
-		return nil, connect.NewError(connect.CodeUnauthenticated,
-			errors.New("orchestrator: no mTLS peer identity"))
+	fp, authErr := h.requireNode(req.Header())
+	if authErr != nil {
+		return nil, authErr
 	}
 	// Registry.Heartbeat returns only ErrUnknownNode or nil —
 	// the FailedPrecondition path is the only error mapping we

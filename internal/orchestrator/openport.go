@@ -161,7 +161,7 @@ func (h *NodeControlHandler) pushOpenPortRequest(
 		},
 	}
 	select {
-	case ch <- ev:
+	case ch.events <- ev:
 		return nil
 	default:
 		return ErrSandboxEventBacklog
@@ -183,6 +183,9 @@ func (h *NodeControlHandler) OpenPortStream(
 	ctx context.Context,
 	stream *connect.BidiStream[nodectrlv1.PortStreamMessage, nodectrlv1.PortStreamMessage],
 ) error {
+	if _, err := h.requireNode(stream.RequestHeader()); err != nil {
+		return err
+	}
 	return h.runOpenPortStream(ctx, stream)
 }
 

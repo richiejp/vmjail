@@ -3786,9 +3786,19 @@ Slices:
   transient local `vendor/` trees as intended, so dependency changes are always
   checked against the pinned `vendorHash` rather than accidentally consuming a
   developer's ignored vendor snapshot.
-  The operator mutation slice is now in progress: peer-store changes are
-  transactional with respect to persistence and its role field is becoming an
-  authoritative per-request permission rather than descriptive metadata.
+  The operator mutation slice now has transactional peer-store changes and an
+  authoritative per-request role. A dedicated Connect service authorizes,
+  revokes, gets, and cursor-pages Nodes; its status joins durable authorization
+  with live registration. Revocation terminates an established registration,
+  and duplicate stream teardown cannot remove a newer registration. The typed
+  client and MCP expose `node_authorize`, `node_revoke`, and
+  `node_registration_status` with validated fingerprints and accurate safety
+  annotations. Black-box MCP-to-orchestrator coverage remains before L1 is
+  complete.
+  The privileged wire contract is a separate `OperatorService`: its node
+  status joins durable authorization with the live registry and exposes
+  bounded server-side pagination. It deliberately cannot choose arbitrary
+  peer roles.
 - **L2 — declarative Workspace lifecycle.** Add `workspace_apply`, validate,
   push, launch, stop, and status. This is an orchestrator slice as much as an
   MCP one: no apply/update RPC exists (only the fine-grained

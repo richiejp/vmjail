@@ -25,6 +25,49 @@ func TestNewNodeControlHandlerRejectsNilRegistry(t *testing.T) {
 	}
 }
 
+func TestDuplicateRegistrationCleanupPreservesNewerStream(t *testing.T) {
+	reg := nodectrl.NewRegistry(nil)
+	h, err := NewNodeControlHandler(reg)
+	if err != nil {
+		t.Fatalf("NewNodeControlHandler: %v", err)
+	}
+	id, _ := identity.Generate(identity.RoleSandboxHost)
+	fp := id.Fingerprint()
+	old := h.attachRegistration(fp)
+	newer := h.attachRegistration(fp)
+	select {
+	case <-old.revoked:
+	default:
+		t.Fatal("replacement registration did not terminate the old stream")
+	}
+	h.detachRegistration(fp, old)
+	h.mu.Lock()
+	got := h.streams[fp]
+	h.mu.Unlock()
+	if got != newer {
+		t.Fatal("old registration cleanup removed the newer stream")
+	}
+	h.detachRegistration(fp, newer)
+}
+
+func TestRevokeRegistrationSignalsStreamAndForgetsNode(t *testing.T) {
+	reg := nodectrl.NewRegistry(nil)
+	h, _ := NewNodeControlHandler(reg)
+	id, _ := identity.Generate(identity.RoleSandboxHost)
+	fp := id.Fingerprint()
+	registration := h.attachRegistration(fp)
+	reg.Register(fp, "node", "v1", nodectrl.Resources{})
+	h.RevokeRegistration(fp)
+	select {
+	case <-registration.revoked:
+	default:
+		t.Fatal("revocation did not signal registration")
+	}
+	if _, ok := reg.Lookup(fp); ok {
+		t.Fatal("revocation did not forget registry entry")
+	}
+}
+
 // TestNodeControlHandlerRejectsMissingPeerIdentity drives the
 // handler methods with a Connect request that lacks the
 // X-Daft-Peer-Fingerprint header and verifies each one returns
@@ -143,6 +186,31 @@ func TestHeartbeatUnknownNodeMapsToFailedPrecondition(t *testing.T) {
 	_, err = h.Heartbeat(t.Context(), req)
 	if connect.CodeOf(err) != connect.CodeFailedPrecondition {
 		t.Errorf("code = %s, want FailedPrecondition", connect.CodeOf(err))
+	}
+}
+
+func TestHeartbeatRejectsNonNodeRole(t *testing.T) {
+	peers := identity.NewMemoryPeerStore()
+	id := mustGenerate(t, identity.RoleClient)
+	if err := peers.Add(identity.Peer{Fingerprint: id.Fingerprint(), Role: identity.RoleClient}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	h, _ := NewNodeControlHandler(nodectrl.NewRegistry(nil), peers)
+	req := connect.NewRequest(&nodectrlv1.HeartbeatRequest{})
+	req.Header().Set(peerFingerprintHeader, id.Fingerprint().String())
+	if _, err := h.Heartbeat(t.Context(), req); connect.CodeOf(err) != connect.CodePermissionDenied {
+		t.Fatalf("Heartbeat code = %v, want permission denied", connect.CodeOf(err))
+	}
+}
+
+func TestHeartbeatRejectsRemovedPeer(t *testing.T) {
+	peers := identity.NewMemoryPeerStore()
+	id := mustGenerate(t, identity.RoleSandboxHost)
+	h, _ := NewNodeControlHandler(nodectrl.NewRegistry(nil), peers)
+	req := connect.NewRequest(&nodectrlv1.HeartbeatRequest{})
+	req.Header().Set(peerFingerprintHeader, id.Fingerprint().String())
+	if _, err := h.Heartbeat(t.Context(), req); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("Heartbeat code = %v, want unauthenticated", connect.CodeOf(err))
 	}
 }
 
