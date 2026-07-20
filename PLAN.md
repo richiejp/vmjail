@@ -3759,8 +3759,19 @@ Slices:
   explicit project directory, orchestrator precedence, matching local-cluster
   identity, and malformed cluster state; `internal/daftclient` loads an
   existing identity without an implicit bootstrap, owns one shared mTLS HTTP/2
-  transport, and exposes Workspace, Node, and Health clients. CLI migration to
-  this package and the three-tool stdio server are the next L1 slices.
+  transport, and exposes Workspace, Node, and Health clients. `cmd/daft-mcp`
+  now serves the initial `node_list`, `workspace_list`, and `workspace_get`
+  tools over stdio using the official Go MCP SDK. Results are deterministic
+  and capped at 200 objects; both Workspace reads force `mine_only=true`
+  (including get-by-UUID, because the current Get RPC itself is not
+  ownership-scoped). Tool discovery and calls are exercised through a real MCP
+  client session. Remaining L1 work is CLI migration to the shared client,
+  black-box coverage against the orchestrator harness, and deciding whether
+  the existing 200-object client-side cap should become server-side cursor
+  pagination before exposing larger fleets. The Nix source filter now excludes
+  transient local `vendor/` trees as intended, so dependency changes are always
+  checked against the pinned `vendorHash` rather than accidentally consuming a
+  developer's ignored vendor snapshot.
 - **L2 — declarative Workspace lifecycle.** Add `workspace_apply`, validate,
   push, launch, stop, and status. This is an orchestrator slice as much as an
   MCP one: no apply/update RPC exists (only the fine-grained

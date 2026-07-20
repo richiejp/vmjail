@@ -419,7 +419,7 @@ hooks:
 #     only by the Nix build (`nix build .#daft-sandboxd`). Use Nix
 #     for any release artefact.
 
-build: build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator
+build: build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator build-daft-mcp
 
 # dev builds every artefact daft produces, entirely within the Nix
 # dev shell: the host-side Go binaries (build), the sandbox-VM
@@ -458,6 +458,10 @@ build-daft-sandboxd:
 build-daft-orchestrator:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-orchestrator ./cmd/daft-orchestrator
+
+build-daft-mcp:
+	@mkdir -p $(BIN_DIR)
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-mcp ./cmd/daft-mcp
 
 ## Codegen -------------------------------------------------------------------
 
