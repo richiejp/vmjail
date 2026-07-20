@@ -228,7 +228,7 @@ type VsockConfig struct {
 	// brings the feature up on the same constant port — the port number
 	// itself is never per-VM data.
 	Trace  bool // ship the agent's span buffer to the host trace sink
-	Attach bool // vsock-listen for inbound exec-attach sessions
+	Attach bool // vsock-listen for inbound PTY attach and non-PTY job sessions
 	Net    bool // dial sandboxd's per-VM userspace TCP/IP stack
 }
 

@@ -3869,7 +3869,14 @@ Slices:
   ordinary pipes on its own fixed vsock port, emits separated stdout/stderr
   frames and a structured terminal frame, and treats host disconnect as
   cancellation; a host runner adapts that protocol directly to the Node job
-  manager. The interactive attach transport remains PTY-based by design. The
+  manager. The manager now also indexes optional AgentRun idempotency keys,
+  rejects a key reused for a different Sandbox/command, makes cancellation
+  retry-safe, and permits terminal-only deletion so retained results cannot
+  permanently exhaust its bounded capacity. The interactive attach transport
+  remains PTY-based by design. A per-Sandbox job route registry now maps live
+  Sandbox UIDs to their hybrid-vsock sockets; executor integration owns each
+  route for exactly the VM lifetime and enables the shared guest control
+  listener when detached jobs are configured. The
   Node route registration and Node/orchestrator job RPCs remain before the
   manager is wired into production; cursor-based reattach then builds directly
   on its spool API.

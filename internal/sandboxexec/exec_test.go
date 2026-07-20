@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/richiejp/darkaifactory/internal/agent"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
@@ -1741,6 +1742,51 @@ func TestNewRejectsAttachRegistryWithoutVsockDir(t *testing.T) {
 	}
 	if _, err := New(Config{Stdout: io.Discard, AttachRegistry: ar, VsockDir: "relative"}); err == nil {
 		t.Fatal("expected error when VsockDir is relative")
+	}
+}
+
+func TestJobRegistryRequiresVsockAndEnablesGuestControl(t *testing.T) {
+	jr := sandboxgateway.NewJobRegistry()
+	if _, err := New(Config{Stdout: io.Discard, JobRegistry: jr}); err == nil {
+		t.Fatal("expected error when JobRegistry is set but VsockDir is empty")
+	}
+	var seen sandbox.Config
+	e, err := New(Config{
+		Stdout: io.Discard,
+		Runner: func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+			seen = cfg
+			return nil
+		},
+		JobRegistry: jr,
+		VsockDir:    testVsockDir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-job", &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatal(err)
+	}
+	if seen.Vsock == nil || !seen.Vsock.Attach {
+		t.Fatalf("Vsock = %+v, want shared attach/job listener enabled", seen.Vsock)
+	}
+}
+
+func TestRegisterJobRouteLifecycle(t *testing.T) {
+	jr := sandboxgateway.NewJobRegistry()
+	e, err := New(Config{Stdout: io.Discard, JobRegistry: jr, VsockDir: testVsockDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := sandbox.Config{Vsock: &sandbox.VsockConfig{
+		HostSocket: filepath.Join(testVsockDir, "sb-job"), GuestCID: 3, Attach: true,
+	}}
+	unregister := e.registerJobRoute(cfg, "sb-job")
+	if _, err := jr.Dial(t.Context(), "sb-job", agent.DefaultJobVsockPort); errors.Is(err, sandboxgateway.ErrJobNoRoute) {
+		t.Fatalf("registered route was not found: %v", err)
+	}
+	unregister()
+	if _, err := jr.Dial(t.Context(), "sb-job", agent.DefaultJobVsockPort); !errors.Is(err, sandboxgateway.ErrJobNoRoute) {
+		t.Fatalf("route remained after unregister: %v", err)
 	}
 }
 

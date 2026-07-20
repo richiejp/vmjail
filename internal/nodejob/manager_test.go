@@ -144,9 +144,48 @@ func TestManagerCancelWinsTerminalRace(t *testing.T) {
 	if finished.State != StateCanceled || finished.ExitCode != 137 {
 		t.Fatalf("finished = %+v", finished)
 	}
-	if _, err := m.Cancel(s.ID); !errors.Is(err, ErrTerminal) {
-		t.Fatalf("second Cancel error = %v", err)
+	if again, err := m.Cancel(s.ID); err != nil || again.State != StateCanceled {
+		t.Fatalf("second Cancel = %+v, %v", again, err)
 	}
+}
+
+func TestManagerIdempotentStartConflictAndTerminalDelete(t *testing.T) {
+	proc := newFakeProcess()
+	m := newTestManager(t, &fakeRunner{process: proc}, Limits{MaxJobs: 1})
+	req := StartRequest{IdempotencyKey: "run-1", SandboxUID: "sb", Command: []string{testCommand}}
+	first, err := m.Start(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := m.Start(req)
+	if err != nil || again.ID != first.ID {
+		t.Fatalf("idempotent Start = %+v, %v", again, err)
+	}
+	conflict := req
+	conflict.Command = []string{"different"}
+	if _, err := m.Start(conflict); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("conflicting Start = %v", err)
+	}
+	if err := m.Delete(first.ID); !errors.Is(err, ErrNotTerminal) {
+		t.Fatalf("Delete running = %v", err)
+	}
+	proc.finish(Result{}, nil)
+	waitTerminal(t, m, first.ID)
+	if err := m.Delete(first.ID); err != nil {
+		t.Fatalf("Delete terminal: %v", err)
+	}
+	if err := m.Delete(first.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second Delete = %v", err)
+	}
+
+	// Deletion releases both capacity and the key, allowing a fresh job.
+	proc2 := newFakeProcess()
+	m.runner = &fakeRunner{process: proc2}
+	fresh, err := m.Start(req)
+	if err != nil || fresh.ID == first.ID {
+		t.Fatalf("fresh Start after Delete = %+v, %v", fresh, err)
+	}
+	proc2.finish(Result{}, nil)
 }
 
 func TestManagerLifecycleCancellationStopsJobsAndRejectsStarts(t *testing.T) {
@@ -252,6 +291,7 @@ func TestManagerValidationAndConstruction(t *testing.T) {
 		{SandboxUID: "sb", Command: make([]string, MaxCommandArgs+1)},
 		{SandboxUID: "sb", Command: []string{""}},
 		{SandboxUID: "sb", Command: []string{strings.Repeat("x", MaxCommandArgBytes+1)}},
+		{IdempotencyKey: strings.Repeat("k", MaxIdempotencyBytes+1), SandboxUID: "sb", Command: []string{"x"}},
 	}
 	for i, req := range bad {
 		if _, err := m.Start(req); err == nil {

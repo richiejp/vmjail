@@ -117,6 +117,9 @@ type Executor struct {
 	// to wrap the framed conn as an AttachSession. Sharing
 	// VsockDir with bridger is enforced by New().
 	attachRegistry *sandboxgateway.AttachRegistry
+	// jobRegistry is the parallel non-PTY guest-job route table. It is
+	// populated for the VM lifetime and consumed by sandboxjob.Runner.
+	jobRegistry *sandboxgateway.JobRegistry
 	// observerRegistry, when non-nil, is the per-sandbox observer-log
 	// table the executor populates on dispatch (sandbox_uid → the
 	// dispatched Config.ObserverLogPath). The orchestrator-driven
@@ -215,6 +218,9 @@ type Config struct {
 	// Bridger). Leave nil for tests/baselines that don't exercise
 	// attach.
 	AttachRegistry *sandboxgateway.AttachRegistry
+	// JobRegistry routes detached non-PTY jobs to the running VM. It shares
+	// the per-Sandbox hybrid-vsock socket and therefore requires VsockDir.
+	JobRegistry *sandboxgateway.JobRegistry
 	// ObserverRegistry, when non-nil, is the per-sandbox observer-log
 	// table the executor populates on every dispatch whose
 	// ObserverLogPath is set (sandbox_uid → path). The
@@ -328,9 +334,9 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.Runner == nil {
 		cfg.Runner = sandbox.Serve
 	}
-	if cfg.Bridger != nil || cfg.AttachRegistry != nil || cfg.NetEnabled {
+	if cfg.Bridger != nil || cfg.AttachRegistry != nil || cfg.JobRegistry != nil || cfg.NetEnabled {
 		if cfg.VsockDir == "" {
-			return nil, errors.New("sandboxexec: VsockDir required when Bridger, AttachRegistry, or NetEnabled is set")
+			return nil, errors.New("sandboxexec: VsockDir required when Bridger, AttachRegistry, JobRegistry, or NetEnabled is set")
 		}
 		if !filepath.IsAbs(cfg.VsockDir) {
 			return nil, fmt.Errorf("sandboxexec: VsockDir %q must be absolute", cfg.VsockDir)
@@ -366,6 +372,7 @@ func New(cfg Config) (*Executor, error) {
 		assembler:         cfg.Assembler,
 		bridger:           cfg.Bridger,
 		attachRegistry:    cfg.AttachRegistry,
+		jobRegistry:       cfg.JobRegistry,
 		observerRegistry:  cfg.ObserverRegistry,
 		summaryRegistry:   cfg.SummaryRegistry,
 		observeSummary:    cfg.ObserveSummary,
@@ -522,6 +529,8 @@ func (e *Executor) HandleSandboxEvent(
 	defer unregisterPorts()
 	unregisterAttach := e.registerAttachRoute(cfg, uid)
 	defer unregisterAttach()
+	unregisterJob := e.registerJobRoute(cfg, uid)
+	defer unregisterJob()
 	unregisterObserver := e.registerObserverRoute(cfg, uid)
 	defer unregisterObserver()
 	unregisterSummary := e.registerSummaryRoute(cfg, uid)
@@ -606,6 +615,29 @@ func (e *Executor) registerAttachRoute(cfg sandbox.Config, uid string) func() {
 		return func() {}
 	}
 	return func() { e.attachRegistry.Unregister(uid) }
+}
+
+// registerJobRoute exposes the running VM's hybrid-vsock socket through the
+// per-sandbox job registry. The guest protocol chooses the actual port when it
+// dials, so this route is reusable by the sandboxjob runner without importing
+// that protocol into the executor.
+func (e *Executor) registerJobRoute(cfg sandbox.Config, uid string) func() {
+	if e.jobRegistry == nil || cfg.Vsock == nil || !cfg.Vsock.Attach || uid == "" {
+		return func() {}
+	}
+	hostSocket := cfg.Vsock.HostSocket
+	dial := func(ctx context.Context, port uint32) (net.Conn, error) {
+		conn, err := sandbox.DialGuestVsock(ctx, hostSocket, port)
+		if err != nil {
+			return nil, fmt.Errorf("sandboxexec: dial job vsock: %w", err)
+		}
+		return conn, nil
+	}
+	if err := e.jobRegistry.Register(uid, dial); err != nil {
+		_, _ = fmt.Fprintf(e.stdout, "sandboxexec: register job route: %v\n", err)
+		return func() {}
+	}
+	return func() { e.jobRegistry.Unregister(uid) }
 }
 
 // registerObserverRoute adds one ObserverRegistry entry mapping this
@@ -756,7 +788,7 @@ func (e *Executor) applyVsockEgress(cfg *sandbox.Config, uid string, enableNet, 
 		return
 	}
 	cfg.Vsock = e.assignVsock(uid)
-	if enableAttach && e.attachRegistry != nil {
+	if enableAttach && (e.attachRegistry != nil || e.jobRegistry != nil) {
 		cfg.Vsock.Attach = true
 	}
 	if enableNet && e.netEnabled {

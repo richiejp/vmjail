@@ -22,14 +22,16 @@ const (
 	MaxCommandArgs       = 256
 	MaxCommandArgBytes   = 16 << 10
 	MaxSandboxUIDBytes   = 128
+	MaxIdempotencyBytes  = 128
 	MaxTerminalReasonLen = 16 << 10
 )
 
 var (
-	ErrNotFound      = errors.New("nodejob: job not found")
-	ErrCapacity      = errors.New("nodejob: job capacity reached")
-	ErrInvalidCursor = errors.New("nodejob: cursor is ahead of spool")
-	ErrTerminal      = errors.New("nodejob: job is already terminal")
+	ErrNotFound            = errors.New("nodejob: job not found")
+	ErrCapacity            = errors.New("nodejob: job capacity reached")
+	ErrInvalidCursor       = errors.New("nodejob: cursor is ahead of spool")
+	ErrNotTerminal         = errors.New("nodejob: job is not terminal")
+	ErrIdempotencyConflict = errors.New("nodejob: idempotency key reused with different request")
 )
 
 type State string
@@ -67,8 +69,9 @@ func (l Limits) withDefaults() Limits {
 }
 
 type StartRequest struct {
-	SandboxUID string
-	Command    []string
+	IdempotencyKey string
+	SandboxUID     string
+	Command        []string
 }
 
 type Result struct {
@@ -117,21 +120,23 @@ type Manager struct {
 	limits Limits
 	now    func() time.Time
 
-	mu   sync.RWMutex
-	jobs map[string]*job
+	mu            sync.RWMutex
+	jobs          map[string]*job
+	byIdempotency map[string]*job
 }
 
 type job struct {
 	mu sync.Mutex
 
-	id         string
-	sandboxUID string
-	command    []string
-	state      State
-	stdout     *spool
-	stderr     *spool
-	process    Process
-	cancel     context.CancelFunc
+	id             string
+	idempotencyKey string
+	sandboxUID     string
+	command        []string
+	state          State
+	stdout         *spool
+	stderr         *spool
+	process        Process
+	cancel         context.CancelFunc
 
 	exitCode     int32
 	exitCodeSet  bool
@@ -149,7 +154,10 @@ func New(ctx context.Context, runner Runner, limits Limits) (*Manager, error) {
 	if runner == nil {
 		return nil, errors.New("nodejob: nil runner")
 	}
-	m := &Manager{ctx: ctx, runner: runner, limits: limits.withDefaults(), now: time.Now, jobs: map[string]*job{}}
+	m := &Manager{
+		ctx: ctx, runner: runner, limits: limits.withDefaults(), now: time.Now,
+		jobs: map[string]*job{}, byIdempotency: map[string]*job{},
+	}
 	go m.cancelOnShutdown()
 	return m, nil
 }
@@ -162,6 +170,16 @@ func (m *Manager) Start(req StartRequest) (Snapshot, error) {
 		return Snapshot{}, fmt.Errorf("nodejob: manager stopped: %w", err)
 	}
 	m.mu.Lock()
+	if req.IdempotencyKey != "" {
+		if existing := m.byIdempotency[req.IdempotencyKey]; existing != nil {
+			if !existing.matches(req) {
+				m.mu.Unlock()
+				return Snapshot{}, ErrIdempotencyConflict
+			}
+			m.mu.Unlock()
+			return m.snapshot(existing, 0, 0, m.limits.MaxReadBytes)
+		}
+	}
 	if len(m.jobs) >= m.limits.MaxJobs {
 		m.mu.Unlock()
 		return Snapshot{}, ErrCapacity
@@ -173,11 +191,15 @@ func (m *Manager) Start(req StartRequest) (Snapshot, error) {
 	}
 	jobCtx, cancel := context.WithCancel(m.ctx)
 	j := &job{
-		id: id, sandboxUID: req.SandboxUID, command: append([]string(nil), req.Command...),
+		id: id, idempotencyKey: req.IdempotencyKey,
+		sandboxUID: req.SandboxUID, command: append([]string(nil), req.Command...),
 		state: StateStarting, stdout: newSpool(m.limits.SpoolBytes), stderr: newSpool(m.limits.SpoolBytes),
 		cancel: cancel, createdAt: m.now(),
 	}
 	m.jobs[id] = j
+	if req.IdempotencyKey != "" {
+		m.byIdempotency[req.IdempotencyKey] = j
+	}
 	m.mu.Unlock()
 
 	proc, err := m.runner.Start(jobCtx, req, j.stdout, j.stderr)
@@ -223,9 +245,9 @@ func (m *Manager) Cancel(id string) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	j.mu.Lock()
-	if j.state.Terminal() {
+	if j.state.Terminal() || j.cancelCalled {
 		j.mu.Unlock()
-		return Snapshot{}, ErrTerminal
+		return m.snapshot(j, 0, 0, m.limits.MaxReadBytes)
 	}
 	j.cancelCalled = true
 	j.state = StateCanceling
@@ -236,6 +258,28 @@ func (m *Manager) Cancel(id string) (Snapshot, error) {
 		_ = proc.Cancel()
 	}
 	return m.snapshot(j, 0, 0, m.limits.MaxReadBytes)
+}
+
+// Delete releases a terminal job and its idempotency key. Callers must first
+// durably persist the terminal AgentRun result; running jobs are never removed.
+// Repeating a successful delete returns ErrNotFound.
+func (m *Manager) Delete(id string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	j := m.jobs[id]
+	if j == nil {
+		return ErrNotFound
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if !j.state.Terminal() {
+		return ErrNotTerminal
+	}
+	delete(m.jobs, id)
+	if j.idempotencyKey != "" && m.byIdempotency[j.idempotencyKey] == j {
+		delete(m.byIdempotency, j.idempotencyKey)
+	}
+	return nil
 }
 
 func (m *Manager) wait(j *job, proc Process) {
@@ -297,6 +341,18 @@ func (m *Manager) lookup(id string) (*job, error) {
 	return j, nil
 }
 
+func (j *job) matches(req StartRequest) bool {
+	if j.sandboxUID != req.SandboxUID || len(j.command) != len(req.Command) {
+		return false
+	}
+	for i := range j.command {
+		if j.command[i] != req.Command[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (m *Manager) snapshot(j *job, stdoutCursor, stderrCursor uint64, maxBytes int) (Snapshot, error) {
 	out, err := j.stdout.read(stdoutCursor, maxBytes)
 	if err != nil {
@@ -316,6 +372,9 @@ func (m *Manager) snapshot(j *job, stdoutCursor, stderrCursor uint64, maxBytes i
 }
 
 func validateStart(req StartRequest) error {
+	if len(req.IdempotencyKey) > MaxIdempotencyBytes {
+		return errors.New("nodejob: idempotency key is too long")
+	}
 	if req.SandboxUID == "" || len(req.SandboxUID) > MaxSandboxUIDBytes {
 		return errors.New("nodejob: sandbox UID is empty or too long")
 	}
