@@ -28,6 +28,10 @@ message StartAgentRunRequest {
   string image_ref = 6;
   AgentRunResources resources = 7;
   AgentRunEgress egress = 8;
+  // Non-secret delivery requirement from the frozen profile. The credential
+  // profile name and credential bytes never cross this service.
+  bool credential_required = 9;
+  string credential_provider = 10;
 }
 
 message AgentRunResources {
@@ -48,6 +52,7 @@ enum AgentRunState {
   AGENT_RUN_STATE_FAILED = 6;
   AGENT_RUN_STATE_CANCELED = 7;
   AGENT_RUN_STATE_LOST = 8;
+  AGENT_RUN_STATE_AWAITING_CREDENTIAL = 9;
 }
 
 message AgentRun {

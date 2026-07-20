@@ -293,6 +293,50 @@ func TestAgentRunHandlerStartRetainsStartingOnAmbiguousFailure(t *testing.T) {
 	}
 }
 
+func TestAgentRunHandlerCredentialRunDoesNotStartBeforeDelivery(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	workspaces := workspacecatalog.NewStore(nil)
+	workspace, err := workspaces.Create(workspacecatalog.CreateInput{UUID: testAgentWorkspace, Name: testAgentProject, OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = workspaces.Update(workspace.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node, AgentProfileDigest: testAgentDigest}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	starter := &fakeAgentStarter{snapshot: nodejob.Snapshot{ID: testAgentJob}}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspaces, nodes, starter)
+	response, err := handler.Start(t.Context(), agentRunRequest(&agentrunv1.StartAgentRunRequest{WorkspaceUuid: workspace.Metadata.UUID, ProfileName: testAgentProfile, ProfileDigest: testAgentDigest, Command: []string{testAgentProfile}, CredentialRequired: true, CredentialProvider: agentruncatalog.CredentialProviderCodex}, owner))
+	if err != nil || response.Msg.GetState() != agentrunv1.AgentRunState_AGENT_RUN_STATE_AWAITING_CREDENTIAL || starter.request.SandboxUID != "" {
+		t.Fatalf("credential Start = %#v, starter=%#v, %v", response, starter.request, err)
+	}
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := runs.Get(owner, response.Msg.GetUuid())
+	if err != nil || got.State != agentruncatalog.StateAwaitingCredential {
+		t.Fatalf("live reconciliation advanced run = %#v, %v", got, err)
+	}
+
+	restarted := NewAgentRunHandler(runs, nil)
+	restarted.SetStartDependencies(workspaces, nodes, starter)
+	if err := restarted.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got, err = runs.Get(owner, response.Msg.GetUuid())
+	if err != nil || got.State != agentruncatalog.StateLost || got.Reason == "" {
+		t.Fatalf("restart reconciliation = %#v, %v", got, err)
+	}
+}
+
 func TestAgentRunReconcileRecoversStartAndCollectsResult(t *testing.T) {
 	runs, _ := agentRunStore(t)
 	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
@@ -555,6 +599,13 @@ func TestAgentSandboxPolicyValidation(t *testing.T) {
 			request.Resources = &agentrunv1.AgentRunResources{Enable: true, CpuCores: 1025, MemoryBytes: 1}
 		}},
 		{"image unpinned", func(request *agentrunv1.StartAgentRunRequest) { request.ImageRef = "example.com/agent:latest" }},
+		{"credential required without provider", func(request *agentrunv1.StartAgentRunRequest) { request.CredentialRequired = true }},
+		{"credential provider without requirement", func(request *agentrunv1.StartAgentRunRequest) {
+			request.CredentialProvider = agentruncatalog.CredentialProviderCodex
+		}},
+		{"unsupported credential provider", func(request *agentrunv1.StartAgentRunRequest) {
+			request.CredentialRequired, request.CredentialProvider = true, "claude"
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -730,15 +781,16 @@ func TestAgentRunErrorFallback(t *testing.T) {
 
 func TestMapAgentRunState(t *testing.T) {
 	cases := map[agentruncatalog.State]agentrunv1.AgentRunState{
-		agentruncatalog.StateQueued:    agentrunv1.AgentRunState_AGENT_RUN_STATE_QUEUED,
-		agentruncatalog.StateStarting:  agentrunv1.AgentRunState_AGENT_RUN_STATE_STARTING,
-		agentruncatalog.StateRunning:   agentrunv1.AgentRunState_AGENT_RUN_STATE_RUNNING,
-		agentruncatalog.StateCanceling: agentrunv1.AgentRunState_AGENT_RUN_STATE_CANCELING,
-		agentruncatalog.StateSucceeded: agentrunv1.AgentRunState_AGENT_RUN_STATE_SUCCEEDED,
-		agentruncatalog.StateFailed:    agentrunv1.AgentRunState_AGENT_RUN_STATE_FAILED,
-		agentruncatalog.StateCanceled:  agentrunv1.AgentRunState_AGENT_RUN_STATE_CANCELED,
-		agentruncatalog.StateLost:      agentrunv1.AgentRunState_AGENT_RUN_STATE_LOST,
-		"unknown":                      agentrunv1.AgentRunState_AGENT_RUN_STATE_UNSPECIFIED,
+		agentruncatalog.StateQueued:             agentrunv1.AgentRunState_AGENT_RUN_STATE_QUEUED,
+		agentruncatalog.StateAwaitingCredential: agentrunv1.AgentRunState_AGENT_RUN_STATE_AWAITING_CREDENTIAL,
+		agentruncatalog.StateStarting:           agentrunv1.AgentRunState_AGENT_RUN_STATE_STARTING,
+		agentruncatalog.StateRunning:            agentrunv1.AgentRunState_AGENT_RUN_STATE_RUNNING,
+		agentruncatalog.StateCanceling:          agentrunv1.AgentRunState_AGENT_RUN_STATE_CANCELING,
+		agentruncatalog.StateSucceeded:          agentrunv1.AgentRunState_AGENT_RUN_STATE_SUCCEEDED,
+		agentruncatalog.StateFailed:             agentrunv1.AgentRunState_AGENT_RUN_STATE_FAILED,
+		agentruncatalog.StateCanceled:           agentrunv1.AgentRunState_AGENT_RUN_STATE_CANCELED,
+		agentruncatalog.StateLost:               agentrunv1.AgentRunState_AGENT_RUN_STATE_LOST,
+		"unknown":                               agentrunv1.AgentRunState_AGENT_RUN_STATE_UNSPECIFIED,
 	}
 	for input, want := range cases {
 		if got := mapAgentRunState(input); got != want {

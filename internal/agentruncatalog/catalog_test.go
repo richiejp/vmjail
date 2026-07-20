@@ -32,6 +32,20 @@ func testOwner(b byte) identity.Fingerprint {
 	return fp
 }
 
+func openTestStore(t *testing.T) (store *Store, control *controlstore.Store) {
+	t.Helper()
+	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(control.DB(), nil)
+	if err != nil {
+		_ = control.Close()
+		t.Fatal(err)
+	}
+	return store, control
+}
+
 func TestRunTransitionsPersistWithEvents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control")
 	control, err := controlstore.Open(path)
@@ -100,6 +114,41 @@ func TestRunTransitionsPersistWithEvents(t *testing.T) {
 	}
 	if got.State != StateSucceeded || got.LastEventCursor != 4 || got.NodeJobID != "job-1" {
 		t.Fatalf("reopened = %#v", got)
+	}
+}
+
+func TestCredentialRunWaitsBeforeStarting(t *testing.T) {
+	store, control := openTestStore(t)
+	defer func() { _ = control.Close() }()
+	owner, node := testOwner(1), testOwner(2)
+	run, err := store.Create(CreateInput{Command: []string{testProfileName}, UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner, CredentialRequired: true, CredentialProvider: CredentialProviderCodex})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = store.Transition(owner, run.UUID, TransitionInput{From: []State{StateQueued}, To: StateAwaitingCredential, SandboxUID: testSandboxUID, NodeFingerprint: node, NodeInstanceID: testNodeInstance})
+	if err != nil || run.State != StateAwaitingCredential {
+		t.Fatalf("awaiting credential = %#v, %v", run, err)
+	}
+	run, err = store.Transition(owner, run.UUID, TransitionInput{From: []State{StateAwaitingCredential}, To: StateStarting})
+	if err != nil || run.State != StateStarting {
+		t.Fatalf("starting = %#v, %v", run, err)
+	}
+}
+
+func TestCreateRejectsInvalidCredentialRequirements(t *testing.T) {
+	store, control := openTestStore(t)
+	defer func() { _ = control.Close() }()
+	base := CreateInput{Command: []string{testProfileName}, UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: testOwner(1)}
+	for _, mutate := range []func(*CreateInput){
+		func(in *CreateInput) { in.CredentialRequired = true },
+		func(in *CreateInput) { in.CredentialProvider = CredentialProviderCodex },
+		func(in *CreateInput) { in.CredentialRequired, in.CredentialProvider = true, "claude" },
+	} {
+		in := base
+		mutate(&in)
+		if _, err := store.Create(in); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("Create(%#v) = %v", in, err)
+		}
 	}
 }
 
@@ -204,12 +253,13 @@ func TestCreateValidatesAndCopiesCommand(t *testing.T) {
 
 func TestAllLegalAndIllegalTransitions(t *testing.T) {
 	legal := map[State][]State{
-		StateQueued:    {StateStarting, StateCanceled, StateFailed},
-		StateStarting:  {StateRunning, StateCanceled, StateFailed, StateLost},
-		StateRunning:   {StateCanceling, StateSucceeded, StateFailed, StateLost},
-		StateCanceling: {StateCanceled, StateFailed, StateLost},
+		StateQueued:             {StateAwaitingCredential, StateStarting, StateCanceled, StateFailed},
+		StateAwaitingCredential: {StateStarting, StateCanceled, StateFailed, StateLost},
+		StateStarting:           {StateRunning, StateCanceled, StateFailed, StateLost},
+		StateRunning:            {StateCanceling, StateSucceeded, StateFailed, StateLost},
+		StateCanceling:          {StateCanceled, StateFailed, StateLost},
 	}
-	all := []State{StateQueued, StateStarting, StateRunning, StateCanceling, StateSucceeded, StateFailed, StateCanceled, StateLost}
+	all := []State{StateQueued, StateAwaitingCredential, StateStarting, StateRunning, StateCanceling, StateSucceeded, StateFailed, StateCanceled, StateLost}
 	for _, from := range all {
 		for _, to := range all {
 			if got, want := validTransition(from, to), slicesContain(legal[from], to); got != want {
@@ -406,6 +456,9 @@ func TestValidateBindings(t *testing.T) {
 		ok   bool
 	}{
 		{name: "queued", run: Run{State: StateQueued}, ok: true},
+		{name: "awaiting credential", run: withState(Run{SandboxUID: testSandboxUID, NodeFingerprint: testOwner(1), NodeInstanceID: testNodeInstance, CredentialRequired: true, CredentialProvider: CredentialProviderCodex}, StateAwaitingCredential), ok: true},
+		{name: "awaiting without requirement", run: withState(bound, StateAwaitingCredential)},
+		{name: "credential marker mismatch", run: Run{State: StateQueued, CredentialRequired: true}},
 		{name: "starting", run: withState(bound, StateStarting), ok: true},
 		{name: "starting unbound", run: Run{State: StateStarting}},
 		{name: "running", run: withState(bound, StateRunning), ok: true},

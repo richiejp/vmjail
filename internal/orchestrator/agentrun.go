@@ -49,17 +49,19 @@ type agentSandboxLauncher interface {
 
 type AgentRunHandler struct {
 	agentrunv1connect.UnimplementedAgentRunServiceHandler
-	store        *agentruncatalog.Store
-	canceler     agentJobCanceler
-	starter      agentJobStarter
-	reconciler   agentJobReconciler
-	workspaces   *workspacecatalog.Store
-	nodes        *nodectrl.Registry
-	launcher     agentSandboxLauncher
-	now          func() time.Time
-	nodeGrace    time.Duration
-	missingMu    sync.Mutex
-	missingSince map[string]time.Time
+	store           *agentruncatalog.Store
+	canceler        agentJobCanceler
+	starter         agentJobStarter
+	reconciler      agentJobReconciler
+	workspaces      *workspacecatalog.Store
+	nodes           *nodectrl.Registry
+	launcher        agentSandboxLauncher
+	now             func() time.Time
+	nodeGrace       time.Duration
+	missingMu       sync.Mutex
+	missingSince    map[string]time.Time
+	credentialMu    sync.Mutex
+	credentialWaits map[string]struct{}
 }
 
 // Run periodically reconciles durable runs until ctx is canceled.
@@ -91,7 +93,7 @@ func (h *AgentRunHandler) SetSandboxLauncher(launcher agentSandboxLauncher) {
 }
 
 func NewAgentRunHandler(store *agentruncatalog.Store, canceler agentJobCanceler) *AgentRunHandler {
-	return &AgentRunHandler{store: store, canceler: canceler, now: time.Now, nodeGrace: defaultAgentRunNodeGrace, missingSince: make(map[string]time.Time)}
+	return &AgentRunHandler{store: store, canceler: canceler, now: time.Now, nodeGrace: defaultAgentRunNodeGrace, missingSince: make(map[string]time.Time), credentialWaits: make(map[string]struct{})}
 }
 
 func (h *AgentRunHandler) setReconcileClock(now func() time.Time, grace time.Duration) {
@@ -147,17 +149,28 @@ func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentr
 		UUID: mintWorkspaceUUID(), WorkspaceUUID: workspace.Metadata.UUID,
 		ProfileName: req.Msg.GetProfileName(), ProfileDigest: req.Msg.GetProfileDigest(),
 		Prompt: req.Msg.GetPrompt(), Command: req.Msg.GetCommand(), OwnerFingerprint: owner,
+		CredentialRequired: req.Msg.GetCredentialRequired(), CredentialProvider: req.Msg.GetCredentialProvider(),
 	})
 	if err != nil {
 		return nil, agentRunError(err)
 	}
+	nextState := agentruncatalog.StateStarting
+	message := "sandbox assigned"
+	if run.CredentialRequired {
+		nextState = agentruncatalog.StateAwaitingCredential
+		message = "sandbox awaiting credential"
+	}
 	run, err = h.store.Transition(owner, run.UUID, agentruncatalog.TransitionInput{
-		From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting,
-		Message: "sandbox assigned", SandboxUID: binding.UID,
+		From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: nextState,
+		Message: message, SandboxUID: binding.UID,
 		NodeFingerprint: binding.NodeFingerprint, NodeInstanceID: node.InstanceID,
 	})
 	if err != nil {
 		return nil, agentRunError(err)
+	}
+	if run.State == agentruncatalog.StateAwaitingCredential {
+		h.markCredentialWait(run.UUID)
+		return connect.NewResponse(mapAgentRun(run)), nil
 	}
 	command := append([]string(nil), run.Command...)
 	if run.Prompt != "" {
@@ -184,6 +197,9 @@ func agentSandboxPolicy(req *agentrunv1.StartAgentRunRequest) (AgentSandboxPolic
 	}
 	if resources == nil {
 		return AgentSandboxPolicy{}, connect.NewError(connect.CodeInvalidArgument, errors.New("orchestrator: AgentProfile resources section is required"))
+	}
+	if req.GetCredentialRequired() != (req.GetCredentialProvider() != "") || (req.GetCredentialProvider() != "" && req.GetCredentialProvider() != agentruncatalog.CredentialProviderCodex) {
+		return AgentSandboxPolicy{}, connect.NewError(connect.CodeInvalidArgument, errors.New("orchestrator: credential provider must be codex exactly when credentials are required"))
 	}
 	if resources.GetEnable() != (resources.GetCpuCores() != 0 && resources.GetMemoryBytes() != 0) {
 		return AgentSandboxPolicy{}, connect.NewError(connect.CodeInvalidArgument, errors.New("orchestrator: AgentProfile resource values must both be positive exactly when enabled"))
@@ -224,6 +240,9 @@ func (h *AgentRunHandler) reconcileRun(ctx context.Context, run agentruncatalog.
 	if run.State == agentruncatalog.StateQueued {
 		_, err := h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: agentruncatalog.StateFailed, Message: "startup binding unavailable", Reason: "orchestrator restarted before the run was bound to a Sandbox"})
 		return err
+	}
+	if run.State == agentruncatalog.StateAwaitingCredential {
+		return h.reconcileCredentialWait(run)
 	}
 	node, connected := h.nodes.Lookup(run.NodeFingerprint)
 	if !connected {
@@ -284,6 +303,14 @@ func (h *AgentRunHandler) reconcileRun(ctx context.Context, run agentruncatalog.
 		return err
 	}
 	return h.reconciler.DeleteNodeJob(ctx, run.NodeFingerprint, run.NodeJobID)
+}
+
+func (h *AgentRunHandler) reconcileCredentialWait(run agentruncatalog.Run) error {
+	if h.hasCredentialWait(run.UUID) {
+		return nil
+	}
+	_, err := h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: agentruncatalog.StateLost, Message: "credential delivery lost", Reason: "orchestrator restarted before ephemeral credential delivery completed"})
+	return err
 }
 
 func (h *AgentRunHandler) nodeAbsenceExpired(uuid string) bool {
@@ -373,8 +400,9 @@ func (h *AgentRunHandler) Cancel(ctx context.Context, req *connect.Request[agent
 		return nil, agentRunError(err)
 	}
 	switch run.State {
-	case agentruncatalog.StateQueued, agentruncatalog.StateStarting:
+	case agentruncatalog.StateQueued, agentruncatalog.StateAwaitingCredential, agentruncatalog.StateStarting:
 		run, err = h.store.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: agentruncatalog.StateCanceled, Message: "run canceled"})
+		h.clearCredentialWait(run.UUID)
 	case agentruncatalog.StateRunning:
 		if h.canceler == nil {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("orchestrator: AgentRun job cancellation is not configured"))
@@ -447,6 +475,8 @@ func mapAgentRunState(state agentruncatalog.State) agentrunv1.AgentRunState {
 	switch state {
 	case agentruncatalog.StateQueued:
 		return agentrunv1.AgentRunState_AGENT_RUN_STATE_QUEUED
+	case agentruncatalog.StateAwaitingCredential:
+		return agentrunv1.AgentRunState_AGENT_RUN_STATE_AWAITING_CREDENTIAL
 	case agentruncatalog.StateStarting:
 		return agentrunv1.AgentRunState_AGENT_RUN_STATE_STARTING
 	case agentruncatalog.StateRunning:
@@ -464,4 +494,23 @@ func mapAgentRunState(state agentruncatalog.State) agentrunv1.AgentRunState {
 	default:
 		return agentrunv1.AgentRunState_AGENT_RUN_STATE_UNSPECIFIED
 	}
+}
+
+func (h *AgentRunHandler) markCredentialWait(uuid string) {
+	h.credentialMu.Lock()
+	h.credentialWaits[uuid] = struct{}{}
+	h.credentialMu.Unlock()
+}
+
+func (h *AgentRunHandler) hasCredentialWait(uuid string) bool {
+	h.credentialMu.Lock()
+	defer h.credentialMu.Unlock()
+	_, ok := h.credentialWaits[uuid]
+	return ok
+}
+
+func (h *AgentRunHandler) clearCredentialWait(uuid string) {
+	h.credentialMu.Lock()
+	delete(h.credentialWaits, uuid)
+	h.credentialMu.Unlock()
 }

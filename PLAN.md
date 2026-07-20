@@ -3777,7 +3777,12 @@ Slices:
   freezes their bytes at startup, exposes them only through the redacted
   `secretvalue` callback boundary, and destroys all shared buffers on shutdown.
   It deliberately validates only the provider-native JSON envelope rather than
-  decoding or persisting token fields. Race-gate coverage added
+  decoding or persisting token fields. Credentialed AgentRuns now persist an
+  explicit `AWAITING_CREDENTIAL` state with only a non-secret provider marker;
+  neither initial start nor restart reconciliation can execute the agent from
+  that state. A live handler remembers pending delivery only in memory, while
+  restart deterministically marks an unacknowledged delivery LOST rather than
+  guessing whether the secret reached the guest. Race-gate coverage added
   alongside this slice also closed Serve/Shutdown worker-publication races and
   made broker relays join both transport handlers before either response closes.
 - **L1 — read-only MCP.** Land `cmd/daft-mcp` over stdio with initialize,

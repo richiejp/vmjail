@@ -27,15 +27,16 @@ const (
 type AgentRunState int32
 
 const (
-	AgentRunState_AGENT_RUN_STATE_UNSPECIFIED AgentRunState = 0
-	AgentRunState_AGENT_RUN_STATE_QUEUED      AgentRunState = 1
-	AgentRunState_AGENT_RUN_STATE_STARTING    AgentRunState = 2
-	AgentRunState_AGENT_RUN_STATE_RUNNING     AgentRunState = 3
-	AgentRunState_AGENT_RUN_STATE_CANCELING   AgentRunState = 4
-	AgentRunState_AGENT_RUN_STATE_SUCCEEDED   AgentRunState = 5
-	AgentRunState_AGENT_RUN_STATE_FAILED      AgentRunState = 6
-	AgentRunState_AGENT_RUN_STATE_CANCELED    AgentRunState = 7
-	AgentRunState_AGENT_RUN_STATE_LOST        AgentRunState = 8
+	AgentRunState_AGENT_RUN_STATE_UNSPECIFIED         AgentRunState = 0
+	AgentRunState_AGENT_RUN_STATE_QUEUED              AgentRunState = 1
+	AgentRunState_AGENT_RUN_STATE_STARTING            AgentRunState = 2
+	AgentRunState_AGENT_RUN_STATE_RUNNING             AgentRunState = 3
+	AgentRunState_AGENT_RUN_STATE_CANCELING           AgentRunState = 4
+	AgentRunState_AGENT_RUN_STATE_SUCCEEDED           AgentRunState = 5
+	AgentRunState_AGENT_RUN_STATE_FAILED              AgentRunState = 6
+	AgentRunState_AGENT_RUN_STATE_CANCELED            AgentRunState = 7
+	AgentRunState_AGENT_RUN_STATE_LOST                AgentRunState = 8
+	AgentRunState_AGENT_RUN_STATE_AWAITING_CREDENTIAL AgentRunState = 9
 )
 
 // Enum value maps for AgentRunState.
@@ -50,17 +51,19 @@ var (
 		6: "AGENT_RUN_STATE_FAILED",
 		7: "AGENT_RUN_STATE_CANCELED",
 		8: "AGENT_RUN_STATE_LOST",
+		9: "AGENT_RUN_STATE_AWAITING_CREDENTIAL",
 	}
 	AgentRunState_value = map[string]int32{
-		"AGENT_RUN_STATE_UNSPECIFIED": 0,
-		"AGENT_RUN_STATE_QUEUED":      1,
-		"AGENT_RUN_STATE_STARTING":    2,
-		"AGENT_RUN_STATE_RUNNING":     3,
-		"AGENT_RUN_STATE_CANCELING":   4,
-		"AGENT_RUN_STATE_SUCCEEDED":   5,
-		"AGENT_RUN_STATE_FAILED":      6,
-		"AGENT_RUN_STATE_CANCELED":    7,
-		"AGENT_RUN_STATE_LOST":        8,
+		"AGENT_RUN_STATE_UNSPECIFIED":         0,
+		"AGENT_RUN_STATE_QUEUED":              1,
+		"AGENT_RUN_STATE_STARTING":            2,
+		"AGENT_RUN_STATE_RUNNING":             3,
+		"AGENT_RUN_STATE_CANCELING":           4,
+		"AGENT_RUN_STATE_SUCCEEDED":           5,
+		"AGENT_RUN_STATE_FAILED":              6,
+		"AGENT_RUN_STATE_CANCELED":            7,
+		"AGENT_RUN_STATE_LOST":                8,
+		"AGENT_RUN_STATE_AWAITING_CREDENTIAL": 9,
 	}
 )
 
@@ -102,11 +105,15 @@ type StartAgentRunRequest struct {
 	Prompt        string                 `protobuf:"bytes,5,opt,name=prompt,proto3" json:"prompt,omitempty"`
 	// Frozen trusted-host launch policy. MCP callers cannot supply these fields;
 	// daft-mcp resolves them from the named immutable AgentProfile.
-	ImageRef      string             `protobuf:"bytes,6,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
-	Resources     *AgentRunResources `protobuf:"bytes,7,opt,name=resources,proto3" json:"resources,omitempty"`
-	Egress        *AgentRunEgress    `protobuf:"bytes,8,opt,name=egress,proto3" json:"egress,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ImageRef  string             `protobuf:"bytes,6,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
+	Resources *AgentRunResources `protobuf:"bytes,7,opt,name=resources,proto3" json:"resources,omitempty"`
+	Egress    *AgentRunEgress    `protobuf:"bytes,8,opt,name=egress,proto3" json:"egress,omitempty"`
+	// Non-secret delivery requirement from the frozen profile. The credential
+	// profile name and credential bytes never cross this service.
+	CredentialRequired bool   `protobuf:"varint,9,opt,name=credential_required,json=credentialRequired,proto3" json:"credential_required,omitempty"`
+	CredentialProvider string `protobuf:"bytes,10,opt,name=credential_provider,json=credentialProvider,proto3" json:"credential_provider,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *StartAgentRunRequest) Reset() {
@@ -193,6 +200,20 @@ func (x *StartAgentRunRequest) GetEgress() *AgentRunEgress {
 		return x.Egress
 	}
 	return nil
+}
+
+func (x *StartAgentRunRequest) GetCredentialRequired() bool {
+	if x != nil {
+		return x.CredentialRequired
+	}
+	return false
+}
+
+func (x *StartAgentRunRequest) GetCredentialProvider() string {
+	if x != nil {
+		return x.CredentialProvider
+	}
+	return ""
 }
 
 type AgentRunResources struct {
@@ -871,7 +892,7 @@ var File_agentrun_v1_agentrun_proto protoreflect.FileDescriptor
 
 const file_agentrun_v1_agentrun_proto_rawDesc = "" +
 	"\n" +
-	"\x1aagentrun/v1/agentrun.proto\x12\x10daft.agentrun.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd3\x02\n" +
+	"\x1aagentrun/v1/agentrun.proto\x12\x10daft.agentrun.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb5\x03\n" +
 	"\x14StartAgentRunRequest\x12%\n" +
 	"\x0eworkspace_uuid\x18\x01 \x01(\tR\rworkspaceUuid\x12!\n" +
 	"\fprofile_name\x18\x02 \x01(\tR\vprofileName\x12%\n" +
@@ -880,7 +901,10 @@ const file_agentrun_v1_agentrun_proto_rawDesc = "" +
 	"\x06prompt\x18\x05 \x01(\tR\x06prompt\x12\x1b\n" +
 	"\timage_ref\x18\x06 \x01(\tR\bimageRef\x12A\n" +
 	"\tresources\x18\a \x01(\v2#.daft.agentrun.v1.AgentRunResourcesR\tresources\x128\n" +
-	"\x06egress\x18\b \x01(\v2 .daft.agentrun.v1.AgentRunEgressR\x06egress\"k\n" +
+	"\x06egress\x18\b \x01(\v2 .daft.agentrun.v1.AgentRunEgressR\x06egress\x12/\n" +
+	"\x13credential_required\x18\t \x01(\bR\x12credentialRequired\x12/\n" +
+	"\x13credential_provider\x18\n" +
+	" \x01(\tR\x12credentialProvider\"k\n" +
 	"\x11AgentRunResources\x12\x16\n" +
 	"\x06enable\x18\x01 \x01(\bR\x06enable\x12\x1b\n" +
 	"\tcpu_cores\x18\x02 \x01(\rR\bcpuCores\x12!\n" +
@@ -936,7 +960,7 @@ const file_agentrun_v1_agentrun_proto_rawDesc = "" +
 	"\x11last_event_cursor\x18\x03 \x01(\x04R\x0flastEventCursor\x12\x1a\n" +
 	"\bterminal\x18\x04 \x01(\bR\bterminal\"+\n" +
 	"\x15CancelAgentRunRequest\x12\x12\n" +
-	"\x04uuid\x18\x01 \x01(\tR\x04uuid*\x99\x02\n" +
+	"\x04uuid\x18\x01 \x01(\tR\x04uuid*\xc2\x02\n" +
 	"\rAgentRunState\x12\x1f\n" +
 	"\x1bAGENT_RUN_STATE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16AGENT_RUN_STATE_QUEUED\x10\x01\x12\x1c\n" +
@@ -946,7 +970,8 @@ const file_agentrun_v1_agentrun_proto_rawDesc = "" +
 	"\x19AGENT_RUN_STATE_SUCCEEDED\x10\x05\x12\x1a\n" +
 	"\x16AGENT_RUN_STATE_FAILED\x10\x06\x12\x1c\n" +
 	"\x18AGENT_RUN_STATE_CANCELED\x10\a\x12\x18\n" +
-	"\x14AGENT_RUN_STATE_LOST\x10\b2\xb6\x03\n" +
+	"\x14AGENT_RUN_STATE_LOST\x10\b\x12'\n" +
+	"#AGENT_RUN_STATE_AWAITING_CREDENTIAL\x10\t2\xb6\x03\n" +
 	"\x0fAgentRunService\x12M\n" +
 	"\x05Start\x12&.daft.agentrun.v1.StartAgentRunRequest\x1a\x1a.daft.agentrun.v1.AgentRun\"\x00\x12I\n" +
 	"\x03Get\x12$.daft.agentrun.v1.GetAgentRunRequest\x1a\x1a.daft.agentrun.v1.AgentRun\"\x00\x12Y\n" +

@@ -33,42 +33,50 @@ const (
 type State string
 
 const (
-	StateQueued    State = "QUEUED"
-	StateStarting  State = "STARTING"
-	StateRunning   State = "RUNNING"
-	StateCanceling State = "CANCELING"
-	StateSucceeded State = "SUCCEEDED"
-	StateFailed    State = "FAILED"
-	StateCanceled  State = "CANCELED"
-	StateLost      State = "LOST"
+	StateQueued State = "QUEUED"
+	// StateAwaitingCredential has a Sandbox binding but grants no permission to
+	// start the provider process. Only an acknowledged one-shot delivery may
+	// advance it to StateStarting.
+	StateAwaitingCredential State = "AWAITING_CREDENTIAL" //nolint:gosec // state label, not credential material.
+	StateStarting           State = "STARTING"
+	StateRunning            State = "RUNNING"
+	StateCanceling          State = "CANCELING"
+	StateSucceeded          State = "SUCCEEDED"
+	StateFailed             State = "FAILED"
+	StateCanceled           State = "CANCELED"
+	StateLost               State = "LOST"
 )
+
+const CredentialProviderCodex = "codex"
 
 func (s State) Terminal() bool {
 	return s == StateSucceeded || s == StateFailed || s == StateCanceled || s == StateLost
 }
 
 type Run struct {
-	UUID             string               `json:"uuid"`
-	OwnerFingerprint identity.Fingerprint `json:"owner_fingerprint"`
-	WorkspaceUUID    string               `json:"workspace_uuid"`
-	ProfileName      string               `json:"profile_name"`
-	ProfileDigest    string               `json:"profile_digest"`
-	Prompt           string               `json:"prompt"`
-	Command          []string             `json:"command"`
-	State            State                `json:"state"`
-	SandboxUID       string               `json:"sandbox_uid,omitempty"`
-	NodeFingerprint  identity.Fingerprint `json:"node_fingerprint,omitempty"`
-	NodeInstanceID   string               `json:"node_instance_id,omitempty"`
-	NodeJobID        string               `json:"node_job_id,omitempty"`
-	CreatedAt        time.Time            `json:"created_at"`
-	UpdatedAt        time.Time            `json:"updated_at"`
-	StartedAt        time.Time            `json:"started_at,omitempty"`
-	CompletedAt      time.Time            `json:"completed_at,omitempty"`
-	ExitCode         int32                `json:"exit_code,omitempty"`
-	ExitCodeSet      bool                 `json:"exit_code_set,omitempty"`
-	Reason           string               `json:"reason,omitempty"`
-	Result           string               `json:"result,omitempty"`
-	LastEventCursor  uint64               `json:"last_event_cursor"`
+	UUID               string               `json:"uuid"`
+	OwnerFingerprint   identity.Fingerprint `json:"owner_fingerprint"`
+	WorkspaceUUID      string               `json:"workspace_uuid"`
+	ProfileName        string               `json:"profile_name"`
+	ProfileDigest      string               `json:"profile_digest"`
+	CredentialRequired bool                 `json:"credential_required,omitempty"`
+	CredentialProvider string               `json:"credential_provider,omitempty"`
+	Prompt             string               `json:"prompt"`
+	Command            []string             `json:"command"`
+	State              State                `json:"state"`
+	SandboxUID         string               `json:"sandbox_uid,omitempty"`
+	NodeFingerprint    identity.Fingerprint `json:"node_fingerprint,omitempty"`
+	NodeInstanceID     string               `json:"node_instance_id,omitempty"`
+	NodeJobID          string               `json:"node_job_id,omitempty"`
+	CreatedAt          time.Time            `json:"created_at"`
+	UpdatedAt          time.Time            `json:"updated_at"`
+	StartedAt          time.Time            `json:"started_at,omitempty"`
+	CompletedAt        time.Time            `json:"completed_at,omitempty"`
+	ExitCode           int32                `json:"exit_code,omitempty"`
+	ExitCodeSet        bool                 `json:"exit_code_set,omitempty"`
+	Reason             string               `json:"reason,omitempty"`
+	Result             string               `json:"result,omitempty"`
+	LastEventCursor    uint64               `json:"last_event_cursor"`
 }
 
 type Event struct {
@@ -80,9 +88,10 @@ type Event struct {
 }
 
 type CreateInput struct {
-	UUID, WorkspaceUUID, ProfileName, ProfileDigest, Prompt string
-	Command                                                 []string
-	OwnerFingerprint                                        identity.Fingerprint
+	UUID, WorkspaceUUID, ProfileName, ProfileDigest, Prompt, CredentialProvider string
+	Command                                                                     []string
+	OwnerFingerprint                                                            identity.Fingerprint
+	CredentialRequired                                                          bool
 }
 
 type TransitionInput struct {
@@ -138,7 +147,10 @@ func (s *Store) Create(in CreateInput) (Run, error) {
 		return Run{}, err
 	}
 	now := s.now().UTC()
-	r := Run{UUID: in.UUID, OwnerFingerprint: in.OwnerFingerprint, WorkspaceUUID: in.WorkspaceUUID, ProfileName: in.ProfileName, ProfileDigest: in.ProfileDigest, Prompt: in.Prompt, Command: slices.Clone(in.Command), State: StateQueued, CreatedAt: now, UpdatedAt: now, LastEventCursor: 1}
+	if in.CredentialRequired != (in.CredentialProvider != "") || (in.CredentialProvider != "" && in.CredentialProvider != CredentialProviderCodex) {
+		return Run{}, fmt.Errorf("%w: credential provider must be codex exactly when credentials are required", ErrInvalid)
+	}
+	r := Run{UUID: in.UUID, OwnerFingerprint: in.OwnerFingerprint, WorkspaceUUID: in.WorkspaceUUID, ProfileName: in.ProfileName, ProfileDigest: in.ProfileDigest, CredentialRequired: in.CredentialRequired, CredentialProvider: in.CredentialProvider, Prompt: in.Prompt, Command: slices.Clone(in.Command), State: StateQueued, CreatedAt: now, UpdatedAt: now, LastEventCursor: 1}
 	e := Event{RunUUID: r.UUID, Cursor: 1, Timestamp: now, State: r.State, Message: "run queued"}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -303,7 +315,9 @@ func validateCommand(command []string) error {
 func validTransition(from, to State) bool {
 	switch from {
 	case StateQueued:
-		return to == StateStarting || to == StateCanceled || to == StateFailed
+		return to == StateAwaitingCredential || to == StateStarting || to == StateCanceled || to == StateFailed
+	case StateAwaitingCredential:
+		return to == StateStarting || to == StateCanceled || to == StateFailed || to == StateLost
 	case StateStarting:
 		return to == StateRunning || to == StateCanceled || to == StateFailed || to == StateLost
 	case StateRunning:
@@ -385,15 +399,21 @@ func (s *Store) load() error {
 }
 
 func validState(s State) bool {
-	return s == StateQueued || s == StateStarting || s == StateRunning || s == StateCanceling || s.Terminal()
+	return s == StateQueued || s == StateAwaitingCredential || s == StateStarting || s == StateRunning || s == StateCanceling || s.Terminal()
 }
 
 func validateBindings(r Run) error {
 	switch r.State {
-	case StateStarting, StateRunning, StateCanceling, StateSucceeded:
+	case StateAwaitingCredential, StateStarting, StateRunning, StateCanceling, StateSucceeded:
 		if r.SandboxUID == "" || r.NodeFingerprint.IsZero() || r.NodeInstanceID == "" {
 			return fmt.Errorf("%w: state %s requires sandbox and node binding", ErrInvalid, r.State)
 		}
+	}
+	if r.CredentialRequired != (r.CredentialProvider != "") || (r.CredentialProvider != "" && r.CredentialProvider != CredentialProviderCodex) {
+		return fmt.Errorf("%w: invalid credential requirement", ErrInvalid)
+	}
+	if r.State == StateAwaitingCredential && !r.CredentialRequired {
+		return fmt.Errorf("%w: awaiting-credential state requires credentials", ErrInvalid)
 	}
 	switch r.State {
 	case StateRunning, StateCanceling, StateSucceeded:
