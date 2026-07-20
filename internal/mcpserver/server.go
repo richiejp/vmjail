@@ -10,6 +10,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/richiejp/darkaifactory/internal/agentprofile"
 	"github.com/richiejp/darkaifactory/internal/daftclient"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	operatorv1 "github.com/richiejp/darkaifactory/internal/genpb/operator/v1"
@@ -20,12 +21,13 @@ import (
 const maxResults = 200
 
 const (
-	nodeListTool      = "node_list"
-	nodeStatusTool    = "node_registration_status"
-	nodeAuthorizeTool = "node_authorize"
-	nodeRevokeTool    = "node_revoke"
-	workspaceGetTool  = "workspace_get"
-	workspaceListTool = "workspace_list"
+	nodeListTool         = "node_list"
+	nodeStatusTool       = "node_registration_status"
+	nodeAuthorizeTool    = "node_authorize"
+	nodeRevokeTool       = "node_revoke"
+	workspaceGetTool     = "workspace_get"
+	workspaceListTool    = "workspace_list"
+	agentProfileListTool = "agent_profile_list"
 )
 
 type Reader interface {
@@ -66,6 +68,21 @@ type listWorkspacesOutput struct {
 	Truncated  bool        `json:"truncated"`
 }
 
+type agentProfileOutput struct {
+	Name               string                        `json:"name"`
+	Digest             string                        `json:"digest"`
+	Provider           agentprofile.Provider         `json:"provider"`
+	Image              string                        `json:"image"`
+	Command            []string                      `json:"command"`
+	CredentialsEnabled bool                          `json:"credentials_enabled"`
+	Resources          agentprofile.ResourcesSection `json:"resources"`
+	Egress             agentprofile.EgressSection    `json:"egress"`
+}
+
+type listAgentProfilesOutput struct {
+	Profiles []agentProfileOutput `json:"profiles"`
+}
+
 type getWorkspaceInput struct {
 	UUID string `json:"uuid" jsonschema:"canonical workspace UUID"`
 }
@@ -88,6 +105,10 @@ type nodeOutput struct {
 }
 
 func New(reader Reader, version string) (*mcp.Server, error) {
+	return NewWithProfiles(reader, nil, version)
+}
+
+func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version string) (*mcp.Server, error) {
 	if reader == nil {
 		return nil, fmt.Errorf("mcpserver: reader is required")
 	}
@@ -96,6 +117,7 @@ func New(reader Reader, version string) (*mcp.Server, error) {
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "daft", Version: version}, nil)
 	annotations := &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(false)}
+	addAgentProfileListTool(server, annotations, profiles)
 	mcp.AddTool(server, &mcp.Tool{Name: nodeListTool, Description: "List live daft Nodes visible to the orchestrator.", Annotations: annotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listNodesOutput, error) {
 			nodes, truncated, err := readBounded(ctx, reader.ListNodes, func(node Node) string { return node.Fingerprint })
@@ -159,6 +181,23 @@ func New(reader Reader, version string) (*mcp.Server, error) {
 			return nil, getWorkspaceOutput{Workspace: workspace}, nil
 		})
 	return server, nil
+}
+
+func addAgentProfileListTool(server *mcp.Server, annotations *mcp.ToolAnnotations, profiles []agentprofile.Entry) {
+	profileOutputs := make([]agentProfileOutput, len(profiles))
+	for i := range profiles {
+		entry := profiles[i]
+		profileOutputs[i] = agentProfileOutput{Name: entry.Profile.Name, Digest: entry.Digest, Provider: entry.Profile.Provider, Image: entry.Profile.Image, Command: slices.Clone(entry.Profile.Command), CredentialsEnabled: entry.Profile.Credentials.Enable, Resources: entry.Profile.Resources, Egress: entry.Profile.Egress}
+	}
+	slices.SortFunc(profileOutputs, func(a, b agentProfileOutput) int { return cmp.Compare(a.Name, b.Name) })
+	mcp.AddTool(server, &mcp.Tool{Name: agentProfileListTool, Description: "List immutable coding-agent profiles configured on this trusted host.", Annotations: annotations},
+		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, listAgentProfilesOutput, error) {
+			out := slices.Clone(profileOutputs)
+			for i := range out {
+				out[i].Command = slices.Clone(out[i].Command)
+			}
+			return nil, listAgentProfilesOutput{Profiles: out}, nil
+		})
 }
 
 func boundedSorted[T any](values []T, key func(T) string) ([]T, bool) {

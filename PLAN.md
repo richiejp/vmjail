@@ -3748,9 +3748,20 @@ Slices:
   state machine are implemented over the shared B6 control store. Run creation
   and every transition append a monotonically cursor-addressed event in the
   same Badger transaction; terminal states are immutable, reads are owner
-  scoped, and prompt/event/result bodies have hard caps. The wire/JSON schemas,
-  immutable AgentProfile loader, redacted-secret types, event retention policy,
-  and SecretDelivery threat-model contract remain.
+  scoped, and prompt/event/result bodies have hard caps. Trusted-host
+  AgentProfiles now have a strict, size-bounded JSON contract and immutable
+  snapshot loader: v1 supports Codex, digest-pinned OCI images, fixed argv,
+  named (not embedded) credential references, and explicit credential,
+  resource, and egress capability sections. Canonical profile digests bind an
+  AgentRun to the exact loaded policy. Known provider credential field names,
+  unknown fields, duplicate names, moving image tags, inconsistent disabled
+  sections, and unbounded values are rejected. The launch-scoped secret value
+  type redacts every ordinary serialization/formatting path, reveals only a
+  temporary callback buffer, and zeroes both temporary and retained buffers.
+  The MCP `agent_profile_list` tool exposes the frozen launch policy and digest
+  but deliberately omits the host credential-profile name. AgentRun wire/MCP
+  schemas, event retention policy, and SecretDelivery channel implementation
+  remain.
 - **L1 — read-only MCP.** Land `cmd/daft-mcp` over stdio with initialize,
   tool discovery and ownership-safe Node/Workspace reads. The first release is
   deliberately only `node_list`, `workspace_list` (forced to the authenticated
@@ -3885,9 +3896,12 @@ Slices:
   manager over the shared route registry and supplies it to the Node client;
   daemon cancellation owns job shutdown, while control callbacks do not.
   Production orchestrator and Node handlers implement the correlated flow;
-  end-to-end callback coverage remains before the
-  manager is wired into production; cursor-based reattach then builds directly
-  on its spool API.
+  a real mTLS callback test covers start/get/cancel/delete and a real-VM test
+  covers the manager, guest runner, idempotent start retry, bounded output,
+  structured exit and terminal deletion. Detached Node execution is now wired
+  end to end. Immutable AgentProfile loading and read-only MCP discovery are
+  now landed. AgentRun reconciliation, secret delivery, and the mutating/status
+  MCP agent tools remain.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->

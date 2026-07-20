@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/richiejp/darkaifactory/internal/agentprofile"
 	"github.com/richiejp/darkaifactory/internal/daftclient"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	operatorv1 "github.com/richiejp/darkaifactory/internal/genpb/operator/v1"
@@ -17,7 +18,10 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
-const fingerprintKey = "fingerprint"
+const (
+	fingerprintKey = "fingerprint"
+	mcpTestVersion = "test"
+)
 
 type fakeReader struct {
 	nodes          []Node
@@ -30,6 +34,37 @@ type fakeReader struct {
 	listWorkCalled int
 	operatorNode   Node
 	operatorErr    error
+}
+
+func TestAgentProfileListIsSortedAndOmitsCredentialProfileName(t *testing.T) {
+	profiles := []agentprofile.Entry{
+		{Profile: agentprofile.Profile{Name: "z", Provider: agentprofile.ProviderCodex, Command: []string{"codex"}, Credentials: agentprofile.CredentialsSection{Enable: true, Profile: "must-not-leak"}}, Digest: "sha256:z"},
+		{Profile: agentprofile.Profile{Name: "a", Provider: agentprofile.ProviderCodex, Command: []string{"codex"}}, Digest: "sha256:a"},
+	}
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	server, err := NewWithProfiles(&fakeReader{}, profiles, mcpTestVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverSession, err := server.Connect(t.Context(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+	client := mcp.NewClient(&mcp.Implementation{Name: mcpTestVersion, Version: mcpTestVersion}, nil)
+	session, err := client.Connect(t.Context(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	result := callTool(t, session, agentProfileListTool, map[string]any{})
+	listed := requireSlice(t, requireMap(t, result.StructuredContent)["profiles"])
+	if requireMap(t, listed[0])["name"] != "a" || requireMap(t, listed[1])["name"] != "z" {
+		t.Fatalf("profiles not sorted: %#v", listed)
+	}
+	if _, leaked := requireMap(t, listed[1])["profile"]; leaked {
+		t.Fatalf("credential profile leaked: %#v", listed[1])
+	}
 }
 
 func (f *fakeReader) GetNode(context.Context, string) (Node, error) {
@@ -67,7 +102,7 @@ func (f *fakeReader) GetWorkspace(_ context.Context, uuid string) (Workspace, er
 func connectClient(t *testing.T, reader Reader) *mcp.ClientSession {
 	t.Helper()
 	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	server, err := New(reader, "test")
+	server, err := New(reader, mcpTestVersion)
 	if err != nil {
 		t.Fatalf("new server: %v", err)
 	}
@@ -76,7 +111,7 @@ func connectClient(t *testing.T, reader Reader) *mcp.ClientSession {
 		t.Fatalf("connect server: %v", err)
 	}
 	t.Cleanup(func() { _ = serverSession.Close() })
-	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "test"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: mcpTestVersion, Version: mcpTestVersion}, nil)
 	clientSession, err := client.Connect(t.Context(), clientTransport, nil)
 	if err != nil {
 		t.Fatalf("connect client: %v", err)
@@ -100,7 +135,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	wantNames := []string{nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceGetTool, workspaceListTool}
+	wantNames := []string{agentProfileListTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceGetTool, workspaceListTool}
 	if len(result.Tools) != len(wantNames) {
 		t.Fatalf("got %d tools, want %d", len(result.Tools), len(wantNames))
 	}

@@ -12,6 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/richiejp/darkaifactory/internal/agentprofile"
 	"github.com/richiejp/darkaifactory/internal/daftclient"
 	"github.com/richiejp/darkaifactory/internal/mcpserver"
 	"github.com/richiejp/darkaifactory/internal/version"
@@ -21,7 +22,7 @@ var (
 	osExit     = os.Exit
 	openClient = daftclient.Open
 	newReader  = mcpserver.NewConnectReader
-	newServer  = mcpserver.New
+	newServer  = mcpserver.NewWithProfiles
 	runServer  = runMCPServer
 )
 
@@ -45,6 +46,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	orchestrator := flags.String("orchestrator", "", "orchestrator URL (overrides project and local-cluster discovery)")
 	configDir := flags.String("config-dir", "", "daft client identity directory")
 	projectDir := flags.String("project-dir", ".", "project directory used for .daft discovery")
+	agentProfiles := flags.String("agent-profiles", "", "trusted-host AgentProfile JSON file")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -63,7 +65,15 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if err != nil {
 		return reportError(stderr, err)
 	}
-	server, err := newServer(reader, version.Version)
+	var profiles []agentprofile.Entry
+	if *agentProfiles != "" {
+		catalog, loadErr := agentprofile.Load(*agentProfiles)
+		if loadErr != nil {
+			return reportError(stderr, loadErr)
+		}
+		profiles = catalog.List()
+	}
+	server, err := newServer(reader, profiles, version.Version)
 	if err != nil {
 		return reportError(stderr, err)
 	}

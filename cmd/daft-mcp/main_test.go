@@ -6,11 +6,13 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/richiejp/darkaifactory/internal/agentprofile"
 	"github.com/richiejp/darkaifactory/internal/daftclient"
 	"github.com/richiejp/darkaifactory/internal/mcpserver"
 )
@@ -23,7 +25,7 @@ func stubDependencies(t *testing.T) {
 	t.Cleanup(func() { openClient, newReader, newServer, runServer = oldOpen, oldReader, oldServer, oldRun })
 	openClient = func(daftclient.Config) (*daftclient.Client, error) { return &daftclient.Client{}, nil }
 	newReader = func(*daftclient.Client) (*mcpserver.ConnectReader, error) { return &mcpserver.ConnectReader{}, nil }
-	newServer = func(mcpserver.Reader, string) (*mcp.Server, error) {
+	newServer = func(mcpserver.Reader, []agentprofile.Entry, string) (*mcp.Server, error) {
 		return mcp.NewServer(&mcp.Implementation{Name: testValue, Version: testValue}, nil), nil
 	}
 	runServer = func(context.Context, *mcp.Server, io.Reader, io.Writer) error { return nil }
@@ -41,6 +43,37 @@ func TestRunPassesExplicitConfigurationAndStreams(t *testing.T) {
 	}
 	if got.Orchestrator != "https://host:8443" || got.ConfigDir != "/config" || got.ProjectDir != "/project" {
 		t.Errorf("config = %#v", got)
+	}
+}
+
+func TestRunLoadsAgentProfilesBeforeStartingServer(t *testing.T) {
+	stubDependencies(t)
+	path := filepath.Join(t.TempDir(), "profiles.json")
+	data := `{"version":1,"profiles":[{"name":"codex","provider":"codex","image":"example.invalid/codex@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","command":["codex","exec"],"credentials":{"enable":true,"profile":"subscription"},"resources":{"enable":false},"egress":{"enable":true}}]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var got []agentprofile.Entry
+	newServer = func(_ mcpserver.Reader, profiles []agentprofile.Entry, _ string) (*mcp.Server, error) {
+		got = profiles
+		return mcp.NewServer(&mcp.Implementation{Name: testValue, Version: testValue}, nil), nil
+	}
+	if code := run(t.Context(), []string{"--agent-profiles", path}, strings.NewReader(""), io.Discard, io.Discard); code != 0 {
+		t.Fatalf("run code = %d", code)
+	}
+	if len(got) != 1 || got[0].Profile.Name != "codex" || got[0].Digest == "" {
+		t.Fatalf("profiles = %#v", got)
+	}
+}
+
+func TestRunRejectsInvalidAgentProfileFile(t *testing.T) {
+	stubDependencies(t)
+	var stderr bytes.Buffer
+	if code := run(t.Context(), []string{"--agent-profiles", filepath.Join(t.TempDir(), "missing")}, strings.NewReader(""), io.Discard, &stderr); code != 1 {
+		t.Fatalf("run code = %d", code)
+	}
+	if !strings.Contains(stderr.String(), "agentprofile") {
+		t.Fatalf("stderr = %q", stderr.String())
 	}
 }
 
@@ -69,7 +102,9 @@ func TestRunReportsDependencyAndTransportErrors(t *testing.T) {
 			newReader = func(*daftclient.Client) (*mcpserver.ConnectReader, error) { return nil, errors.New("reader") }
 		}},
 		{name: "server", set: func() {
-			newServer = func(mcpserver.Reader, string) (*mcp.Server, error) { return nil, errors.New("server") }
+			newServer = func(mcpserver.Reader, []agentprofile.Entry, string) (*mcp.Server, error) {
+				return nil, errors.New("server")
+			}
 		}},
 		{name: "transport", set: func() {
 			runServer = func(context.Context, *mcp.Server, io.Reader, io.Writer) error { return errors.New("transport") }
