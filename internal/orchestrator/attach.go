@@ -220,8 +220,10 @@ func (c *serverAttachSession) Read(p []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		// Drop any non-data frame the sandbox might emit (the
-		// agent never sends resize back, but be defensive).
+		if exit := msg.GetExit(); exit != nil {
+			return 0, &sandboxgateway.AttachExitError{Code: exit.GetCode(), Reason: exit.GetError()}
+		}
+		// Drop any remaining non-data frame the sandbox might emit.
 		data := msg.GetData()
 		if len(data) == 0 {
 			continue

@@ -95,6 +95,11 @@ func TestOpenSessionSendsHelloAndRoundTripsData(t *testing.T) {
 	}
 	if _, rerr := sess.Read(buf); !errors.Is(rerr, io.EOF) {
 		t.Errorf("expected EOF after Exit frame, got %v", rerr)
+	} else {
+		var exit *sandboxgateway.AttachExitError
+		if !errors.As(rerr, &exit) || exit.Code != 0 || exit.Reason != "" {
+			t.Errorf("exit = %#v, want code=0 with no reason", exit)
+		}
 	}
 	<-agentDone
 }

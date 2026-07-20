@@ -3,10 +3,31 @@ package sandboxgateway
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"testing"
 	"time"
 )
+
+func TestAttachExitError(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		exit *AttachExitError
+		want string
+	}{
+		{name: "command status", exit: &AttachExitError{Code: 12}, want: "sandbox command exited with code 12"},
+		{name: "execution reason", exit: &AttachExitError{Code: 1, Reason: "crun failed"}, want: "sandbox command execution failed: crun failed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.exit.Error(); got != tc.want {
+				t.Fatalf("Error() = %q, want %q", got, tc.want)
+			}
+			if !errors.Is(tc.exit, io.EOF) {
+				t.Fatal("AttachExitError must unwrap to io.EOF")
+			}
+		})
+	}
+}
 
 const (
 	testSandboxUID = "sb-abcd"

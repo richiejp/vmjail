@@ -16,6 +16,7 @@ import (
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 )
 
 // execCopyBufSize is the stdin → Data-frame chunk size. 32 KiB
@@ -250,6 +251,13 @@ func pumpExecSession(
 	}
 	err := pumpExecStreamToStdout(stream, stdout)
 	signalDone()
+	var exit *sandboxgateway.AttachExitError
+	if errors.As(err, &exit) {
+		if exit.Code == 0 && exit.Reason == "" {
+			return nil
+		}
+		return exit
+	}
 	if err != nil && !oops.IsExpectedPumpExit(err) {
 		return err
 	}
@@ -286,6 +294,9 @@ func pumpExecStreamToStdout(stream execClientStream, stdout io.Writer) error {
 		frame, err := stream.Receive()
 		if err != nil {
 			return err
+		}
+		if exit := frame.GetExit(); exit != nil {
+			return &sandboxgateway.AttachExitError{Code: exit.GetCode(), Reason: exit.GetError()}
 		}
 		data := frame.GetData()
 		if len(data) == 0 {

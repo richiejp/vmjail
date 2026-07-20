@@ -207,6 +207,7 @@ message AttachStreamMessage {
     AttachStreamHello hello = 1;
     bytes data = 2;
     AttachStreamResize resize = 3;
+    AttachStreamExit exit = 4;
   }
 }
 
@@ -220,6 +221,14 @@ message AttachStreamHello {
 message AttachStreamResize {
   uint32 cols = 1;
   uint32 rows = 2;
+}
+
+// AttachStreamExit preserves the guest command's terminal result across the
+// Node relay. A non-empty error means execution failed outside the command;
+// otherwise code is the command's authoritative exit status.
+message AttachStreamExit {
+  int32 code = 1;
+  string error = 2;
 }
 
 // ObserverSource selects which host-side per-sandbox file an

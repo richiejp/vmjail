@@ -176,6 +176,14 @@ func pumpAttachSessionToStream(stream attachStreamRPC, session sandboxgateway.At
 			}
 		}
 		if err != nil {
+			var exit *sandboxgateway.AttachExitError
+			if errors.As(err, &exit) {
+				return stream.Send(&nodectrlv1.AttachStreamMessage{
+					Body: &nodectrlv1.AttachStreamMessage_Exit{Exit: &nodectrlv1.AttachStreamExit{
+						Code: exit.Code, Error: exit.Reason,
+					}},
+				})
+			}
 			if oops.IsExpectedPumpExit(err) {
 				return nil
 			}

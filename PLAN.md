@@ -3863,6 +3863,10 @@ Slices:
   lands first. E2E providers use deterministic fake agent binaries; opt-in
   smoke tests exercise real subscription credentials without recording them
   or running in CI.
+  **In progress (2026-07-20):** the existing attached execution path now
+  preserves the guest's terminal exit code/reason through the Node and
+  orchestrator wire protocols to the client. The dedicated durable detached
+  job RPC, spool, cancellation, and cursor-based reattach remain.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->

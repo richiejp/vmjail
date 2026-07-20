@@ -96,6 +96,14 @@ type fakeAttachSession struct {
 	rerr    error
 }
 
+type exitAttachSession struct {
+	net.Conn
+	exit *sandboxgateway.AttachExitError
+}
+
+func (s *exitAttachSession) Read([]byte) (int, error)  { return 0, s.exit }
+func (*exitAttachSession) Resize(uint32, uint32) error { return nil }
+
 func (s *fakeAttachSession) Resize(cols, rows uint32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -154,6 +162,24 @@ func (b *fakeAttachBridger) Attach(_ context.Context, req sandboxgateway.AttachR
 	s := b.sessions[0]
 	b.sessions = b.sessions[1:]
 	return s, nil
+}
+
+func TestPumpAttachSessionToStreamPreservesExit(t *testing.T) {
+	local, remote := net.Pipe()
+	t.Cleanup(func() { _ = local.Close() })
+	t.Cleanup(func() { _ = remote.Close() })
+	stream := newFakeAttachStream()
+	err := pumpAttachSessionToStream(stream, &exitAttachSession{
+		Conn: remote,
+		exit: &sandboxgateway.AttachExitError{Code: 23, Reason: "crun disappeared"},
+	})
+	if err != nil {
+		t.Fatalf("pumpAttachSessionToStream: %v", err)
+	}
+	sent := stream.sent()
+	if len(sent) != 1 || sent[0].GetExit().GetCode() != 23 || sent[0].GetExit().GetError() != "crun disappeared" {
+		t.Fatalf("sent = %+v, want one preserved exit", sent)
+	}
 }
 
 // TestRunAttachSendsHelloAndDispatches pins the canonical happy

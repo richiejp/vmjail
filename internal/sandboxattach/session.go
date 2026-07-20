@@ -15,7 +15,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"time"
@@ -81,8 +80,8 @@ func newAgentSession(conn net.Conn) *agentSession {
 // Read returns Data-frame bytes from the agent. A short read
 // (fewer bytes than the frame carries) buffers the tail for the
 // next Read call so callers using a small []byte don't lose data.
-// Non-Data frames (e.g. the agent's terminal Exit) collapse the
-// session: Exit translates to io.EOF.
+// An Exit frame becomes AttachExitError, which still unwraps to io.EOF while
+// preserving the command result for exit-aware relays.
 func (s *agentSession) Read(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
@@ -112,7 +111,7 @@ func (s *agentSession) Read(b []byte) (int, error) {
 			}
 			return n, nil
 		case *agentv1.AgentAttachFrame_Exit:
-			return 0, io.EOF
+			return 0, &sandboxgateway.AttachExitError{Code: body.Exit.GetCode(), Reason: body.Exit.GetError()}
 		case *agentv1.AgentAttachFrame_Resize:
 			// v0: agent → host Resize is undefined. Drop and
 			// keep reading so a confused peer can't kill the

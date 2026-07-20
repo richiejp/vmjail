@@ -221,6 +221,14 @@ func pumpAttachSessionToClient(stream attachServerStream, session sandboxgateway
 			}
 		}
 		if err != nil {
+			var exit *sandboxgateway.AttachExitError
+			if errors.As(err, &exit) {
+				return stream.Send(&workspacev1.AttachFrame{
+					Body: &workspacev1.AttachFrame_Exit{Exit: &workspacev1.AttachExit{
+						Code: exit.Code, Error: exit.Reason,
+					}},
+				})
+			}
 			if oops.IsExpectedPumpExit(err) {
 				return nil
 			}

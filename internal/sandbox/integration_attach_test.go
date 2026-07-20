@@ -99,7 +99,8 @@ func TestAttachExecE2E(t *testing.T) {
 		t.Fatalf("SetReadDeadline: %v", derr)
 	}
 	out, err := io.ReadAll(session)
-	if err != nil {
+	var exit *sandboxgateway.AttachExitError
+	if !errors.As(err, &exit) || exit.Code != 0 || exit.Reason != "" {
 		t.Fatalf("ReadAll(session): %v\noutput so far: %q\n--- console ---\n%s",
 			err, out, console.String())
 	}

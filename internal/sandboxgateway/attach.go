@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 )
@@ -12,6 +13,23 @@ import (
 // session can be opened for the requested sandbox_uid. Same
 // shape as ErrNoRoute on the port side.
 var ErrAttachNoRoute = errors.New("sandboxgateway: no attach route for sandbox")
+
+// AttachExitError is the terminal result reported by the in-VM agent. It
+// unwraps to io.EOF so existing stream pumps still treat a completed command
+// as an expected close while exit-aware relays can preserve Code and Reason.
+type AttachExitError struct {
+	Code   int32
+	Reason string
+}
+
+func (e *AttachExitError) Error() string {
+	if e.Reason != "" {
+		return fmt.Sprintf("sandbox command execution failed: %s", e.Reason)
+	}
+	return fmt.Sprintf("sandbox command exited with code %d", e.Code)
+}
+
+func (*AttachExitError) Unwrap() error { return io.EOF }
 
 // AttachRequest is the dispatch payload carried from the
 // orchestrator's AttachRequest event through to the sandboxd's

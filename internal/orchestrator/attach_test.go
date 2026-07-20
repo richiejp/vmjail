@@ -213,6 +213,19 @@ func TestOpenAttachBridgePushesEventThenSplices(t *testing.T) {
 	}
 }
 
+func TestServerAttachSessionPreservesExit(t *testing.T) {
+	stream := newFakeAttachServerStream()
+	stream.push(&nodectrlv1.AttachStreamMessage{Body: &nodectrlv1.AttachStreamMessage_Exit{
+		Exit: &nodectrlv1.AttachStreamExit{Code: 17, Error: "exec failed"},
+	}})
+	session := newServerAttachSession(stream, make(chan struct{}))
+	_, err := session.Read(make([]byte, 1))
+	var exit *sandboxgateway.AttachExitError
+	if !errors.As(err, &exit) || exit.Code != 17 || exit.Reason != "exec failed" {
+		t.Fatalf("Read error = %#v, want preserved exit", err)
+	}
+}
+
 func attachHelloMsg(sessionID string) *nodectrlv1.AttachStreamMessage {
 	return &nodectrlv1.AttachStreamMessage{
 		Body: &nodectrlv1.AttachStreamMessage_Hello{

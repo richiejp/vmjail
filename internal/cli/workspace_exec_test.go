@@ -12,6 +12,7 @@ import (
 
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 )
 
 // testOrchURL is the placeholder URL every exec test uses; the
@@ -264,6 +265,45 @@ func TestRunWorkspaceExecForwardsResize(t *testing.T) {
 	case <-errCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("session did not exit")
+	}
+}
+
+func TestPumpExecStreamToStdoutReturnsCommandExit(t *testing.T) {
+	stream := newFakeExecStream()
+	stream.recvCh <- &workspacev1.AttachFrame{Body: &workspacev1.AttachFrame_Exit{
+		Exit: &workspacev1.AttachExit{Code: 42, Error: "runtime unavailable"},
+	}}
+	err := pumpExecStreamToStdout(stream, io.Discard)
+	var exit *sandboxgateway.AttachExitError
+	if !errors.As(err, &exit) || exit.Code != 42 || exit.Reason != "runtime unavailable" {
+		t.Fatalf("error = %#v, want preserved command exit", err)
+	}
+}
+
+func TestPumpExecSessionHandlesTerminalStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		exit    *workspacev1.AttachExit
+		wantErr bool
+	}{
+		{name: "success", exit: &workspacev1.AttachExit{Code: 0}},
+		{name: "nonzero", exit: &workspacev1.AttachExit{Code: 7}, wantErr: true},
+		{name: "execution failure", exit: &workspacev1.AttachExit{Error: "crun failed"}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := newFakeExecStream()
+			stream.recvCh <- &workspacev1.AttachFrame{Body: &workspacev1.AttachFrame_Exit{Exit: tc.exit}}
+			err := pumpExecSession(t.Context(), bytes.NewReader(nil), io.Discard, stream, false, nil)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("error = %v, wantErr=%v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				var exit *sandboxgateway.AttachExitError
+				if !errors.As(err, &exit) {
+					t.Fatalf("error type = %T, want AttachExitError", err)
+				}
+			}
+		})
 	}
 }
 

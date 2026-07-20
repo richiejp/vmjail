@@ -296,6 +296,7 @@ message AttachFrame {
     AttachHello hello = 1;
     bytes data = 2;
     AttachResize resize = 3;
+    AttachExit exit = 4;
   }
 }
 
@@ -323,6 +324,14 @@ message AttachHello {
 message AttachResize {
   uint32 cols = 1;
   uint32 rows = 2;
+}
+
+// AttachExit is the terminal result of the command running in the Sandbox.
+// A non-empty error describes an execution failure; otherwise code is the
+// command's authoritative exit status, including non-zero statuses.
+message AttachExit {
+  int32 code = 1;
+  string error = 2;
 }
 
 // WorkspaceHandle addresses a workspace by either its canonical

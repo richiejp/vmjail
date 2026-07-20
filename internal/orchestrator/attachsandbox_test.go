@@ -72,6 +72,32 @@ type fakeAttachSession struct {
 	rerr    error
 }
 
+type terminalAttachSession struct {
+	net.Conn
+	exit *sandboxgateway.AttachExitError
+}
+
+func (s *terminalAttachSession) Read([]byte) (int, error)  { return 0, s.exit }
+func (*terminalAttachSession) Resize(uint32, uint32) error { return nil }
+
+func TestPumpAttachSessionToClientPreservesExit(t *testing.T) {
+	local, remote := net.Pipe()
+	t.Cleanup(func() { _ = local.Close() })
+	t.Cleanup(func() { _ = remote.Close() })
+	stream := newFakeAttachClientStream()
+	err := pumpAttachSessionToClient(stream, &terminalAttachSession{
+		Conn: remote,
+		exit: &sandboxgateway.AttachExitError{Code: 9, Reason: "agent failure"},
+	})
+	if err != nil {
+		t.Fatalf("pumpAttachSessionToClient: %v", err)
+	}
+	sent := stream.sent()
+	if len(sent) != 1 || sent[0].GetExit().GetCode() != 9 || sent[0].GetExit().GetError() != "agent failure" {
+		t.Fatalf("sent = %+v, want one preserved exit", sent)
+	}
+}
+
 func (s *fakeAttachSession) Resize(cols, rows uint32) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
