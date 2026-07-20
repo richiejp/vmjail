@@ -3605,7 +3605,7 @@ Phase L — **Overseer MCP, fleet deployment, and sandboxed agent runs**
 
 Goal: one long-lived overseer coding agent on a trusted user-host can discover
 and update a fleet of daft Nodes, create isolated project Workspaces on chosen
-Nodes, start Codex or Claude Code inside them, and inspect each run's status and
+Nodes, start Codex inside them, and inspect each run's status and
 observability. The human may later take over a run through a terminal or web
 browser, but direct interactive control is deliberately deferred until the
 overseer path is reliable.
@@ -3616,7 +3616,7 @@ The boundary is intentional:
 trusted user-host
   overseer agent -> daft MCP server -> daft client APIs -> orchestrator
        |                  |                                  |
-       |                  +-> constrained SSH deploy         +-> Node(s)
+       +-> adaptive SSH install skill                        +-> Node(s)
        |                  +-> local project paths                 |
        |                  +-> named OAuth profiles                +-> Sandbox
        |                                                           +-> agent
@@ -3635,11 +3635,15 @@ Decisions:
   structured MCP content. Tools are coarse, declarative, and idempotent; do
   not mirror every Cobra flag and do not expose `ssh`, `sh`, or arbitrary host
   file access.
-- **Deployment is constrained desired-state reconciliation.** The overseer
-  supplies a Node address and a release artifact/version; daft owns probing,
-  transfer, digest verification, atomic installation, service configuration,
-  registration, health checking, and rollback. SSH is a bootstrap/update
-  transport only, never the Sandbox terminal path.
+- **Node installation is an overseer skill, not an MCP operation.** Linux
+  hosts differ too much in init system, privilege model, cgroup delegation,
+  and filesystem layout for a fixed MCP deployment schema to make the right
+  decision. A repository-local skill and deterministic probe/stage/verify
+  scripts guide the overseer through strict-host-key SSH installation of the
+  digest-pinned static executable. The overseer selects systemd, OpenRC,
+  runit, a container supervisor, or another explicit strategy from observed
+  host facts, verifies registration through MCP, and rolls back a failed
+  upgrade. MCP never exposes SSH or an arbitrary shell tool.
 - **Agent implementations remain ordinary Sandbox workloads.** Daft does not
   embed either coding agent. An AgentProfile selects an OCI image, launch
   command (`codex exec`/SDK or Claude Agent SDK/`claude -p`), resource and
@@ -3671,12 +3675,11 @@ bounded pagination rather than free-form strings):
 
 - Resources: `daft://nodes`, `daft://nodes/{fingerprint}`,
   `daft://workspaces/{uuid}`, `daft://sandboxes/{uuid}`,
-  `daft://agent-runs/{uuid}`, `daft://operations/{uuid}`, and bounded
+  `daft://agent-runs/{uuid}` and bounded
   progress/trace resources beneath a Sandbox.
-- Fleet tools: `node_probe`, `node_reconcile`, `node_update`,
-  `node_operation_get`. `node_reconcile` accepts desired version, target
-  orchestrator, service user, SSH endpoint, host-key policy, and artifact
-  source; private-key bytes are never accepted as tool arguments.
+- Node tools: `node_list`, `node_get`, `node_authorize`, `node_revoke`, and
+  `node_registration_status`. Authorization records an expected fingerprint;
+  installation and service management stay in the overseer SSH skill.
 - Workspace tools: `workspace_apply`, `workspace_validate`,
   `workspace_push`, `workspace_launch`, `workspace_stop`, and
   `workspace_status`. `workspace_apply` takes a declarative patch for image,
@@ -3698,17 +3701,16 @@ bounded pagination rather than free-form strings):
   Applying a pull and direct terminal/browser attachment are deferred.
 
 Every tool carries accurate MCP safety annotations. Read-only discovery and
-observability tools are marked read-only; deployment, launch, cancellation,
-stop, and future pull-apply tools advertise side effects/destructiveness. Long
-operations return an Operation UUID rather than holding one MCP call open.
-Operation and AgentRun events use monotonically increasing cursors so polling
-is resumable and context bounded.
+observability tools are marked read-only; authorization, launch, cancellation,
+stop, and future pull-apply tools advertise side effects/destructiveness.
+AgentRun events use monotonically increasing cursors so polling is resumable
+and context bounded. There is deliberately no compound `project_develop` tool:
+the overseer skill composes independently observable MCP calls.
 
 Slices:
 
-- **L0 — contracts and threat model.** Add native `NodeDeployment`,
-  `AgentProfile`, `AgentRun`, `Operation`, event cursor, and redacted-secret
-  types plus JSON/MCP schemas. AgentProfile capability grants (egress,
+- **L0 — contracts and threat model.** Add native `AgentProfile`, `AgentRun`,
+  event cursor, and redacted-secret types plus JSON/MCP schemas. AgentProfile capability grants (egress,
   credentials, resources) follow the Nix-module-style section idiom
   (sub-message with `enable`), not bare bools/enums. Document which component
   owns each field and enumerate leak paths (`/proc`, argv/env, logs, traces,
@@ -3721,16 +3723,13 @@ Slices:
   node-side image-bundle config and the guest exec env with no redaction
   anywhere. Agent APIs must reject the known provider credential field names
   and must have no arbitrary secret/env input, while documenting that a generic
-  schema cannot detect every user-chosen secret value. Decide whether AgentRun
-  *and Operation* persistence land directly on B6
-  storage or initially use an explicit local MCP journal; no silent
-  in-memory-only production state. An Operation UUID that dies with the
-  orchestrator process is worse than a blocking call — the overseer polls a
-  ghost.
+  schema cannot detect every user-chosen secret value. AgentRun state and
+  events land directly in the Badger-backed B6 store; credentials stay
+  host-only and there is no second MCP journal or deployment Operation model.
 - **L1 — read-only MCP.** Land `cmd/daft-mcp` over stdio with initialize,
   tool discovery and ownership-safe Node/Workspace reads. The first release is
   deliberately only `node_list`, `workspace_list` (forced to the authenticated
-  owner's Workspaces), and `workspace_get`; Sandbox, Operation, resource, and
+  owner's Workspaces), and `workspace_get`; Sandbox, AgentRun, resource, and
   observability surfaces follow once their read/ownership contracts exist.
   First extract the client identity/discovery
   glue (`resolveClientDir`, `resolveOrchestratorSource`, the http2/Connect
@@ -3783,22 +3782,20 @@ Slices:
   design if preconditions prove awkward. Make repeated identical calls no-ops
   so two overseers cannot overwrite each other. A real-VM e2e drives the
   complete lifecycle using only MCP calls.
-- **L3 — SSH Node reconcile/update.** Add a host-side deployment package and
-  fleet tools. The release input is a signed/digest-pinned static bundled
-  executable appropriate for the probed OS/architecture. Upload to a sibling
-  temporary path, run the binary's own version/compatibility check, verify the
-  expected digest, atomically rename, restart a managed systemd service, wait
-  for the expected fingerprint/version to register, and retain one previous
-  binary for automatic rollback. Never disable SSH host-key verification;
-  accept a known-hosts profile/fingerprint name, not a raw permissive boolean.
-  Privilege escalation is an explicit deployment-profile choice and is never
-  inferred from a failed command. Cover fresh install, no-op reconcile,
-  upgrade, incompatible architecture/protocol, interrupted upload, failed
-  restart, rollback, and already-newer-node policy. First e2e uses disposable
-  SSH containers/VMs; a gated bare-metal/KVM fleet test proves registration.
+- **L3 — adaptive SSH Node installation skill.** Add
+  `.agents/skills/deploy-daft-node` with concise workflow instructions,
+  supervisor/cgroup reference material, and deterministic read-only probe,
+  artifact-inspection, atomic-stage/rollback, and registration-verification
+  scripts. The skill uses strict host-key SSH and the local digest-pinned
+  static executable, but lets the overseer choose supervision from discovered
+  host facts. It must verify architecture/protocol, KVM access, cgroup v2
+  delegation, identity exchange, and exact fingerprint/version registration.
+  It may not infer sudo permission or weaken a missing prerequisite. Cover
+  fresh install, no-op, upgrade, incompatible host, interrupted upload,
+  failed start, and rollback across representative supervisor fixtures.
 - **L4 — detached execution and agent startup.** Implement AgentProfile loading
-  and `agent_start` for
-  Codex and Claude Code. Named enabler first: exit-code/exit-reason
+  and `agent_start` for Codex; Claude Code is deferred. Named enabler first:
+  exit-code/exit-reason
   propagation through the exec path — the guest's
   `AgentAttachExit{code,error}` is collapsed to `io.EOF` at the Node session
   boundary (`internal/sandboxattach`) and the outward `AttachFrame` oneof has
@@ -3811,8 +3808,10 @@ Slices:
   than polling forever. Then: launch or reuse the requested Workspace Sandbox,
   deliver the credential through L0's one-shot channel, start the provider,
   persist AgentRun state/events, and capture
-  final response, exit reason, Sandbox UUID, and observability links. Enforce
-  max runtime, output limits, cancellation, and secret redaction. The
+  final response, exit reason, Sandbox UUID, and observability links. Do not
+  infer stuckness or impose an automatic runtime deadline; enforce output and
+  resource limits, explicit cancellation, and secret redaction. On completion,
+  stop the VM while preserving its overlay for later inspection or resume. The
   provider egress allowlist depends on per-workspace/per-sandbox egress
   policy (C4) — today the proxy lane is a node-level env toggle and the MITM
   proxy accepts any CONNECT host — so L4 v1 ships deny+proxy-on with no host
@@ -3820,12 +3819,13 @@ Slices:
   lands first. E2E providers use deterministic fake agent binaries; opt-in
   smoke tests exercise real subscription credentials without recording them
   or running in CI.
-- **L5 — overseer workflow and recovery.** Add an MCP prompt/skill describing
-  `reconcile nodes -> apply/push workspace -> start agents -> poll events ->
-  inspect traces/results`. Prove parallel projects on different Nodes,
-  overseer/MCP restart and resume, Node loss, agent timeout, and partial fleet
-  upgrade. The overseer can manage and summarize AgentRuns but cannot yet take
-  over their interactive TTY.
+- **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
+  companion skill) to describe `probe/install node over SSH -> authorize and
+  verify through MCP -> apply/push workspace -> start agent -> poll events ->
+  inspect traces/result -> stop and preserve`. Prove parallel projects on
+  different Nodes, overseer/MCP restart and resume, Node loss, indefinite-run
+  cancellation, and partial fleet upgrade. The overseer can manage and
+  summarize AgentRuns but cannot yet take over their interactive TTY.
 - **L6 (deferred) — direct agent control.** Terminal attach/resume, browser UI,
   bidirectional prompt injection, approval relays, port publication, and human
   handoff. Reuse Phase C ingress and the existing PTY/forward streams; do not
@@ -3834,16 +3834,11 @@ Slices:
 Phase L dependencies and non-dependencies:
 
 - B6 durable persistence is a prerequisite for production L2 and L4/L5, not
-  for L1 or SSH bootstrap/update in L3. The control plane is in-memory today,
-  and an
+  for L1 or the SSH skill in L3. The control plane is in-memory today, and an
   overseer converging desired state against an orchestrator that forgets
-  everything on restart will thrash — L2's idempotent re-applies and durable
-  AgentRun/Operation UUIDs assume the orchestrator remembers. L3 deployment
-  operations may instead be journaled by the trusted-host MCP and verify a
-  fresh live registration after every orchestrator restart. If sequencing
-  demands an earlier L2/L4 prototype, L0 must define an explicit crash-safe
-  local journal and migration path. L must not create a second ambiguous source
-  of truth.
+  everything on restart will thrash. Workspaces and AgentRuns therefore use
+  the versioned Badger store directly; L must not create a second MCP journal
+  or ambiguous source of truth.
 - L2 reuses the landed Workspace/Sandbox lifecycle but adds the Apply RPC and
   generation preconditions (see L2). L1 reuses the observer stores as-is, but
   the trace store needs a query RPC before `sandbox_trace_query` (see L1).
@@ -3854,22 +3849,23 @@ Phase L dependencies and non-dependencies:
 - L1-L5 do not depend on Phase C2 browser ingress, Phase H Docker compatibility,
   GPU shared-VM work, or L6 direct interaction.
 
-Open questions for L0:
+Remaining open questions for L0:
 
 - **Release trust:** digest pinned by an overseer deployment profile is the
   minimum. Do releases also carry a project signing key/Sigstore identity, and
   where is the trust root configured?
-- **Service ownership:** system-level `daft-sandboxd.service` is the production
-  default, but should rootless/user-systemd Nodes be supported in L3 v1 or only
-  after the root path is proven?
+
+Decisions closed for L0 (2026-07-20):
+- **Service ownership:** no service manager is prescribed by MCP. The overseer
+  skill probes the host and selects an explicit strategy; every strategy must
+  still satisfy the same KVM and delegated-cgroup preconditions.
 - **Credential renewal:** Codex documents a trusted-automation access token;
   Claude subscription automation may require its native refresh store. Which
   provider-supported credential representation can be copied into ephemeral
   homes without depending on private file formats?
-- **AgentRun/Operation persistence:** add them to the orchestrator's B6 store
-  immediately, or use a user-host journal for the first MCP release? Fleet
-  recovery favours orchestrator ownership; credential profiles must remain
-  host-only either way.
+- **AgentRun persistence:** store AgentRuns and their bounded event history in
+  Badger immediately. There is no deployment Operation resource; credential
+  profiles remain host-only.
 - **MCP project-path addressing:** `workspace push` is a client-side
   operation keyed off dir-local mounts in `./.daft/config.json`, resolved
   from cwd only. A long-lived MCP server has one cwd but manages many
