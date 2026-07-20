@@ -14,22 +14,63 @@ import (
 	agentrunv1 "github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1/agentrunv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/nodejob"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 const (
 	defaultAgentRunPageSize = 50
 	maxAgentRunPageSize     = 200
+	defaultAgentRunSweep    = 2 * time.Second
 )
 
 type agentJobCanceler interface {
 	CancelNodeJob(context.Context, identity.Fingerprint, string) (nodejob.Snapshot, error)
 }
 
+type agentJobStarter interface {
+	StartNodeJob(context.Context, identity.Fingerprint, nodejob.StartRequest) (nodejob.Snapshot, error)
+}
+
+type agentJobReconciler interface {
+	agentJobStarter
+	GetNodeJob(context.Context, identity.Fingerprint, string, uint64, uint64, int) (nodejob.Snapshot, error)
+	DeleteNodeJob(context.Context, identity.Fingerprint, string) error
+}
+
 type AgentRunHandler struct {
 	agentrunv1connect.UnimplementedAgentRunServiceHandler
-	store    *agentruncatalog.Store
-	canceler agentJobCanceler
+	store      *agentruncatalog.Store
+	canceler   agentJobCanceler
+	starter    agentJobStarter
+	reconciler agentJobReconciler
+	workspaces *workspacecatalog.Store
+	nodes      *nodectrl.Registry
+}
+
+// Run periodically reconciles durable runs until ctx is canceled.
+func (h *AgentRunHandler) Run(ctx context.Context) {
+	ticker := time.NewTicker(defaultAgentRunSweep)
+	defer ticker.Stop()
+	_ = h.ReconcileOnce(ctx)
+	//daft:lint:disable=forloopbound reason="exits on ctx.Done; retry cadence is bounded by defaultAgentRunSweep"
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			_ = h.ReconcileOnce(ctx)
+		}
+	}
+}
+
+// SetStartDependencies wires the internal trusted start controller. Keeping
+// these separate from the read/cancel constructor preserves small unit-test
+// fakes while production always supplies the workspace and live-node stores.
+func (h *AgentRunHandler) SetStartDependencies(workspaces *workspacecatalog.Store, nodes *nodectrl.Registry, starter agentJobStarter) {
+	h.workspaces, h.nodes, h.starter = workspaces, nodes, starter
+	h.reconciler, _ = starter.(agentJobReconciler)
 }
 
 func NewAgentRunHandler(store *agentruncatalog.Store, canceler agentJobCanceler) *AgentRunHandler {
@@ -46,6 +87,136 @@ func (h *AgentRunHandler) owner(reqHeader interface{ Get(string) string }) (iden
 		return identity.Fingerprint{}, connect.NewError(connect.CodeUnauthenticated, errors.New("orchestrator: no mTLS peer identity"))
 	}
 	return fp, nil
+}
+
+func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentrunv1.StartAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error) {
+	owner, err := h.owner(req.Header())
+	if err != nil {
+		return nil, err
+	}
+	if h.workspaces == nil || h.nodes == nil || h.starter == nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("orchestrator: AgentRun start controller is not configured"))
+	}
+	workspace, err := h.workspaces.Get(req.Msg.GetWorkspaceUuid())
+	if err != nil || workspace.Metadata.OwnerFingerprint != owner {
+		return nil, connect.NewError(connect.CodeNotFound, errors.New("orchestrator: Workspace not found"))
+	}
+	if workspace.Status.CurrentSandbox == nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("orchestrator: Workspace has no current Sandbox"))
+	}
+	binding := workspace.Status.CurrentSandbox
+	node, ok := h.nodes.Lookup(binding.NodeFingerprint)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnavailable, errors.New("orchestrator: Workspace Node is not connected"))
+	}
+	run, err := h.store.Create(agentruncatalog.CreateInput{
+		UUID: mintWorkspaceUUID(), WorkspaceUUID: workspace.Metadata.UUID,
+		ProfileName: req.Msg.GetProfileName(), ProfileDigest: req.Msg.GetProfileDigest(),
+		Prompt: req.Msg.GetPrompt(), Command: req.Msg.GetCommand(), OwnerFingerprint: owner,
+	})
+	if err != nil {
+		return nil, agentRunError(err)
+	}
+	run, err = h.store.Transition(owner, run.UUID, agentruncatalog.TransitionInput{
+		From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting,
+		Message: "sandbox assigned", SandboxUID: binding.UID,
+		NodeFingerprint: binding.NodeFingerprint, NodeInstanceID: node.InstanceID,
+	})
+	if err != nil {
+		return nil, agentRunError(err)
+	}
+	command := append([]string(nil), run.Command...)
+	if run.Prompt != "" {
+		command = append(command, run.Prompt)
+	}
+	job, startErr := h.starter.StartNodeJob(ctx, run.NodeFingerprint, nodejob.StartRequest{IdempotencyKey: run.UUID, SandboxUID: run.SandboxUID, Command: command})
+	if startErr != nil {
+		// STARTING is durable and carries the exact process-instance binding and
+		// argv. Reconciliation can safely retry this ambiguous transport result
+		// with the same Node idempotency key.
+		return connect.NewResponse(mapAgentRun(run)), nil //nolint:nilerr // durable STARTING is the successful, retryable result
+	}
+	run, err = h.store.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, Message: "job started", NodeJobID: job.ID})
+	if err != nil {
+		return nil, agentRunError(err)
+	}
+	return connect.NewResponse(mapAgentRun(run)), nil
+}
+
+// ReconcileOnce advances every durable active run using only its frozen launch
+// snapshot and exact Node process binding. Transport errors are retryable; a
+// changed process instance is definitive evidence that process-local jobs were
+// lost.
+func (h *AgentRunHandler) ReconcileOnce(ctx context.Context) error {
+	if h.store == nil || h.nodes == nil || h.reconciler == nil {
+		return errors.New("orchestrator: AgentRun reconciliation is not configured")
+	}
+	var joined error
+	active := h.store.Active()
+	for i := range active {
+		run := active[i]
+		if err := h.reconcileRun(ctx, run); err != nil {
+			joined = errors.Join(joined, fmt.Errorf("AgentRun %s: %w", run.UUID, err))
+		}
+	}
+	return joined
+}
+
+func (h *AgentRunHandler) reconcileRun(ctx context.Context, run agentruncatalog.Run) error {
+	node, connected := h.nodes.Lookup(run.NodeFingerprint)
+	if !connected {
+		return nil
+	}
+	if node.InstanceID != run.NodeInstanceID {
+		_, err := h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: agentruncatalog.StateLost, Message: "node process restarted", Reason: "detached job was lost when the Node process restarted"})
+		return err
+	}
+	if run.State == agentruncatalog.StateStarting {
+		if len(run.Command) == 0 {
+			_, err := h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: agentruncatalog.StateLost, Message: "launch snapshot unavailable", Reason: "launch snapshot unavailable after upgrade"})
+			return err
+		}
+		command := append([]string(nil), run.Command...)
+		if run.Prompt != "" {
+			command = append(command, run.Prompt)
+		}
+		job, err := h.reconciler.StartNodeJob(ctx, run.NodeFingerprint, nodejob.StartRequest{IdempotencyKey: run.UUID, SandboxUID: run.SandboxUID, Command: command})
+		if err != nil {
+			return nil //nolint:nilerr // an ambiguous idempotent start remains retryable
+		}
+		_, err = h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, Message: "job recovered", NodeJobID: job.ID})
+		return err
+	}
+	if run.State != agentruncatalog.StateRunning && run.State != agentruncatalog.StateCanceling {
+		return nil
+	}
+	job, err := h.reconciler.GetNodeJob(ctx, run.NodeFingerprint, run.NodeJobID, 0, 0, agentruncatalog.MaxResultBytes)
+	if err != nil {
+		return nil //nolint:nilerr // a disconnected control stream is retried on the next sweep
+	}
+	if !job.State.Terminal() {
+		return nil
+	}
+	to := agentruncatalog.StateFailed
+	switch job.State {
+	case nodejob.StateSucceeded:
+		to = agentruncatalog.StateSucceeded
+	case nodejob.StateCanceled:
+		to = agentruncatalog.StateCanceled
+	}
+	if run.State == agentruncatalog.StateCanceling && to == agentruncatalog.StateSucceeded {
+		to = agentruncatalog.StateCanceled
+	}
+	result := string(job.Stdout.Data)
+	if job.Stderr.CursorExpired || job.Stdout.CursorExpired {
+		to, result = agentruncatalog.StateFailed, ""
+		job.Reason = "detached job output expired before collection"
+	}
+	_, err = h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: to, Message: "job completed", ExitCode: job.ExitCode, ExitCodeSet: job.ExitCodeSet, Reason: job.Reason, Result: result})
+	if err != nil {
+		return err
+	}
+	return h.reconciler.DeleteNodeJob(ctx, run.NodeFingerprint, run.NodeJobID)
 }
 
 func (h *AgentRunHandler) Get(_ context.Context, req *connect.Request[agentrunv1.GetAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error) {

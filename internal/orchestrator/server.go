@@ -166,6 +166,7 @@ type Server struct {
 	sandboxCtrl      *NodeControlHandler
 	workspaceCatalog *workspacecatalog.Store
 	agentRunCatalog  *agentruncatalog.Store
+	agentRunCtrl     *AgentRunHandler
 	reconciler       *reconciler.Reconciler
 
 	backgroundMu       sync.Mutex
@@ -242,7 +243,7 @@ func New(cfg Config) (*Server, error) {
 	if wcErr != nil {
 		return nil, wcErr
 	}
-	agentRunCtrl := NewAgentRunHandler(cfg.AgentRunCatalog, sandboxCtrl)
+	agentRunCtrl := newAgentRunController(cfg.AgentRunCatalog, workspaceCat, nodeReg, sandboxCtrl)
 	// Reconciler (Slice B5) owns per-heartbeat reconcile, the
 	// missing-heartbeat threshold → SandboxLost, periodic sweep
 	// for unreachable Nodes, and the Launch/Stop pre-action hook.
@@ -291,8 +292,15 @@ func New(cfg Config) (*Server, error) {
 		sandboxCtrl:      sandboxCtrl,
 		workspaceCatalog: workspaceCat,
 		agentRunCatalog:  cfg.AgentRunCatalog,
+		agentRunCtrl:     agentRunCtrl,
 		reconciler:       rec,
 	}, nil
+}
+
+func newAgentRunController(runs *agentruncatalog.Store, workspaces *workspacecatalog.Store, nodes *nodectrl.Registry, jobs *NodeControlHandler) *AgentRunHandler {
+	controller := NewAgentRunHandler(runs, jobs)
+	controller.SetStartDependencies(workspaces, nodes, jobs)
+	return controller
 }
 
 func resolveWorkspaceCatalog(cat *workspacecatalog.Store) *workspacecatalog.Store {
@@ -531,7 +539,17 @@ func (s *Server) startReconciler() {
 		done := s.reconcilerDone
 		go func() {
 			defer close(done)
-			_ = s.reconciler.Run(ctx)
+			var workers sync.WaitGroup
+			workers.Add(2)
+			go func() {
+				defer workers.Done()
+				_ = s.reconciler.Run(ctx)
+			}()
+			go func() {
+				defer workers.Done()
+				s.agentRunCtrl.Run(ctx)
+			}()
+			workers.Wait()
 		}()
 	})
 }

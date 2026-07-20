@@ -3926,6 +3926,20 @@ Slices:
   idempotent Node job without reloading mutable host configuration. Legacy
   active records created before this snapshot field existed remain readable
   but reconciliation must mark them LOST rather than guess a launch command.
+  The trusted Start RPC now validates Workspace ownership, binds the run to
+  the Workspace's current Sandbox and the live Node process instance, persists
+  QUEUED then STARTING before issuing any detached execution request, and uses
+  the AgentRun UUID as the Node idempotency key. A successful start records the
+  Node job ID and RUNNING atomically; an ambiguous transport failure deliberately
+  returns the durable STARTING run so the forthcoming reconciler can retry the
+  exact request. Launching a missing current Sandbox, absence-grace recovery,
+  and the public profile-name-only MCP adapter remain. A Serve-lifetime recovery worker
+  now retries STARTING jobs idempotently after orchestrator restart, polls
+  RUNNING/CANCELING jobs, durably captures bounded terminal results before
+  deleting Node-local job state, and marks runs LOST when the bound Node
+  process instance changes. A disconnected Node is left retryable for now;
+  the bounded absence/grace policy still needs to land before reconciliation
+  is complete.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->

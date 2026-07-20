@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -13,19 +14,51 @@ import (
 	agentrunv1 "github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1/agentrunv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/nodejob"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 const (
-	testAgentRunA    = "run-a"
-	testAgentBootID  = "boot"
-	testAgentSandbox = "sandbox"
+	testAgentRunA      = "run-a"
+	testAgentBootID    = "boot"
+	testAgentSandbox   = "sandbox"
+	testAgentProfile   = "codex"
+	testAgentWorkspace = "agent-workspace"
+	testAgentJob       = "agent-job"
+	testAgentProject   = "project"
+	testAgentDigest    = "digest"
 )
 
 type fakeAgentCanceler struct {
 	fingerprint identity.Fingerprint
 	jobID       string
 	err         error
+}
+
+type fakeAgentStarter struct {
+	fingerprint identity.Fingerprint
+	request     nodejob.StartRequest
+	snapshot    nodejob.Snapshot
+	err         error
+	getErr      error
+	deleteErr   error
+	get         nodejob.Snapshot
+	deleted     string
+}
+
+func (f *fakeAgentStarter) GetNodeJob(_ context.Context, _ identity.Fingerprint, _ string, _, _ uint64, _ int) (nodejob.Snapshot, error) {
+	return f.get, f.getErr
+}
+
+func (f *fakeAgentStarter) DeleteNodeJob(_ context.Context, _ identity.Fingerprint, jobID string) error {
+	f.deleted = jobID
+	return f.deleteErr
+}
+
+func (f *fakeAgentStarter) StartNodeJob(_ context.Context, fingerprint identity.Fingerprint, request nodejob.StartRequest) (nodejob.Snapshot, error) {
+	f.fingerprint, f.request = fingerprint, request
+	return f.snapshot, f.err
 }
 
 func (f *fakeAgentCanceler) CancelNodeJob(_ context.Context, fingerprint identity.Fingerprint, jobID string) (nodejob.Snapshot, error) {
@@ -59,11 +92,319 @@ func agentRunRequest[T any](message *T, owner identity.Fingerprint) *connect.Req
 
 func createAgentRun(t *testing.T, store *agentruncatalog.Store, owner identity.Fingerprint, uuid string) agentruncatalog.Run {
 	t.Helper()
-	run, err := store.Create(agentruncatalog.CreateInput{Command: []string{"codex"}, UUID: uuid, WorkspaceUUID: "workspace", ProfileName: "codex", ProfileDigest: "sha256:profile", OwnerFingerprint: owner})
+	run, err := store.Create(agentruncatalog.CreateInput{Command: []string{testAgentProfile}, UUID: uuid, WorkspaceUUID: testAgentWorkspace, ProfileName: testAgentProfile, ProfileDigest: "sha256:profile", OwnerFingerprint: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return run
+}
+
+func TestAgentRunHandlerStartBindsAndStartsIdempotentJob(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	workspaces := workspacecatalog.NewStore(nil)
+	workspace, err := workspaces.Create(workspacecatalog.CreateInput{UUID: testAgentWorkspace, Name: testAgentProject, OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = workspaces.Update(workspace.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	starter := &fakeAgentStarter{snapshot: nodejob.Snapshot{ID: "job"}}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspaces, nodes, starter)
+	response, err := handler.Start(t.Context(), agentRunRequest(&agentrunv1.StartAgentRunRequest{
+		WorkspaceUuid: workspace.Metadata.UUID, ProfileName: testAgentProfile, ProfileDigest: "sha256:profile",
+		Command: []string{testAgentProfile, "exec"}, Prompt: "fix it",
+	}, owner))
+	if err != nil || response.Msg.GetState() != agentrunv1.AgentRunState_AGENT_RUN_STATE_RUNNING {
+		t.Fatalf("Start = %#v, %v", response, err)
+	}
+	if starter.fingerprint != node || starter.request.IdempotencyKey != response.Msg.GetUuid() || starter.request.SandboxUID != testAgentSandbox {
+		t.Fatalf("start request = %#v, node=%s", starter.request, starter.fingerprint)
+	}
+	if got := starter.request.Command; len(got) != 3 || got[2] != "fix it" {
+		t.Fatalf("command = %#v", got)
+	}
+	stored, err := runs.Get(owner, response.Msg.GetUuid())
+	if err != nil || len(stored.Command) != 2 || stored.Command[1] != "exec" {
+		t.Fatalf("stored launch snapshot = %#v, %v", stored, err)
+	}
+}
+
+func TestAgentRunHandlerStartRetainsStartingOnAmbiguousFailure(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	workspaces := workspacecatalog.NewStore(nil)
+	workspace, err := workspaces.Create(workspacecatalog.CreateInput{UUID: testAgentWorkspace, Name: testAgentProject, OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = workspaces.Update(workspace.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	starter := &fakeAgentStarter{err: context.DeadlineExceeded}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspaces, nodes, starter)
+	response, err := handler.Start(t.Context(), agentRunRequest(&agentrunv1.StartAgentRunRequest{WorkspaceUuid: workspace.Metadata.UUID, ProfileName: testAgentProfile, ProfileDigest: testAgentDigest, Command: []string{testAgentProfile}}, owner))
+	if err != nil || response.Msg.GetState() != agentrunv1.AgentRunState_AGENT_RUN_STATE_STARTING {
+		t.Fatalf("Start ambiguous = %#v, %v", response, err)
+	}
+}
+
+func TestAgentRunReconcileRecoversStartAndCollectsResult(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	run := createAgentRun(t, runs, owner, "recover")
+	run, err := runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting, SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	jobs := &fakeAgentStarter{snapshot: nodejob.Snapshot{ID: testAgentJob}}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodes, jobs)
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	run, err = runs.Get(owner, run.UUID)
+	if err != nil || run.State != agentruncatalog.StateRunning || run.NodeJobID != testAgentJob {
+		t.Fatalf("recovered = %#v, %v", run, err)
+	}
+	jobs.get = nodejob.Snapshot{ID: testAgentJob, State: nodejob.StateSucceeded, Stdout: nodejob.Chunk{Data: []byte("done")}, ExitCodeSet: true}
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	run, err = runs.Get(owner, run.UUID)
+	if err != nil || run.State != agentruncatalog.StateSucceeded || run.Result != "done" || jobs.deleted != testAgentJob {
+		t.Fatalf("completed = %#v, deleted=%q, %v", run, jobs.deleted, err)
+	}
+}
+
+func TestAgentRunReconcileMarksRestartedNodeLost(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	run := createAgentRun(t, runs, owner, "lost")
+	_, err := runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting, SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, "new-process", "node", "v1", nodectrl.Resources{})
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodes, &fakeAgentStarter{})
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := runs.Get(owner, run.UUID)
+	if err != nil || got.State != agentruncatalog.StateLost {
+		t.Fatalf("lost = %#v, %v", got, err)
+	}
+}
+
+func TestAgentRunStartPreconditions(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner, other := mustGenerate(t, identity.RoleOperator).Fingerprint(), mustGenerate(t, identity.RoleClient).Fingerprint()
+	handler := NewAgentRunHandler(runs, nil)
+	request := agentRunRequest(&agentrunv1.StartAgentRunRequest{WorkspaceUuid: testAgentWorkspace, ProfileName: testAgentProfile, ProfileDigest: testAgentDigest, Command: []string{testAgentProfile}}, owner)
+	if _, err := handler.Start(t.Context(), request); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("unconfigured = %v", err)
+	}
+	workspaces := workspacecatalog.NewStore(nil)
+	if _, err := workspaces.Create(workspacecatalog.CreateInput{UUID: testAgentWorkspace, Name: testAgentProject, OwnerFingerprint: other}); err != nil {
+		t.Fatal(err)
+	}
+	nodes := nodectrl.NewRegistry(nil)
+	handler.SetStartDependencies(workspaces, nodes, &fakeAgentStarter{})
+	if _, err := handler.Start(t.Context(), request); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("foreign workspace = %v", err)
+	}
+	owned, err := workspaces.Create(workspacecatalog.CreateInput{UUID: "owned", Name: "owned", OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Msg.WorkspaceUuid = owned.Metadata.UUID
+	if _, err := handler.Start(t.Context(), request); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("missing Sandbox = %v", err)
+	}
+	_, err = workspaces.Update(owned.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: other}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := handler.Start(t.Context(), request); connect.CodeOf(err) != connect.CodeUnavailable {
+		t.Fatalf("missing Node = %v", err)
+	}
+}
+
+func TestAgentRunReconcileConfigurationAndRunCancellation(t *testing.T) {
+	handler := NewAgentRunHandler(nil, nil)
+	if err := handler.ReconcileOnce(t.Context()); err == nil {
+		t.Fatal("unconfigured reconcile succeeded")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		handler.Run(ctx)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not stop on cancellation")
+	}
+}
+
+func TestAgentRunReconcileHandlesOutputExpiryAndDisconnectedNode(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	run := createAgentRun(t, runs, owner, "expired")
+	run, err := runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting, SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, NodeJobID: testAgentJob})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := nodectrl.NewRegistry(nil)
+	jobs := &fakeAgentStarter{get: nodejob.Snapshot{ID: testAgentJob, State: nodejob.StateSucceeded, Stdout: nodejob.Chunk{CursorExpired: true}, ExitCodeSet: true}}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodes, jobs)
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := runs.Get(owner, run.UUID)
+	if err != nil || unchanged.State != agentruncatalog.StateRunning {
+		t.Fatalf("disconnected = %#v, %v", unchanged, err)
+	}
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	jobs.get = nodejob.Snapshot{ID: testAgentJob, State: nodejob.StateRunning}
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	jobs.get = nodejob.Snapshot{ID: testAgentJob, State: nodejob.StateSucceeded, Stdout: nodejob.Chunk{CursorExpired: true}, ExitCodeSet: true}
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	failed, err := runs.Get(owner, run.UUID)
+	if err != nil || failed.State != agentruncatalog.StateFailed || failed.Reason == "" || failed.Result != "" {
+		t.Fatalf("expired = %#v, %v", failed, err)
+	}
+}
+
+func TestAgentRunReconcileCanceledJobReportsDeleteFailure(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	run := createAgentRun(t, runs, owner, "canceled-result")
+	run, err := runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting, SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, NodeJobID: testAgentJob})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateRunning}, To: agentruncatalog.StateCanceling})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	jobs := &fakeAgentStarter{get: nodejob.Snapshot{ID: testAgentJob, State: nodejob.StateCanceled}, deleteErr: errors.New("delete failed")}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodes, jobs)
+	if err := handler.ReconcileOnce(t.Context()); err == nil {
+		t.Fatal("delete failure was not reported")
+	}
+	got, err := runs.Get(owner, run.UUID)
+	if err != nil || got.State != agentruncatalog.StateCanceled {
+		t.Fatalf("canceled = %#v, %v", got, err)
+	}
+}
+
+func TestAgentRunReconcileRetriesTransientNodeErrors(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	starting := createAgentRun(t, runs, owner, "retry-start")
+	starting, err := runs.Transition(owner, starting.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting, SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := &fakeAgentStarter{err: context.DeadlineExceeded}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodes, jobs)
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := runs.Get(owner, starting.UUID)
+	if err != nil || got.State != agentruncatalog.StateStarting {
+		t.Fatalf("transient start = %#v, %v", got, err)
+	}
+	jobs.err = nil
+	jobs.snapshot.ID = testAgentJob
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	jobs.getErr = context.DeadlineExceeded
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got, err = runs.Get(owner, starting.UUID)
+	if err != nil || got.State != agentruncatalog.StateRunning {
+		t.Fatalf("transient get = %#v, %v", got, err)
+	}
+}
+
+func TestAgentRunStartRejectsInvalidResolvedProfile(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	workspaces := workspacecatalog.NewStore(nil)
+	workspace, err := workspaces.Create(workspacecatalog.CreateInput{UUID: testAgentWorkspace, Name: testAgentProject, OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = workspaces.Update(workspace.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspaces, nodes, &fakeAgentStarter{})
+	request := agentRunRequest(&agentrunv1.StartAgentRunRequest{WorkspaceUuid: workspace.Metadata.UUID, ProfileName: testAgentProfile, ProfileDigest: testAgentDigest}, owner)
+	if _, err := handler.Start(t.Context(), request); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("invalid resolved profile = %v", err)
+	}
 }
 
 func TestAgentRunHandlerOwnerScopedReadsEventsAndPagination(t *testing.T) {
