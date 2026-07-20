@@ -3755,6 +3755,12 @@ Slices:
   v1. Unit-test schemas, pagination, ownership filtering, annotations,
   cancellation, and output caps; black-box test with an MCP client against a
   real orchestrator (the `internal/testdaemons` harness fits).
+  **In progress (2026-07-20):** `internal/clientconfig` now resolves an
+  explicit project directory, orchestrator precedence, matching local-cluster
+  identity, and malformed cluster state; `internal/daftclient` loads an
+  existing identity without an implicit bootstrap, owns one shared mTLS HTTP/2
+  transport, and exposes Workspace, Node, and Health clients. CLI migration to
+  this package and the three-tool stdio server are the next L1 slices.
 - **L2 — declarative Workspace lifecycle.** Add `workspace_apply`, validate,
   push, launch, stop, and status. This is an orchestrator slice as much as an
   MCP one: no apply/update RPC exists (only the fine-grained
