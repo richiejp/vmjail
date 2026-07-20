@@ -407,6 +407,51 @@ func TestAgentRunStartRejectsInvalidResolvedProfile(t *testing.T) {
 	}
 }
 
+func TestAgentRunReconcileBoundsNodeAbsence(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	run := createAgentRun(t, runs, owner, "missing-node")
+	run, err := runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting, SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodectrl.NewRegistry(nil), &fakeAgentStarter{})
+	handler.setReconcileClock(func() time.Time { return now }, time.Minute)
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := runs.Get(owner, run.UUID)
+	if err != nil || got.State != agentruncatalog.StateStarting {
+		t.Fatalf("within grace = %#v, %v", got, err)
+	}
+	now = now.Add(time.Minute)
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got, err = runs.Get(owner, run.UUID)
+	if err != nil || got.State != agentruncatalog.StateLost {
+		t.Fatalf("after grace = %#v, %v", got, err)
+	}
+}
+
+func TestAgentRunReconcileFailsCrashStrandedQueuedRun(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	run := createAgentRun(t, runs, owner, "stranded-queued")
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodectrl.NewRegistry(nil), &fakeAgentStarter{})
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := runs.Get(owner, run.UUID)
+	if err != nil || got.State != agentruncatalog.StateFailed {
+		t.Fatalf("stranded = %#v, %v", got, err)
+	}
+}
+
 func TestAgentRunHandlerOwnerScopedReadsEventsAndPagination(t *testing.T) {
 	store, _ := agentRunStore(t)
 	owner, other := mustGenerate(t, identity.RoleOperator).Fingerprint(), mustGenerate(t, identity.RoleClient).Fingerprint()

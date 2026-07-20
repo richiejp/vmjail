@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -20,9 +21,10 @@ import (
 )
 
 const (
-	defaultAgentRunPageSize = 50
-	maxAgentRunPageSize     = 200
-	defaultAgentRunSweep    = 2 * time.Second
+	defaultAgentRunPageSize  = 50
+	maxAgentRunPageSize      = 200
+	defaultAgentRunSweep     = 2 * time.Second
+	defaultAgentRunNodeGrace = 30 * time.Second
 )
 
 type agentJobCanceler interface {
@@ -41,12 +43,16 @@ type agentJobReconciler interface {
 
 type AgentRunHandler struct {
 	agentrunv1connect.UnimplementedAgentRunServiceHandler
-	store      *agentruncatalog.Store
-	canceler   agentJobCanceler
-	starter    agentJobStarter
-	reconciler agentJobReconciler
-	workspaces *workspacecatalog.Store
-	nodes      *nodectrl.Registry
+	store        *agentruncatalog.Store
+	canceler     agentJobCanceler
+	starter      agentJobStarter
+	reconciler   agentJobReconciler
+	workspaces   *workspacecatalog.Store
+	nodes        *nodectrl.Registry
+	now          func() time.Time
+	nodeGrace    time.Duration
+	missingMu    sync.Mutex
+	missingSince map[string]time.Time
 }
 
 // Run periodically reconciles durable runs until ctx is canceled.
@@ -74,7 +80,11 @@ func (h *AgentRunHandler) SetStartDependencies(workspaces *workspacecatalog.Stor
 }
 
 func NewAgentRunHandler(store *agentruncatalog.Store, canceler agentJobCanceler) *AgentRunHandler {
-	return &AgentRunHandler{store: store, canceler: canceler}
+	return &AgentRunHandler{store: store, canceler: canceler, now: time.Now, nodeGrace: defaultAgentRunNodeGrace, missingSince: make(map[string]time.Time)}
+}
+
+func (h *AgentRunHandler) setReconcileClock(now func() time.Time, grace time.Duration) {
+	h.now, h.nodeGrace = now, grace
 }
 
 func (h *AgentRunHandler) owner(reqHeader interface{ Get(string) string }) (identity.Fingerprint, error) {
@@ -163,10 +173,19 @@ func (h *AgentRunHandler) ReconcileOnce(ctx context.Context) error {
 }
 
 func (h *AgentRunHandler) reconcileRun(ctx context.Context, run agentruncatalog.Run) error {
+	if run.State == agentruncatalog.StateQueued {
+		_, err := h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: agentruncatalog.StateFailed, Message: "startup binding unavailable", Reason: "orchestrator restarted before the run was bound to a Sandbox"})
+		return err
+	}
 	node, connected := h.nodes.Lookup(run.NodeFingerprint)
 	if !connected {
-		return nil
+		if !h.nodeAbsenceExpired(run.UUID) {
+			return nil
+		}
+		_, err := h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: agentruncatalog.StateLost, Message: "node unavailable", Reason: "Node remained disconnected beyond the AgentRun recovery grace period"})
+		return err
 	}
+	h.clearNodeAbsence(run.UUID)
 	if node.InstanceID != run.NodeInstanceID {
 		_, err := h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: agentruncatalog.StateLost, Message: "node process restarted", Reason: "detached job was lost when the Node process restarted"})
 		return err
@@ -217,6 +236,24 @@ func (h *AgentRunHandler) reconcileRun(ctx context.Context, run agentruncatalog.
 		return err
 	}
 	return h.reconciler.DeleteNodeJob(ctx, run.NodeFingerprint, run.NodeJobID)
+}
+
+func (h *AgentRunHandler) nodeAbsenceExpired(uuid string) bool {
+	now := h.now()
+	h.missingMu.Lock()
+	defer h.missingMu.Unlock()
+	since, exists := h.missingSince[uuid]
+	if !exists {
+		h.missingSince[uuid] = now
+		return false
+	}
+	return !now.Before(since.Add(h.nodeGrace))
+}
+
+func (h *AgentRunHandler) clearNodeAbsence(uuid string) {
+	h.missingMu.Lock()
+	delete(h.missingSince, uuid)
+	h.missingMu.Unlock()
 }
 
 func (h *AgentRunHandler) Get(_ context.Context, req *connect.Request[agentrunv1.GetAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error) {

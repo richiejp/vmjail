@@ -3937,9 +3937,12 @@ Slices:
   now retries STARTING jobs idempotently after orchestrator restart, polls
   RUNNING/CANCELING jobs, durably captures bounded terminal results before
   deleting Node-local job state, and marks runs LOST when the bound Node
-  process instance changes. A disconnected Node is left retryable for now;
-  the bounded absence/grace policy still needs to land before reconciliation
-  is complete.
+  process instance changes. Node disconnects now start a controller-local
+  30-second grace window: reconnecting the same process resumes reconciliation,
+  while expiry durably marks the run LOST. A crash-stranded QUEUED record that
+  never received a Sandbox/Node binding is deterministically FAILED on recovery
+  rather than polled or guessed. This completes the bounded absence behavior;
+  configurable policy and launching a missing current Sandbox remain.
   MCP now exposes `agent_start` with the intentionally narrow public schema:
   Workspace UUID, immutable profile name, and bounded prompt only. The trusted
   MCP host resolves that name from its already-validated AgentProfile snapshot
