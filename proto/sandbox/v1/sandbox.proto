@@ -102,6 +102,12 @@ message SandboxSpec {
   // message — grants the standard container cap set so an in-sandbox
   // buildah can build images.
   PrivilegedBuild privileged_build = 14;
+
+  // Explicit network policy for an agent-created Sandbox. Unset preserves the
+  // legacy Node-wide proxy behavior used by ordinary Workspace launches.
+  // Set+disabled denies all guest egress; set+enabled requires and exclusively
+  // uses the Node's terminating proxy lane.
+  EgressPolicy egress_policy = 15;
 }
 
 // SandboxStatus is the orchestrator's observed runtime state.
@@ -236,6 +242,10 @@ message PrivilegedBuild {
   bool enable = 1;
 }
 
+message EgressPolicy {
+  bool enable = 1;
+}
+
 // Isolation is the per-Sandbox sharing policy.
 enum Isolation {
   ISOLATION_UNSPECIFIED = 0;
@@ -264,6 +274,9 @@ message NodeRef {
 message SandboxRef {
   string uid = 1;
   NodeRef node = 2;
+  // Non-empty only for a Sandbox composed from an immutable AgentProfile.
+  // AgentRun reuse requires an exact digest match.
+  string agent_profile_digest = 3;
 }
 
 // EventType is the K8s-style watch discriminator. Carried on

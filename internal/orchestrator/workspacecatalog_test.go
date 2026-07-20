@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"sync"
@@ -1370,6 +1371,154 @@ func TestAutoSelectSoleNodeBranches(t *testing.T) {
 
 	if got, ok := h.autoSelectSoleNode(base()); !ok || got != sole {
 		t.Errorf("sole selection = %s, %v; want %s, true", got, ok, sole)
+	}
+}
+
+func TestLaunchAgentSandboxAppliesFrozenPolicyAndReusesExactDigest(t *testing.T) {
+	store := workspacecatalog.NewStore(nil)
+	dispatcher := &fakeDispatcher{}
+	h, err := NewWorkspaceCatalogHandler(store, dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	h.SetNodeLister(fakeNodeLister{fps: []identity.Fingerprint{node}})
+	ws, err := store.Create(workspacecatalog.CreateInput{UUID: "agent-workspace", Name: "project", OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Update(ws.Metadata.UUID, workspacecatalog.MutateSpec, func(value *workspacecatalog.Workspace) error {
+		value.Spec.ImageRef = "example.com/project:latest"
+		value.Spec.CPUCores = 2
+		value.Spec.MemoryBytes = 2 << 30
+		value.Spec.Mounts = []workspacecatalog.Mount{{Source: "src", Target: testMountTarget}}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := AgentSandboxPolicy{
+		ProfileDigest: testAgentDigest, ImageRef: testAgentImage,
+		ResourcesEnable: true, CPUCores: 8, MemoryBytes: 16 << 30, EgressEnable: true,
+	}
+	ref, err := h.LaunchAgentSandbox(owner, ws.Metadata.UUID, policy)
+	if err != nil {
+		t.Fatalf("LaunchAgentSandbox: %v", err)
+	}
+	call, ok := dispatcher.last()
+	if !ok {
+		t.Fatal("dispatcher was not called")
+	}
+	spec := call.sandbox.GetSpec()
+	if call.fp != node || spec.GetImageRef() != policy.ImageRef || spec.GetCpuCores() != policy.CPUCores || spec.GetMemoryBytes() != policy.MemoryBytes {
+		t.Errorf("published binding/spec = node %s image %q cpu %d memory %d", call.fp, spec.GetImageRef(), spec.GetCpuCores(), spec.GetMemoryBytes())
+	}
+	if !spec.GetEgressPolicy().GetEnable() || len(spec.GetMounts()) != 1 {
+		t.Errorf("published policy/mounts = %#v, %#v", spec.GetEgressPolicy(), spec.GetMounts())
+	}
+	got, _ := store.Get(ws.Metadata.UUID)
+	if got.Spec.ImageRef != "example.com/project:latest" || got.Spec.CPUCores != 2 || got.Spec.MemoryBytes != 2<<30 {
+		t.Errorf("project spec was mutated: %#v", got.Spec)
+	}
+	if got.Spec.TargetSandboxFingerprint != node.String() || got.Status.CurrentSandbox == nil || got.Status.CurrentSandbox.AgentProfileDigest != policy.ProfileDigest {
+		t.Errorf("persisted binding = %#v, target %q", got.Status.CurrentSandbox, got.Spec.TargetSandboxFingerprint)
+	}
+
+	reused, err := h.LaunchAgentSandbox(owner, ws.Metadata.UUID, policy)
+	if err != nil || reused != ref || len(dispatcher.calls) != 1 {
+		t.Errorf("exact reuse = %#v, %v; dispatches=%d", reused, err, len(dispatcher.calls))
+	}
+	policy.ProfileDigest = "sha256:different"
+	if _, err := h.LaunchAgentSandbox(owner, ws.Metadata.UUID, policy); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Errorf("incompatible reuse code = %s, want FailedPrecondition", connect.CodeOf(err))
+	}
+}
+
+func TestLaunchAgentSandboxRejectsInvalidStateAndMapsDispatchErrors(t *testing.T) {
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	policy := AgentSandboxPolicy{ProfileDigest: testAgentDigest, ImageRef: testAgentImage}
+
+	withoutDispatcher, err := NewWorkspaceCatalogHandler(workspacecatalog.NewStore(nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := withoutDispatcher.LaunchAgentSandbox(owner, "workspace", policy); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Errorf("without dispatcher code = %s", connect.CodeOf(err))
+	}
+
+	dispatcher := &fakeDispatcher{}
+	store := workspacecatalog.NewStore(nil)
+	h, err := NewWorkspaceCatalogHandler(store, dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.LaunchAgentSandbox(identity.Fingerprint{}, "workspace", policy); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("incomplete policy code = %s", connect.CodeOf(err))
+	}
+	if _, err := h.LaunchAgentSandbox(owner, "missing", policy); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Errorf("missing workspace code = %s", connect.CodeOf(err))
+	}
+	other := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	ws, err := store.Create(workspacecatalog.CreateInput{UUID: "invalid-agent-workspace", Name: "project", OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.LaunchAgentSandbox(other, ws.Metadata.UUID, policy); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Errorf("foreign workspace code = %s", connect.CodeOf(err))
+	}
+	if _, err := h.LaunchAgentSandbox(owner, ws.Metadata.UUID, policy); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Errorf("missing launch fields code = %s", connect.CodeOf(err))
+	}
+	_, err = store.Update(ws.Metadata.UUID, workspacecatalog.MutateSpec, func(value *workspacecatalog.Workspace) error {
+		value.Spec.TargetSandboxFingerprint = node.String()
+		value.Spec.Mounts = []workspacecatalog.Mount{{Source: "src", Target: testMountTarget}}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher.nextError = errors.New("publish failed")
+	if _, err := h.LaunchAgentSandbox(owner, ws.Metadata.UUID, policy); connect.CodeOf(err) != connect.CodeInternal {
+		t.Errorf("publish failure code = %s", connect.CodeOf(err))
+	}
+	_, err = store.Update(ws.Metadata.UUID, workspacecatalog.MutateSpec, func(value *workspacecatalog.Workspace) error {
+		value.Spec.TargetSandboxFingerprint = "invalid"
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.LaunchAgentSandbox(owner, ws.Metadata.UUID, policy); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Errorf("invalid target code = %s", connect.CodeOf(err))
+	}
+}
+
+func TestAutoSelectAgentNodeBranches(t *testing.T) {
+	store := workspacecatalog.NewStore(nil)
+	h, err := NewWorkspaceCatalogHandler(store, &fakeDispatcher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ws workspacecatalog.Workspace
+	if _, ok := h.autoSelectAgentNode(ws); ok {
+		t.Error("selected with no node lister")
+	}
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	h.SetNodeLister(fakeNodeLister{fps: []identity.Fingerprint{node}})
+	ws.Spec.TargetSandboxFingerprint = node.String()
+	if _, ok := h.autoSelectAgentNode(ws); ok {
+		t.Error("overrode an explicit target")
+	}
+	ws.Spec.TargetSandboxFingerprint = ""
+	h.SetNodeLister(fakeNodeLister{fps: []identity.Fingerprint{node, mustGenerate(t, identity.RoleSandboxHost).Fingerprint()}})
+	if _, ok := h.autoSelectAgentNode(ws); ok {
+		t.Error("selected among multiple nodes")
+	}
+	h.SetNodeLister(fakeNodeLister{fps: []identity.Fingerprint{node}})
+	if got, ok := h.autoSelectAgentNode(ws); !ok || got != node {
+		t.Errorf("sole node = %s, %v; want %s, true", got, ok, node)
 	}
 }
 

@@ -100,6 +100,11 @@ type StartAgentRunRequest struct {
 	ProfileDigest string                 `protobuf:"bytes,3,opt,name=profile_digest,json=profileDigest,proto3" json:"profile_digest,omitempty"`
 	Command       []string               `protobuf:"bytes,4,rep,name=command,proto3" json:"command,omitempty"`
 	Prompt        string                 `protobuf:"bytes,5,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	// Frozen trusted-host launch policy. MCP callers cannot supply these fields;
+	// daft-mcp resolves them from the named immutable AgentProfile.
+	ImageRef      string             `protobuf:"bytes,6,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
+	Resources     *AgentRunResources `protobuf:"bytes,7,opt,name=resources,proto3" json:"resources,omitempty"`
+	Egress        *AgentRunEgress    `protobuf:"bytes,8,opt,name=egress,proto3" json:"egress,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -169,6 +174,131 @@ func (x *StartAgentRunRequest) GetPrompt() string {
 	return ""
 }
 
+func (x *StartAgentRunRequest) GetImageRef() string {
+	if x != nil {
+		return x.ImageRef
+	}
+	return ""
+}
+
+func (x *StartAgentRunRequest) GetResources() *AgentRunResources {
+	if x != nil {
+		return x.Resources
+	}
+	return nil
+}
+
+func (x *StartAgentRunRequest) GetEgress() *AgentRunEgress {
+	if x != nil {
+		return x.Egress
+	}
+	return nil
+}
+
+type AgentRunResources struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enable        bool                   `protobuf:"varint,1,opt,name=enable,proto3" json:"enable,omitempty"`
+	CpuCores      uint32                 `protobuf:"varint,2,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
+	MemoryBytes   uint64                 `protobuf:"varint,3,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentRunResources) Reset() {
+	*x = AgentRunResources{}
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentRunResources) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentRunResources) ProtoMessage() {}
+
+func (x *AgentRunResources) ProtoReflect() protoreflect.Message {
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentRunResources.ProtoReflect.Descriptor instead.
+func (*AgentRunResources) Descriptor() ([]byte, []int) {
+	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *AgentRunResources) GetEnable() bool {
+	if x != nil {
+		return x.Enable
+	}
+	return false
+}
+
+func (x *AgentRunResources) GetCpuCores() uint32 {
+	if x != nil {
+		return x.CpuCores
+	}
+	return 0
+}
+
+func (x *AgentRunResources) GetMemoryBytes() uint64 {
+	if x != nil {
+		return x.MemoryBytes
+	}
+	return 0
+}
+
+type AgentRunEgress struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enable        bool                   `protobuf:"varint,1,opt,name=enable,proto3" json:"enable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentRunEgress) Reset() {
+	*x = AgentRunEgress{}
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentRunEgress) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentRunEgress) ProtoMessage() {}
+
+func (x *AgentRunEgress) ProtoReflect() protoreflect.Message {
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentRunEgress.ProtoReflect.Descriptor instead.
+func (*AgentRunEgress) Descriptor() ([]byte, []int) {
+	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *AgentRunEgress) GetEnable() bool {
+	if x != nil {
+		return x.Enable
+	}
+	return false
+}
+
 type AgentRun struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Uuid            string                 `protobuf:"bytes,1,opt,name=uuid,proto3" json:"uuid,omitempty"`
@@ -195,7 +325,7 @@ type AgentRun struct {
 
 func (x *AgentRun) Reset() {
 	*x = AgentRun{}
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[1]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -207,7 +337,7 @@ func (x *AgentRun) String() string {
 func (*AgentRun) ProtoMessage() {}
 
 func (x *AgentRun) ProtoReflect() protoreflect.Message {
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[1]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -220,7 +350,7 @@ func (x *AgentRun) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRun.ProtoReflect.Descriptor instead.
 func (*AgentRun) Descriptor() ([]byte, []int) {
-	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{1}
+	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *AgentRun) GetUuid() string {
@@ -361,7 +491,7 @@ type AgentRunEvent struct {
 
 func (x *AgentRunEvent) Reset() {
 	*x = AgentRunEvent{}
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[2]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -373,7 +503,7 @@ func (x *AgentRunEvent) String() string {
 func (*AgentRunEvent) ProtoMessage() {}
 
 func (x *AgentRunEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[2]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -386,7 +516,7 @@ func (x *AgentRunEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRunEvent.ProtoReflect.Descriptor instead.
 func (*AgentRunEvent) Descriptor() ([]byte, []int) {
-	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{2}
+	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *AgentRunEvent) GetCursor() uint64 {
@@ -426,7 +556,7 @@ type GetAgentRunRequest struct {
 
 func (x *GetAgentRunRequest) Reset() {
 	*x = GetAgentRunRequest{}
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[3]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -438,7 +568,7 @@ func (x *GetAgentRunRequest) String() string {
 func (*GetAgentRunRequest) ProtoMessage() {}
 
 func (x *GetAgentRunRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[3]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -451,7 +581,7 @@ func (x *GetAgentRunRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentRunRequest.ProtoReflect.Descriptor instead.
 func (*GetAgentRunRequest) Descriptor() ([]byte, []int) {
-	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{3}
+	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetAgentRunRequest) GetUuid() string {
@@ -471,7 +601,7 @@ type ListAgentRunsRequest struct {
 
 func (x *ListAgentRunsRequest) Reset() {
 	*x = ListAgentRunsRequest{}
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[4]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -483,7 +613,7 @@ func (x *ListAgentRunsRequest) String() string {
 func (*ListAgentRunsRequest) ProtoMessage() {}
 
 func (x *ListAgentRunsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[4]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -496,7 +626,7 @@ func (x *ListAgentRunsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentRunsRequest.ProtoReflect.Descriptor instead.
 func (*ListAgentRunsRequest) Descriptor() ([]byte, []int) {
-	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{4}
+	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ListAgentRunsRequest) GetPageSize() uint32 {
@@ -523,7 +653,7 @@ type ListAgentRunsResponse struct {
 
 func (x *ListAgentRunsResponse) Reset() {
 	*x = ListAgentRunsResponse{}
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[5]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -535,7 +665,7 @@ func (x *ListAgentRunsResponse) String() string {
 func (*ListAgentRunsResponse) ProtoMessage() {}
 
 func (x *ListAgentRunsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[5]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -548,7 +678,7 @@ func (x *ListAgentRunsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentRunsResponse.ProtoReflect.Descriptor instead.
 func (*ListAgentRunsResponse) Descriptor() ([]byte, []int) {
-	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{5}
+	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListAgentRunsResponse) GetRuns() []*AgentRun {
@@ -576,7 +706,7 @@ type AgentRunEventsRequest struct {
 
 func (x *AgentRunEventsRequest) Reset() {
 	*x = AgentRunEventsRequest{}
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[6]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -588,7 +718,7 @@ func (x *AgentRunEventsRequest) String() string {
 func (*AgentRunEventsRequest) ProtoMessage() {}
 
 func (x *AgentRunEventsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[6]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -601,7 +731,7 @@ func (x *AgentRunEventsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRunEventsRequest.ProtoReflect.Descriptor instead.
 func (*AgentRunEventsRequest) Descriptor() ([]byte, []int) {
-	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{6}
+	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *AgentRunEventsRequest) GetUuid() string {
@@ -637,7 +767,7 @@ type AgentRunEventsResponse struct {
 
 func (x *AgentRunEventsResponse) Reset() {
 	*x = AgentRunEventsResponse{}
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[7]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -649,7 +779,7 @@ func (x *AgentRunEventsResponse) String() string {
 func (*AgentRunEventsResponse) ProtoMessage() {}
 
 func (x *AgentRunEventsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[7]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -662,7 +792,7 @@ func (x *AgentRunEventsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentRunEventsResponse.ProtoReflect.Descriptor instead.
 func (*AgentRunEventsResponse) Descriptor() ([]byte, []int) {
-	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{7}
+	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *AgentRunEventsResponse) GetEvents() []*AgentRunEvent {
@@ -702,7 +832,7 @@ type CancelAgentRunRequest struct {
 
 func (x *CancelAgentRunRequest) Reset() {
 	*x = CancelAgentRunRequest{}
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[8]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -714,7 +844,7 @@ func (x *CancelAgentRunRequest) String() string {
 func (*CancelAgentRunRequest) ProtoMessage() {}
 
 func (x *CancelAgentRunRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_agentrun_v1_agentrun_proto_msgTypes[8]
+	mi := &file_agentrun_v1_agentrun_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -727,7 +857,7 @@ func (x *CancelAgentRunRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelAgentRunRequest.ProtoReflect.Descriptor instead.
 func (*CancelAgentRunRequest) Descriptor() ([]byte, []int) {
-	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{8}
+	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *CancelAgentRunRequest) GetUuid() string {
@@ -741,13 +871,22 @@ var File_agentrun_v1_agentrun_proto protoreflect.FileDescriptor
 
 const file_agentrun_v1_agentrun_proto_rawDesc = "" +
 	"\n" +
-	"\x1aagentrun/v1/agentrun.proto\x12\x10daft.agentrun.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb9\x01\n" +
+	"\x1aagentrun/v1/agentrun.proto\x12\x10daft.agentrun.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd3\x02\n" +
 	"\x14StartAgentRunRequest\x12%\n" +
 	"\x0eworkspace_uuid\x18\x01 \x01(\tR\rworkspaceUuid\x12!\n" +
 	"\fprofile_name\x18\x02 \x01(\tR\vprofileName\x12%\n" +
 	"\x0eprofile_digest\x18\x03 \x01(\tR\rprofileDigest\x12\x18\n" +
 	"\acommand\x18\x04 \x03(\tR\acommand\x12\x16\n" +
-	"\x06prompt\x18\x05 \x01(\tR\x06prompt\"\xe9\x05\n" +
+	"\x06prompt\x18\x05 \x01(\tR\x06prompt\x12\x1b\n" +
+	"\timage_ref\x18\x06 \x01(\tR\bimageRef\x12A\n" +
+	"\tresources\x18\a \x01(\v2#.daft.agentrun.v1.AgentRunResourcesR\tresources\x128\n" +
+	"\x06egress\x18\b \x01(\v2 .daft.agentrun.v1.AgentRunEgressR\x06egress\"k\n" +
+	"\x11AgentRunResources\x12\x16\n" +
+	"\x06enable\x18\x01 \x01(\bR\x06enable\x12\x1b\n" +
+	"\tcpu_cores\x18\x02 \x01(\rR\bcpuCores\x12!\n" +
+	"\fmemory_bytes\x18\x03 \x01(\x04R\vmemoryBytes\"(\n" +
+	"\x0eAgentRunEgress\x12\x16\n" +
+	"\x06enable\x18\x01 \x01(\bR\x06enable\"\xe9\x05\n" +
 	"\bAgentRun\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12%\n" +
 	"\x0eworkspace_uuid\x18\x02 \x01(\tR\rworkspaceUuid\x12!\n" +
@@ -828,45 +967,49 @@ func file_agentrun_v1_agentrun_proto_rawDescGZIP() []byte {
 }
 
 var file_agentrun_v1_agentrun_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_agentrun_v1_agentrun_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_agentrun_v1_agentrun_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_agentrun_v1_agentrun_proto_goTypes = []any{
 	(AgentRunState)(0),             // 0: daft.agentrun.v1.AgentRunState
 	(*StartAgentRunRequest)(nil),   // 1: daft.agentrun.v1.StartAgentRunRequest
-	(*AgentRun)(nil),               // 2: daft.agentrun.v1.AgentRun
-	(*AgentRunEvent)(nil),          // 3: daft.agentrun.v1.AgentRunEvent
-	(*GetAgentRunRequest)(nil),     // 4: daft.agentrun.v1.GetAgentRunRequest
-	(*ListAgentRunsRequest)(nil),   // 5: daft.agentrun.v1.ListAgentRunsRequest
-	(*ListAgentRunsResponse)(nil),  // 6: daft.agentrun.v1.ListAgentRunsResponse
-	(*AgentRunEventsRequest)(nil),  // 7: daft.agentrun.v1.AgentRunEventsRequest
-	(*AgentRunEventsResponse)(nil), // 8: daft.agentrun.v1.AgentRunEventsResponse
-	(*CancelAgentRunRequest)(nil),  // 9: daft.agentrun.v1.CancelAgentRunRequest
-	(*timestamppb.Timestamp)(nil),  // 10: google.protobuf.Timestamp
+	(*AgentRunResources)(nil),      // 2: daft.agentrun.v1.AgentRunResources
+	(*AgentRunEgress)(nil),         // 3: daft.agentrun.v1.AgentRunEgress
+	(*AgentRun)(nil),               // 4: daft.agentrun.v1.AgentRun
+	(*AgentRunEvent)(nil),          // 5: daft.agentrun.v1.AgentRunEvent
+	(*GetAgentRunRequest)(nil),     // 6: daft.agentrun.v1.GetAgentRunRequest
+	(*ListAgentRunsRequest)(nil),   // 7: daft.agentrun.v1.ListAgentRunsRequest
+	(*ListAgentRunsResponse)(nil),  // 8: daft.agentrun.v1.ListAgentRunsResponse
+	(*AgentRunEventsRequest)(nil),  // 9: daft.agentrun.v1.AgentRunEventsRequest
+	(*AgentRunEventsResponse)(nil), // 10: daft.agentrun.v1.AgentRunEventsResponse
+	(*CancelAgentRunRequest)(nil),  // 11: daft.agentrun.v1.CancelAgentRunRequest
+	(*timestamppb.Timestamp)(nil),  // 12: google.protobuf.Timestamp
 }
 var file_agentrun_v1_agentrun_proto_depIdxs = []int32{
-	0,  // 0: daft.agentrun.v1.AgentRun.state:type_name -> daft.agentrun.v1.AgentRunState
-	10, // 1: daft.agentrun.v1.AgentRun.created_at:type_name -> google.protobuf.Timestamp
-	10, // 2: daft.agentrun.v1.AgentRun.updated_at:type_name -> google.protobuf.Timestamp
-	10, // 3: daft.agentrun.v1.AgentRun.started_at:type_name -> google.protobuf.Timestamp
-	10, // 4: daft.agentrun.v1.AgentRun.completed_at:type_name -> google.protobuf.Timestamp
-	10, // 5: daft.agentrun.v1.AgentRunEvent.timestamp:type_name -> google.protobuf.Timestamp
-	0,  // 6: daft.agentrun.v1.AgentRunEvent.state:type_name -> daft.agentrun.v1.AgentRunState
-	2,  // 7: daft.agentrun.v1.ListAgentRunsResponse.runs:type_name -> daft.agentrun.v1.AgentRun
-	3,  // 8: daft.agentrun.v1.AgentRunEventsResponse.events:type_name -> daft.agentrun.v1.AgentRunEvent
-	1,  // 9: daft.agentrun.v1.AgentRunService.Start:input_type -> daft.agentrun.v1.StartAgentRunRequest
-	4,  // 10: daft.agentrun.v1.AgentRunService.Get:input_type -> daft.agentrun.v1.GetAgentRunRequest
-	5,  // 11: daft.agentrun.v1.AgentRunService.List:input_type -> daft.agentrun.v1.ListAgentRunsRequest
-	7,  // 12: daft.agentrun.v1.AgentRunService.Events:input_type -> daft.agentrun.v1.AgentRunEventsRequest
-	9,  // 13: daft.agentrun.v1.AgentRunService.Cancel:input_type -> daft.agentrun.v1.CancelAgentRunRequest
-	2,  // 14: daft.agentrun.v1.AgentRunService.Start:output_type -> daft.agentrun.v1.AgentRun
-	2,  // 15: daft.agentrun.v1.AgentRunService.Get:output_type -> daft.agentrun.v1.AgentRun
-	6,  // 16: daft.agentrun.v1.AgentRunService.List:output_type -> daft.agentrun.v1.ListAgentRunsResponse
-	8,  // 17: daft.agentrun.v1.AgentRunService.Events:output_type -> daft.agentrun.v1.AgentRunEventsResponse
-	2,  // 18: daft.agentrun.v1.AgentRunService.Cancel:output_type -> daft.agentrun.v1.AgentRun
-	14, // [14:19] is the sub-list for method output_type
-	9,  // [9:14] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	2,  // 0: daft.agentrun.v1.StartAgentRunRequest.resources:type_name -> daft.agentrun.v1.AgentRunResources
+	3,  // 1: daft.agentrun.v1.StartAgentRunRequest.egress:type_name -> daft.agentrun.v1.AgentRunEgress
+	0,  // 2: daft.agentrun.v1.AgentRun.state:type_name -> daft.agentrun.v1.AgentRunState
+	12, // 3: daft.agentrun.v1.AgentRun.created_at:type_name -> google.protobuf.Timestamp
+	12, // 4: daft.agentrun.v1.AgentRun.updated_at:type_name -> google.protobuf.Timestamp
+	12, // 5: daft.agentrun.v1.AgentRun.started_at:type_name -> google.protobuf.Timestamp
+	12, // 6: daft.agentrun.v1.AgentRun.completed_at:type_name -> google.protobuf.Timestamp
+	12, // 7: daft.agentrun.v1.AgentRunEvent.timestamp:type_name -> google.protobuf.Timestamp
+	0,  // 8: daft.agentrun.v1.AgentRunEvent.state:type_name -> daft.agentrun.v1.AgentRunState
+	4,  // 9: daft.agentrun.v1.ListAgentRunsResponse.runs:type_name -> daft.agentrun.v1.AgentRun
+	5,  // 10: daft.agentrun.v1.AgentRunEventsResponse.events:type_name -> daft.agentrun.v1.AgentRunEvent
+	1,  // 11: daft.agentrun.v1.AgentRunService.Start:input_type -> daft.agentrun.v1.StartAgentRunRequest
+	6,  // 12: daft.agentrun.v1.AgentRunService.Get:input_type -> daft.agentrun.v1.GetAgentRunRequest
+	7,  // 13: daft.agentrun.v1.AgentRunService.List:input_type -> daft.agentrun.v1.ListAgentRunsRequest
+	9,  // 14: daft.agentrun.v1.AgentRunService.Events:input_type -> daft.agentrun.v1.AgentRunEventsRequest
+	11, // 15: daft.agentrun.v1.AgentRunService.Cancel:input_type -> daft.agentrun.v1.CancelAgentRunRequest
+	4,  // 16: daft.agentrun.v1.AgentRunService.Start:output_type -> daft.agentrun.v1.AgentRun
+	4,  // 17: daft.agentrun.v1.AgentRunService.Get:output_type -> daft.agentrun.v1.AgentRun
+	8,  // 18: daft.agentrun.v1.AgentRunService.List:output_type -> daft.agentrun.v1.ListAgentRunsResponse
+	10, // 19: daft.agentrun.v1.AgentRunService.Events:output_type -> daft.agentrun.v1.AgentRunEventsResponse
+	4,  // 20: daft.agentrun.v1.AgentRunService.Cancel:output_type -> daft.agentrun.v1.AgentRun
+	16, // [16:21] is the sub-list for method output_type
+	11, // [11:16] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_agentrun_v1_agentrun_proto_init() }
@@ -880,7 +1023,7 @@ func file_agentrun_v1_agentrun_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agentrun_v1_agentrun_proto_rawDesc), len(file_agentrun_v1_agentrun_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

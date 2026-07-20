@@ -27,7 +27,9 @@ const (
 	testAgentWorkspace = "agent-workspace"
 	testAgentJob       = "agent-job"
 	testAgentProject   = "project"
-	testAgentDigest    = "digest"
+	testAgentDigest    = "sha256:profile"
+	testAgentPrompt    = "fix it"
+	testAgentImage     = "example.com/agent@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 )
 
 type fakeAgentCanceler struct {
@@ -45,6 +47,19 @@ type fakeAgentStarter struct {
 	deleteErr   error
 	get         nodejob.Snapshot
 	deleted     string
+}
+
+type fakeAgentSandboxLauncher struct {
+	owner     identity.Fingerprint
+	workspace string
+	policy    AgentSandboxPolicy
+	ref       workspacecatalog.SandboxRef
+	err       error
+}
+
+func (f *fakeAgentSandboxLauncher) LaunchAgentSandbox(owner identity.Fingerprint, workspace string, policy AgentSandboxPolicy) (workspacecatalog.SandboxRef, error) {
+	f.owner, f.workspace, f.policy = owner, workspace, policy
+	return f.ref, f.err
 }
 
 func (f *fakeAgentStarter) GetNodeJob(_ context.Context, _ identity.Fingerprint, _ string, _, _ uint64, _ int) (nodejob.Snapshot, error) {
@@ -85,6 +100,17 @@ func agentRunStore(t *testing.T) (runs *agentruncatalog.Store, control *controls
 }
 
 func agentRunRequest[T any](message *T, owner identity.Fingerprint) *connect.Request[T] {
+	if start, ok := any(message).(*agentrunv1.StartAgentRunRequest); ok {
+		if start.ImageRef == "" {
+			start.ImageRef = testAgentImage
+		}
+		if start.Resources == nil {
+			start.Resources = &agentrunv1.AgentRunResources{}
+		}
+		if start.Egress == nil {
+			start.Egress = &agentrunv1.AgentRunEgress{}
+		}
+	}
 	req := connect.NewRequest(message)
 	req.Header().Set(peerFingerprintHeader, owner.String())
 	return req
@@ -92,7 +118,7 @@ func agentRunRequest[T any](message *T, owner identity.Fingerprint) *connect.Req
 
 func createAgentRun(t *testing.T, store *agentruncatalog.Store, owner identity.Fingerprint, uuid string) agentruncatalog.Run {
 	t.Helper()
-	run, err := store.Create(agentruncatalog.CreateInput{Command: []string{testAgentProfile}, UUID: uuid, WorkspaceUUID: testAgentWorkspace, ProfileName: testAgentProfile, ProfileDigest: "sha256:profile", OwnerFingerprint: owner})
+	run, err := store.Create(agentruncatalog.CreateInput{Command: []string{testAgentProfile}, UUID: uuid, WorkspaceUUID: testAgentWorkspace, ProfileName: testAgentProfile, ProfileDigest: testAgentDigest, OwnerFingerprint: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +135,7 @@ func TestAgentRunHandlerStartBindsAndStartsIdempotentJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = workspaces.Update(workspace.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
-		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node}
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node, AgentProfileDigest: testAgentDigest}
 		return nil
 	})
 	if err != nil {
@@ -121,8 +147,8 @@ func TestAgentRunHandlerStartBindsAndStartsIdempotentJob(t *testing.T) {
 	handler := NewAgentRunHandler(runs, nil)
 	handler.SetStartDependencies(workspaces, nodes, starter)
 	response, err := handler.Start(t.Context(), agentRunRequest(&agentrunv1.StartAgentRunRequest{
-		WorkspaceUuid: workspace.Metadata.UUID, ProfileName: testAgentProfile, ProfileDigest: "sha256:profile",
-		Command: []string{testAgentProfile, "exec"}, Prompt: "fix it",
+		WorkspaceUuid: workspace.Metadata.UUID, ProfileName: testAgentProfile, ProfileDigest: testAgentDigest,
+		Command: []string{testAgentProfile, "exec"}, Prompt: testAgentPrompt,
 	}, owner))
 	if err != nil || response.Msg.GetState() != agentrunv1.AgentRunState_AGENT_RUN_STATE_RUNNING {
 		t.Fatalf("Start = %#v, %v", response, err)
@@ -139,6 +165,107 @@ func TestAgentRunHandlerStartBindsAndStartsIdempotentJob(t *testing.T) {
 	}
 }
 
+func TestAgentRunHandlerStartLaunchesMissingSandboxWithFrozenPolicy(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	workspaces := workspacecatalog.NewStore(nil)
+	workspace, err := workspaces.Create(workspacecatalog.CreateInput{UUID: testAgentWorkspace, Name: testAgentProject, OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	starter := &fakeAgentStarter{snapshot: nodejob.Snapshot{ID: testAgentJob}}
+	launcher := &fakeAgentSandboxLauncher{ref: workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node, AgentProfileDigest: testAgentDigest}}
+	handler := NewAgentRunHandler(runs, &fakeAgentCanceler{})
+	handler.SetStartDependencies(workspaces, nodes, starter)
+	handler.SetSandboxLauncher(launcher)
+
+	request := agentRunRequest(&agentrunv1.StartAgentRunRequest{
+		WorkspaceUuid: workspace.Metadata.UUID,
+		ProfileName:   testAgentProfile, ProfileDigest: testAgentDigest,
+		Command: []string{testAgentProfile}, Prompt: testAgentPrompt,
+		Resources: &agentrunv1.AgentRunResources{Enable: true, CpuCores: 4, MemoryBytes: 8 << 30},
+		Egress:    &agentrunv1.AgentRunEgress{Enable: true},
+	}, owner)
+	response, err := handler.Start(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if launcher.owner != owner || launcher.workspace != workspace.Metadata.UUID {
+		t.Errorf("launcher binding = (%s, %q), want (%s, %q)", launcher.owner, launcher.workspace, owner, workspace.Metadata.UUID)
+	}
+	wantPolicy := AgentSandboxPolicy{ProfileDigest: testAgentDigest, ImageRef: testAgentImage, ResourcesEnable: true, CPUCores: 4, MemoryBytes: 8 << 30, EgressEnable: true}
+	if launcher.policy != wantPolicy {
+		t.Errorf("launcher policy = %#v, want %#v", launcher.policy, wantPolicy)
+	}
+	if response.Msg.GetSandboxUid() != testAgentSandbox || starter.request.SandboxUID != testAgentSandbox {
+		t.Errorf("sandbox binding = response %q, job %q", response.Msg.GetSandboxUid(), starter.request.SandboxUID)
+	}
+}
+
+func TestAgentRunHandlerStartRejectsUnusableSandboxBindings(t *testing.T) {
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	launchFailure := connect.NewError(connect.CodeResourceExhausted, errors.New("node full"))
+	tests := []struct {
+		name     string
+		binding  *workspacecatalog.SandboxRef
+		launcher agentSandboxLauncher
+		wantCode connect.Code
+	}{
+		{name: "launcher not configured", wantCode: connect.CodeFailedPrecondition},
+		{name: "launcher failure", launcher: &fakeAgentSandboxLauncher{err: launchFailure}, wantCode: connect.CodeResourceExhausted},
+		{
+			name: "incompatible running sandbox",
+			binding: &workspacecatalog.SandboxRef{
+				UID: testAgentSandbox, NodeFingerprint: node, AgentProfileDigest: "sha256:different",
+			},
+			wantCode: connect.CodeFailedPrecondition,
+		},
+		{
+			name: "bound node disconnected",
+			binding: &workspacecatalog.SandboxRef{
+				UID: testAgentSandbox, NodeFingerprint: node, AgentProfileDigest: testAgentDigest,
+			},
+			wantCode: connect.CodeUnavailable,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runs, _ := agentRunStore(t)
+			workspaces := workspacecatalog.NewStore(nil)
+			workspace, err := workspaces.Create(workspacecatalog.CreateInput{
+				UUID: testAgentWorkspace, Name: testAgentProject, OwnerFingerprint: owner,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.binding != nil {
+				_, err = workspaces.Update(workspace.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+					value.Status.CurrentSandbox = test.binding
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			handler := NewAgentRunHandler(runs, nil)
+			handler.SetStartDependencies(workspaces, nodectrl.NewRegistry(nil), &fakeAgentStarter{})
+			handler.SetSandboxLauncher(test.launcher)
+			_, err = handler.Start(t.Context(), agentRunRequest(&agentrunv1.StartAgentRunRequest{
+				WorkspaceUuid: workspace.Metadata.UUID,
+				ProfileName:   testAgentProfile, ProfileDigest: testAgentDigest,
+				Command: []string{testAgentProfile},
+			}, owner))
+			if connect.CodeOf(err) != test.wantCode {
+				t.Fatalf("Start error = %v (code %s), want code %s", err, connect.CodeOf(err), test.wantCode)
+			}
+		})
+	}
+}
+
 func TestAgentRunHandlerStartRetainsStartingOnAmbiguousFailure(t *testing.T) {
 	runs, _ := agentRunStore(t)
 	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
@@ -149,7 +276,7 @@ func TestAgentRunHandlerStartRetainsStartingOnAmbiguousFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = workspaces.Update(workspace.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
-		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node}
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node, AgentProfileDigest: testAgentDigest}
 		return nil
 	})
 	if err != nil {
@@ -245,7 +372,7 @@ func TestAgentRunStartPreconditions(t *testing.T) {
 		t.Fatalf("missing Sandbox = %v", err)
 	}
 	_, err = workspaces.Update(owned.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
-		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: other}
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: other, AgentProfileDigest: testAgentDigest}
 		return nil
 	})
 	if err != nil {
@@ -391,7 +518,7 @@ func TestAgentRunStartRejectsInvalidResolvedProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = workspaces.Update(workspace.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
-		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node}
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node, AgentProfileDigest: testAgentDigest}
 		return nil
 	})
 	if err != nil {
@@ -404,6 +531,43 @@ func TestAgentRunStartRejectsInvalidResolvedProfile(t *testing.T) {
 	request := agentRunRequest(&agentrunv1.StartAgentRunRequest{WorkspaceUuid: workspace.Metadata.UUID, ProfileName: testAgentProfile, ProfileDigest: testAgentDigest}, owner)
 	if _, err := handler.Start(t.Context(), request); connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Fatalf("invalid resolved profile = %v", err)
+	}
+}
+
+func TestAgentSandboxPolicyValidation(t *testing.T) {
+	valid := func() *agentrunv1.StartAgentRunRequest {
+		return &agentrunv1.StartAgentRunRequest{
+			ProfileName: testAgentProfile, ProfileDigest: testAgentDigest,
+			Command: []string{testAgentProfile}, ImageRef: testAgentImage,
+			Resources: &agentrunv1.AgentRunResources{}, Egress: &agentrunv1.AgentRunEgress{},
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*agentrunv1.StartAgentRunRequest)
+	}{
+		{"incomplete", func(request *agentrunv1.StartAgentRunRequest) { request.ImageRef = "" }},
+		{"resources missing", func(request *agentrunv1.StartAgentRunRequest) { request.Resources = nil }},
+		{"resources partially enabled", func(request *agentrunv1.StartAgentRunRequest) {
+			request.Resources = &agentrunv1.AgentRunResources{Enable: true, CpuCores: 1}
+		}},
+		{"resources excessive", func(request *agentrunv1.StartAgentRunRequest) {
+			request.Resources = &agentrunv1.AgentRunResources{Enable: true, CpuCores: 1025, MemoryBytes: 1}
+		}},
+		{"image unpinned", func(request *agentrunv1.StartAgentRunRequest) { request.ImageRef = "example.com/agent:latest" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := valid()
+			test.mutate(request)
+			if _, err := agentSandboxPolicy(request); connect.CodeOf(err) != connect.CodeInvalidArgument {
+				t.Fatalf("agentSandboxPolicy error = %v", err)
+			}
+		})
+	}
+	want := AgentSandboxPolicy{ProfileDigest: testAgentDigest, ImageRef: testAgentImage}
+	if got, err := agentSandboxPolicy(valid()); err != nil || got != want {
+		t.Fatalf("agentSandboxPolicy valid = %#v, %v; want %#v", got, err, want)
 	}
 }
 

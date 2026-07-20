@@ -114,15 +114,18 @@ test:
 
 ## Coverage ------------------------------------------------------------------
 
-# Compute total coverage as a percentage with one decimal point.
-# Writes coverage.out (transient) and prints the number to stdout.
-COVER_OUT := coverage.out
+# Each coverage invocation owns a unique profile. This keeps `make cover` and
+# `make cover-check` correct when an editor, agent, or parallel make invokes
+# them concurrently; sharing coverage.out allowed one invocation to remove the
+# other's profile between `go test` and the checker.
+COVER_OUT_PREFIX := coverage.out
 COVER_BASELINE := coverage.txt
 
 cover:
-	@go test -covermode=atomic -coverprofile=$(COVER_OUT) $(OUR_GO_PKGS) > /dev/null
-	@scripts/cover-check.sh --update $(COVER_OUT) $(COVER_BASELINE)
-	@rm -f $(COVER_OUT)
+	@profile=$$(mktemp ./$(COVER_OUT_PREFIX).XXXXXX); \
+	trap 'rm -f "$$profile"' EXIT; \
+	go test -covermode=atomic -coverprofile="$$profile" $(OUR_GO_PKGS) > /dev/null; \
+	scripts/cover-check.sh --update "$$profile" $(COVER_BASELINE)
 
 # cover-check: three gates (see CONTRIBUTING.md and scripts/cover-check.sh).
 #   1. Total coverage >= committed baseline (no drop tolerance).
@@ -130,9 +133,10 @@ cover:
 #      more than 10 statements.
 #   3. (--update mode) baseline only ever rises.
 cover-check:
-	@go test -covermode=atomic -coverprofile=$(COVER_OUT) $(OUR_GO_PKGS) > /dev/null
-	@scripts/cover-check.sh $(COVER_OUT) $(COVER_BASELINE)
-	@rm -f $(COVER_OUT)
+	@profile=$$(mktemp ./$(COVER_OUT_PREFIX).XXXXXX); \
+	trap 'rm -f "$$profile"' EXIT; \
+	go test -covermode=atomic -coverprofile="$$profile" $(OUR_GO_PKGS) > /dev/null; \
+	scripts/cover-check.sh "$$profile" $(COVER_BASELINE)
 
 ## Benchmarks ----------------------------------------------------------------
 #
@@ -496,7 +500,7 @@ gen-bpf:
 	done
 
 clean:
-	rm -rf $(BIN_DIR) $(COVER_OUT)
+	rm -rf $(BIN_DIR) $(COVER_OUT_PREFIX) $(COVER_OUT_PREFIX).*
 	@# Legacy: earlier builds put binaries at the repo root. Clean
 	@# those too in case someone is upgrading from an older Makefile.
 	rm -f daft daft-agent daft-sandboxd

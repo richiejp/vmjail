@@ -47,6 +47,18 @@ type WorkspaceNodeLister interface {
 	RegisteredFingerprints() []identity.Fingerprint
 }
 
+// AgentSandboxPolicy is the immutable AgentProfile subset that affects VM
+// composition. It is resolved on the trusted host and is never accepted from
+// the public MCP schema.
+type AgentSandboxPolicy struct {
+	ProfileDigest   string
+	ImageRef        string
+	ResourcesEnable bool
+	CPUCores        uint32
+	MemoryBytes     uint64
+	EgressEnable    bool
+}
+
 // WorkspacePortBridger is the seam ForwardPort uses to open a
 // labeled byte channel into the Node bound to a Workspace. The
 // production implementation is *NodeControlHandler (its
@@ -696,13 +708,7 @@ func (h *WorkspaceCatalogHandler) Launch(
 	sandboxUID := mintWorkspaceUUID()
 	sandbox := workspaceToSandbox(ws, sandboxUID, targetFP)
 	if pubErr := h.dispatcher.PublishSandboxEvent(targetFP, sandboxv1.EventType_EVENT_TYPE_ADDED, sandbox); pubErr != nil {
-		switch {
-		case errors.Is(pubErr, ErrNodeNotConnected):
-			return nil, connect.NewError(connect.CodeFailedPrecondition, pubErr)
-		case errors.Is(pubErr, ErrSandboxEventBacklog):
-			return nil, connect.NewError(connect.CodeUnavailable, pubErr)
-		}
-		return nil, connect.NewError(connect.CodeInternal, pubErr)
+		return nil, mapSandboxPublishError(pubErr)
 	}
 
 	now := time.Now()
@@ -732,6 +738,111 @@ func (h *WorkspaceCatalogHandler) Launch(
 	return connect.NewResponse(&workspacev1.WorkspaceResponse{
 		Workspace: workspaceToProto(updated),
 	}), nil
+}
+
+// LaunchAgentSandbox composes an agent-specific Sandbox without mutating the
+// Workspace's project spec. An existing Sandbox is reusable only when it was
+// launched from the exact same immutable AgentProfile digest.
+func (h *WorkspaceCatalogHandler) LaunchAgentSandbox(owner identity.Fingerprint, workspaceUUID string, policy AgentSandboxPolicy) (workspacecatalog.SandboxRef, error) {
+	if h.dispatcher == nil {
+		return workspacecatalog.SandboxRef{}, connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator: no dispatcher configured"))
+	}
+	if owner.IsZero() || workspaceUUID == "" || policy.ProfileDigest == "" || policy.ImageRef == "" {
+		return workspacecatalog.SandboxRef{}, connect.NewError(connect.CodeInvalidArgument, errors.New("orchestrator: incomplete AgentProfile launch policy"))
+	}
+	ws, err := h.store.Get(workspaceUUID)
+	if err != nil || ws.Metadata.OwnerFingerprint != owner {
+		return workspacecatalog.SandboxRef{}, connect.NewError(connect.CodeNotFound, errors.New("orchestrator: Workspace not found"))
+	}
+	if err := guardLock(ws, owner); err != nil {
+		return workspacecatalog.SandboxRef{}, err
+	}
+	h.reconcileBefore(workspaceUUID)
+	ws, err = h.store.Get(workspaceUUID)
+	if err != nil {
+		return workspacecatalog.SandboxRef{}, mapCatalogErr(err)
+	}
+	if current := ws.Status.CurrentSandbox; current != nil {
+		if current.AgentProfileDigest == policy.ProfileDigest {
+			return *current, nil
+		}
+		return workspacecatalog.SandboxRef{}, connect.NewError(connect.CodeFailedPrecondition, errors.New("orchestrator: Workspace current Sandbox was not launched from the requested AgentProfile; stop it before starting the agent"))
+	}
+
+	targetFP, autoSelected := h.autoSelectAgentNode(ws)
+	if !autoSelected {
+		targetFP, err = identity.ParseFingerprint(ws.Spec.TargetSandboxFingerprint)
+		if err != nil {
+			return workspacecatalog.SandboxRef{}, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("workspace: invalid target fingerprint: %w", err))
+		}
+	}
+	missing := agentLaunchMissing(ws)
+	missingOnlyAutoTarget := autoSelected && len(missing) == 1 && missing[0] == workspacecatalog.MissingTarget
+	if len(missing) != 0 && !missingOnlyAutoTarget {
+		return workspacecatalog.SandboxRef{}, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("workspace: not ready for agent launch, missing: %v", missing))
+	}
+
+	launch := ws
+	launch.Spec.ImageRef = policy.ImageRef
+	launch.Spec.PendingBuildID = ""
+	if policy.ResourcesEnable {
+		launch.Spec.CPUCores = policy.CPUCores
+		launch.Spec.MemoryBytes = policy.MemoryBytes
+	} else {
+		launch.Spec.CPUCores = 0
+		launch.Spec.MemoryBytes = 0
+	}
+	sandboxUID := mintWorkspaceUUID()
+	sandbox := workspaceToSandbox(launch, sandboxUID, targetFP)
+	sandbox.Spec.EgressPolicy = &sandboxv1.EgressPolicy{Enable: policy.EgressEnable}
+	if pubErr := h.dispatcher.PublishSandboxEvent(targetFP, sandboxv1.EventType_EVENT_TYPE_ADDED, sandbox); pubErr != nil {
+		return workspacecatalog.SandboxRef{}, mapSandboxPublishError(pubErr)
+	}
+
+	ref := workspacecatalog.SandboxRef{UID: sandboxUID, NodeFingerprint: targetFP, AgentProfileDigest: policy.ProfileDigest}
+	mutation := workspacecatalog.MutateStatus
+	if autoSelected {
+		mutation = workspacecatalog.MutateSpec
+	}
+	_, err = h.store.Update(workspaceUUID, mutation, func(w *workspacecatalog.Workspace) error {
+		if autoSelected {
+			w.Spec.TargetSandboxFingerprint = targetFP.String()
+		}
+		w.Status.CurrentSandbox = &ref
+		w.Status.SetCondition(workspacecatalog.ConditionDispatched, workspacecatalog.ConditionStatusTrue, "AgentLaunched", "", time.Now())
+		return nil
+	})
+	if err != nil {
+		return workspacecatalog.SandboxRef{}, mapCatalogErr(err)
+	}
+	return ref, nil
+}
+
+func (h *WorkspaceCatalogHandler) autoSelectAgentNode(ws workspacecatalog.Workspace) (identity.Fingerprint, bool) {
+	if h.nodes == nil || ws.Spec.TargetSandboxFingerprint != "" {
+		return identity.Fingerprint{}, false
+	}
+	fps := h.nodes.RegisteredFingerprints()
+	if len(fps) != 1 {
+		return identity.Fingerprint{}, false
+	}
+	return fps[0], true
+}
+
+func agentLaunchMissing(ws workspacecatalog.Workspace) []string {
+	missing := slices.Clone(ws.Status.Missing)
+	return slices.DeleteFunc(missing, func(field string) bool { return field == "image" })
+}
+
+func mapSandboxPublishError(err error) error {
+	switch {
+	case errors.Is(err, ErrNodeNotConnected):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	case errors.Is(err, ErrSandboxEventBacklog):
+		return connect.NewError(connect.CodeUnavailable, err)
+	default:
+		return connect.NewError(connect.CodeInternal, err)
+	}
 }
 
 // autoSelectSoleNode returns the sole live node when target is the only
@@ -1125,8 +1236,9 @@ func sandboxRefToProto(ref *workspacecatalog.SandboxRef) *sandboxv1.SandboxRef {
 		return nil
 	}
 	return &sandboxv1.SandboxRef{
-		Uid:  ref.UID,
-		Node: &sandboxv1.NodeRef{Fingerprint: ref.NodeFingerprint.String()},
+		Uid:                ref.UID,
+		Node:               &sandboxv1.NodeRef{Fingerprint: ref.NodeFingerprint.String()},
+		AgentProfileDigest: ref.AgentProfileDigest,
 	}
 }
 

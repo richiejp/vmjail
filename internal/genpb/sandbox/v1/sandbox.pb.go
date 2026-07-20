@@ -449,8 +449,13 @@ type SandboxSpec struct {
 	// message — grants the standard container cap set so an in-sandbox
 	// buildah can build images.
 	PrivilegedBuild *PrivilegedBuild `protobuf:"bytes,14,opt,name=privileged_build,json=privilegedBuild,proto3" json:"privileged_build,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Explicit network policy for an agent-created Sandbox. Unset preserves the
+	// legacy Node-wide proxy behavior used by ordinary Workspace launches.
+	// Set+disabled denies all guest egress; set+enabled requires and exclusively
+	// uses the Node's terminating proxy lane.
+	EgressPolicy  *EgressPolicy `protobuf:"bytes,15,opt,name=egress_policy,json=egressPolicy,proto3" json:"egress_policy,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SandboxSpec) Reset() {
@@ -577,6 +582,13 @@ func (x *SandboxSpec) GetDevcontainerPath() string {
 func (x *SandboxSpec) GetPrivilegedBuild() *PrivilegedBuild {
 	if x != nil {
 		return x.PrivilegedBuild
+	}
+	return nil
+}
+
+func (x *SandboxSpec) GetEgressPolicy() *EgressPolicy {
+	if x != nil {
+		return x.EgressPolicy
 	}
 	return nil
 }
@@ -1086,6 +1098,50 @@ func (x *PrivilegedBuild) GetEnable() bool {
 	return false
 }
 
+type EgressPolicy struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Enable        bool                   `protobuf:"varint,1,opt,name=enable,proto3" json:"enable,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EgressPolicy) Reset() {
+	*x = EgressPolicy{}
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EgressPolicy) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EgressPolicy) ProtoMessage() {}
+
+func (x *EgressPolicy) ProtoReflect() protoreflect.Message {
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EgressPolicy.ProtoReflect.Descriptor instead.
+func (*EgressPolicy) Descriptor() ([]byte, []int) {
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *EgressPolicy) GetEnable() bool {
+	if x != nil {
+		return x.Enable
+	}
+	return false
+}
+
 // WorkspaceRef points at a Workspace by its canonical UUID.
 // Denormalised name allowed for display; uuid is authoritative.
 type WorkspaceRef struct {
@@ -1098,7 +1154,7 @@ type WorkspaceRef struct {
 
 func (x *WorkspaceRef) Reset() {
 	*x = WorkspaceRef{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1110,7 +1166,7 @@ func (x *WorkspaceRef) String() string {
 func (*WorkspaceRef) ProtoMessage() {}
 
 func (x *WorkspaceRef) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1123,7 +1179,7 @@ func (x *WorkspaceRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceRef.ProtoReflect.Descriptor instead.
 func (*WorkspaceRef) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{11}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *WorkspaceRef) GetUuid() string {
@@ -1150,7 +1206,7 @@ type NodeRef struct {
 
 func (x *NodeRef) Reset() {
 	*x = NodeRef{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1162,7 +1218,7 @@ func (x *NodeRef) String() string {
 func (*NodeRef) ProtoMessage() {}
 
 func (x *NodeRef) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1175,7 +1231,7 @@ func (x *NodeRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeRef.ProtoReflect.Descriptor instead.
 func (*NodeRef) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{12}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *NodeRef) GetFingerprint() string {
@@ -1188,16 +1244,19 @@ func (x *NodeRef) GetFingerprint() string {
 // SandboxRef points at a Sandbox by its uid and the Node it's
 // bound to. Used in Workspace.current_sandbox and elsewhere.
 type SandboxRef struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Uid           string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
-	Node          *NodeRef               `protobuf:"bytes,2,opt,name=node,proto3" json:"node,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Uid   string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	Node  *NodeRef               `protobuf:"bytes,2,opt,name=node,proto3" json:"node,omitempty"`
+	// Non-empty only for a Sandbox composed from an immutable AgentProfile.
+	// AgentRun reuse requires an exact digest match.
+	AgentProfileDigest string `protobuf:"bytes,3,opt,name=agent_profile_digest,json=agentProfileDigest,proto3" json:"agent_profile_digest,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *SandboxRef) Reset() {
 	*x = SandboxRef{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[13]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1209,7 +1268,7 @@ func (x *SandboxRef) String() string {
 func (*SandboxRef) ProtoMessage() {}
 
 func (x *SandboxRef) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[13]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1222,7 +1281,7 @@ func (x *SandboxRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxRef.ProtoReflect.Descriptor instead.
 func (*SandboxRef) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{13}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *SandboxRef) GetUid() string {
@@ -1237,6 +1296,13 @@ func (x *SandboxRef) GetNode() *NodeRef {
 		return x.Node
 	}
 	return nil
+}
+
+func (x *SandboxRef) GetAgentProfileDigest() string {
+	if x != nil {
+		return x.AgentProfileDigest
+	}
+	return ""
 }
 
 // Condition is the standard K8s-style status entry. type +
@@ -1264,7 +1330,7 @@ type Condition struct {
 
 func (x *Condition) Reset() {
 	*x = Condition{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[14]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1276,7 +1342,7 @@ func (x *Condition) String() string {
 func (*Condition) ProtoMessage() {}
 
 func (x *Condition) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[14]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1289,7 +1355,7 @@ func (x *Condition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Condition.ProtoReflect.Descriptor instead.
 func (*Condition) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{14}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *Condition) GetType() string {
@@ -1341,7 +1407,7 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\tworkspace\x18\x02 \x01(\v2\x1d.daft.sandbox.v1.WorkspaceRefR\tworkspace\x129\n" +
 	"\n" +
 	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12I\n" +
-	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xf9\x05\n" +
+	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xbd\x06\n" +
 	"\vSandboxSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12.\n" +
 	"\x06mounts\x18\x02 \x03(\v2\x16.daft.sandbox.v1.MountR\x06mounts\x12)\n" +
@@ -1358,7 +1424,8 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\x15nested_virtualization\x18\v \x01(\v2%.daft.sandbox.v1.NestedVirtualizationR\x14nestedVirtualization\x12[\n" +
 	"\x16privileged_fuse_mounts\x18\f \x01(\v2%.daft.sandbox.v1.PrivilegedFuseMountsR\x14privilegedFuseMounts\x12+\n" +
 	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\x12K\n" +
-	"\x10privileged_build\x18\x0e \x01(\v2 .daft.sandbox.v1.PrivilegedBuildR\x0fprivilegedBuild\"\xcc\x01\n" +
+	"\x10privileged_build\x18\x0e \x01(\v2 .daft.sandbox.v1.PrivilegedBuildR\x0fprivilegedBuild\x12B\n" +
+	"\regress_policy\x18\x0f \x01(\v2\x1d.daft.sandbox.v1.EgressPolicyR\fegressPolicy\"\xcc\x01\n" +
 	"\rSandboxStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12\x1b\n" +
 	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12:\n" +
@@ -1385,16 +1452,19 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\x14PrivilegedFuseMounts\x12\x16\n" +
 	"\x06enable\x18\x01 \x01(\bR\x06enable\")\n" +
 	"\x0fPrivilegedBuild\x12\x16\n" +
+	"\x06enable\x18\x01 \x01(\bR\x06enable\"&\n" +
+	"\fEgressPolicy\x12\x16\n" +
 	"\x06enable\x18\x01 \x01(\bR\x06enable\"6\n" +
 	"\fWorkspaceRef\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"+\n" +
 	"\aNodeRef\x12 \n" +
-	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\"L\n" +
+	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\"~\n" +
 	"\n" +
 	"SandboxRef\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12,\n" +
-	"\x04node\x18\x02 \x01(\v2\x18.daft.sandbox.v1.NodeRefR\x04node\"\xd9\x01\n" +
+	"\x04node\x18\x02 \x01(\v2\x18.daft.sandbox.v1.NodeRefR\x04node\x120\n" +
+	"\x14agent_profile_digest\x18\x03 \x01(\tR\x12agentProfileDigest\"\xd9\x01\n" +
 	"\tCondition\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x128\n" +
 	"\x06status\x18\x02 \x01(\x0e2 .daft.sandbox.v1.ConditionStatusR\x06status\x12\x16\n" +
@@ -1434,7 +1504,7 @@ func file_sandbox_v1_sandbox_proto_rawDescGZIP() []byte {
 }
 
 var file_sandbox_v1_sandbox_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_sandbox_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_sandbox_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_sandbox_v1_sandbox_proto_goTypes = []any{
 	(Protocol)(0),                 // 0: daft.sandbox.v1.Protocol
 	(Isolation)(0),                // 1: daft.sandbox.v1.Isolation
@@ -1451,39 +1521,41 @@ var file_sandbox_v1_sandbox_proto_goTypes = []any{
 	(*NestedVirtualization)(nil),  // 12: daft.sandbox.v1.NestedVirtualization
 	(*PrivilegedFuseMounts)(nil),  // 13: daft.sandbox.v1.PrivilegedFuseMounts
 	(*PrivilegedBuild)(nil),       // 14: daft.sandbox.v1.PrivilegedBuild
-	(*WorkspaceRef)(nil),          // 15: daft.sandbox.v1.WorkspaceRef
-	(*NodeRef)(nil),               // 16: daft.sandbox.v1.NodeRef
-	(*SandboxRef)(nil),            // 17: daft.sandbox.v1.SandboxRef
-	(*Condition)(nil),             // 18: daft.sandbox.v1.Condition
-	(*timestamppb.Timestamp)(nil), // 19: google.protobuf.Timestamp
+	(*EgressPolicy)(nil),          // 15: daft.sandbox.v1.EgressPolicy
+	(*WorkspaceRef)(nil),          // 16: daft.sandbox.v1.WorkspaceRef
+	(*NodeRef)(nil),               // 17: daft.sandbox.v1.NodeRef
+	(*SandboxRef)(nil),            // 18: daft.sandbox.v1.SandboxRef
+	(*Condition)(nil),             // 19: daft.sandbox.v1.Condition
+	(*timestamppb.Timestamp)(nil), // 20: google.protobuf.Timestamp
 }
 var file_sandbox_v1_sandbox_proto_depIdxs = []int32{
 	5,  // 0: daft.sandbox.v1.Sandbox.metadata:type_name -> daft.sandbox.v1.SandboxMetadata
 	6,  // 1: daft.sandbox.v1.Sandbox.spec:type_name -> daft.sandbox.v1.SandboxSpec
 	7,  // 2: daft.sandbox.v1.Sandbox.status:type_name -> daft.sandbox.v1.SandboxStatus
-	15, // 3: daft.sandbox.v1.SandboxMetadata.workspace:type_name -> daft.sandbox.v1.WorkspaceRef
-	19, // 4: daft.sandbox.v1.SandboxMetadata.created_at:type_name -> google.protobuf.Timestamp
-	19, // 5: daft.sandbox.v1.SandboxMetadata.deletion_timestamp:type_name -> google.protobuf.Timestamp
+	16, // 3: daft.sandbox.v1.SandboxMetadata.workspace:type_name -> daft.sandbox.v1.WorkspaceRef
+	20, // 4: daft.sandbox.v1.SandboxMetadata.created_at:type_name -> google.protobuf.Timestamp
+	20, // 5: daft.sandbox.v1.SandboxMetadata.deletion_timestamp:type_name -> google.protobuf.Timestamp
 	8,  // 6: daft.sandbox.v1.SandboxSpec.mounts:type_name -> daft.sandbox.v1.Mount
 	9,  // 7: daft.sandbox.v1.SandboxSpec.env:type_name -> daft.sandbox.v1.EnvVar
 	10, // 8: daft.sandbox.v1.SandboxSpec.ports:type_name -> daft.sandbox.v1.PortMapping
 	11, // 9: daft.sandbox.v1.SandboxSpec.gpu_request:type_name -> daft.sandbox.v1.GpuRequest
 	1,  // 10: daft.sandbox.v1.SandboxSpec.isolation:type_name -> daft.sandbox.v1.Isolation
-	16, // 11: daft.sandbox.v1.SandboxSpec.node:type_name -> daft.sandbox.v1.NodeRef
+	17, // 11: daft.sandbox.v1.SandboxSpec.node:type_name -> daft.sandbox.v1.NodeRef
 	12, // 12: daft.sandbox.v1.SandboxSpec.nested_virtualization:type_name -> daft.sandbox.v1.NestedVirtualization
 	13, // 13: daft.sandbox.v1.SandboxSpec.privileged_fuse_mounts:type_name -> daft.sandbox.v1.PrivilegedFuseMounts
 	14, // 14: daft.sandbox.v1.SandboxSpec.privileged_build:type_name -> daft.sandbox.v1.PrivilegedBuild
-	18, // 15: daft.sandbox.v1.SandboxStatus.conditions:type_name -> daft.sandbox.v1.Condition
-	19, // 16: daft.sandbox.v1.SandboxStatus.last_transition_time:type_name -> google.protobuf.Timestamp
-	0,  // 17: daft.sandbox.v1.PortMapping.protocol:type_name -> daft.sandbox.v1.Protocol
-	16, // 18: daft.sandbox.v1.SandboxRef.node:type_name -> daft.sandbox.v1.NodeRef
-	3,  // 19: daft.sandbox.v1.Condition.status:type_name -> daft.sandbox.v1.ConditionStatus
-	19, // 20: daft.sandbox.v1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
-	21, // [21:21] is the sub-list for method output_type
-	21, // [21:21] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	15, // 15: daft.sandbox.v1.SandboxSpec.egress_policy:type_name -> daft.sandbox.v1.EgressPolicy
+	19, // 16: daft.sandbox.v1.SandboxStatus.conditions:type_name -> daft.sandbox.v1.Condition
+	20, // 17: daft.sandbox.v1.SandboxStatus.last_transition_time:type_name -> google.protobuf.Timestamp
+	0,  // 18: daft.sandbox.v1.PortMapping.protocol:type_name -> daft.sandbox.v1.Protocol
+	17, // 19: daft.sandbox.v1.SandboxRef.node:type_name -> daft.sandbox.v1.NodeRef
+	3,  // 20: daft.sandbox.v1.Condition.status:type_name -> daft.sandbox.v1.ConditionStatus
+	20, // 21: daft.sandbox.v1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
+	22, // [22:22] is the sub-list for method output_type
+	22, // [22:22] is the sub-list for method input_type
+	22, // [22:22] is the sub-list for extension type_name
+	22, // [22:22] is the sub-list for extension extendee
+	0,  // [0:22] is the sub-list for field type_name
 }
 
 func init() { file_sandbox_v1_sandbox_proto_init() }
@@ -1497,7 +1569,7 @@ func file_sandbox_v1_sandbox_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sandbox_v1_sandbox_proto_rawDesc), len(file_sandbox_v1_sandbox_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   15,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

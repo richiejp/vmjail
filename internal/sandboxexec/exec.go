@@ -678,7 +678,7 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 	// in-VM agent fetches its config (and streams status events) over the
 	// control channel instead of the world-readable kernel cmdline. attach
 	// is enabled here so the workload is reachable over the attach lane.
-	e.applyVsockEgress(&cfg, uid, true, true)
+	e.applyVsockEgress(&cfg, uid, true, true, spec.GetEgressPolicy())
 	e.applyObserverLog(&cfg, uid)
 	e.applyObserveSummary(&cfg, uid)
 	return cfg, unlock, nil
@@ -774,16 +774,16 @@ func (e *Executor) registerSummaryRoute(cfg sandbox.Config, uid string) func() {
 
 // applyVsockEgress mints the per-VM hybrid-vsock device (so the agent has
 // a control channel for config + the BOOT_COMPLETE event) and, when net is
-// enabled, the sandboxnet listener — locking it to default-deny with the
-// in-stack proxy whenever an egress proxy is active so every legitimate
-// egress is injected through the proxy (J6) and anything dialing elsewhere
-// is dropped + logged. Gated on a configured VsockDir: production sandboxd
+// enabled, the sandboxnet listener. An explicit Sandbox policy always selects
+// default-deny: disabled permits no route, while enabled admits only the
+// in-stack proxy. A nil policy retains the legacy Node-wide proxy behaviour
+// for ordinary Workspace launches. Gated on a configured VsockDir: production sandboxd
 // always sets it (the Bridger/AttachRegistry/NetEnabled paths require it in
 // New), while a bare unit-test executor with no VsockDir uses a fake runner
 // that never boots a real VM, so it needs no device. attach is layered only
 // for the workload boot (it owns the attach lane); the ephemeral build VM
 // passes false. Shared by resolveBootConfig and buildDevcontainerImage.
-func (e *Executor) applyVsockEgress(cfg *sandbox.Config, uid string, enableNet, enableAttach bool) {
+func (e *Executor) applyVsockEgress(cfg *sandbox.Config, uid string, enableNet, enableAttach bool, policy *sandboxv1.EgressPolicy) {
 	if e.vsockDir == "" {
 		return
 	}
@@ -793,7 +793,10 @@ func (e *Executor) applyVsockEgress(cfg *sandbox.Config, uid string, enableNet, 
 	}
 	if enableNet && e.netEnabled {
 		cfg.Vsock.Net = true
-		if e.egressActive() {
+		if policy != nil {
+			cfg.DenyEgress = true
+		}
+		if e.egressProxyEnabled(policy) {
 			cfg.DenyEgress = true
 			cfg.ProxyHandler = e.egressProxy.Handler
 			cfg.ProxyPort = e.proxyPort()
@@ -804,15 +807,21 @@ func (e *Executor) applyVsockEgress(cfg *sandbox.Config, uid string, enableNet, 
 // applyEgressOpts layers the egress-proxy env + CA into BootOptions before
 // the assembler bundles them: the proxy vars route the container's HTTP(S)
 // egress through the in-stack proxy and the CA is written into the rootfs
-// so TLS clients trust its MITM leaves. No-op when no proxy is active.
+// so TLS clients trust its MITM leaves. Explicitly enabled egress fails closed
+// when the Node has no proxy; explicitly disabled egress injects nothing. A
+// nil policy retains the legacy Node-wide behaviour.
 // Shared by baseBootConfig and buildDevcontainerImage.
-func (e *Executor) applyEgressOpts(opts *sandboxboot.BootOptions) {
-	if !e.egressActive() {
-		return
+func (e *Executor) applyEgressOpts(opts *sandboxboot.BootOptions, policy *sandboxv1.EgressPolicy) error {
+	if policy != nil && policy.GetEnable() && !e.egressActive() {
+		return errors.New("sandboxexec: Sandbox requires egress proxy but Node proxy is unavailable")
+	}
+	if !e.egressProxyEnabled(policy) {
+		return nil
 	}
 	opts.Env = append(opts.Env, proxyEnv(e.proxyGuestURL())...)
 	opts.CACert = e.egressProxy.CACertPEM
 	opts.CACertGuestPath = egressCAGuestPath
+	return nil
 }
 
 // assignVsock mints a per-Sandbox hybrid-vsock device: a fresh
@@ -891,7 +900,9 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 	// Layer the egress-proxy env after the workspace's own env so the
 	// proxy vars win on a key clash (a workload can't unset the proxy the
 	// node mandates), and ship the proxy CA into the rootfs.
-	e.applyEgressOpts(&opts)
+	if err := e.applyEgressOpts(&opts, spec.GetEgressPolicy()); err != nil {
+		return sandbox.Config{}, nil, func() {}, err
+	}
 	cfg, unlock, aerr := e.assembler(ctx, imageRef, opts)
 	return cfg, ports, unlock, aerr
 }
@@ -902,6 +913,13 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 // reachable proxy lane would black-hole all guest egress.
 func (e *Executor) egressActive() bool {
 	return e.egressProxy != nil && e.egressProxy.Handler != nil
+}
+
+func (e *Executor) egressProxyEnabled(policy *sandboxv1.EgressPolicy) bool {
+	if policy != nil && !policy.GetEnable() {
+		return false
+	}
+	return e.egressActive()
 }
 
 // proxyPort is the gateway port the in-stack proxy listens on,

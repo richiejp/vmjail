@@ -535,12 +535,20 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	if _, err := reader.CancelAgentRun(t.Context(), testRunValue); err != nil {
 		t.Fatalf("CancelAgentRun = %v", err)
 	}
-	profile := agentprofile.Entry{Profile: agentprofile.Profile{Name: mcpTestProfile, Command: []string{mcpTestProfile, "exec"}}, Digest: "sha256:profile"}
+	profile := agentprofile.Entry{Profile: agentprofile.Profile{
+		Name: mcpTestProfile, Command: []string{mcpTestProfile, "exec"},
+		Image:     "example.com/agent@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Resources: agentprofile.ResourcesSection{Enable: true, CPUCores: 4, MemoryBytes: 8 << 30},
+		Egress:    agentprofile.EgressSection{Enable: true},
+	}, Digest: "sha256:profile"}
 	if _, err := reader.StartAgentRun(t.Context(), mcpTestWorkspace, profile, mcpTestPrompt); err != nil {
 		t.Fatalf("StartAgentRun = %v", err)
 	}
 	if startRequest.GetWorkspaceUuid() != mcpTestWorkspace || startRequest.GetProfileDigest() != profile.Digest || len(startRequest.GetCommand()) != 2 || startRequest.GetPrompt() != mcpTestPrompt {
 		t.Fatalf("Start request = %#v", startRequest)
+	}
+	if startRequest.GetImageRef() != profile.Profile.Image || !startRequest.GetResources().GetEnable() || startRequest.GetResources().GetCpuCores() != 4 || startRequest.GetResources().GetMemoryBytes() != 8<<30 || !startRequest.GetEgress().GetEnable() {
+		t.Fatalf("Start policy = %#v", startRequest)
 	}
 }
 

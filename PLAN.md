@@ -3913,8 +3913,8 @@ Slices:
   structured exit and terminal deletion. Detached Node execution is now wired
   end to end. Immutable AgentProfile loading and read-only MCP discovery are
   now landed. Owner-scoped AgentRun status/events/result/cancel wire and MCP
-  tools are landed as well. AgentRun reconciliation, secret delivery, and
-  `agent_start` remain.
+  tools are landed as well. Secret delivery and completion-time Sandbox
+  shutdown remain.
   Node registration now carries a random process-lifetime instance UUID in
   addition to its stable certificate fingerprint. This supplies the missing
   evidence AgentRun reconciliation needs to classify process-local detached
@@ -3927,13 +3927,12 @@ Slices:
   active records created before this snapshot field existed remain readable
   but reconciliation must mark them LOST rather than guess a launch command.
   The trusted Start RPC now validates Workspace ownership, binds the run to
-  the Workspace's current Sandbox and the live Node process instance, persists
+  the Workspace's compatible current Sandbox and the live Node process instance, persists
   QUEUED then STARTING before issuing any detached execution request, and uses
   the AgentRun UUID as the Node idempotency key. A successful start records the
   Node job ID and RUNNING atomically; an ambiguous transport failure deliberately
   returns the durable STARTING run so the forthcoming reconciler can retry the
-  exact request. Launching a missing current Sandbox and absence-grace recovery
-  remain. A Serve-lifetime recovery worker
+  exact request. A Serve-lifetime recovery worker
   now retries STARTING jobs idempotently after orchestrator restart, polls
   RUNNING/CANCELING jobs, durably captures bounded terminal results before
   deleting Node-local job state, and marks runs LOST when the bound Node
@@ -3942,7 +3941,7 @@ Slices:
   while expiry durably marks the run LOST. A crash-stranded QUEUED record that
   never received a Sandbox/Node binding is deterministically FAILED on recovery
   rather than polled or guessed. This completes the bounded absence behavior;
-  configurable policy and launching a missing current Sandbox remain.
+  configurable grace policy remains.
   MCP now exposes `agent_start` with the intentionally narrow public schema:
   Workspace UUID, immutable profile name, and bounded prompt only. The trusted
   MCP host resolves that name from its already-validated AgentProfile snapshot
@@ -3950,6 +3949,20 @@ Slices:
   callers cannot inject an image, command, digest, credential reference, or
   environment. The tool returns the durable AgentRun immediately and accurately
   advertises a non-idempotent, non-destructive side effect.
+  The trusted start request now also freezes the profile's digest-pinned image,
+  CPU/memory section, and egress decision. When no current Sandbox exists, the
+  orchestrator composes one from the Workspace mounts and the frozen profile
+  policy without mutating the project's image or resource settings; an unset
+  target auto-selects only when exactly one Node is registered. The resulting
+  Sandbox binding persists the profile digest and is reusable only for that
+  exact digest, so profile changes fail closed until the old Sandbox is stopped.
+  Sandbox execution now distinguishes an explicit agent egress policy from the
+  legacy nil Workspace policy: disabled means deny-all, while enabled requires
+  the Node proxy and permits traffic only through it. Host allowlisting remains
+  future C4 work. Focused launch/reuse, policy projection, MCP propagation, and
+  egress fail-closed tests are landed. Coverage gates now use invocation-local
+  profiles, so concurrent overseer/editor checks cannot delete each other's
+  transient results. Real-VM AgentRun lifecycle coverage remains.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->

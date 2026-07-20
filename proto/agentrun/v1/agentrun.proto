@@ -23,7 +23,20 @@ message StartAgentRunRequest {
   string profile_digest = 3;
   repeated string command = 4;
   string prompt = 5;
+  // Frozen trusted-host launch policy. MCP callers cannot supply these fields;
+  // daft-mcp resolves them from the named immutable AgentProfile.
+  string image_ref = 6;
+  AgentRunResources resources = 7;
+  AgentRunEgress egress = 8;
 }
+
+message AgentRunResources {
+  bool enable = 1;
+  uint32 cpu_cores = 2;
+  uint64 memory_bytes = 3;
+}
+
+message AgentRunEgress { bool enable = 1; }
 
 enum AgentRunState {
   AGENT_RUN_STATE_UNSPECIFIED = 0;

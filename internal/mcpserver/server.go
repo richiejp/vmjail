@@ -388,7 +388,9 @@ type ConnectReader struct {
 func (r ConnectReader) StartAgentRun(ctx context.Context, workspaceUUID string, profile agentprofile.Entry, prompt string) (AgentRun, error) {
 	response, err := r.agentRuns.Start(ctx, connect.NewRequest(&agentrunv1.StartAgentRunRequest{
 		WorkspaceUuid: workspaceUUID, ProfileName: profile.Profile.Name, ProfileDigest: profile.Digest,
-		Command: slices.Clone(profile.Profile.Command), Prompt: prompt,
+		Command: slices.Clone(profile.Profile.Command), Prompt: prompt, ImageRef: profile.Profile.Image,
+		Resources: &agentrunv1.AgentRunResources{Enable: profile.Profile.Resources.Enable, CpuCores: profile.Profile.Resources.CPUCores, MemoryBytes: profile.Profile.Resources.MemoryBytes},
+		Egress:    &agentrunv1.AgentRunEgress{Enable: profile.Profile.Egress.Enable},
 	}))
 	if err != nil {
 		return AgentRun{}, err

@@ -384,6 +384,37 @@ func TestHandleSandboxEventInjectsProxy(t *testing.T) {
 	}
 }
 
+func TestExplicitSandboxEgressPolicy(t *testing.T) {
+	handler := http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	e := &Executor{netEnabled: true, vsockDir: t.TempDir(), egressProxy: &EgressProxy{Handler: handler, CACertPEM: []byte("CA")}}
+	e.nextCID.Store(2)
+
+	var denied sandbox.Config
+	e.applyVsockEgress(&denied, "denied", true, false, &sandboxv1.EgressPolicy{})
+	if !denied.DenyEgress || denied.ProxyHandler != nil || denied.ProxyPort != 0 {
+		t.Errorf("disabled egress config = %#v", denied)
+	}
+	var deniedOpts sandboxboot.BootOptions
+	if err := e.applyEgressOpts(&deniedOpts, &sandboxv1.EgressPolicy{}); err != nil || len(deniedOpts.Env) != 0 || len(deniedOpts.CACert) != 0 {
+		t.Errorf("disabled egress opts = %#v, %v", deniedOpts, err)
+	}
+
+	var allowed sandbox.Config
+	e.applyVsockEgress(&allowed, "allowed", true, false, &sandboxv1.EgressPolicy{Enable: true})
+	if !allowed.DenyEgress || allowed.ProxyHandler == nil || allowed.ProxyPort != sandboxnet.DefaultProxyPort {
+		t.Errorf("enabled egress config = %#v", allowed)
+	}
+	var allowedOpts sandboxboot.BootOptions
+	if err := e.applyEgressOpts(&allowedOpts, &sandboxv1.EgressPolicy{Enable: true}); err != nil || len(allowedOpts.Env) == 0 || !bytes.Equal(allowedOpts.CACert, []byte("CA")) {
+		t.Errorf("enabled egress opts = %#v, %v", allowedOpts, err)
+	}
+
+	withoutProxy := &Executor{}
+	if err := withoutProxy.applyEgressOpts(&sandboxboot.BootOptions{}, &sandboxv1.EgressPolicy{Enable: true}); err == nil {
+		t.Error("enabled egress without a Node proxy succeeded")
+	}
+}
+
 // TestHandleSandboxEventAssemblerError pins the error path when the
 // assembler fails — runner must not be invoked and the dispatch
 // id must appear in the wrapped error.

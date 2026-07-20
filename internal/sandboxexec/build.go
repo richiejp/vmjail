@@ -232,7 +232,9 @@ func (e *Executor) buildDevcontainerImage(ctx context.Context, uid string, spec 
 		},
 		PrivilegedBuild: true,
 	}
-	e.applyEgressOpts(&opts)
+	if err := e.applyEgressOpts(&opts, spec.GetEgressPolicy()); err != nil {
+		return "", err
+	}
 
 	cfg, unlock, err := e.assembler(ctx, e.buildImageRef, opts)
 	if err != nil {
@@ -243,7 +245,7 @@ func (e *Executor) buildDevcontainerImage(ctx context.Context, uid string, spec 
 	// The build VM only needs the control channel (for BOOT_COMPLETE) and,
 	// for a `FROM <registry>` base, the default-deny egress lane — never
 	// attach or port ingress, so those stay off.
-	e.applyVsockEgress(&cfg, uid+"-build", true, false)
+	e.applyVsockEgress(&cfg, uid+"-build", true, false, spec.GetEgressPolicy())
 
 	buildCtx := ctx
 	if e.buildTimeout > 0 {

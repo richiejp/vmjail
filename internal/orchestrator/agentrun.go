@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/go-containerregistry/pkg/name"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/richiejp/darkaifactory/internal/agentprofile"
 	"github.com/richiejp/darkaifactory/internal/agentruncatalog"
 	agentrunv1 "github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1/agentrunv1connect"
@@ -41,6 +43,10 @@ type agentJobReconciler interface {
 	DeleteNodeJob(context.Context, identity.Fingerprint, string) error
 }
 
+type agentSandboxLauncher interface {
+	LaunchAgentSandbox(identity.Fingerprint, string, AgentSandboxPolicy) (workspacecatalog.SandboxRef, error)
+}
+
 type AgentRunHandler struct {
 	agentrunv1connect.UnimplementedAgentRunServiceHandler
 	store        *agentruncatalog.Store
@@ -49,6 +55,7 @@ type AgentRunHandler struct {
 	reconciler   agentJobReconciler
 	workspaces   *workspacecatalog.Store
 	nodes        *nodectrl.Registry
+	launcher     agentSandboxLauncher
 	now          func() time.Time
 	nodeGrace    time.Duration
 	missingMu    sync.Mutex
@@ -77,6 +84,10 @@ func (h *AgentRunHandler) Run(ctx context.Context) {
 func (h *AgentRunHandler) SetStartDependencies(workspaces *workspacecatalog.Store, nodes *nodectrl.Registry, starter agentJobStarter) {
 	h.workspaces, h.nodes, h.starter = workspaces, nodes, starter
 	h.reconciler, _ = starter.(agentJobReconciler)
+}
+
+func (h *AgentRunHandler) SetSandboxLauncher(launcher agentSandboxLauncher) {
+	h.launcher = launcher
 }
 
 func NewAgentRunHandler(store *agentruncatalog.Store, canceler agentJobCanceler) *AgentRunHandler {
@@ -111,10 +122,23 @@ func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentr
 	if err != nil || workspace.Metadata.OwnerFingerprint != owner {
 		return nil, connect.NewError(connect.CodeNotFound, errors.New("orchestrator: Workspace not found"))
 	}
-	if workspace.Status.CurrentSandbox == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("orchestrator: Workspace has no current Sandbox"))
+	policy, err := agentSandboxPolicy(req.Msg)
+	if err != nil {
+		return nil, err
 	}
 	binding := workspace.Status.CurrentSandbox
+	if binding == nil {
+		if h.launcher == nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("orchestrator: AgentRun Sandbox launcher is not configured"))
+		}
+		launched, launchErr := h.launcher.LaunchAgentSandbox(owner, workspace.Metadata.UUID, policy)
+		if launchErr != nil {
+			return nil, launchErr
+		}
+		binding = &launched
+	} else if binding.AgentProfileDigest != policy.ProfileDigest {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("orchestrator: Workspace current Sandbox is incompatible with the requested AgentProfile; stop it before starting the agent"))
+	}
 	node, ok := h.nodes.Lookup(binding.NodeFingerprint)
 	if !ok {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("orchestrator: Workspace Node is not connected"))
@@ -151,6 +175,30 @@ func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentr
 		return nil, agentRunError(err)
 	}
 	return connect.NewResponse(mapAgentRun(run)), nil
+}
+
+func agentSandboxPolicy(req *agentrunv1.StartAgentRunRequest) (AgentSandboxPolicy, error) {
+	resources := req.GetResources()
+	if req.GetProfileName() == "" || req.GetProfileDigest() == "" || len(req.GetCommand()) == 0 || req.GetImageRef() == "" || req.GetEgress() == nil {
+		return AgentSandboxPolicy{}, connect.NewError(connect.CodeInvalidArgument, errors.New("orchestrator: incomplete resolved AgentProfile"))
+	}
+	if resources == nil {
+		return AgentSandboxPolicy{}, connect.NewError(connect.CodeInvalidArgument, errors.New("orchestrator: AgentProfile resources section is required"))
+	}
+	if resources.GetEnable() != (resources.GetCpuCores() != 0 && resources.GetMemoryBytes() != 0) {
+		return AgentSandboxPolicy{}, connect.NewError(connect.CodeInvalidArgument, errors.New("orchestrator: AgentProfile resource values must both be positive exactly when enabled"))
+	}
+	if resources.GetCpuCores() > agentprofile.MaxCPUCores || resources.GetMemoryBytes() > agentprofile.MaxMemoryBytes {
+		return AgentSandboxPolicy{}, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("orchestrator: AgentProfile resources exceed %d CPU cores or %d memory bytes", agentprofile.MaxCPUCores, agentprofile.MaxMemoryBytes))
+	}
+	if _, err := name.NewDigest(req.GetImageRef(), name.StrictValidation); err != nil {
+		return AgentSandboxPolicy{}, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("orchestrator: AgentProfile image must be digest-pinned: %w", err))
+	}
+	return AgentSandboxPolicy{
+		ProfileDigest: req.GetProfileDigest(), ImageRef: req.GetImageRef(),
+		ResourcesEnable: resources.GetEnable(), CPUCores: resources.GetCpuCores(), MemoryBytes: resources.GetMemoryBytes(),
+		EgressEnable: req.GetEgress().GetEnable(),
+	}, nil
 }
 
 // ReconcileOnce advances every durable active run using only its frozen launch

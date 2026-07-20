@@ -243,7 +243,7 @@ func New(cfg Config) (*Server, error) {
 	if wcErr != nil {
 		return nil, wcErr
 	}
-	agentRunCtrl := newAgentRunController(cfg.AgentRunCatalog, workspaceCat, nodeReg, sandboxCtrl)
+	agentRunCtrl := newAgentRunController(cfg.AgentRunCatalog, workspaceCat, nodeReg, sandboxCtrl, workspaceCtrl)
 	// Reconciler (Slice B5) owns per-heartbeat reconcile, the
 	// missing-heartbeat threshold → SandboxLost, periodic sweep
 	// for unreachable Nodes, and the Launch/Stop pre-action hook.
@@ -297,9 +297,10 @@ func New(cfg Config) (*Server, error) {
 	}, nil
 }
 
-func newAgentRunController(runs *agentruncatalog.Store, workspaces *workspacecatalog.Store, nodes *nodectrl.Registry, jobs *NodeControlHandler) *AgentRunHandler {
+func newAgentRunController(runs *agentruncatalog.Store, workspaces *workspacecatalog.Store, nodes *nodectrl.Registry, jobs *NodeControlHandler, launcher agentSandboxLauncher) *AgentRunHandler {
 	controller := NewAgentRunHandler(runs, jobs)
 	controller.SetStartDependencies(workspaces, nodes, jobs)
+	controller.SetSandboxLauncher(launcher)
 	return controller
 }
 
