@@ -86,6 +86,12 @@ service NodeControlService {
   // (the log is read-only); the orchestrator's return direction
   // carries nothing and closing it cancels the tail.
   rpc ObserverStream(stream ObserverStreamMessage) returns (stream ObserverStreamMessage) {}
+
+  // ReportJobControl completes one correlated detached-job operation pushed
+  // through NodeEvent.job_control. Only the targeted sandbox-host may answer;
+  // the orchestrator matches request_id and the authenticated peer before
+  // releasing the waiting internal controller.
+  rpc ReportJobControl(JobControlResponse) returns (JobControlAck) {}
 }
 
 // ProtocolVersion is the wire-protocol version exchanged at
@@ -142,8 +148,96 @@ message NodeEvent {
     OpenPortRequest open_port = 3;
     AttachRequest attach = 4;
     ObserverRequest observer = 5;
+    JobControlRequest job_control = 6;
   }
 }
+
+// JobControlRequest is an orchestrator-to-Node operation over the existing
+// outbound RegisterNode channel. request_id is a short-lived correlation ID;
+// it is not the durable job identity. A start's idempotency_key (the AgentRun
+// UUID) supplies retry safety when a response is lost.
+message JobControlRequest {
+  string request_id = 1;
+  oneof operation {
+    JobStartRequest start = 2;
+    JobGetRequest get = 3;
+    JobCancelRequest cancel = 4;
+    JobDeleteRequest delete = 5;
+  }
+}
+
+message JobStartRequest {
+  string idempotency_key = 1;
+  string sandbox_uid = 2;
+  repeated string command = 3;
+}
+
+message JobGetRequest {
+  string job_id = 1;
+  uint64 stdout_cursor = 2;
+  uint64 stderr_cursor = 3;
+  uint32 max_bytes_per_stream = 4;
+}
+
+message JobCancelRequest {
+  string job_id = 1;
+}
+
+// Delete is terminal-only. The orchestrator invokes it only after persisting
+// the terminal AgentRun result, releasing bounded Node-side retention.
+message JobDeleteRequest {
+  string job_id = 1;
+}
+
+enum JobState {
+  JOB_STATE_UNSPECIFIED = 0;
+  JOB_STATE_STARTING = 1;
+  JOB_STATE_RUNNING = 2;
+  JOB_STATE_CANCELING = 3;
+  JOB_STATE_SUCCEEDED = 4;
+  JOB_STATE_FAILED = 5;
+  JOB_STATE_CANCELED = 6;
+}
+
+message JobOutputChunk {
+  bytes data = 1;
+  uint64 next_cursor = 2;
+  bool cursor_expired = 3;
+}
+
+message JobSnapshot {
+  string job_id = 1;
+  string sandbox_uid = 2;
+  JobState state = 3;
+  JobOutputChunk stdout = 4;
+  JobOutputChunk stderr = 5;
+  optional int32 exit_code = 6;
+  string reason = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp started_at = 9;
+  google.protobuf.Timestamp completed_at = 10;
+  bool cancel_called = 11;
+}
+
+enum JobControlErrorCode {
+  JOB_CONTROL_ERROR_CODE_UNSPECIFIED = 0;
+  JOB_CONTROL_ERROR_CODE_NOT_FOUND = 1;
+  JOB_CONTROL_ERROR_CODE_CAPACITY = 2;
+  JOB_CONTROL_ERROR_CODE_INVALID_CURSOR = 3;
+  JOB_CONTROL_ERROR_CODE_NOT_TERMINAL = 4;
+  JOB_CONTROL_ERROR_CODE_IDEMPOTENCY_CONFLICT = 5;
+  JOB_CONTROL_ERROR_CODE_INVALID_ARGUMENT = 6;
+  JOB_CONTROL_ERROR_CODE_INTERNAL = 7;
+}
+
+message JobControlResponse {
+  string request_id = 1;
+  JobSnapshot snapshot = 2;
+  JobControlErrorCode error_code = 3;
+  string error = 4;
+}
+
+message JobControlAck {}
 
 // OpenPortRequest asks the Node to dial OpenPortStream for one
 // inbound port-forward attach. The Node looks (workspace_uuid,

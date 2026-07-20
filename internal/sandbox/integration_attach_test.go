@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,9 +19,10 @@ import (
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/darkaifactory/internal/nodejob"
 	"github.com/richiejp/darkaifactory/internal/sandboxattach"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/richiejp/darkaifactory/internal/sandboxjob"
 )
 
 // TestAttachExecE2E is the D2 attach end-to-end proof: boot a
@@ -115,29 +118,50 @@ func TestAttachExecE2E(t *testing.T) {
 	// unit tests separately pin stdout/stderr interleaving and cancellation.
 	jobCtx, jobCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer jobCancel()
-	jobConn, err := DialGuestVsock(jobCtx, cfg.Vsock.HostSocket, agent.DefaultJobVsockPort)
+	jobRunner, err := sandboxjob.NewRunner(func(ctx context.Context, sandboxUID string, port uint32) (net.Conn, error) {
+		if sandboxUID != "d2d-sandbox" {
+			return nil, fmt.Errorf("unexpected sandbox UID %q", sandboxUID)
+		}
+		return DialGuestVsock(ctx, cfg.Vsock.HostSocket, port)
+	})
 	if err != nil {
-		t.Fatalf("DialGuestVsock(job): %v\n--- console ---\n%s", err, console.String())
+		t.Fatal(err)
 	}
-	defer func() { _ = jobConn.Close() }()
-	if err := agent.WriteJobHello(jobConn, &agentv1.JobHello{Command: []string{"/hello"}}); err != nil {
-		t.Fatalf("WriteJobHello: %v", err)
+	manager, err := nodejob.New(jobCtx, jobRunner, nodejob.Limits{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	var jobOut bytes.Buffer
-	var jobExit *agentv1.JobExit
-	for jobExit == nil {
-		frame, readErr := agent.ReadJobFrame(jobConn)
-		if readErr != nil {
-			t.Fatalf("ReadJobFrame: %v; output=%q", readErr, jobOut.String())
+	started, err := manager.Start(nodejob.StartRequest{
+		IdempotencyKey: "run-e2e", SandboxUID: "d2d-sandbox", Command: []string{"/hello"},
+	})
+	if err != nil {
+		t.Fatalf("Start job: %v", err)
+	}
+	var finished nodejob.Snapshot
+	jobDeadline := time.Now().Add(10 * time.Second)
+	//daft:lint:disable=forloopbound reason="bounded by the ten-second real-VM job deadline"
+	for time.Now().Before(jobDeadline) {
+		finished, err = manager.Get(started.ID, 0, 0, nodejob.DefaultMaxReadBytes)
+		if err != nil {
+			t.Fatal(err)
 		}
-		jobOut.Write(frame.GetStdout())
-		if len(frame.GetStderr()) != 0 {
-			t.Fatalf("unexpected stderr from /hello: %q", frame.GetStderr())
+		if finished.State.Terminal() {
+			break
 		}
-		jobExit = frame.GetExit()
+		time.Sleep(10 * time.Millisecond)
 	}
-	if jobExit.GetCode() != 0 || jobExit.GetError() != "" || !strings.Contains(jobOut.String(), agent.ContainerBanner) {
-		t.Fatalf("job exit=%+v stdout=%q", jobExit, jobOut.String())
+	if finished.State != nodejob.StateSucceeded || !finished.ExitCodeSet || finished.ExitCode != 0 ||
+		len(finished.Stderr.Data) != 0 || !strings.Contains(string(finished.Stdout.Data), agent.ContainerBanner) {
+		t.Fatalf("job result=%+v", finished)
+	}
+	retried, err := manager.Start(nodejob.StartRequest{
+		IdempotencyKey: "run-e2e", SandboxUID: "d2d-sandbox", Command: []string{"/hello"},
+	})
+	if err != nil || retried.ID != started.ID {
+		t.Fatalf("retry = %+v, %v", retried, err)
+	}
+	if err := manager.Delete(started.ID); err != nil {
+		t.Fatalf("Delete job: %v", err)
 	}
 }
 

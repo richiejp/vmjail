@@ -27,6 +27,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/richiejp/darkaifactory/internal/nodejob"
 )
 
 // DefaultHeartbeatInterval is the cadence at which RegisterAndServe
@@ -58,6 +59,15 @@ type SandboxEventHandlerFunc func(ctx context.Context, evt *nodectrlv1.SandboxWa
 // HandleSandboxEvent satisfies SandboxEventHandler.
 func (f SandboxEventHandlerFunc) HandleSandboxEvent(ctx context.Context, evt *nodectrlv1.SandboxWatchEvent) error {
 	return f(ctx, evt)
+}
+
+// JobManager is the process-lifetime detached job surface. Its lifecycle is
+// owned by sandboxd, not by any individual control request.
+type JobManager interface {
+	Start(nodejob.StartRequest) (nodejob.Snapshot, error)
+	Get(id string, stdoutCursor, stderrCursor uint64, maxBytes int) (nodejob.Snapshot, error)
+	Cancel(id string) (nodejob.Snapshot, error)
+	Delete(id string) error
 }
 
 // Config is everything the client needs to dial the orchestrator
@@ -126,6 +136,9 @@ type Config struct {
 	// (`daft-sandboxd serve`) shares one sandboxgateway.SummaryRegistry
 	// with the sandboxexec Executor, alongside the ObserverRegistry.
 	SummaryResolver ObserverResolver
+	// JobManager executes correlated JobControlRequest events. Nil means the
+	// node cannot accept detached jobs and reports a structured internal error.
+	JobManager JobManager
 	// Stderr is where per-bridge errors are logged. Defaults to
 	// os.Stderr when nil.
 	Stderr io.Writer
@@ -325,6 +338,14 @@ func (c *Client) dispatchEvent(ctx context.Context, msg *nodectrlv1.NodeEvent) e
 		go func() {
 			if err := c.handleObserver(ctx, obs); err != nil {
 				_, _ = fmt.Fprintf(c.cfg.openPortLogSink(), "nodectrlclient: observer tail: %v\n", err)
+			}
+		}()
+		return nil
+	}
+	if job := msg.GetJobControl(); job != nil {
+		go func() {
+			if err := c.handleJobControl(ctx, job); err != nil {
+				_, _ = fmt.Fprintf(c.cfg.openPortLogSink(), "nodectrlclient: job control: %v\n", err)
 			}
 		}()
 		return nil

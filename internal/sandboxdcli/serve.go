@@ -26,11 +26,13 @@ import (
 	"github.com/richiejp/darkaifactory/internal/mitmproxy"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
+	"github.com/richiejp/darkaifactory/internal/nodejob"
 	"github.com/richiejp/darkaifactory/internal/ociregistry"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/sandboxexec"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/richiejp/darkaifactory/internal/sandboxjob"
 	"github.com/richiejp/darkaifactory/internal/version"
 	"github.com/richiejp/darkaifactory/internal/workspace"
 )
@@ -118,31 +120,23 @@ func runServe(
 
 	bridger := sandboxgateway.New()
 	attachRegistry := sandboxgateway.NewAttachRegistry()
+	jobRegistry := sandboxgateway.NewJobRegistry()
 	observerRegistry := sandboxgateway.NewObserverRegistry()
 	summaryRegistry := sandboxgateway.NewSummaryRegistry()
 	mountBackingDir := filepath.Join(dir, "mounts")
 	hostedRT := hostedRegistryTransport(orchestratorURL, id, peers)
-	dispatcher, err := buildDispatcher(stdout, bridger, attachRegistry,
+	dispatcher, err := buildDispatcher(stdout, bridger, attachRegistry, jobRegistry,
 		observerRegistry, summaryRegistry, vsockDir, sync.server, mountBackingDir, hostedRT)
 	if err != nil {
 		return err
 	}
+	jobManager, err := newJobManager(ctx, jobRegistry)
+	if err != nil {
+		return err
+	}
 
-	client, err := nodectrlclient.New(nodectrlclient.Config{
-		URL:               orchestratorURL,
-		Identity:          id,
-		Peers:             peers,
-		Version:           version.Version,
-		Hostname:          detectHostname(),
-		HeartbeatInterval: heartbeatInterval,
-		SandboxEvents:     dispatcher,
-		LiveSnapshot:      dispatcher.LiveSnapshot,
-		Bridger:           bridger,
-		AttachBridger:     attachRegistry,
-		ObserverResolver:  observerRegistry,
-		SummaryResolver:   summaryRegistry,
-		Stderr:            stdout,
-	})
+	client, err := newServeNodeClient(orchestratorURL, id, peers, heartbeatInterval,
+		dispatcher, bridger, attachRegistry, observerRegistry, summaryRegistry, jobManager, stdout)
 	if err != nil {
 		return err
 	}
@@ -164,6 +158,35 @@ func runServe(
 	go sync.run(ctx, stdout)
 
 	return runRegisterAndServe(ctx, client, resources)
+}
+
+func newJobManager(ctx context.Context, registry *sandboxgateway.JobRegistry) (*nodejob.Manager, error) {
+	runner, err := sandboxjob.NewRunner(registry.Dial)
+	if err != nil {
+		return nil, err
+	}
+	return nodejob.New(ctx, runner, nodejob.Limits{})
+}
+
+func newServeNodeClient(
+	orchestratorURL string,
+	id *identity.Identity,
+	peers *identity.PeerStore,
+	heartbeatInterval time.Duration,
+	dispatcher *sandboxexec.Executor,
+	bridger *sandboxgateway.Bridger,
+	attachRegistry *sandboxgateway.AttachRegistry,
+	observerRegistry *sandboxgateway.ObserverRegistry,
+	summaryRegistry *sandboxgateway.SummaryRegistry,
+	jobManager *nodejob.Manager,
+	stderr io.Writer,
+) (*nodectrlclient.Client, error) {
+	return nodectrlclient.New(nodectrlclient.Config{
+		URL: orchestratorURL, Identity: id, Peers: peers, Version: version.Version, Hostname: detectHostname(),
+		HeartbeatInterval: heartbeatInterval, SandboxEvents: dispatcher, LiveSnapshot: dispatcher.LiveSnapshot,
+		Bridger: bridger, AttachBridger: attachRegistry, ObserverResolver: observerRegistry,
+		SummaryResolver: summaryRegistry, JobManager: jobManager, Stderr: stderr,
+	})
 }
 
 // nodeSync bundles the node's persistent CAS-backed WorkspaceService
@@ -264,6 +287,7 @@ var buildDispatcher = func(
 	stdout io.Writer,
 	bridger *sandboxgateway.Bridger,
 	attachRegistry *sandboxgateway.AttachRegistry,
+	jobRegistry *sandboxgateway.JobRegistry,
 	observerRegistry *sandboxgateway.ObserverRegistry,
 	summaryRegistry *sandboxgateway.SummaryRegistry,
 	vsockDir string,
@@ -314,6 +338,7 @@ var buildDispatcher = func(
 		Assembler:          assembler,
 		Bridger:            bridger,
 		AttachRegistry:     attachRegistry,
+		JobRegistry:        jobRegistry,
 		ObserverRegistry:   observerRegistry,
 		SummaryRegistry:    summaryRegistry,
 		ObserveSummary:     observeSummaryFromEnv(),

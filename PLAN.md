@@ -3876,8 +3876,16 @@ Slices:
   remains PTY-based by design. A per-Sandbox job route registry now maps live
   Sandbox UIDs to their hybrid-vsock sockets; executor integration owns each
   route for exactly the VM lifetime and enables the shared guest control
-  listener when detached jobs are configured. The
-  Node route registration and Node/orchestrator job RPCs remain before the
+  listener when detached jobs are configured. The Node wire contract uses a
+  correlated `JobControlRequest` pushed over the existing outbound
+  registration stream and an authenticated `ReportJobControl` unary callback;
+  start/get/cancel/terminal-delete operations carry structured state, errors,
+  independent output cursors, and bounded chunks without tying job lifetime
+  to either transport request. Sandboxd now creates one process-lifetime job
+  manager over the shared route registry and supplies it to the Node client;
+  daemon cancellation owns job shutdown, while control callbacks do not.
+  Production orchestrator and Node handlers implement the correlated flow;
+  end-to-end callback coverage remains before the
   manager is wired into production; cursor-based reattach then builds directly
   on its spool API.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact

@@ -16,6 +16,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
+	"github.com/richiejp/darkaifactory/internal/nodejob"
 	"github.com/richiejp/darkaifactory/internal/orchestrator"
 )
 
@@ -41,6 +42,7 @@ func (b *syncBuffer) String() string {
 const (
 	testListenAddr = "127.0.0.1:0"
 	testFixtureVer = "test-v0"
+	testJobSandbox = "sb-e2e"
 )
 
 // publishUntilAttached retries PublishSandboxEvent for up to 1s
@@ -78,6 +80,32 @@ type e2eRig struct {
 	sbID   *identity.Identity
 	sbPeer *identity.PeerStore
 	reg    *nodectrl.Registry
+}
+
+type e2eJobManager struct {
+	mu      sync.Mutex
+	deleted bool
+}
+
+func (m *e2eJobManager) Start(req nodejob.StartRequest) (nodejob.Snapshot, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return nodejob.Snapshot{ID: "job-e2e", SandboxUID: req.SandboxUID, State: nodejob.StateRunning}, nil
+}
+
+func (m *e2eJobManager) Get(id string, _, _ uint64, _ int) (nodejob.Snapshot, error) {
+	return nodejob.Snapshot{ID: id, SandboxUID: testJobSandbox, State: nodejob.StateSucceeded, ExitCodeSet: true}, nil
+}
+
+func (m *e2eJobManager) Cancel(id string) (nodejob.Snapshot, error) {
+	return nodejob.Snapshot{ID: id, SandboxUID: testJobSandbox, State: nodejob.StateCanceled, CancelCalled: true}, nil
+}
+
+func (m *e2eJobManager) Delete(string) error {
+	m.mu.Lock()
+	m.deleted = true
+	m.mu.Unlock()
+	return nil
 }
 
 func newE2ERig(t *testing.T) *e2eRig {
@@ -220,6 +248,58 @@ func TestRegisterAndServeRecordsRegistrationAndHeartbeat(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Errorf("registry still has entry 2s after RegisterAndServe returned")
+}
+
+func TestRegisterAndServeJobControlRoundTrip(t *testing.T) {
+	rig := newE2ERig(t)
+	manager := &e2eJobManager{}
+	client, err := nodectrlclient.New(nodectrlclient.Config{
+		URL: rig.url, Identity: rig.sbID, Peers: rig.sbPeer, Version: testFixtureVer,
+		HeartbeatInterval: time.Second, JobManager: manager,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	served := make(chan error, 1)
+	go func() { served <- client.RegisterAndServe(ctx, nodectrl.Resources{}) }()
+	deadline := time.Now().Add(time.Second)
+	//daft:lint:disable=forloopbound reason="bounded to one second while the real registration stream attaches"
+	for time.Now().Before(deadline) {
+		if _, ok := rig.reg.Lookup(rig.sbID.Fingerprint()); ok {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	h := rig.server.SandboxControl()
+	started, err := h.StartNodeJob(t.Context(), rig.sbID.Fingerprint(), nodejob.StartRequest{
+		IdempotencyKey: "run-e2e", SandboxUID: testJobSandbox, Command: []string{"agent"},
+	})
+	if err != nil || started.ID != "job-e2e" || started.State != nodejob.StateRunning {
+		t.Fatalf("StartNodeJob = %+v, %v", started, err)
+	}
+	got, err := h.GetNodeJob(t.Context(), rig.sbID.Fingerprint(), started.ID, 0, 0, 1024)
+	if err != nil || got.State != nodejob.StateSucceeded || !got.ExitCodeSet {
+		t.Fatalf("GetNodeJob = %+v, %v", got, err)
+	}
+	canceled, err := h.CancelNodeJob(t.Context(), rig.sbID.Fingerprint(), started.ID)
+	if err != nil || canceled.State != nodejob.StateCanceled || !canceled.CancelCalled {
+		t.Fatalf("CancelNodeJob = %+v, %v", canceled, err)
+	}
+	if err := h.DeleteNodeJob(t.Context(), rig.sbID.Fingerprint(), started.ID); err != nil {
+		t.Fatal(err)
+	}
+	manager.mu.Lock()
+	deleted := manager.deleted
+	manager.mu.Unlock()
+	if !deleted {
+		t.Fatal("Delete did not reach Node manager")
+	}
+	cancel()
+	if err := <-served; err != nil {
+		t.Fatalf("RegisterAndServe: %v", err)
+	}
 }
 
 // TestRegisterAndServeFailsOnUnreachableOrchestrator covers the

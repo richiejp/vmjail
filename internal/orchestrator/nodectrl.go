@@ -85,6 +85,9 @@ type NodeControlHandler struct {
 	// session_id pattern; populated before the ObserverRequest event
 	// is pushed, drained when ObserverStream arrives. See observer.go.
 	pendingObservers map[string]*pendingObserver
+	// pendingJobs correlates short-lived control operations with the
+	// authenticated Node callback. Detached job lifetime remains Node-owned.
+	pendingJobs map[string]*pendingJobControl
 }
 
 type nodeRegistration struct {
@@ -118,6 +121,7 @@ func NewNodeControlHandler(reg *nodectrl.Registry, peerStores ...*identity.PeerS
 		pendingPorts:     map[string]*pendingPort{},
 		pendingAttaches:  map[string]*pendingAttach{},
 		pendingObservers: map[string]*pendingObserver{},
+		pendingJobs:      map[string]*pendingJobControl{},
 	}, nil
 }
 
@@ -198,6 +202,7 @@ func (h *NodeControlHandler) detachRegistration(fp identity.Fingerprint, registr
 	if h.streams[fp] == registration {
 		delete(h.streams, fp)
 		h.reg.Forget(fp)
+		h.failPendingJobsLocked(fp, ErrNodeNotConnected)
 	}
 	h.mu.Unlock()
 }
@@ -211,6 +216,7 @@ func (h *NodeControlHandler) RevokeRegistration(fp identity.Fingerprint) {
 		delete(h.streams, fp)
 		close(registration.revoked)
 	}
+	h.failPendingJobsLocked(fp, ErrNodeNotConnected)
 	h.reg.Forget(fp)
 	h.mu.Unlock()
 }
