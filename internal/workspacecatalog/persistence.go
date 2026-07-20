@@ -7,12 +7,11 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
+	"github.com/richiejp/darkaifactory/internal/controlstore"
 )
 
 const (
-	workspaceSchemaVersion = "1"
 	workspaceRecordVersion = 1
-	schemaVersionKey       = "meta/schema_version"
 	workspacePrefix        = "workspace/"
 )
 
@@ -23,7 +22,8 @@ type persistedWorkspace struct {
 }
 
 type badgerBackend struct {
-	db *badger.DB
+	db      *badger.DB
+	closeDB bool
 }
 
 // Open opens or creates a Badger-backed Workspace store at path. Only the
@@ -33,41 +33,31 @@ func Open(path string, now func() time.Time) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("workspacecatalog: persistence path is empty")
 	}
-	db, err := badger.Open(badger.DefaultOptions(path).WithLogger(nil))
+	control, err := controlstore.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("workspacecatalog: open badger: %w", err)
+		return nil, fmt.Errorf("workspacecatalog: open control store: %w", err)
 	}
-	backend := &badgerBackend{db: db}
-	if err := initialiseSchema(db); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
+	db := control.DB()
+	backend := &badgerBackend{db: db, closeDB: true}
 	s := newStore(now, backend)
 	if err := s.load(db); err != nil {
-		_ = db.Close()
+		_ = control.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
-func initialiseSchema(db *badger.DB) error {
-	return db.Update(func(txn *badger.Txn) error {
-		item, err := txn.Get([]byte(schemaVersionKey))
-		if errors.Is(err, badger.ErrKeyNotFound) {
-			return txn.Set([]byte(schemaVersionKey), []byte(workspaceSchemaVersion))
-		}
-		if err != nil {
-			return fmt.Errorf("read schema version: %w", err)
-		}
-		got, err := item.ValueCopy(nil)
-		if err != nil {
-			return fmt.Errorf("copy schema version: %w", err)
-		}
-		if string(got) != workspaceSchemaVersion {
-			return fmt.Errorf("unsupported schema version %q (want %q)", got, workspaceSchemaVersion)
-		}
-		return nil
-	})
+// NewPersistent builds a Workspace catalog over a shared control database.
+// The caller retains ownership of db.
+func NewPersistent(db *badger.DB, now func() time.Time) (*Store, error) {
+	if db == nil {
+		return nil, errors.New("workspacecatalog: nil control database")
+	}
+	s := newStore(now, &badgerBackend{db: db})
+	if err := s.load(db); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func (s *Store) load(db *badger.DB) error {
@@ -150,4 +140,9 @@ func (b *badgerBackend) Delete(uuid string) error {
 	return nil
 }
 
-func (b *badgerBackend) Close() error { return b.db.Close() }
+func (b *badgerBackend) Close() error {
+	if !b.closeDB {
+		return nil
+	}
+	return b.db.Close()
+}

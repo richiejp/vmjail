@@ -621,11 +621,14 @@ Phase B — **Workspace as a first-class orchestrator object**:
   from the in-memory cache. Crash-safety verified by a
   kill-9-mid-write integration test.
   **In progress (2026-07-20):** B6a persists Workspace metadata/spec in a
-  versioned Badger store owned by `daft-orchestrator serve`; writes commit to
+  versioned Badger control store owned once by `daft-orchestrator serve`; writes commit to
   Badger before the in-memory catalog changes, alias indexes and derived Ready
   status rebuild on startup, and locks/current Sandbox/runtime conditions are
   deliberately discarded. Corrupt/unknown records and lock contention fail
-  startup. Standalone Sandbox bindings, AgentRuns, restart reconciliation, and
+  startup. The same database now hosts durable AgentRun records and their
+  atomically committed state-transition events; catalog namespaces share one
+  schema and one close owner rather than competing Badger openers or an MCP
+  journal. Standalone Sandbox bindings, AgentRun RPC/job reconciliation, and
   the kill-9 integration test remain B6b/B6c work. Live Node registrations
   remain ephemeral because the active registration stream is their source of
   truth.
@@ -3741,6 +3744,13 @@ Slices:
   schema cannot detect every user-chosen secret value. AgentRun state and
   events land directly in the Badger-backed B6 store; credentials stay
   host-only and there is no second MCP journal or deployment Operation model.
+  **In progress (2026-07-20):** the native durable AgentRun model and explicit
+  state machine are implemented over the shared B6 control store. Run creation
+  and every transition append a monotonically cursor-addressed event in the
+  same Badger transaction; terminal states are immutable, reads are owner
+  scoped, and prompt/event/result bodies have hard caps. The wire/JSON schemas,
+  immutable AgentProfile loader, redacted-secret types, event retention policy,
+  and SecretDelivery threat-model contract remain.
 - **L1 — read-only MCP.** Land `cmd/daft-mcp` over stdio with initialize,
   tool discovery and ownership-safe Node/Workspace reads. The first release is
   deliberately only `node_list`, `workspace_list` (forced to the authenticated

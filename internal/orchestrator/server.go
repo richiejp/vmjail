@@ -26,6 +26,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/registry"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
+	"github.com/richiejp/darkaifactory/internal/agentruncatalog"
 	"github.com/richiejp/darkaifactory/internal/component"
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
@@ -91,6 +92,10 @@ type Config struct {
 	// if this is nil. The Connect-RPC service surface that exposes
 	// the catalog to clients lands in Slice B2.
 	WorkspaceCatalog *workspacecatalog.Store
+
+	// AgentRunCatalog is the durable state/event store for detached agent runs.
+	// It is nil in deployments which have not enabled the Phase-L surface.
+	AgentRunCatalog *agentruncatalog.Store
 
 	// WorkspaceDispatcher backs WorkspaceCatalogService.Launch.
 	// Defaults to the orchestrator's own NodeControlHandler so
@@ -159,6 +164,7 @@ type Server struct {
 	nodeReg          *nodectrl.Registry
 	sandboxCtrl      *NodeControlHandler
 	workspaceCatalog *workspacecatalog.Store
+	agentRunCatalog  *agentruncatalog.Store
 	reconciler       *reconciler.Reconciler
 
 	reaperStart  sync.Once
@@ -191,6 +197,9 @@ func (s *Server) SandboxControl() *NodeControlHandler { return s.sandboxCtrl }
 // and (Slice B2) for the workspace-service handlers.
 func (s *Server) WorkspaceCatalog() *workspacecatalog.Store { return s.workspaceCatalog }
 
+// AgentRunCatalog returns the configured durable agent-run catalog.
+func (s *Server) AgentRunCatalog() *agentruncatalog.Store { return s.agentRunCatalog }
+
 // New builds a Server with the provided config. Returns an error if
 // Config.Identity or Config.Peers is missing or if the TLS template
 // can't be built.
@@ -217,10 +226,7 @@ func New(cfg Config) (*Server, error) {
 	if nodeReg == nil {
 		nodeReg = nodectrl.NewRegistry(nil)
 	}
-	workspaceCat := cfg.WorkspaceCatalog
-	if workspaceCat == nil {
-		workspaceCat = workspacecatalog.NewStore(nil)
-	}
+	workspaceCat := resolveWorkspaceCatalog(cfg.WorkspaceCatalog)
 	sandboxCtrl, operatorCtrl, controlErr := newControlHandlers(nodeReg, cfg.Peers)
 	if controlErr != nil {
 		return nil, controlErr
@@ -280,8 +286,16 @@ func New(cfg Config) (*Server, error) {
 		nodeReg:          nodeReg,
 		sandboxCtrl:      sandboxCtrl,
 		workspaceCatalog: workspaceCat,
+		agentRunCatalog:  cfg.AgentRunCatalog,
 		reconciler:       rec,
 	}, nil
+}
+
+func resolveWorkspaceCatalog(cat *workspacecatalog.Store) *workspacecatalog.Store {
+	if cat == nil {
+		return workspacecatalog.NewStore(nil)
+	}
+	return cat
 }
 
 // buildReconciler constructs the Reconciler with Config-supplied

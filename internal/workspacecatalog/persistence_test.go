@@ -135,6 +135,9 @@ func TestOpenRejectsInvalidPersistence(t *testing.T) {
 	if _, err := Open("", nil); err == nil {
 		t.Fatal("Open(empty) succeeded")
 	}
+	if _, err := NewPersistent(nil, nil); err == nil {
+		t.Fatal("NewPersistent(nil) succeeded")
+	}
 
 	tests := []struct {
 		name  string
@@ -142,7 +145,6 @@ func TestOpenRejectsInvalidPersistence(t *testing.T) {
 		value []byte
 		want  string
 	}{
-		{name: "schema", key: []byte(schemaVersionKey), value: []byte("999"), want: "unsupported schema"},
 		{name: "json", key: []byte(workspacePrefix + "broken"), value: []byte("{"), want: "decode"},
 		{name: "record", key: []byte(workspacePrefix + "broken"), value: []byte(`{"version":1}`), want: "empty uuid"},
 	}
@@ -153,16 +155,12 @@ func TestOpenRejectsInvalidPersistence(t *testing.T) {
 			if err != nil {
 				t.Fatalf("badger.Open: %v", err)
 			}
-			if tc.name != "schema" {
-				if err := db.Update(func(txn *badger.Txn) error {
-					if err := txn.Set([]byte(schemaVersionKey), []byte(workspaceSchemaVersion)); err != nil {
-						return err
-					}
-					return txn.Set(tc.key, tc.value)
-				}); err != nil {
-					t.Fatalf("seed: %v", err)
+			if err := db.Update(func(txn *badger.Txn) error {
+				if err := txn.Set([]byte("meta/schema_version"), []byte("1")); err != nil {
+					return err
 				}
-			} else if err := db.Update(func(txn *badger.Txn) error { return txn.Set(tc.key, tc.value) }); err != nil {
+				return txn.Set(tc.key, tc.value)
+			}); err != nil {
 				t.Fatalf("seed schema: %v", err)
 			}
 			if err := db.Close(); err != nil {
@@ -224,9 +222,6 @@ func TestBadgerBackendReportsClosedDatabase(t *testing.T) {
 	}
 	if err := backend.Delete(ws.Metadata.UUID); err == nil || !strings.Contains(err.Error(), "delete workspace") {
 		t.Fatalf("Delete error = %v, want delete workspace", err)
-	}
-	if err := initialiseSchema(db); err == nil {
-		t.Fatal("initialiseSchema succeeded on closed database")
 	}
 }
 
