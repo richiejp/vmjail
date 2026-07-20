@@ -52,10 +52,9 @@
         # `packages` output as a derivation.
         goSrc = pkgs.lib.cleanSourceWith {
           src = ./.;
-          filter = path: _type:
-            let rel = pkgs.lib.removePrefix (toString ./. + "/") (toString path);
-            in !(pkgs.lib.hasPrefix "third_party/" rel)
-              && !(pkgs.lib.hasPrefix "vendor/" rel);
+          filter = path: type:
+            let name = baseNameOf path;
+            in !(type == "directory" && (name == "third_party" || name == "vendor"));
         };
 
         # mkDaftBinary builds one of our cmd/ binaries from the repo's
@@ -85,7 +84,7 @@
           pname = name;
           inherit version;
           src = goSrc;
-          vendorHash = "sha256-7yPxKzDme17oK8w+TB0QrwDlWlyh6vl1miAe8P2SvLM=";
+          vendorHash = "sha256-EwZee0qVr8QoU6LBzXuGuv8lHd7CJoKaozq2IxrvNAg=";
           env.CGO_ENABLED = if cgoEnabled then "1" else "0";
           ldflags = [
             "-s" "-w"
@@ -677,7 +676,7 @@
             pname = "daft-sandboxd";
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-7yPxKzDme17oK8w+TB0QrwDlWlyh6vl1miAe8P2SvLM=";
+            vendorHash = "sha256-EwZee0qVr8QoU6LBzXuGuv8lHd7CJoKaozq2IxrvNAg=";
             env.CGO_ENABLED = "0";
 
             # Stage the real artifacts into internal/bundled/assets/

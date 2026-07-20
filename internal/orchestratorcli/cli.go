@@ -26,6 +26,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/ociregistry"
 	"github.com/richiejp/darkaifactory/internal/orchestrator"
 	"github.com/richiejp/darkaifactory/internal/version"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 // configSubdir is appended to the user's config dir to derive the
@@ -131,21 +132,26 @@ func serveCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			workspaceCat, err := workspacecatalog.Open(filepath.Join(dir, "state", "workspaces"), nil)
+			if err != nil {
+				return err
+			}
 			seeds, err := builtinRegistrySeeds()
 			if err != nil {
-				return err
+				return errors.Join(err, workspaceCat.Close())
 			}
 			srv, err := orchestrator.New(orchestrator.Config{
-				Identity:      id,
-				Peers:         peers,
-				Addr:          addr,
-				RegistrySeeds: seeds,
+				Identity:         id,
+				Peers:            peers,
+				Addr:             addr,
+				RegistrySeeds:    seeds,
+				WorkspaceCatalog: workspaceCat,
 			})
 			if err != nil {
-				return err
+				return errors.Join(err, workspaceCat.Close())
 			}
 			if err := srv.Listen(); err != nil {
-				return err
+				return errors.Join(err, workspaceCat.Close())
 			}
 			banner := fmt.Sprintf(
 				"daft-orchestrator: listening on %s\n"+
@@ -154,9 +160,9 @@ func serveCommand() *cobra.Command {
 				srv.Addr(), id.Fingerprint(), peers.Path(),
 			)
 			if _, err := io.WriteString(cmd.OutOrStdout(), banner); err != nil {
-				return err
+				return errors.Join(err, workspaceCat.Close())
 			}
-			return runServer(ctx, srv)
+			return errors.Join(runServer(ctx, srv), workspaceCat.Close())
 		},
 	}
 	cmd.Flags().StringVar(&addr, "addr", "0.0.0.0:14443",

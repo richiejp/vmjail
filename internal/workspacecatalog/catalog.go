@@ -16,8 +16,6 @@
 // internal/orchestrator/workspacecatalog.go. This split mirrors
 // nodectrl / orchestrator.nodectrl so the catalog stays independent
 // of generated proto types.
-//
-// State is in-memory only; persistence (Badger) lands in Slice B6.
 package workspacecatalog
 
 import (
@@ -265,6 +263,7 @@ var (
 	ErrNotFound       = errors.New("workspacecatalog: workspace not found")
 	ErrAliasInUse     = errors.New("workspacecatalog: name already used by this owner")
 	ErrImmutableField = errors.New("workspacecatalog: refusing to mutate immutable field")
+	ErrClosed         = errors.New("workspacecatalog: store closed")
 	// ErrLockHeldByOther is returned by mutators when the
 	// workspace lock is held by an identity other than the caller.
 	// Maps to FailedPrecondition at the Connect surface.
@@ -277,11 +276,19 @@ var (
 type Store struct {
 	now func() time.Time
 
-	mu  sync.Mutex
-	all map[string]Workspace
+	mu      sync.Mutex
+	all     map[string]Workspace
+	backend workspaceBackend
+	closed  bool
 	// alias indexes (owner, name) → uuid; populated on Create and
 	// kept consistent on every Update / Delete.
 	byAlias map[aliasKey]string
+}
+
+type workspaceBackend interface {
+	Save(Workspace) error
+	Delete(string) error
+	Close() error
 }
 
 type aliasKey struct {
@@ -301,6 +308,12 @@ func NewStore(now func() time.Time) *Store {
 		all:     map[string]Workspace{},
 		byAlias: map[aliasKey]string{},
 	}
+}
+
+func newStore(now func() time.Time, backend workspaceBackend) *Store {
+	s := NewStore(now)
+	s.backend = backend
+	return s
 }
 
 // CreateInput is the new-workspace shape. UUID is supplied by the
@@ -326,6 +339,9 @@ func (s *Store) Create(in CreateInput) (Workspace, error) {
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return Workspace{}, ErrClosed
+	}
 	if _, dup := s.all[in.UUID]; dup {
 		return Workspace{}, fmt.Errorf("workspacecatalog: uuid %q already exists", in.UUID)
 	}
@@ -345,9 +361,14 @@ func (s *Store) Create(in CreateInput) (Workspace, error) {
 	}
 	ws.Status.Missing = missingFields(ws.Spec)
 	ws.Status.Conditions = recomputeConditions(nil, ws.Status.Missing, false, now)
+	if s.backend != nil {
+		if err := s.backend.Save(ws); err != nil {
+			return Workspace{}, fmt.Errorf("workspacecatalog: persist create: %w", err)
+		}
+	}
 	s.all[in.UUID] = ws
 	s.byAlias[key] = in.UUID
-	return ws, nil
+	return cloneWorkspace(ws), nil
 }
 
 // Get returns the workspace identified by uuid. The returned value
@@ -356,11 +377,14 @@ func (s *Store) Create(in CreateInput) (Workspace, error) {
 func (s *Store) Get(uuid string) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return Workspace{}, ErrClosed
+	}
 	ws, ok := s.all[uuid]
 	if !ok {
 		return Workspace{}, ErrNotFound
 	}
-	return ws, nil
+	return cloneWorkspace(ws), nil
 }
 
 // LookupByAlias returns the workspace whose (owner, name) matches.
@@ -368,11 +392,14 @@ func (s *Store) Get(uuid string) (Workspace, error) {
 func (s *Store) LookupByAlias(owner identity.Fingerprint, name string) (Workspace, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return Workspace{}, ErrClosed
+	}
 	uuid, ok := s.byAlias[aliasKey{owner: owner, name: name}]
 	if !ok {
 		return Workspace{}, ErrNotFound
 	}
-	return s.all[uuid], nil
+	return cloneWorkspace(s.all[uuid]), nil
 }
 
 // MutateKind tells Update whether a callback's edit is a spec
@@ -407,11 +434,14 @@ func (s *Store) Update(uuid string, kind MutateKind, fn func(*Workspace) error) 
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return Workspace{}, ErrClosed
+	}
 	prev, ok := s.all[uuid]
 	if !ok {
 		return Workspace{}, ErrNotFound
 	}
-	next := prev
+	next := cloneWorkspace(prev)
 	if fn != nil {
 		if err := fn(&next); err != nil {
 			return Workspace{}, err
@@ -423,13 +453,10 @@ func (s *Store) Update(uuid string, kind MutateKind, fn func(*Workspace) error) 
 		return Workspace{}, ErrImmutableField
 	}
 	if next.Metadata.Name != prev.Metadata.Name {
-		oldKey := aliasKey{owner: prev.Metadata.OwnerFingerprint, name: prev.Metadata.Name}
 		newKey := aliasKey{owner: prev.Metadata.OwnerFingerprint, name: next.Metadata.Name}
 		if _, dup := s.byAlias[newKey]; dup {
 			return Workspace{}, ErrAliasInUse
 		}
-		delete(s.byAlias, oldKey)
-		s.byAlias[newKey] = uuid
 	}
 	if kind == MutateSpec {
 		next.Metadata.Generation++
@@ -437,20 +464,40 @@ func (s *Store) Update(uuid string, kind MutateKind, fn func(*Workspace) error) 
 		next.Status.Conditions = recomputeConditions(next.Status.Conditions, next.Status.Missing, next.Status.IsTrue(ConditionDispatched), now)
 	}
 	next.Metadata.UpdatedAt = now
+	if s.backend != nil {
+		if err := s.backend.Save(next); err != nil {
+			return Workspace{}, fmt.Errorf("workspacecatalog: persist update: %w", err)
+		}
+	}
+	if next.Metadata.Name != prev.Metadata.Name {
+		oldKey := aliasKey{owner: prev.Metadata.OwnerFingerprint, name: prev.Metadata.Name}
+		newKey := aliasKey{owner: prev.Metadata.OwnerFingerprint, name: next.Metadata.Name}
+		delete(s.byAlias, oldKey)
+		s.byAlias[newKey] = uuid
+	}
 	s.all[uuid] = next
-	return next, nil
+	return cloneWorkspace(next), nil
 }
 
 // Delete removes the workspace if present. Idempotent.
-func (s *Store) Delete(uuid string) {
+func (s *Store) Delete(uuid string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
 	prev, ok := s.all[uuid]
 	if !ok {
-		return
+		return nil
+	}
+	if s.backend != nil {
+		if err := s.backend.Delete(uuid); err != nil {
+			return fmt.Errorf("workspacecatalog: persist delete: %w", err)
+		}
 	}
 	delete(s.all, uuid)
 	delete(s.byAlias, aliasKey{owner: prev.Metadata.OwnerFingerprint, name: prev.Metadata.Name})
+	return nil
 }
 
 // List returns every workspace satisfying keep (or every workspace
@@ -460,17 +507,54 @@ func (s *Store) Delete(uuid string) {
 // records that the caller is about to discard.
 func (s *Store) List(keep func(*Workspace) bool) []Workspace {
 	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
 	out := make([]Workspace, 0, len(s.all))
 	for uuid := range s.all {
 		ws := s.all[uuid]
 		if keep != nil && !keep(&ws) {
 			continue
 		}
-		out = append(out, ws)
+		out = append(out, cloneWorkspace(ws))
 	}
 	s.mu.Unlock()
 	slices.SortFunc(out, func(a, b Workspace) int { return cmp.Compare(a.Metadata.UUID, b.Metadata.UUID) })
 	return out
+}
+
+// Close flushes and closes a persistent Store. It is safe to call more than
+// once. In-memory stores have nothing to close.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil
+	}
+	s.closed = true
+	backend := s.backend
+	s.mu.Unlock()
+	if backend == nil {
+		return nil
+	}
+	if err := backend.Close(); err != nil {
+		return fmt.Errorf("workspacecatalog: close: %w", err)
+	}
+	return nil
+}
+
+func cloneWorkspace(ws Workspace) Workspace {
+	ws.Spec.Mounts = slices.Clone(ws.Spec.Mounts)
+	ws.Spec.Env = slices.Clone(ws.Spec.Env)
+	ws.Spec.Ports = slices.Clone(ws.Spec.Ports)
+	ws.Status.Conditions = slices.Clone(ws.Status.Conditions)
+	ws.Status.Missing = slices.Clone(ws.Status.Missing)
+	if ws.Status.CurrentSandbox != nil {
+		ref := *ws.Status.CurrentSandbox
+		ws.Status.CurrentSandbox = &ref
+	}
+	return ws
 }
 
 // missingFields returns the human-readable list of required spec

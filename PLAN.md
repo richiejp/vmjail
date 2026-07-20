@@ -620,6 +620,15 @@ Phase B — **Workspace as a first-class orchestrator object**:
   Create/Update/Patch become write-through; reads stay served
   from the in-memory cache. Crash-safety verified by a
   kill-9-mid-write integration test.
+  **In progress (2026-07-20):** B6a persists Workspace metadata/spec in a
+  versioned Badger store owned by `daft-orchestrator serve`; writes commit to
+  Badger before the in-memory catalog changes, alias indexes and derived Ready
+  status rebuild on startup, and locks/current Sandbox/runtime conditions are
+  deliberately discarded. Corrupt/unknown records and lock contention fail
+  startup. Standalone Sandbox bindings, AgentRuns, restart reconciliation, and
+  the kill-9 integration test remain B6b/B6c work. Live Node registrations
+  remain ephemeral because the active registration stream is their source of
+  truth.
 
 Phase C — **Orchestrator-driven port ingress**:
 - C1 (landed): Sandbox-side: container `0.0.0.0:N` exposed back over the

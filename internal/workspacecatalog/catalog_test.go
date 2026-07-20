@@ -345,8 +345,12 @@ func TestDeleteIsIdempotent(t *testing.T) {
 	if _, err := s.Create(CreateInput{UUID: uuidA, Name: "ws", OwnerFingerprint: owner}); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	s.Delete(uuidA)
-	s.Delete(uuidA) // second call is a no-op
+	if err := s.Delete(uuidA); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if err := s.Delete(uuidA); err != nil { // second call is a no-op
+		t.Fatalf("second Delete: %v", err)
+	}
 	if _, err := s.Get(uuidA); !errors.Is(err, ErrNotFound) {
 		t.Errorf("after Delete: err = %v, want ErrNotFound", err)
 	}
