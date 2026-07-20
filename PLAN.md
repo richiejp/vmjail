@@ -3865,10 +3865,14 @@ Slices:
   orchestrator wire protocols to the client. A transport-independent Node job
   manager now owns process-lifetime job UUIDs, cancellation, terminal status,
   and separate bounded stdout/stderr spools with absolute cursors and explicit
-  cursor-expiry reporting. The existing guest attach transport still always
-  allocates a PTY and merges stderr, so the dedicated non-PTY guest protocol
-  and Node/orchestrator job RPCs must land before this manager is wired into
-  production; cursor-based reattach then builds directly on its spool API.
+  cursor-expiry reporting. A dedicated guest job protocol now executes through
+  ordinary pipes on its own fixed vsock port, emits separated stdout/stderr
+  frames and a structured terminal frame, and treats host disconnect as
+  cancellation; a host runner adapts that protocol directly to the Node job
+  manager. The interactive attach transport remains PTY-based by design. The
+  Node route registration and Node/orchestrator job RPCs remain before the
+  manager is wired into production; cursor-based reattach then builds directly
+  on its spool API.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->

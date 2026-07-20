@@ -20,7 +20,11 @@ import (
 
 // testExecUser is the non-root uid:gid used across the exec-user tests,
 // shared so goconst doesn't flag the repeated literal.
-const testExecUser = "1000:2000"
+const (
+	testExecUser      = "1000:2000"
+	testEnvAssignment = "A=B"
+	testRunCommand    = "run"
+)
 
 func TestReadContainerProcess(t *testing.T) {
 	if p := readContainerProcess(io.Discard, ""); p.Env != nil || p.User != "" {

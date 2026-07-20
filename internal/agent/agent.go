@@ -84,6 +84,7 @@ func Run(ctx context.Context, w io.Writer) error {
 		dialVsock:   DialHostVsock,
 		portForward: defaultPortForwardDeps(),
 		attach:      defaultAttachDeps(),
+		job:         defaultJobDeps(),
 		tap:         defaultTapDeps(),
 		opensnoop:   defaultOpensnoopDeps(),
 		execsnoop:   defaultExecsnoopDeps(),
@@ -135,6 +136,10 @@ type runDeps struct {
 	// attach is the test-substitutable surface for the D2b
 	// in-VM attach listener: vsock.Listen + ExecAttach.
 	attach attachDeps
+	// job is the non-PTY, output-separated command listener used by
+	// detached Node jobs. It shares attach_enabled but has its own port and
+	// framing so interactive PTY traffic cannot be confused with jobs.
+	job jobDeps
 	// tap is the test-substitutable surface for the D6c.2 slice-2b
 	// tap bridge: /dev/net/tun open + netlink configure. Zero value
 	// disables the tap path (slice-2a conn-only behaviour).
@@ -192,6 +197,7 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	// the agent's lifetime.
 	startPortForwarders(ctx, w, d)
 	startAttachListener(ctx, w, d)
+	startJobListener(ctx, w, d)
 	// postStart runs the resolved devcontainer lifecycle command inside the
 	// container after it comes up; it waits for "running" on its own
 	// goroutine and returns immediately, so it never blocks the boot before

@@ -116,7 +116,7 @@ func TestRunPostStartRunsCommandsInOrder(t *testing.T) {
 	}
 	var buf bytes.Buffer
 
-	runPostStart(context.Background(), &buf, d, containerProcess{Env: []string{"FOO=bar"}, User: "1000:1000"})
+	runPostStart(context.Background(), &buf, d, containerProcess{Env: []string{"FOO=bar"}, User: testExecUser})
 
 	calls := ex.calls()
 	if len(calls) != 2 {
@@ -127,7 +127,7 @@ func TestRunPostStartRunsCommandsInOrder(t *testing.T) {
 		t.Fatalf("commands out of order: %+v", calls)
 	}
 	// Container env + user are forwarded to the exec.
-	if len(calls[0].Env) != 1 || calls[0].Env[0] != "FOO=bar" || calls[0].User != "1000:1000" {
+	if len(calls[0].Env) != 1 || calls[0].Env[0] != "FOO=bar" || calls[0].User != testExecUser {
 		t.Errorf("env/user not forwarded: %+v", calls[0])
 	}
 	// Output is streamed to the console under the post-start prefix.

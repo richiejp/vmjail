@@ -80,12 +80,12 @@ message GuestConfig {
 
   // Protocol-feature toggles. The host enables a feature; the agent brings
   // it up on that feature's fixed AF_VSOCK port — a protocol constant (see
-  // agent.DefaultAttachVsockPort / DefaultNetVsockPort /
+  // agent.DefaultAttachVsockPort / DefaultJobVsockPort / DefaultNetVsockPort /
   // DefaultTraceVsockPort), so the port number never travels as per-VM
   // data. These replace the daft.attach_port / daft.net_port /
   // daft.vsock.trace_port cmdline tokens (each of which only ever carried
   // the constant anyway).
-  bool attach_enabled = 5; // run the exec-attach listener
+  bool attach_enabled = 5; // run interactive attach + detached job listeners
   bool net_enabled = 6;    // dial sandboxd's netstack + bring up tap0
   bool trace_enabled = 7;  // ship the span buffer to the host trace sink
 

@@ -33,6 +33,10 @@ func defaultAttachDeps() attachDeps {
 	}
 }
 
+func defaultJobDeps() jobDeps {
+	return jobDeps{listenVsock: vsockListenGuest, exec: newDefaultPipeJobExec()}
+}
+
 // ptyAttachExec is the production ExecAttach. It allocates a
 // PTY pair, builds the exec command (default: `crun exec -t
 // <ContainerID> <argv...>`), and wires the command's stdio to the

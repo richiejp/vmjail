@@ -1,0 +1,28 @@
+// Wire format for detached, non-PTY commands inside the running container.
+// The sandbox host opens one connection per job, sends JobHello, then receives
+// separated stdout/stderr chunks and one terminal JobExit. Closing the host
+// side before JobExit is the cancellation signal.
+syntax = "proto3";
+
+package daft.agent.v1;
+
+option go_package = "github.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1";
+
+message JobHello {
+  repeated string command = 1;
+}
+
+message JobFrame {
+  oneof body {
+    bytes stdout = 1;
+    bytes stderr = 2;
+    JobExit exit = 3;
+  }
+}
+
+message JobExit {
+  int32 code = 1;
+  // Non-empty only when execution infrastructure failed. A command's normal
+  // non-zero status is represented by code with error empty.
+  string error = 2;
+}

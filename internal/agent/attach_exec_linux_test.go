@@ -310,11 +310,11 @@ func TestDefaultAttachCmdBuildsCrunArgs(t *testing.T) {
 		},
 		{
 			name: "env-forwarded-before-container-id",
-			req:  AttachExecRequest{Command: []string{"run", "x"}, Env: []string{"https_proxy=http://p", "A=B"}},
+			req:  AttachExecRequest{Command: []string{testRunCommand, "x"}, Env: []string{"https_proxy=http://p", testEnvAssignment}},
 			want: []string{
 				ContainerRuntime, crunExecSubcommand,
-				"--env", "https_proxy=http://p", "--env", "A=B",
-				ContainerID, "run", "x",
+				"--env", "https_proxy=http://p", "--env", testEnvAssignment,
+				ContainerID, testRunCommand, "x",
 			},
 		},
 		{

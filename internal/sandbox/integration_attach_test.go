@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
+	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
 	"github.com/richiejp/darkaifactory/internal/sandboxattach"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 )
@@ -107,6 +108,36 @@ func TestAttachExecE2E(t *testing.T) {
 	if !strings.Contains(string(out), agent.ContainerBanner) {
 		t.Fatalf("attach session output missing banner %q\ngot: %q\n--- console ---\n%s",
 			agent.ContainerBanner, out, console.String())
+	}
+
+	// The dedicated job listener uses ordinary pipes rather than the attach
+	// PTY. Exercise the real crun/vsock path and require a structured exit;
+	// unit tests separately pin stdout/stderr interleaving and cancellation.
+	jobCtx, jobCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer jobCancel()
+	jobConn, err := DialGuestVsock(jobCtx, cfg.Vsock.HostSocket, agent.DefaultJobVsockPort)
+	if err != nil {
+		t.Fatalf("DialGuestVsock(job): %v\n--- console ---\n%s", err, console.String())
+	}
+	defer func() { _ = jobConn.Close() }()
+	if err := agent.WriteJobHello(jobConn, &agentv1.JobHello{Command: []string{"/hello"}}); err != nil {
+		t.Fatalf("WriteJobHello: %v", err)
+	}
+	var jobOut bytes.Buffer
+	var jobExit *agentv1.JobExit
+	for jobExit == nil {
+		frame, readErr := agent.ReadJobFrame(jobConn)
+		if readErr != nil {
+			t.Fatalf("ReadJobFrame: %v; output=%q", readErr, jobOut.String())
+		}
+		jobOut.Write(frame.GetStdout())
+		if len(frame.GetStderr()) != 0 {
+			t.Fatalf("unexpected stderr from /hello: %q", frame.GetStderr())
+		}
+		jobExit = frame.GetExit()
+	}
+	if jobExit.GetCode() != 0 || jobExit.GetError() != "" || !strings.Contains(jobOut.String(), agent.ContainerBanner) {
+		t.Fatalf("job exit=%+v stdout=%q", jobExit, jobOut.String())
 	}
 }
 

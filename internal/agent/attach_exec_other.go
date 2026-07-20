@@ -13,3 +13,7 @@ func defaultAttachDeps() attachDeps {
 		exec:        unavailableAttachExec{},
 	}
 }
+
+func defaultJobDeps() jobDeps {
+	return jobDeps{listenVsock: vsockListenGuest, exec: unavailableJobExec{}}
+}

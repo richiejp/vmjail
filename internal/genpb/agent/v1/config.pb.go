@@ -167,12 +167,12 @@ type GuestConfig struct {
 	Observe *GuestConfig_Observe `protobuf:"bytes,4,opt,name=observe,proto3" json:"observe,omitempty"`
 	// Protocol-feature toggles. The host enables a feature; the agent brings
 	// it up on that feature's fixed AF_VSOCK port — a protocol constant (see
-	// agent.DefaultAttachVsockPort / DefaultNetVsockPort /
+	// agent.DefaultAttachVsockPort / DefaultJobVsockPort / DefaultNetVsockPort /
 	// DefaultTraceVsockPort), so the port number never travels as per-VM
 	// data. These replace the daft.attach_port / daft.net_port /
 	// daft.vsock.trace_port cmdline tokens (each of which only ever carried
 	// the constant anyway).
-	AttachEnabled bool `protobuf:"varint,5,opt,name=attach_enabled,json=attachEnabled,proto3" json:"attach_enabled,omitempty"` // run the exec-attach listener
+	AttachEnabled bool `protobuf:"varint,5,opt,name=attach_enabled,json=attachEnabled,proto3" json:"attach_enabled,omitempty"` // run interactive attach + detached job listeners
 	NetEnabled    bool `protobuf:"varint,6,opt,name=net_enabled,json=netEnabled,proto3" json:"net_enabled,omitempty"`          // dial sandboxd's netstack + bring up tap0
 	TraceEnabled  bool `protobuf:"varint,7,opt,name=trace_enabled,json=traceEnabled,proto3" json:"trace_enabled,omitempty"`    // ship the span buffer to the host trace sink
 	// Lifecycle commands the agent runs INSIDE the container after it has
