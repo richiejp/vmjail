@@ -3838,13 +3838,10 @@ Slices:
   bootstrapping works before a supervisor is installed. Fixture and isolated
   forward tests cover the workflow; supervisor-specific failure fixtures remain.
 - **L4 — detached execution and agent startup.** Implement AgentProfile loading
-  and `agent_start` for Codex; Claude Code is deferred. Named enabler first:
-  exit-code/exit-reason
-  propagation through the exec path — the guest's
-  `AgentAttachExit{code,error}` is collapsed to `io.EOF` at the Node session
-  boundary (`internal/sandboxattach`) and the outward `AttachFrame` oneof has
-  no exit frame, so today a client cannot distinguish "agent finished" from
-  "agent crashed". Add a dedicated detached non-PTY job RPC with a durable
+  and `agent_start` for Codex; Claude Code is deferred. The first named
+  enabler, exit-code/exit-reason propagation through the attached exec path,
+  is landed: `AgentAttachExit{code,error}` now remains structured across the
+  Node and outward client streams. Add a dedicated detached non-PTY job RPC with a durable
   Node-scoped job ID, separated bounded stdout/stderr spool, exit frame/status,
   cancellation, and cursor-based reattach. Persist enough job identity on the
   Node to survive MCP/overseer disconnect (but not a Node restart); AgentRun
@@ -3865,8 +3862,13 @@ Slices:
   or running in CI.
   **In progress (2026-07-20):** the existing attached execution path now
   preserves the guest's terminal exit code/reason through the Node and
-  orchestrator wire protocols to the client. The dedicated durable detached
-  job RPC, spool, cancellation, and cursor-based reattach remain.
+  orchestrator wire protocols to the client. A transport-independent Node job
+  manager now owns process-lifetime job UUIDs, cancellation, terminal status,
+  and separate bounded stdout/stderr spools with absolute cursors and explicit
+  cursor-expiry reporting. The existing guest attach transport still always
+  allocates a PTY and merges stderr, so the dedicated non-PTY guest protocol
+  and Node/orchestrator job RPCs must land before this manager is wired into
+  production; cursor-based reattach then builds directly on its spool API.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->
