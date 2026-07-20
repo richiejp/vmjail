@@ -110,8 +110,9 @@ orchestrator-hosted ingress (C2), per-workspace egress/routing policy (C4),
 GPU discovery/scheduling and shared-VM lifecycle (D1/D3-D5), adoption and
 per-client mount mappings (F), freeze-on-disconnect (G), the optional Docker
 API compatibility surface (H), cache pin/mock/cache-correctness policy
-(I4-I6), and DNS/general hosted-cassette completion (J3-J5). Phase E remains
-deliberately deferred.
+(I4-I6), DNS/general hosted-cassette completion (J3-J5), and the overseer MCP,
+fleet deployment, and agent-run surface (L). Phase E remains deliberately
+deferred.
 
 The detailed slice history below preserves the names that existed when each
 slice landed. In particular, Phase A's `sandboxctrl`, `Dispatch`, and
@@ -3598,6 +3599,272 @@ Open questions:
   - **Non-HTTP/DNS protocols**: none needed yet; J1's deny-log is the
     tripwire. When one appears (e.g. a git:// or ssh fetch), stop and
     design its lane rather than widening the allowlist reflexively.
+
+Phase L — **Overseer MCP, fleet deployment, and sandboxed agent runs**
+(planned 2026-07-19; slices reconciled against the codebase 2026-07-19):
+
+Goal: one long-lived overseer coding agent on a trusted user-host can discover
+and update a fleet of daft Nodes, create isolated project Workspaces on chosen
+Nodes, start Codex or Claude Code inside them, and inspect each run's status and
+observability. The human may later take over a run through a terminal or web
+browser, but direct interactive control is deliberately deferred until the
+overseer path is reliable.
+
+The boundary is intentional:
+
+```text
+trusted user-host
+  overseer agent -> daft MCP server -> daft client APIs -> orchestrator
+       |                  |                                  |
+       |                  +-> constrained SSH deploy         +-> Node(s)
+       |                  +-> local project paths                 |
+       |                  +-> named OAuth profiles                +-> Sandbox
+       |                                                           +-> agent
+       +-- no durable credential or SSH-key persistence on Nodes
+```
+
+Decisions:
+
+- **MCP runs beside the overseer, not on the orchestrator.** It uses the
+  existing daft client identity and can see only local paths explicitly placed
+  in a Workspace. This is the only component allowed to resolve SSH keys and
+  durable Codex/Claude credential profiles. A later remote HTTP transport may
+  be added, but v1 is stdio so there is no new network-facing authority.
+- **MCP is a typed facade over Go clients, not a CLI shell wrapper.** New
+  `cmd/daft-mcp` reuses the existing internal Connect clients and returns
+  structured MCP content. Tools are coarse, declarative, and idempotent; do
+  not mirror every Cobra flag and do not expose `ssh`, `sh`, or arbitrary host
+  file access.
+- **Deployment is constrained desired-state reconciliation.** The overseer
+  supplies a Node address and a release artifact/version; daft owns probing,
+  transfer, digest verification, atomic installation, service configuration,
+  registration, health checking, and rollback. SSH is a bootstrap/update
+  transport only, never the Sandbox terminal path.
+- **Agent implementations remain ordinary Sandbox workloads.** Daft does not
+  embed either coding agent. An AgentProfile selects an OCI image, launch
+  command (`codex exec`/SDK or Claude Agent SDK/`claude -p`), resource and
+  egress policy, and a named credential profile resolved on the trusted host.
+  The first implementation launches a Workspace then starts a detached agent
+  job through a new resumable non-PTY execution path; the existing attached
+  exec stream cannot survive an MCP process restart.
+- **Subscription OAuth is launch-scoped secret material.** A profile names a
+  provider and a host-side credential source; its durable token is never
+  serialized into Workspace/Sandbox specs, MCP results, traces, deployment
+  state, or Node storage. Launch delivers the minimum supported credential
+  state into guest tmpfs over a dedicated one-shot secret-delivery RPC, uses an
+  ephemeral agent home, redacts its environment, and destroys it on stop. The
+  orchestrator and Node necessarily relay ciphertext/bytes in memory but never
+  persist or trace them. Support provider-native access/refresh stores where
+  required; do not invent undocumented OAuth environment variables. API-key or
+  gateway profiles remain alternative providers, not prerequisites.
+- **AgentRun is distinct from Workspace and Sandbox.** Workspace is durable
+  project configuration, Sandbox is an immutable launch, and AgentRun is one
+  coding-agent process/session linked to both. This permits retries and
+  parallel agents without cloning the project-level configuration model.
+- **No automatic pull-back.** Agent writes remain in the Sandbox overlay.
+  The overseer can request a diff/preview, but importing changes to the trusted
+  project remains an explicit later action. This preserves the factory's core
+  data barrier.
+
+Target MCP surface (names provisional; schemas must use UUIDs/fingerprints and
+bounded pagination rather than free-form strings):
+
+- Resources: `daft://nodes`, `daft://nodes/{fingerprint}`,
+  `daft://workspaces/{uuid}`, `daft://sandboxes/{uuid}`,
+  `daft://agent-runs/{uuid}`, `daft://operations/{uuid}`, and bounded
+  progress/trace resources beneath a Sandbox.
+- Fleet tools: `node_probe`, `node_reconcile`, `node_update`,
+  `node_operation_get`. `node_reconcile` accepts desired version, target
+  orchestrator, service user, SSH endpoint, host-key policy, and artifact
+  source; private-key bytes are never accepted as tool arguments.
+- Workspace tools: `workspace_apply`, `workspace_validate`,
+  `workspace_push`, `workspace_launch`, `workspace_stop`, and
+  `workspace_status`. `workspace_apply` takes a declarative patch for image,
+  target, mounts, env, ports, and resources so an overseer can converge state
+  in one bounded call.
+- Agent tools: `agent_profile_list`, `agent_start`, `agent_status`,
+  `agent_events`, `agent_cancel`, and `agent_result`. `agent_start` accepts a
+  Workspace handle, immutable host-configured AgentProfile **name**, prompt,
+  timeout, and profile-bounded Node/resource constraints; the MCP caller cannot
+  submit or mutate an image/command-bearing profile. It returns an AgentRun UUID
+  immediately.
+- Observability v1 tools: `sandbox_progress_get`,
+  `sandbox_observer_summary`, and a bounded `sandbox_observer_tail`. Planned
+  extensions `sandbox_resource_query`, `sandbox_trace_query`, and
+  `sandbox_diagnostics_bundle` require new server-side query RPCs and are not
+  part of the first MCP release. Large/event data is cursor-paginated and
+  filtered server-side; no unbounded log body enters model context.
+- Inspection tools: `workspace_diff` and `workspace_pull_preview` are read-only.
+  Applying a pull and direct terminal/browser attachment are deferred.
+
+Every tool carries accurate MCP safety annotations. Read-only discovery and
+observability tools are marked read-only; deployment, launch, cancellation,
+stop, and future pull-apply tools advertise side effects/destructiveness. Long
+operations return an Operation UUID rather than holding one MCP call open.
+Operation and AgentRun events use monotonically increasing cursors so polling
+is resumable and context bounded.
+
+Slices:
+
+- **L0 — contracts and threat model.** Add native `NodeDeployment`,
+  `AgentProfile`, `AgentRun`, `Operation`, event cursor, and redacted-secret
+  types plus JSON/MCP schemas. AgentProfile capability grants (egress,
+  credentials, resources) follow the Nix-module-style section idiom
+  (sub-message with `enable`), not bare bools/enums. Document which component
+  owns each field and enumerate leak paths (`/proc`, argv/env, logs, traces,
+  diagnostics, CAS, manifests, pull/diff). Define `SecretDelivery` as a
+  separately authorized, size-capped, expiry-bound, replay-protected one-shot
+  channel from the trusted client to a running Sandbox; its payload is never a
+  Workspace/Sandbox field and every relay buffer is zeroed/released after an
+  acknowledged guest tmpfs install. Classify `WorkspaceSpec.env`
+  explicitly as a cleartext non-secret lane — today it flows into the
+  node-side image-bundle config and the guest exec env with no redaction
+  anywhere. Agent APIs must reject the known provider credential field names
+  and must have no arbitrary secret/env input, while documenting that a generic
+  schema cannot detect every user-chosen secret value. Decide whether AgentRun
+  *and Operation* persistence land directly on B6
+  storage or initially use an explicit local MCP journal; no silent
+  in-memory-only production state. An Operation UUID that dies with the
+  orchestrator process is worse than a blocking call — the overseer polls a
+  ghost.
+- **L1 — read-only MCP.** Land `cmd/daft-mcp` over stdio with initialize,
+  tool discovery and ownership-safe Node/Workspace reads. The first release is
+  deliberately only `node_list`, `workspace_list` (forced to the authenticated
+  owner's Workspaces), and `workspace_get`; Sandbox, Operation, resource, and
+  observability surfaces follow once their read/ownership contracts exist.
+  First extract the client identity/discovery
+  glue (`resolveClientDir`, `resolveOrchestratorSource`, the http2/Connect
+  dialers) out of `internal/cli` — it is unexported inside the Cobra package —
+  into a shared package, so the MCP server reuses mTLS resolution exactly as
+  the CLI does rather than importing the CLI wholesale.
+  The shared client owns one reusable HTTP/2 transport and accepts an explicit
+  project directory rather than changing or inheriting process cwd. Treat
+  identity creation as an explicit bootstrap side effect. Its peer store is
+  currently a one-time in-memory snapshot and concurrent writers race through
+  a fixed temporary filename, so either add coordinated atomic reload/update
+  semantics or require MCP restart and serialize authorization edits; do not
+  claim that a daemon observes live `daft auth` changes until that is fixed.
+  `daft://sandboxes/{uuid}` has no read path today (`proto/sandbox/v1`
+  defines messages, no service): resolve through the owning Workspace or add
+  a read RPC. Observability v1 is `sandbox_observer_summary` (the existing
+  1 MiB-capped `ObserveSummary` unary is already the right shape) plus a
+  byte/line-capped observer tail; `sandbox_resource_query`,
+  `sandbox_trace_query`, and `sandbox_diagnostics_bundle` need new bounded,
+  cursor-paginated server-side query RPCs — the trace store is an in-memory
+  ring with only a debug-dump endpoint — and are explicit follow-on work, not
+  v1. Unit-test schemas, pagination, ownership filtering, annotations,
+  cancellation, and output caps; black-box test with an MCP client against a
+  real orchestrator (the `internal/testdaemons` harness fits).
+- **L2 — declarative Workspace lifecycle.** Add `workspace_apply`, validate,
+  push, launch, stop, and status. This is an orchestrator slice as much as an
+  MCP one: no apply/update RPC exists (only the fine-grained
+  Set*/Add*/Remove* mutations) and no mutation request carries a precondition
+  today, so `workspace_apply` needs a new `Apply` RPC taking a declarative
+  patch plus an expected-generation precondition (`metadata.generation`
+  already exists on the wire but is not usable as an optimistic-concurrency
+  guard). The existing Acquire/Release workspace lock RPCs are the fallback
+  design if preconditions prove awkward. Make repeated identical calls no-ops
+  so two overseers cannot overwrite each other. A real-VM e2e drives the
+  complete lifecycle using only MCP calls.
+- **L3 — SSH Node reconcile/update.** Add a host-side deployment package and
+  fleet tools. The release input is a signed/digest-pinned static bundled
+  executable appropriate for the probed OS/architecture. Upload to a sibling
+  temporary path, run the binary's own version/compatibility check, verify the
+  expected digest, atomically rename, restart a managed systemd service, wait
+  for the expected fingerprint/version to register, and retain one previous
+  binary for automatic rollback. Never disable SSH host-key verification;
+  accept a known-hosts profile/fingerprint name, not a raw permissive boolean.
+  Privilege escalation is an explicit deployment-profile choice and is never
+  inferred from a failed command. Cover fresh install, no-op reconcile,
+  upgrade, incompatible architecture/protocol, interrupted upload, failed
+  restart, rollback, and already-newer-node policy. First e2e uses disposable
+  SSH containers/VMs; a gated bare-metal/KVM fleet test proves registration.
+- **L4 — detached execution and agent startup.** Implement AgentProfile loading
+  and `agent_start` for
+  Codex and Claude Code. Named enabler first: exit-code/exit-reason
+  propagation through the exec path — the guest's
+  `AgentAttachExit{code,error}` is collapsed to `io.EOF` at the Node session
+  boundary (`internal/sandboxattach`) and the outward `AttachFrame` oneof has
+  no exit frame, so today a client cannot distinguish "agent finished" from
+  "agent crashed". Add a dedicated detached non-PTY job RPC with a durable
+  Node-scoped job ID, separated bounded stdout/stderr spool, exit frame/status,
+  cancellation, and cursor-based reattach. Persist enough job identity on the
+  Node to survive MCP/overseer disconnect (but not a Node restart); AgentRun
+  reconciliation converts a lost Node/job into a terminal LOST result rather
+  than polling forever. Then: launch or reuse the requested Workspace Sandbox,
+  deliver the credential through L0's one-shot channel, start the provider,
+  persist AgentRun state/events, and capture
+  final response, exit reason, Sandbox UUID, and observability links. Enforce
+  max runtime, output limits, cancellation, and secret redaction. The
+  provider egress allowlist depends on per-workspace/per-sandbox egress
+  policy (C4) — today the proxy lane is a node-level env toggle and the MITM
+  proxy accepts any CONNECT host — so L4 v1 ships deny+proxy-on with no host
+  filtering unless C4 (or an L-scoped per-sandbox host allowlist in the proxy)
+  lands first. E2E providers use deterministic fake agent binaries; opt-in
+  smoke tests exercise real subscription credentials without recording them
+  or running in CI.
+- **L5 — overseer workflow and recovery.** Add an MCP prompt/skill describing
+  `reconcile nodes -> apply/push workspace -> start agents -> poll events ->
+  inspect traces/results`. Prove parallel projects on different Nodes,
+  overseer/MCP restart and resume, Node loss, agent timeout, and partial fleet
+  upgrade. The overseer can manage and summarize AgentRuns but cannot yet take
+  over their interactive TTY.
+- **L6 (deferred) — direct agent control.** Terminal attach/resume, browser UI,
+  bidirectional prompt injection, approval relays, port publication, and human
+  handoff. Reuse Phase C ingress and the existing PTY/forward streams; do not
+  block L1-L5 on this UX.
+
+Phase L dependencies and non-dependencies:
+
+- B6 durable persistence is a prerequisite for production L2 and L4/L5, not
+  for L1 or SSH bootstrap/update in L3. The control plane is in-memory today,
+  and an
+  overseer converging desired state against an orchestrator that forgets
+  everything on restart will thrash — L2's idempotent re-applies and durable
+  AgentRun/Operation UUIDs assume the orchestrator remembers. L3 deployment
+  operations may instead be journaled by the trusted-host MCP and verify a
+  fresh live registration after every orchestrator restart. If sequencing
+  demands an earlier L2/L4 prototype, L0 must define an explicit crash-safe
+  local journal and migration path. L must not create a second ambiguous source
+  of truth.
+- L2 reuses the landed Workspace/Sandbox lifecycle but adds the Apply RPC and
+  generation preconditions (see L2). L1 reuses the observer stores as-is, but
+  the trace store needs a query RPC before `sandbox_trace_query` (see L1).
+  L3's reuse claims hold as written: the bundled static Node executable and
+  the orchestrator-enforced protocol-version handshake both exist.
+- L4's provider egress allowlist depends on C4-grade per-workspace egress
+  policy (or an L-scoped subset); see L4.
+- L1-L5 do not depend on Phase C2 browser ingress, Phase H Docker compatibility,
+  GPU shared-VM work, or L6 direct interaction.
+
+Open questions for L0:
+
+- **Release trust:** digest pinned by an overseer deployment profile is the
+  minimum. Do releases also carry a project signing key/Sigstore identity, and
+  where is the trust root configured?
+- **Service ownership:** system-level `daft-sandboxd.service` is the production
+  default, but should rootless/user-systemd Nodes be supported in L3 v1 or only
+  after the root path is proven?
+- **Credential renewal:** Codex documents a trusted-automation access token;
+  Claude subscription automation may require its native refresh store. Which
+  provider-supported credential representation can be copied into ephemeral
+  homes without depending on private file formats?
+- **AgentRun/Operation persistence:** add them to the orchestrator's B6 store
+  immediately, or use a user-host journal for the first MCP release? Fleet
+  recovery favours orchestrator ownership; credential profiles must remain
+  host-only either way.
+- **MCP project-path addressing:** `workspace push` is a client-side
+  operation keyed off dir-local mounts in `./.daft/config.json`, resolved
+  from cwd only. A long-lived MCP server has one cwd but manages many
+  projects — tools need explicit project-path arguments and per-project
+  config resolution that does not depend on cwd.
+- **Parallel AgentRuns vs the single current-Sandbox ref:** a Workspace has
+  one current Sandbox ref (the B5 reconciler clears "its" ref, singular).
+  L4 v1 therefore permits parallel jobs only within that one current Sandbox;
+  N Sandboxes per Workspace is a later resource-model change.
+- **Project checkout model:** L2 starts from explicit local Workspace mounts.
+  A future overseer may create projects from a git URL, but that requires a
+  separate source-credential and review policy and is not implicit in L4.
 
 ### What survives, what moves
 
