@@ -67,6 +67,7 @@ type AgentRunHandler struct {
 	missingSince    map[string]time.Time
 	credentialMu    sync.Mutex
 	credentialWaits map[string]struct{}
+	bindMu          sync.Mutex
 }
 
 // Run periodically reconciles durable runs until ctx is canceled.
@@ -151,6 +152,11 @@ func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentr
 	if !ok {
 		return nil, connect.NewError(connect.CodeUnavailable, errors.New("orchestrator: Workspace Node is not connected"))
 	}
+	// Keep the process-local recovery worker from observing the intentionally
+	// brief QUEUED record between Create and its durable Sandbox binding. After
+	// a process restart the lock is gone, so a genuinely stranded QUEUED record
+	// is still failed by reconciliation as designed.
+	h.bindMu.Lock()
 	run, err := h.store.Create(agentruncatalog.CreateInput{
 		UUID: mintWorkspaceUUID(), WorkspaceUUID: workspace.Metadata.UUID,
 		ProfileName: req.Msg.GetProfileName(), ProfileDigest: req.Msg.GetProfileDigest(),
@@ -158,6 +164,7 @@ func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentr
 		CredentialRequired: req.Msg.GetCredentialRequired(), CredentialProvider: req.Msg.GetCredentialProvider(),
 	})
 	if err != nil {
+		h.bindMu.Unlock()
 		return nil, agentRunError(err)
 	}
 	nextState := agentruncatalog.StateStarting
@@ -171,6 +178,7 @@ func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentr
 		Message: message, SandboxUID: binding.UID,
 		NodeFingerprint: binding.NodeFingerprint, NodeInstanceID: node.InstanceID,
 	})
+	h.bindMu.Unlock()
 	if err != nil {
 		return nil, agentRunError(err)
 	}
@@ -189,7 +197,7 @@ func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentr
 		// with the same Node idempotency key.
 		return connect.NewResponse(mapAgentRun(run)), nil //nolint:nilerr // durable STARTING is the successful, retryable result
 	}
-	run, err = h.store.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, Message: "job started", NodeJobID: job.ID})
+	run, err = recordJobRunning(h.store, owner, run.UUID, job.ID, "job started")
 	if err != nil {
 		return nil, agentRunError(err)
 	}
@@ -233,7 +241,9 @@ func (h *AgentRunHandler) ReconcileOnce(ctx context.Context) error {
 		return errors.New("orchestrator: AgentRun reconciliation is not configured")
 	}
 	var joined error
+	h.bindMu.Lock()
 	active := h.store.Active()
+	h.bindMu.Unlock()
 	for i := range active {
 		run := active[i]
 		if err := h.reconcileRun(ctx, run); err != nil {
@@ -315,8 +325,27 @@ func (h *AgentRunHandler) reconcileStarting(ctx context.Context, run agentruncat
 	if err != nil {
 		return nil //nolint:nilerr // an ambiguous idempotent start remains retryable
 	}
-	_, err = h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, Message: "job recovered", NodeJobID: job.ID})
+	_, err = recordJobRunning(h.store, run.OwnerFingerprint, run.UUID, job.ID, "job recovered")
 	return err
+}
+
+func recordJobRunning(store *agentruncatalog.Store, owner identity.Fingerprint, runUUID, jobID, message string) (agentruncatalog.Run, error) {
+	run, err := store.Transition(owner, runUUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, Message: message, NodeJobID: jobID})
+	if !errors.Is(err, agentruncatalog.ErrConflict) {
+		return run, err
+	}
+	current, getErr := store.Get(owner, runUUID)
+	if getErr != nil {
+		return agentruncatalog.Run{}, getErr
+	}
+	// StartNodeJob is idempotent by AgentRun UUID. A concurrent recovery pass
+	// may have recorded and even completed this exact job while the original
+	// request was waiting on Sandbox readiness. That is forward progress, not a
+	// conflicting launch.
+	if current.NodeJobID == jobID && current.State != agentruncatalog.StateStarting {
+		return current, nil
+	}
+	return agentruncatalog.Run{}, err
 }
 
 func (h *AgentRunHandler) reconcileTerminalTeardown(ctx context.Context, run agentruncatalog.Run) error {

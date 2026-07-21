@@ -12,5 +12,6 @@ else
     echo "sha256sum or shasum is required" >&2; exit 1
 fi
 version=$("$artifact" version)
-printf 'schema=daft-artifact-v1\npath=%s\nsha256=%s\nversion=%s\n' "$artifact" "$digest" "$version"
+runtime_arch=$(uname -m 2>/dev/null || printf unknown)
+printf 'schema=daft-artifact-v1\npath=%s\nsha256=%s\nversion=%s\nruntime_architecture=%s\n' "$artifact" "$digest" "$version" "$runtime_arch"
 if command -v file >/dev/null 2>&1; then printf 'file=%s\n' "$(file -b "$artifact")"; fi

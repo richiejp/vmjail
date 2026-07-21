@@ -19,8 +19,10 @@ fingerprint automatically.
 
 ## Workflow
 
-1. Inspect the local artifact with `scripts/inspect-artifact.sh PATH`. Stop if
-   its architecture is incompatible with the remote host or `version` fails.
+1. Inspect the local artifact with `scripts/inspect-artifact.sh PATH`. Compare
+   its `runtime_architecture` with the normalized remote architecture from the
+   probe (`x86_64`/`amd64` and `aarch64`/`arm64` are equivalent spellings).
+   Stop if they are incompatible or `version` fails.
 2. Run the read-only probe through SSH:
 
    ```sh

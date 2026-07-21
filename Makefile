@@ -1,4 +1,4 @@
-.PHONY: all check check-submodule-revs verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build update-egress-cache proto gen-bpf clean help
+.PHONY: all check check-submodule-revs check-deploy-skill verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build update-egress-cache proto gen-bpf clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -26,7 +26,7 @@ all: build check
 # check is the fast pre-flight: fmt, lint, unit tests, coverage gate.
 # Reproducer corpora under testdata/fuzz/ are replayed automatically
 # by `go test`, so any committed crash surfaces here too.
-check: check-fmt check-submodule-revs lint test cover-check
+check: check-fmt check-submodule-revs check-deploy-skill lint test cover-check
 
 # Keep third_party/submodule-revs.json in sync with `git submodule
 # status` + .gitmodules. The flake reads that file via
@@ -34,6 +34,11 @@ check: check-fmt check-submodule-revs lint test cover-check
 # or URL. Fails the gate and regenerates the file on mismatch.
 check-submodule-revs:
 	@scripts/check-submodule-revs.sh
+
+# The deployment skill is executable product surface even though it is not Go.
+# Keep its POSIX-shell install/upgrade/rollback contract in the fast gate.
+check-deploy-skill:
+	@.agents/skills/deploy-daft-node/scripts/test-scripts.sh
 
 # verify is the full gate set used by the pre-commit hook. `dev`
 # builds every real artefact (Go binaries + VM toolchain + initramfs +
@@ -53,7 +58,7 @@ verify: check dev integration bench-check
 help:
 	@echo "Targets:"
 	@echo "  all         - build the project + run the fast check gates (default)"
-	@echo "  check       - fmt + submodule-revs + lint + unit tests + coverage gate (fast pre-flight)"
+	@echo "  check       - fmt + submodule-revs + deployment skill + lint + unit tests + coverage gate"
 	@echo "  verify      - check + integration + bench + 1s fuzz sweep (pre-commit gate)"
 	@echo "  fmt         - format Go code with gofumpt"
 	@echo "  check-fmt   - fail if anything is unformatted"
@@ -379,9 +384,23 @@ integration: integration-build
 			fi; \
 			rc=0; \
 			echo "[e2e] sandbox pkg — in-process host shares the delegated scope: per-VM accounting, limits off"; \
-			$$delegate go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/sandbox/ || rc=1; \
+			sandbox_log=$$(mktemp /tmp/daft-integration-sandbox.XXXXXX.log); \
+			if $$delegate go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/sandbox/ >$$sandbox_log 2>&1; then \
+				tail -2 $$sandbox_log; rm -f $$sandbox_log; \
+			else \
+				echo "[e2e] sandbox failure; full log retained at $$sandbox_log"; \
+				grep -n -E -B 12 -A 80 -- '--- FAIL:|panic:|fatal error|^FAIL([[:space:]]|$$)' $$sandbox_log || tail -200 $$sandbox_log; \
+				rc=1; \
+			fi; \
 			echo "[e2e] testdaemons pkg — daft-sandboxd self-wraps into a private scope: per-VM limits enforced (fail-closed)"; \
-			go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/testdaemons/ || rc=1; \
+			daemon_log=$$(mktemp /tmp/daft-integration-testdaemons.XXXXXX.log); \
+			if go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/testdaemons/ >$$daemon_log 2>&1; then \
+				tail -2 $$daemon_log; rm -f $$daemon_log; \
+			else \
+				echo "[e2e] testdaemons failure; full log retained at $$daemon_log"; \
+				grep -n -E -B 12 -A 80 -- '--- FAIL:|panic:|fatal error|^FAIL([[:space:]]|$$)' $$daemon_log || tail -200 $$daemon_log; \
+				rc=1; \
+			fi; \
 			exit $$rc; \
 	)
 

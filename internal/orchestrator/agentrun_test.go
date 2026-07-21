@@ -172,6 +172,73 @@ func TestAgentRunHandlerStartBindsAndStartsIdempotentJob(t *testing.T) {
 	}
 }
 
+func TestAgentRunRecoveryCannotObserveLiveQueuedBindingWindow(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	starter := &fakeAgentStarter{snapshot: nodejob.Snapshot{ID: testAgentJob}}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodes, starter)
+
+	// Reproduce Start's atomic process-local Create -> bind region while a
+	// recovery sweep begins concurrently.
+	handler.bindMu.Lock()
+	run := createAgentRun(t, runs, owner, "live-binding")
+	done := make(chan error, 1)
+	go func() { done <- handler.ReconcileOnce(t.Context()) }()
+	select {
+	case err := <-done:
+		handler.bindMu.Unlock()
+		t.Fatalf("recovery entered live binding window: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	_, err := runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{
+		From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting,
+		SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID,
+	})
+	handler.bindMu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("ReconcileOnce: %v", err)
+	}
+	stored, err := runs.Get(owner, run.UUID)
+	if err != nil || stored.State != agentruncatalog.StateRunning || stored.NodeJobID != testAgentJob {
+		t.Fatalf("run after recovery = %#v, %v", stored, err)
+	}
+}
+
+func TestRecordJobRunningAcceptsConcurrentSameJobProgress(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	run := createAgentRun(t, runs, owner, "concurrent-start")
+	var err error
+	run, err = runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{
+		From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting,
+		SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{
+		From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, NodeJobID: testAgentJob,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := recordJobRunning(runs, owner, run.UUID, testAgentJob, "original start completed")
+	if err != nil || got.State != want.State || got.NodeJobID != want.NodeJobID || got.LastEventCursor != want.LastEventCursor {
+		t.Fatalf("same-job progress = %#v, %v; want %#v", got, err, want)
+	}
+	if _, err := recordJobRunning(runs, owner, run.UUID, "different-job", "conflict"); !errors.Is(err, agentruncatalog.ErrConflict) {
+		t.Fatalf("different job error = %v, want conflict", err)
+	}
+}
+
 func TestAgentRunHandlerStartLaunchesMissingSandboxWithFrozenPolicy(t *testing.T) {
 	runs, _ := agentRunStore(t)
 	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()

@@ -11,8 +11,12 @@ if [ "${1:-}" = --rollback ]; then
     [ "$#" -eq 2 ] || { echo "usage: $0 --rollback DEST" >&2; exit 2; }
     dest=$2
     [ -f "$dest.previous" ] || { echo "no rollback artifact: $dest.previous" >&2; exit 1; }
-    if [ -e "$dest" ]; then mv -f "$dest" "$dest.failed"; fi
-    if ! mv -f "$dest.previous" "$dest"; then mv -f "$dest.failed" "$dest"; exit 1; fi
+    had_dest=false
+    if [ -e "$dest" ]; then mv -f "$dest" "$dest.failed"; had_dest=true; fi
+    if ! mv -f "$dest.previous" "$dest"; then
+        if [ "$had_dest" = true ]; then mv -f "$dest.failed" "$dest"; fi
+        exit 1
+    fi
     rm -f "$dest.failed"
     exit 0
 fi
@@ -37,9 +41,13 @@ if ! mv -f "$source_file" "$dest"; then
     if [ -f "$dest.previous" ]; then mv -f "$dest.previous" "$dest"; fi
     exit 1
 fi
-if [ "$("$dest" version)" != "$expected_version" ]; then
-    if [ -f "$dest.previous" ]; then mv -f "$dest" "$dest.failed"; mv -f "$dest.previous" "$dest"; fi
-    echo "installed version validation failed" >&2
+installed_digest=$(digest_file "$dest") || installed_digest=unreadable
+installed_version=$("$dest" version) || installed_version=unrunnable
+if [ "$installed_digest" != "$expected_digest" ] || [ "$installed_version" != "$expected_version" ]; then
+    mv -f "$dest" "$dest.failed"
+    if [ -f "$dest.previous" ]; then mv -f "$dest.previous" "$dest"; fi
+    rm -f "$dest.failed"
+    echo "installed artifact validation failed" >&2
     exit 1
 fi
 printf 'installed=%s\nsha256=%s\nversion=%s\n' "$dest" "$actual_digest" "$actual_version"

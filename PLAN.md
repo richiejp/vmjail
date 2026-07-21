@@ -3902,7 +3902,24 @@ Slices:
   verification primitives are implemented. The sandbox-host's non-runtime
   `version` and `auth` commands now bypass VM cgroup/userns preconditions so
   bootstrapping works before a supervisor is installed. Fixture and isolated
-  forward tests cover the workflow; supervisor-specific failure fixtures remain.
+  forward tests cover the workflow. The portable deployment fixture suite is
+  now part of `make check` rather than an uninvoked helper; it covers fresh and
+  no-op installs, upgrades, incompatible or interrupted artifacts, failed
+  post-stage startup with rollback, fresh-install post-validation cleanup, and
+  foreground command contracts for systemd, OpenRC, runit, and s6. Supervisor
+  selection itself remains an overseer decision based on the probe. The KVM
+  gate now captures each verbose package log, emits only passing summaries,
+  and retains plus excerpts the complete log on failure; this keeps the full
+  suite while making late integration flakes diagnosable instead of losing the
+  failing assertion to terminal truncation.
+  Repeated full-gate runs then exposed a real recovery race in the black-box
+  MCP proof: reconciliation could classify the live handler's momentary QUEUED
+  record as crash-stranded, or could advance its idempotent Node job to RUNNING
+  while the original request still waited for guest readiness and make that
+  request report a transition conflict. Live create-to-bind is now excluded
+  from the process-local recovery snapshot, while a same-job state already
+  advanced by reconciliation is accepted as forward progress. Restarted
+  orchestrators still fail genuinely stranded QUEUED records.
 - **L4 — detached execution and agent startup.** Implement AgentProfile loading
   and `agent_start` for Codex; Claude Code is deferred. The first named
   enabler, exit-code/exit-reason propagation through the attached exec path,

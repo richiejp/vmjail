@@ -85,7 +85,7 @@ func (h *SecretDeliveryHandler) Deliver(ctx context.Context, req *connect.Reques
 	}
 	job, startErr := h.starter.StartNodeJob(ctx, run.NodeFingerprint, nodejob.StartRequest{IdempotencyKey: run.UUID, SandboxUID: run.SandboxUID, Command: command})
 	if startErr == nil {
-		_, err = h.runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, Message: "job started", NodeJobID: job.ID})
+		_, err = recordJobRunning(h.runs, owner, run.UUID, job.ID, "job started")
 		if err != nil {
 			return nil, agentRunError(err)
 		}
