@@ -79,7 +79,8 @@ func startPostStart(ctx context.Context, w io.Writer, d runDeps) {
 // `daft workspace exec` uses — so there's one way to run a command in the
 // container.
 func runPostStart(ctx context.Context, w io.Writer, d runDeps, cp containerProcess) {
-	if !awaitContainerRunning(ctx, w) {
+	if !awaitContainerRunning(ctx, w, PostStartReportPrefix,
+		"container did not reach running state; skipping postStartCommand") {
 		return
 	}
 	for _, cmd := range d.cfg.GetPostStartCommands() {
@@ -95,7 +96,7 @@ func runPostStart(ctx context.Context, w io.Writer, d runDeps, cp containerProce
 // deadline passes. Returns false (and reports) on timeout/cancel so the
 // caller skips the commands rather than exec into a container that never
 // came up.
-func awaitContainerRunning(ctx context.Context, w io.Writer) bool {
+func awaitContainerRunning(ctx context.Context, w io.Writer, reportPrefix, timeoutMessage string) bool {
 	deadline := time.Now().Add(postStartReadyTimeout)
 	tick := time.NewTicker(postStartPollInterval)
 	defer tick.Stop()
@@ -105,8 +106,7 @@ func awaitContainerRunning(ctx context.Context, w io.Writer) bool {
 			return true
 		}
 		if time.Now().After(deadline) {
-			writeReport(w, PostStartReportPrefix,
-				"container did not reach running state; skipping postStartCommand")
+			writeReport(w, reportPrefix, timeoutMessage)
 			return false
 		}
 		select {

@@ -4,14 +4,18 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
 	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
 	"github.com/richiejp/darkaifactory/internal/nodejob"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 )
 
 func TestRunnerRoundTripSeparatedOutput(t *testing.T) {
@@ -146,5 +150,55 @@ func TestRunnerConstructionAndDialFailure(t *testing.T) {
 	runner, _ := NewRunner(func(context.Context, string, uint32) (net.Conn, error) { return nil, want })
 	if _, err := runner.Start(t.Context(), nodejob.StartRequest{}, io.Discard, io.Discard); !errors.Is(err, want) {
 		t.Fatalf("Start error = %v", err)
+	}
+}
+
+func TestRunnerWaitsForSandboxRoute(t *testing.T) {
+	host, guest := net.Pipe()
+	dials := 0
+	runner, _ := NewRunner(func(context.Context, string, uint32) (net.Conn, error) {
+		dials++
+		if dials == 1 {
+			return nil, sandboxgateway.ErrJobNoRoute
+		}
+		if dials == 2 {
+			return nil, fmt.Errorf("socket pending: %w", os.ErrNotExist)
+		}
+		return host, nil
+	})
+	runner.retryWait = time.Millisecond
+	go func() {
+		defer func() { _ = guest.Close() }()
+		_, _ = agent.ReadJobHello(guest)
+		_ = agent.WriteJobFrame(guest, &agentv1.JobFrame{Body: &agentv1.JobFrame_Exit{Exit: &agentv1.JobExit{}}})
+	}()
+	process, err := runner.Start(t.Context(), nodejob.StartRequest{SandboxUID: "starting", Command: []string{"true"}}, io.Discard, io.Discard)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := process.Wait(); err != nil || dials != 3 {
+		t.Fatalf("Wait = %v, dials = %d", err, dials)
+	}
+}
+
+func TestRunnerBoundsSandboxRouteWait(t *testing.T) {
+	runner, _ := NewRunner(func(context.Context, string, uint32) (net.Conn, error) {
+		return nil, sandboxgateway.ErrJobNoRoute
+	})
+	runner.routeWait = time.Millisecond
+	runner.retryWait = time.Hour
+	if _, err := runner.Start(t.Context(), nodejob.StartRequest{}, io.Discard, io.Discard); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Start error = %v, want deadline exceeded", err)
+	}
+}
+
+func TestRoutePendingClassification(t *testing.T) {
+	for _, err := range []error{sandboxgateway.ErrJobNoRoute, os.ErrNotExist, syscall.ECONNREFUSED, io.EOF} {
+		if !routePending(fmt.Errorf("wrapped: %w", err)) {
+			t.Errorf("routePending(%v) = false", err)
+		}
+	}
+	if routePending(errors.New("permission denied")) {
+		t.Error("arbitrary dial error was classified as pending")
 	}
 }

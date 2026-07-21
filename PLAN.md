@@ -4013,7 +4013,19 @@ Slices:
   and MCP catalog tests are landed. Real-VM AgentRun lifecycle and credential
   non-retention coverage now includes the direct real-VM secret/job path.
   Completion-time teardown is now durable and preserves writable mount state;
-  black-box daemon/MCP lifecycle coverage remains.
+  Black-box daemon/MCP lifecycle coverage is now landed through the real
+  `daft-mcp` subprocess and stdio protocol. It uses an operator identity to
+  compose owned Workspace reads with AgentRun authority, starts a digest-pinned
+  profile in a real VM, cursor-polls events to a terminal result, verifies that
+  terminal reconciliation clears the exact Workspace Sandbox binding, and
+  closes the MCP child cleanly. That proof exposed the previously untested
+  dispatch/readiness race: a fresh AgentRun could create a Node job before the
+  Sandbox route, hybrid-vsock socket, guest job listener, or workload container
+  was ready, permanently recording a transient boot condition as FAILED.
+  Node-side job dialing now retries only the bounded, explicit readiness errors
+  (missing route/socket, refused socket, or pre-listener EOF), and the guest
+  advertises its job listener only after `crun state` reports the container
+  running. Arbitrary dial failures still fail immediately.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->

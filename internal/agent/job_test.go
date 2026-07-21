@@ -252,6 +252,9 @@ func TestJobFramingRoundTripAndMalformed(t *testing.T) {
 }
 
 func TestStartJobListenerWiringAndDisabled(t *testing.T) {
+	oldContainerRunning := containerRunning
+	containerRunning = func(context.Context) bool { return true }
+	t.Cleanup(func() { containerRunning = oldContainerRunning })
 	ln := newFakeVsockListener(DefaultJobVsockPort)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()

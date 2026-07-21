@@ -80,6 +80,10 @@ type Cluster struct {
 	// DaftBin is the absolute path to the freshly-built daft CLI
 	// binary; tests typically prefix command lines with it.
 	DaftBin string
+	// MCPBin is the absolute path to the freshly-built daft-mcp stdio
+	// server. Tests use it through the MCP SDK's CommandTransport so the
+	// executable's configuration and transport boundary are both exercised.
+	MCPBin string
 	// OrchestratorURL is the https://host:port the orchestrator
 	// is listening on (loopback, OS-assigned port).
 	OrchestratorURL string
@@ -269,13 +273,17 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 
 	orchID := mustLoadOrGen(t, orchDir, identity.RoleOrchestrator)
 	sbxID := mustLoadOrGen(t, sbxDir, identity.RoleSandboxHost)
-	cliID := mustLoadOrGen(t, cliDir, identity.RoleClient)
+	clientRole := o.clientRole
+	if clientRole == "" {
+		clientRole = identity.RoleClient
+	}
+	cliID := mustLoadOrGen(t, cliDir, clientRole)
 
 	// Four-way cross-approval: each side trusts the others it
 	// will interact with. Orchestrator talks to sandboxd + client;
 	// sandboxd + client both dial the orchestrator.
 	approvePeer(t, orchDir, sbxID.Fingerprint(), identity.RoleSandboxHost)
-	approvePeer(t, orchDir, cliID.Fingerprint(), identity.RoleClient)
+	approvePeer(t, orchDir, cliID.Fingerprint(), clientRole)
 	approvePeer(t, sbxDir, orchID.Fingerprint(), identity.RoleOrchestrator)
 	approvePeer(t, cliDir, orchID.Fingerprint(), identity.RoleOrchestrator)
 
@@ -362,6 +370,7 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 
 	return &Cluster{
 		DaftBin:         bins.daft,
+		MCPBin:          bins.mcp,
 		OrchestratorURL: url,
 		ClientConfigDir: cliDir,
 		MitmProxyBin:    bins.mitmProxy,
@@ -402,6 +411,7 @@ type ClusterOption func(*clusterOpts)
 
 type clusterOpts struct {
 	egressProxy bool
+	clientRole  identity.Role
 	// egressReplayCache opts THIS cluster into the recorded egress-replay
 	// cache env (DAFT_EGRESS_PROXY_CACHE / _RECORD). Without it a
 	// WithEgressProxy cluster always records live into a throwaway dir and
@@ -420,6 +430,14 @@ type clusterOpts struct {
 	// buildImageRef, when set, is exported as DAFT_BUILD_IMAGE_REF so the
 	// node can build a build-based devcontainer in an ephemeral sandbox.
 	buildImageRef string
+}
+
+// WithOperatorClient gives the cluster's trusted client identity the operator
+// role required by privileged fleet and AgentRun RPCs. Workspace ownership is
+// still bound to the same certificate fingerprint, so one daft-mcp process can
+// compose project and operator operations without a self-asserted role.
+func WithOperatorClient() ClusterOption {
+	return func(o *clusterOpts) { o.clientRole = identity.RoleOperator }
 }
 
 // WithEgressProxy makes the cluster run the in-stack egress proxy:
@@ -525,6 +543,7 @@ var artefactEnvKeys = []string{
 // orchestrator, and daft-sandboxd binaries.
 type binaries struct {
 	daft         string
+	mcp          string
 	orchestrator string
 	sandboxd     string
 	mitmProxy    string
@@ -556,6 +575,7 @@ func ensureBinaries(t *testing.T) binaries {
 		built := binaries{}
 		targets := []struct{ name, pkg string }{
 			{"daft", "./cmd/daft"},
+			{"daft-mcp", "./cmd/daft-mcp"},
 			{"daft-orchestrator", "./cmd/daft-orchestrator"},
 			{"daft-sandboxd", "./cmd/daft-sandboxd"},
 			{"daft-mitm-proxy", "./cmd/daft-mitm-proxy"},
@@ -572,6 +592,8 @@ func ensureBinaries(t *testing.T) binaries {
 			switch tgt.name {
 			case "daft":
 				built.daft = outPath
+			case "daft-mcp":
+				built.mcp = outPath
 			case "daft-orchestrator":
 				built.orchestrator = outPath
 			case "daft-sandboxd":

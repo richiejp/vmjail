@@ -7,30 +7,41 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
+	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
 	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
 	"github.com/richiejp/darkaifactory/internal/nodejob"
+	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+)
+
+const (
+	defaultRouteWaitTimeout = 30 * time.Second
+	defaultRouteRetryDelay  = 25 * time.Millisecond
 )
 
 // Dialer resolves a live Sandbox UID to its VM's guest job listener.
 type Dialer func(ctx context.Context, sandboxUID string, port uint32) (net.Conn, error)
 
 type Runner struct {
-	dial Dialer
+	dial      Dialer
+	routeWait time.Duration
+	retryWait time.Duration
 }
 
 func NewRunner(dial Dialer) (*Runner, error) {
 	if dial == nil {
 		return nil, errors.New("sandboxjob: nil dialer")
 	}
-	return &Runner{dial: dial}, nil
+	return &Runner{dial: dial, routeWait: defaultRouteWaitTimeout, retryWait: defaultRouteRetryDelay}, nil
 }
 
 func (r *Runner) Start(ctx context.Context, req nodejob.StartRequest, stdout, stderr io.Writer) (nodejob.Process, error) {
-	conn, err := r.dial(ctx, req.SandboxUID, agent.DefaultJobVsockPort)
+	conn, err := r.dialGuest(ctx, req.SandboxUID)
 	if err != nil {
 		return nil, fmt.Errorf("sandboxjob: dial guest: %w", err)
 	}
@@ -48,6 +59,36 @@ func (r *Runner) Start(ctx context.Context, req nodejob.StartRequest, stdout, st
 		}
 	}()
 	return p, nil
+}
+
+// dialGuest bridges the asynchronous Sandbox dispatch boundary. The Node may
+// receive StartJob immediately after the orchestrator publishes the Sandbox,
+// before sandboxexec has registered its VM route. Only that explicit
+// not-ready condition is retried; a real dial failure still fails immediately.
+func (r *Runner) dialGuest(ctx context.Context, sandboxUID string) (net.Conn, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, r.routeWait)
+	defer cancel()
+	//daft:lint:disable=forloopbound reason="bounded by routeWait through waitCtx and returns immediately on every non-readiness result"
+	for {
+		conn, err := r.dial(waitCtx, sandboxUID, agent.DefaultJobVsockPort)
+		if err == nil || !routePending(err) {
+			return conn, err
+		}
+		timer := time.NewTimer(r.retryWait)
+		select {
+		case <-waitCtx.Done():
+			timer.Stop()
+			return nil, fmt.Errorf("wait for Sandbox job route: %w", waitCtx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func routePending(err error) bool {
+	return errors.Is(err, sandboxgateway.ErrJobNoRoute) ||
+		errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, io.EOF)
 }
 
 type process struct {

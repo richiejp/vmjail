@@ -176,7 +176,7 @@ func TestAwaitContainerRunningTimeout(t *testing.T) {
 	t.Cleanup(func() { postStartReadyTimeout, postStartPollInterval = prevTO, prevPoll })
 
 	var buf bytes.Buffer
-	if awaitContainerRunning(context.Background(), &buf) {
+	if awaitContainerRunning(context.Background(), &buf, PostStartReportPrefix, "container did not reach running") {
 		t.Fatalf("await should time out when container never runs")
 	}
 	if !strings.Contains(buf.String(), "did not reach running") {
@@ -192,7 +192,7 @@ func TestAwaitContainerRunningCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if awaitContainerRunning(ctx, &bytes.Buffer{}) {
+	if awaitContainerRunning(ctx, &bytes.Buffer{}, PostStartReportPrefix, "not ready") {
 		t.Fatalf("await should return false on cancelled ctx")
 	}
 }

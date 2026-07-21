@@ -62,7 +62,13 @@ func startJobListener(ctx context.Context, w io.Writer, d runDeps) {
 		return
 	}
 	proc := readContainerProcess(w, d.cfg.GetBundle())
-	go runJobListener(ctx, w, DefaultJobVsockPort, d.job, proc)
+	go func() {
+		if !awaitContainerRunning(ctx, w, jobReportPrefix,
+			"container did not reach running state; detached jobs unavailable") {
+			return
+		}
+		runJobListener(ctx, w, DefaultJobVsockPort, d.job, proc)
+	}()
 }
 
 func runJobListener(ctx context.Context, w io.Writer, port uint32, d jobDeps, proc containerProcess) {
