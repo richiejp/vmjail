@@ -1,4 +1,4 @@
-.PHONY: all check check-submodule-revs check-deploy-skill verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build update-egress-cache proto gen-bpf clean help
+.PHONY: all check check-submodule-revs check-deploy-skill check-agent-tools verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build update-egress-cache proto gen-bpf clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -26,7 +26,7 @@ all: build check
 # check is the fast pre-flight: fmt, lint, unit tests, coverage gate.
 # Reproducer corpora under testdata/fuzz/ are replayed automatically
 # by `go test`, so any committed crash surfaces here too.
-check: check-fmt check-submodule-revs check-deploy-skill lint test cover-check
+check: check-fmt check-submodule-revs check-deploy-skill check-agent-tools lint test cover-check
 
 # Keep third_party/submodule-revs.json in sync with `git submodule
 # status` + .gitmodules. The flake reads that file via
@@ -39,6 +39,12 @@ check-submodule-revs:
 # Keep its POSIX-shell install/upgrade/rollback contract in the fast gate.
 check-deploy-skill:
 	@.agents/skills/deploy-daft-node/scripts/test-scripts.sh
+
+# Agent-facing helpers are part of the development surface. Keep their shell
+# syntax valid without requiring gopls to be installed in release builders.
+check-agent-tools:
+	@sh -n scripts/go-nav.sh
+	@scripts/test-go-nav.sh
 
 # verify is the full gate set used by the pre-commit hook. `dev`
 # builds every real artefact (Go binaries + VM toolchain + initramfs +

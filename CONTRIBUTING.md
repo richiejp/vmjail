@@ -159,6 +159,32 @@ Project direction lives in [`PLAN.md`](PLAN.md). When scope changes, when a
 milestone lands, when an open question gets answered — update `PLAN.md` in
 the same change. Stale plans actively mislead future contributors (and agents).
 
+Keep the living plan compact: current architecture, active work, decisions, and
+open questions belong in `PLAN.md`; completed implementation diaries and
+superseded detail belong in `PLAN_HISTORY.md`. Test logs and command transcripts
+do not belong in either file.
+
+### Bound investigation output
+
+Large successful logs and whole-file source dumps are expensive to review and
+particularly harmful in coding-agent sessions, where they are replayed as
+context on later turns. Preserve diagnostic depth on disk while keeping the
+interactive result concise.
+
+For Go changes, prefer semantic navigation before linear reads. Use
+`scripts/go-nav.sh symbol`, `definition`, `references`, `call-hierarchy`, and
+`check`, or the equivalent `gopls`/LSP operations. Search for the relevant
+symbol first and then inspect the smallest useful source window, normally no
+more than 200 lines. Generated files should be inspected only when generated
+behavior is itself relevant.
+
+Commands that may be verbose should write their complete output to a temporary
+log. On success, print a short summary. On failure, print the failing command,
+test, assertion, and a bounded excerpt; retain or identify the complete log for
+follow-up. APIs that expose events, logs, traces, or observations must paginate
+or enforce a byte/record limit rather than relying on callers to truncate an
+unbounded response.
+
 ## Cloning
 
 Most of the time you only want the Go code; the third-party submodules

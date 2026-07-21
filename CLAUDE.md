@@ -44,6 +44,30 @@ make bench        # update bench.txt baseline
 make hooks        # install pre-commit hook into .git/hooks
 ```
 
+## Context-efficient investigation
+
+Keep source and diagnostic output bounded. For Go, navigate semantically before
+reading files linearly:
+
+```sh
+scripts/go-nav.sh symbol WorkspaceApply
+scripts/go-nav.sh definition internal/mcpserver/server.go:120:8
+scripts/go-nav.sh references internal/mcpserver/server.go:120:8
+scripts/go-nav.sh check internal/mcpserver/server.go
+```
+
+The wrapper caps output at 120 lines. An agent runtime may instead register
+`gopls mcp` and use the same symbol, definition, reference, call-hierarchy, and
+diagnostic operations directly.
+
+Search first, then read the smallest relevant source window—normally at most
+200 lines. Do not dump complete large files, generated protobufs, full test
+logs, or unbounded traces into the conversation. Save verbose command output to
+a temporary file and report a one-line success or a bounded failure excerpt.
+Give subagents compact task briefs with relevant paths rather than the full
+parent transcript, and use a fresh session with a concise handoff after a major
+milestone.
+
 ## Things that bite
 
 - The pre-commit hook fails the commit if total Go test coverage drops below
