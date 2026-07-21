@@ -92,6 +92,11 @@ service NodeControlService {
   // the orchestrator matches request_id and the authenticated peer before
   // releasing the waiting internal controller.
   rpc ReportJobControl(JobControlResponse) returns (JobControlAck) {}
+
+  // ReportSecretDelivery completes a correlated, one-shot secret operation.
+  // It is deliberately separate from detached job control so credential bytes
+  // cannot enter job persistence, output, or arbitrary-command surfaces.
+  rpc ReportSecretDelivery(SecretDeliveryResponse) returns (SecretDeliveryAck) {}
 }
 
 // ProtocolVersion is the wire-protocol version exchanged at
@@ -154,8 +159,27 @@ message NodeEvent {
     AttachRequest attach = 4;
     ObserverRequest observer = 5;
     JobControlRequest job_control = 6;
+    SecretDeliveryRequest secret_delivery = 7;
   }
 }
+
+message SecretDeliveryRequest {
+  string request_id = 1;
+  string sandbox_uid = 2;
+  string delivery_id = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  string provider = 5;
+  bytes payload = 6;
+}
+
+message SecretDeliveryResponse {
+  string request_id = 1;
+  string delivery_id = 2;
+  bool installed = 3;
+  string error = 4;
+}
+
+message SecretDeliveryAck {}
 
 // JobControlRequest is an orchestrator-to-Node operation over the existing
 // outbound RegisterNode channel. request_id is a short-lived correlation ID;

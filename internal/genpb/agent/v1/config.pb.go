@@ -183,8 +183,12 @@ type GuestConfig struct {
 	// no-op. A non-zero exit is logged, not fatal — the container keeps
 	// running (devcontainer semantics).
 	PostStartCommands []*GuestConfig_PostStartCommand `protobuf:"bytes,8,rep,name=post_start_commands,json=postStartCommands,proto3" json:"post_start_commands,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Non-secret provider selector. The guest creates the corresponding fixed
+	// tmpfs-backed home before the container starts and enables the dedicated
+	// secret listener. Empty disables all credential plumbing.
+	CredentialProvider string `protobuf:"bytes,9,opt,name=credential_provider,json=credentialProvider,proto3" json:"credential_provider,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *GuestConfig) Reset() {
@@ -271,6 +275,13 @@ func (x *GuestConfig) GetPostStartCommands() []*GuestConfig_PostStartCommand {
 		return x.PostStartCommands
 	}
 	return nil
+}
+
+func (x *GuestConfig) GetCredentialProvider() string {
+	if x != nil {
+		return x.CredentialProvider
+	}
+	return ""
 }
 
 // AgentEvent is a status milestone the agent streams to the host over
@@ -585,7 +596,7 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\n" +
 	"\x15agent/v1/config.proto\x12\rdaft.agent.v1\"9\n" +
 	"\x12GuestConfigRequest\x12#\n" +
-	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xbe\x06\n" +
+	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xef\x06\n" +
 	"\vGuestConfig\x12\x16\n" +
 	"\x06bundle\x18\x01 \x01(\tR\x06bundle\x128\n" +
 	"\x06shares\x18\x02 \x03(\v2 .daft.agent.v1.GuestConfig.ShareR\x06shares\x12K\n" +
@@ -595,7 +606,8 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\vnet_enabled\x18\x06 \x01(\bR\n" +
 	"netEnabled\x12#\n" +
 	"\rtrace_enabled\x18\a \x01(\bR\ftraceEnabled\x12[\n" +
-	"\x13post_start_commands\x18\b \x03(\v2+.daft.agent.v1.GuestConfig.PostStartCommandR\x11postStartCommands\x1aS\n" +
+	"\x13post_start_commands\x18\b \x03(\v2+.daft.agent.v1.GuestConfig.PostStartCommandR\x11postStartCommands\x12/\n" +
+	"\x13credential_provider\x18\t \x01(\tR\x12credentialProvider\x1aS\n" +
 	"\x05Share\x12\x10\n" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x1e\n" +
 	"\n" +

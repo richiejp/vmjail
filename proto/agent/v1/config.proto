@@ -98,6 +98,11 @@ message GuestConfig {
   // running (devcontainer semantics).
   repeated PostStartCommand post_start_commands = 8;
 
+  // Non-secret provider selector. The guest creates the corresponding fixed
+  // tmpfs-backed home before the container starts and enables the dedicated
+  // secret listener. Empty disables all credential plumbing.
+  string credential_provider = 9;
+
   // PostStartCommand is one resolved lifecycle command: a full argv the
   // agent crun-execs in the running container.
   message PostStartCommand {

@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/richiejp/darkaifactory/internal/agentcredential"
 	"github.com/richiejp/darkaifactory/internal/bundled"
 	"github.com/richiejp/darkaifactory/internal/imagestore"
 	"github.com/richiejp/darkaifactory/internal/oops"
@@ -30,8 +31,10 @@ import (
 // In-VM mount points the executor and CLI agree on. Stable so the
 // daft-agent inside the VM can find them.
 const (
-	BundlesMount = "/bundles"
-	BundlesTag   = "bundles"
+	BundlesMount            = "/bundles"
+	BundlesTag              = "bundles"
+	credentialProviderCodex = "codex"
+	bundleMountTypeBind     = "bind"
 )
 
 // workspaceMountTagPrefix prefixes each spec.Mount's virtiofs Tag
@@ -99,6 +102,10 @@ type BootOptions struct {
 	// node-resolved devcontainer; carried through to sandbox.Config →
 	// GuestConfig.
 	PostStartCommands [][]string
+	// CredentialProvider enables one built-in, tmpfs-backed agent home. The
+	// only supported value is "codex"; arbitrary paths and environment names
+	// are intentionally not part of this surface.
+	CredentialProvider string
 }
 
 // Store is the imagestore surface BuildBundleConfig needs. Kept as
@@ -168,10 +175,14 @@ func BuildBundleConfig(
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: pull %s: %w", ref, err)
 	}
+	extraMounts, env, err := credentialBundleOptions(opts)
+	if err != nil {
+		return sandbox.Config{}, unlock, err
+	}
 	bundle, err := store.Bundle(ctx, img.Digest, imagestore.BundleOptions{
-		ExtraMounts:          bundleMountsFromSpec(opts.Mounts),
+		ExtraMounts:          extraMounts,
 		Args:                 opts.Args,
-		Env:                  opts.Env,
+		Env:                  env,
 		Nested:               opts.Nested,
 		PrivilegedFuseMounts: opts.PrivilegedFuseMounts,
 		PrivilegedBuild:      opts.PrivilegedBuild,
@@ -213,15 +224,30 @@ func BuildBundleConfig(
 	}
 
 	cfg = sandbox.Config{
-		CloudHypervisor:   paths.CloudHypervisor,
-		Kernel:            paths.Kernel,
-		Initramfs:         paths.Initramfs,
-		Virtiofsd:         paths.Virtiofsd,
-		Shares:            buildShares(bundle, opts.Mounts),
-		Bundle:            filepath.Join(BundlesMount, filepath.Base(bundle.Path)),
-		PostStartCommands: opts.PostStartCommands,
+		CloudHypervisor:    paths.CloudHypervisor,
+		Kernel:             paths.Kernel,
+		Initramfs:          paths.Initramfs,
+		Virtiofsd:          paths.Virtiofsd,
+		Shares:             buildShares(bundle, opts.Mounts),
+		Bundle:             filepath.Join(BundlesMount, filepath.Base(bundle.Path)),
+		PostStartCommands:  opts.PostStartCommands,
+		CredentialProvider: opts.CredentialProvider,
 	}
 	return cfg, bundleTeardown, nil
+}
+
+func credentialBundleOptions(opts BootOptions) ([]imagestore.BundleMount, []string, error) {
+	mounts := bundleMountsFromSpec(opts.Mounts)
+	env := opts.Env
+	if opts.CredentialProvider == "" {
+		return mounts, env, nil
+	}
+	if opts.CredentialProvider != credentialProviderCodex {
+		return nil, nil, fmt.Errorf("sandboxboot: unsupported credential provider %q", opts.CredentialProvider)
+	}
+	mounts = append(mounts, imagestore.BundleMount{Destination: agentcredential.CodexHome, Type: bundleMountTypeBind, Source: agentcredential.CodexHome, Options: []string{"rbind", "rw", "nosuid", "nodev", "noexec"}})
+	env = append(env, "CODEX_HOME="+agentcredential.CodexHome)
+	return mounts, env, nil
 }
 
 // lockAndCloneBundle locks the digest's cache entry and returns an

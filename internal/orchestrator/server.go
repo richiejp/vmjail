@@ -32,6 +32,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/operator/v1/operatorv1connect"
+	"github.com/richiejp/darkaifactory/internal/genpb/secretdelivery/v1/secretdeliveryv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspacebroker/v1/workspacebrokerv1connect"
@@ -263,7 +264,7 @@ func New(cfg Config) (*Server, error) {
 		}
 		return inner.Addr()
 	}
-	if err := registerServices(mux, interceptor, tracer, matcher, sandboxCtrl, operatorCtrl, workspaceCtrl, agentRunCtrl, getRelayEndpoint, cfg.RegistrySeeds); err != nil {
+	if err := registerServices(mux, interceptor, tracer, matcher, sandboxCtrl, operatorCtrl, workspaceCtrl, agentRunCtrl, NewSecretDeliveryHandler(cfg.AgentRunCatalog, nodeReg, sandboxCtrl, sandboxCtrl, agentRunCtrl), getRelayEndpoint, cfg.RegistrySeeds); err != nil {
 		return nil, err
 	}
 	handler := withPeerMiddleware(mux)
@@ -378,6 +379,7 @@ func registerServices(
 	operatorCtrl *OperatorHandler,
 	workspaceCtrl *WorkspaceCatalogHandler,
 	agentRunCtrl *AgentRunHandler,
+	secretCtrl *SecretDeliveryHandler,
 	relayEndpointFn func() string,
 	registrySeeds []RegistrySeed,
 ) error {
@@ -424,6 +426,9 @@ func registerServices(
 		agentRunCtrl, interceptor,
 	)
 	mux.Handle(agentRunPath, agentRunConnectHandler)
+
+	secretPath, secretConnectHandler := secretdeliveryv1connect.NewSecretDeliveryServiceHandler(secretCtrl, interceptor)
+	mux.Handle(secretPath, secretConnectHandler)
 
 	// Embedded OCI registry (PLAN.md item 8): served on the same mTLS
 	// endpoint, so the existing peer gate is its access control — only

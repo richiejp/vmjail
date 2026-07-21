@@ -33,6 +33,8 @@ import (
 // against this exact string on the VM console.
 const Banner = "hello world from daft-agent"
 
+const traceAttrVsockPort = "vsock_port"
+
 // ContainerBanner is the exact line cmd/daft-hello-container prints
 // when run inside the sandbox VM. The host's banner-scanner watches for
 // it (prefixed with ContainerReportPrefix) to confirm crun successfully
@@ -85,6 +87,7 @@ func Run(ctx context.Context, w io.Writer) error {
 		portForward: defaultPortForwardDeps(),
 		attach:      defaultAttachDeps(),
 		job:         defaultJobDeps(),
+		secret:      defaultSecretDeps(),
 		tap:         defaultTapDeps(),
 		opensnoop:   defaultOpensnoopDeps(),
 		execsnoop:   defaultExecsnoopDeps(),
@@ -140,6 +143,9 @@ type runDeps struct {
 	// detached Node jobs. It shares attach_enabled but has its own port and
 	// framing so interactive PTY traffic cannot be confused with jobs.
 	job jobDeps
+	// secret is the credential-only listener and tmpfs store. It is kept
+	// separate from jobs so arbitrary exec traffic never handles secrets.
+	secret secretDeps
 	// tap is the test-substitutable surface for the D6c.2 slice-2b
 	// tap bridge: /dev/net/tun open + netlink configure. Zero value
 	// disables the tap path (slice-2a conn-only behaviour).
@@ -189,6 +195,11 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	ctx, bootSpan := trace.Start(ctx, "agent.boot")
 	bundle := resolveBundle(w, cfg)
 	applyShares(w, d, cfg, bundle != "")
+	secretCleanup, err := startSecretListener(ctx, w, d)
+	if err != nil {
+		return err
+	}
+	defer secretCleanup()
 	// Port-forwarders and the attach listener must come up
 	// BEFORE the container so a long-running workload like
 	// `bash` doesn't block the agent's main goroutine forever

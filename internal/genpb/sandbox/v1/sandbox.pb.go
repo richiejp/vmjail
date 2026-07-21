@@ -453,9 +453,13 @@ type SandboxSpec struct {
 	// legacy Node-wide proxy behavior used by ordinary Workspace launches.
 	// Set+disabled denies all guest egress; set+enabled requires and exclusively
 	// uses the Node's terminating proxy lane.
-	EgressPolicy  *EgressPolicy `protobuf:"bytes,15,opt,name=egress_policy,json=egressPolicy,proto3" json:"egress_policy,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	EgressPolicy *EgressPolicy `protobuf:"bytes,15,opt,name=egress_policy,json=egressPolicy,proto3" json:"egress_policy,omitempty"`
+	// Fixed credential plumbing requested by a trusted AgentProfile. This is
+	// non-secret policy: it selects a built-in guest destination and environment
+	// mapping; neither callers nor Nodes can choose a path or variable name.
+	AgentCredential *AgentCredential `protobuf:"bytes,16,opt,name=agent_credential,json=agentCredential,proto3" json:"agent_credential,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *SandboxSpec) Reset() {
@@ -593,6 +597,58 @@ func (x *SandboxSpec) GetEgressPolicy() *EgressPolicy {
 	return nil
 }
 
+func (x *SandboxSpec) GetAgentCredential() *AgentCredential {
+	if x != nil {
+		return x.AgentCredential
+	}
+	return nil
+}
+
+type AgentCredential struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Currently only "codex" is valid. Empty disables credential plumbing.
+	Provider      string `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AgentCredential) Reset() {
+	*x = AgentCredential{}
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AgentCredential) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AgentCredential) ProtoMessage() {}
+
+func (x *AgentCredential) ProtoReflect() protoreflect.Message {
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AgentCredential.ProtoReflect.Descriptor instead.
+func (*AgentCredential) Descriptor() ([]byte, []int) {
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *AgentCredential) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
 // SandboxStatus is the orchestrator's observed runtime state.
 // Controller-owned; clients read but don't write.
 type SandboxStatus struct {
@@ -621,7 +677,7 @@ type SandboxStatus struct {
 
 func (x *SandboxStatus) Reset() {
 	*x = SandboxStatus{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[3]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -633,7 +689,7 @@ func (x *SandboxStatus) String() string {
 func (*SandboxStatus) ProtoMessage() {}
 
 func (x *SandboxStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[3]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -646,7 +702,7 @@ func (x *SandboxStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxStatus.ProtoReflect.Descriptor instead.
 func (*SandboxStatus) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{3}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SandboxStatus) GetPhase() string {
@@ -698,7 +754,7 @@ type Mount struct {
 
 func (x *Mount) Reset() {
 	*x = Mount{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[4]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -710,7 +766,7 @@ func (x *Mount) String() string {
 func (*Mount) ProtoMessage() {}
 
 func (x *Mount) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[4]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -723,7 +779,7 @@ func (x *Mount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Mount.ProtoReflect.Descriptor instead.
 func (*Mount) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{4}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Mount) GetTarget() string {
@@ -760,7 +816,7 @@ type EnvVar struct {
 
 func (x *EnvVar) Reset() {
 	*x = EnvVar{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[5]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -772,7 +828,7 @@ func (x *EnvVar) String() string {
 func (*EnvVar) ProtoMessage() {}
 
 func (x *EnvVar) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[5]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -785,7 +841,7 @@ func (x *EnvVar) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvVar.ProtoReflect.Descriptor instead.
 func (*EnvVar) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{5}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *EnvVar) GetName() string {
@@ -819,7 +875,7 @@ type PortMapping struct {
 
 func (x *PortMapping) Reset() {
 	*x = PortMapping{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[6]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -831,7 +887,7 @@ func (x *PortMapping) String() string {
 func (*PortMapping) ProtoMessage() {}
 
 func (x *PortMapping) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[6]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -844,7 +900,7 @@ func (x *PortMapping) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortMapping.ProtoReflect.Descriptor instead.
 func (*PortMapping) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{6}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *PortMapping) GetContainerPort() uint32 {
@@ -876,7 +932,7 @@ type GpuRequest struct {
 
 func (x *GpuRequest) Reset() {
 	*x = GpuRequest{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[7]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -888,7 +944,7 @@ func (x *GpuRequest) String() string {
 func (*GpuRequest) ProtoMessage() {}
 
 func (x *GpuRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[7]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -901,7 +957,7 @@ func (x *GpuRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GpuRequest.ProtoReflect.Descriptor instead.
 func (*GpuRequest) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{7}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GpuRequest) GetCount() uint32 {
@@ -944,7 +1000,7 @@ type NestedVirtualization struct {
 
 func (x *NestedVirtualization) Reset() {
 	*x = NestedVirtualization{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[8]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -956,7 +1012,7 @@ func (x *NestedVirtualization) String() string {
 func (*NestedVirtualization) ProtoMessage() {}
 
 func (x *NestedVirtualization) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[8]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -969,7 +1025,7 @@ func (x *NestedVirtualization) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NestedVirtualization.ProtoReflect.Descriptor instead.
 func (*NestedVirtualization) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{8}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *NestedVirtualization) GetEnable() bool {
@@ -1006,7 +1062,7 @@ type PrivilegedFuseMounts struct {
 
 func (x *PrivilegedFuseMounts) Reset() {
 	*x = PrivilegedFuseMounts{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[9]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1018,7 +1074,7 @@ func (x *PrivilegedFuseMounts) String() string {
 func (*PrivilegedFuseMounts) ProtoMessage() {}
 
 func (x *PrivilegedFuseMounts) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[9]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1031,7 +1087,7 @@ func (x *PrivilegedFuseMounts) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrivilegedFuseMounts.ProtoReflect.Descriptor instead.
 func (*PrivilegedFuseMounts) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{9}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *PrivilegedFuseMounts) GetEnable() bool {
@@ -1063,7 +1119,7 @@ type PrivilegedBuild struct {
 
 func (x *PrivilegedBuild) Reset() {
 	*x = PrivilegedBuild{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[10]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1075,7 +1131,7 @@ func (x *PrivilegedBuild) String() string {
 func (*PrivilegedBuild) ProtoMessage() {}
 
 func (x *PrivilegedBuild) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[10]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1088,7 +1144,7 @@ func (x *PrivilegedBuild) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PrivilegedBuild.ProtoReflect.Descriptor instead.
 func (*PrivilegedBuild) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{10}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *PrivilegedBuild) GetEnable() bool {
@@ -1107,7 +1163,7 @@ type EgressPolicy struct {
 
 func (x *EgressPolicy) Reset() {
 	*x = EgressPolicy{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1119,7 +1175,7 @@ func (x *EgressPolicy) String() string {
 func (*EgressPolicy) ProtoMessage() {}
 
 func (x *EgressPolicy) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[11]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1132,7 +1188,7 @@ func (x *EgressPolicy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EgressPolicy.ProtoReflect.Descriptor instead.
 func (*EgressPolicy) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{11}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *EgressPolicy) GetEnable() bool {
@@ -1154,7 +1210,7 @@ type WorkspaceRef struct {
 
 func (x *WorkspaceRef) Reset() {
 	*x = WorkspaceRef{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1166,7 +1222,7 @@ func (x *WorkspaceRef) String() string {
 func (*WorkspaceRef) ProtoMessage() {}
 
 func (x *WorkspaceRef) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[12]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1179,7 +1235,7 @@ func (x *WorkspaceRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkspaceRef.ProtoReflect.Descriptor instead.
 func (*WorkspaceRef) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{12}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *WorkspaceRef) GetUuid() string {
@@ -1206,7 +1262,7 @@ type NodeRef struct {
 
 func (x *NodeRef) Reset() {
 	*x = NodeRef{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[13]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1218,7 +1274,7 @@ func (x *NodeRef) String() string {
 func (*NodeRef) ProtoMessage() {}
 
 func (x *NodeRef) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[13]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1231,7 +1287,7 @@ func (x *NodeRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeRef.ProtoReflect.Descriptor instead.
 func (*NodeRef) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{13}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *NodeRef) GetFingerprint() string {
@@ -1256,7 +1312,7 @@ type SandboxRef struct {
 
 func (x *SandboxRef) Reset() {
 	*x = SandboxRef{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[14]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1268,7 +1324,7 @@ func (x *SandboxRef) String() string {
 func (*SandboxRef) ProtoMessage() {}
 
 func (x *SandboxRef) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[14]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1281,7 +1337,7 @@ func (x *SandboxRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxRef.ProtoReflect.Descriptor instead.
 func (*SandboxRef) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{14}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *SandboxRef) GetUid() string {
@@ -1330,7 +1386,7 @@ type Condition struct {
 
 func (x *Condition) Reset() {
 	*x = Condition{}
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[15]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1342,7 +1398,7 @@ func (x *Condition) String() string {
 func (*Condition) ProtoMessage() {}
 
 func (x *Condition) ProtoReflect() protoreflect.Message {
-	mi := &file_sandbox_v1_sandbox_proto_msgTypes[15]
+	mi := &file_sandbox_v1_sandbox_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1355,7 +1411,7 @@ func (x *Condition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Condition.ProtoReflect.Descriptor instead.
 func (*Condition) Descriptor() ([]byte, []int) {
-	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{15}
+	return file_sandbox_v1_sandbox_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *Condition) GetType() string {
@@ -1407,7 +1463,7 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\tworkspace\x18\x02 \x01(\v2\x1d.daft.sandbox.v1.WorkspaceRefR\tworkspace\x129\n" +
 	"\n" +
 	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12I\n" +
-	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xbd\x06\n" +
+	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\x8a\a\n" +
 	"\vSandboxSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12.\n" +
 	"\x06mounts\x18\x02 \x03(\v2\x16.daft.sandbox.v1.MountR\x06mounts\x12)\n" +
@@ -1425,7 +1481,10 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\x16privileged_fuse_mounts\x18\f \x01(\v2%.daft.sandbox.v1.PrivilegedFuseMountsR\x14privilegedFuseMounts\x12+\n" +
 	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\x12K\n" +
 	"\x10privileged_build\x18\x0e \x01(\v2 .daft.sandbox.v1.PrivilegedBuildR\x0fprivilegedBuild\x12B\n" +
-	"\regress_policy\x18\x0f \x01(\v2\x1d.daft.sandbox.v1.EgressPolicyR\fegressPolicy\"\xcc\x01\n" +
+	"\regress_policy\x18\x0f \x01(\v2\x1d.daft.sandbox.v1.EgressPolicyR\fegressPolicy\x12K\n" +
+	"\x10agent_credential\x18\x10 \x01(\v2 .daft.sandbox.v1.AgentCredentialR\x0fagentCredential\"-\n" +
+	"\x0fAgentCredential\x12\x1a\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\"\xcc\x01\n" +
 	"\rSandboxStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12\x1b\n" +
 	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12:\n" +
@@ -1504,7 +1563,7 @@ func file_sandbox_v1_sandbox_proto_rawDescGZIP() []byte {
 }
 
 var file_sandbox_v1_sandbox_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_sandbox_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_sandbox_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_sandbox_v1_sandbox_proto_goTypes = []any{
 	(Protocol)(0),                 // 0: daft.sandbox.v1.Protocol
 	(Isolation)(0),                // 1: daft.sandbox.v1.Isolation
@@ -1513,49 +1572,51 @@ var file_sandbox_v1_sandbox_proto_goTypes = []any{
 	(*Sandbox)(nil),               // 4: daft.sandbox.v1.Sandbox
 	(*SandboxMetadata)(nil),       // 5: daft.sandbox.v1.SandboxMetadata
 	(*SandboxSpec)(nil),           // 6: daft.sandbox.v1.SandboxSpec
-	(*SandboxStatus)(nil),         // 7: daft.sandbox.v1.SandboxStatus
-	(*Mount)(nil),                 // 8: daft.sandbox.v1.Mount
-	(*EnvVar)(nil),                // 9: daft.sandbox.v1.EnvVar
-	(*PortMapping)(nil),           // 10: daft.sandbox.v1.PortMapping
-	(*GpuRequest)(nil),            // 11: daft.sandbox.v1.GpuRequest
-	(*NestedVirtualization)(nil),  // 12: daft.sandbox.v1.NestedVirtualization
-	(*PrivilegedFuseMounts)(nil),  // 13: daft.sandbox.v1.PrivilegedFuseMounts
-	(*PrivilegedBuild)(nil),       // 14: daft.sandbox.v1.PrivilegedBuild
-	(*EgressPolicy)(nil),          // 15: daft.sandbox.v1.EgressPolicy
-	(*WorkspaceRef)(nil),          // 16: daft.sandbox.v1.WorkspaceRef
-	(*NodeRef)(nil),               // 17: daft.sandbox.v1.NodeRef
-	(*SandboxRef)(nil),            // 18: daft.sandbox.v1.SandboxRef
-	(*Condition)(nil),             // 19: daft.sandbox.v1.Condition
-	(*timestamppb.Timestamp)(nil), // 20: google.protobuf.Timestamp
+	(*AgentCredential)(nil),       // 7: daft.sandbox.v1.AgentCredential
+	(*SandboxStatus)(nil),         // 8: daft.sandbox.v1.SandboxStatus
+	(*Mount)(nil),                 // 9: daft.sandbox.v1.Mount
+	(*EnvVar)(nil),                // 10: daft.sandbox.v1.EnvVar
+	(*PortMapping)(nil),           // 11: daft.sandbox.v1.PortMapping
+	(*GpuRequest)(nil),            // 12: daft.sandbox.v1.GpuRequest
+	(*NestedVirtualization)(nil),  // 13: daft.sandbox.v1.NestedVirtualization
+	(*PrivilegedFuseMounts)(nil),  // 14: daft.sandbox.v1.PrivilegedFuseMounts
+	(*PrivilegedBuild)(nil),       // 15: daft.sandbox.v1.PrivilegedBuild
+	(*EgressPolicy)(nil),          // 16: daft.sandbox.v1.EgressPolicy
+	(*WorkspaceRef)(nil),          // 17: daft.sandbox.v1.WorkspaceRef
+	(*NodeRef)(nil),               // 18: daft.sandbox.v1.NodeRef
+	(*SandboxRef)(nil),            // 19: daft.sandbox.v1.SandboxRef
+	(*Condition)(nil),             // 20: daft.sandbox.v1.Condition
+	(*timestamppb.Timestamp)(nil), // 21: google.protobuf.Timestamp
 }
 var file_sandbox_v1_sandbox_proto_depIdxs = []int32{
 	5,  // 0: daft.sandbox.v1.Sandbox.metadata:type_name -> daft.sandbox.v1.SandboxMetadata
 	6,  // 1: daft.sandbox.v1.Sandbox.spec:type_name -> daft.sandbox.v1.SandboxSpec
-	7,  // 2: daft.sandbox.v1.Sandbox.status:type_name -> daft.sandbox.v1.SandboxStatus
-	16, // 3: daft.sandbox.v1.SandboxMetadata.workspace:type_name -> daft.sandbox.v1.WorkspaceRef
-	20, // 4: daft.sandbox.v1.SandboxMetadata.created_at:type_name -> google.protobuf.Timestamp
-	20, // 5: daft.sandbox.v1.SandboxMetadata.deletion_timestamp:type_name -> google.protobuf.Timestamp
-	8,  // 6: daft.sandbox.v1.SandboxSpec.mounts:type_name -> daft.sandbox.v1.Mount
-	9,  // 7: daft.sandbox.v1.SandboxSpec.env:type_name -> daft.sandbox.v1.EnvVar
-	10, // 8: daft.sandbox.v1.SandboxSpec.ports:type_name -> daft.sandbox.v1.PortMapping
-	11, // 9: daft.sandbox.v1.SandboxSpec.gpu_request:type_name -> daft.sandbox.v1.GpuRequest
+	8,  // 2: daft.sandbox.v1.Sandbox.status:type_name -> daft.sandbox.v1.SandboxStatus
+	17, // 3: daft.sandbox.v1.SandboxMetadata.workspace:type_name -> daft.sandbox.v1.WorkspaceRef
+	21, // 4: daft.sandbox.v1.SandboxMetadata.created_at:type_name -> google.protobuf.Timestamp
+	21, // 5: daft.sandbox.v1.SandboxMetadata.deletion_timestamp:type_name -> google.protobuf.Timestamp
+	9,  // 6: daft.sandbox.v1.SandboxSpec.mounts:type_name -> daft.sandbox.v1.Mount
+	10, // 7: daft.sandbox.v1.SandboxSpec.env:type_name -> daft.sandbox.v1.EnvVar
+	11, // 8: daft.sandbox.v1.SandboxSpec.ports:type_name -> daft.sandbox.v1.PortMapping
+	12, // 9: daft.sandbox.v1.SandboxSpec.gpu_request:type_name -> daft.sandbox.v1.GpuRequest
 	1,  // 10: daft.sandbox.v1.SandboxSpec.isolation:type_name -> daft.sandbox.v1.Isolation
-	17, // 11: daft.sandbox.v1.SandboxSpec.node:type_name -> daft.sandbox.v1.NodeRef
-	12, // 12: daft.sandbox.v1.SandboxSpec.nested_virtualization:type_name -> daft.sandbox.v1.NestedVirtualization
-	13, // 13: daft.sandbox.v1.SandboxSpec.privileged_fuse_mounts:type_name -> daft.sandbox.v1.PrivilegedFuseMounts
-	14, // 14: daft.sandbox.v1.SandboxSpec.privileged_build:type_name -> daft.sandbox.v1.PrivilegedBuild
-	15, // 15: daft.sandbox.v1.SandboxSpec.egress_policy:type_name -> daft.sandbox.v1.EgressPolicy
-	19, // 16: daft.sandbox.v1.SandboxStatus.conditions:type_name -> daft.sandbox.v1.Condition
-	20, // 17: daft.sandbox.v1.SandboxStatus.last_transition_time:type_name -> google.protobuf.Timestamp
-	0,  // 18: daft.sandbox.v1.PortMapping.protocol:type_name -> daft.sandbox.v1.Protocol
-	17, // 19: daft.sandbox.v1.SandboxRef.node:type_name -> daft.sandbox.v1.NodeRef
-	3,  // 20: daft.sandbox.v1.Condition.status:type_name -> daft.sandbox.v1.ConditionStatus
-	20, // 21: daft.sandbox.v1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
-	22, // [22:22] is the sub-list for method output_type
-	22, // [22:22] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	18, // 11: daft.sandbox.v1.SandboxSpec.node:type_name -> daft.sandbox.v1.NodeRef
+	13, // 12: daft.sandbox.v1.SandboxSpec.nested_virtualization:type_name -> daft.sandbox.v1.NestedVirtualization
+	14, // 13: daft.sandbox.v1.SandboxSpec.privileged_fuse_mounts:type_name -> daft.sandbox.v1.PrivilegedFuseMounts
+	15, // 14: daft.sandbox.v1.SandboxSpec.privileged_build:type_name -> daft.sandbox.v1.PrivilegedBuild
+	16, // 15: daft.sandbox.v1.SandboxSpec.egress_policy:type_name -> daft.sandbox.v1.EgressPolicy
+	7,  // 16: daft.sandbox.v1.SandboxSpec.agent_credential:type_name -> daft.sandbox.v1.AgentCredential
+	20, // 17: daft.sandbox.v1.SandboxStatus.conditions:type_name -> daft.sandbox.v1.Condition
+	21, // 18: daft.sandbox.v1.SandboxStatus.last_transition_time:type_name -> google.protobuf.Timestamp
+	0,  // 19: daft.sandbox.v1.PortMapping.protocol:type_name -> daft.sandbox.v1.Protocol
+	18, // 20: daft.sandbox.v1.SandboxRef.node:type_name -> daft.sandbox.v1.NodeRef
+	3,  // 21: daft.sandbox.v1.Condition.status:type_name -> daft.sandbox.v1.ConditionStatus
+	21, // 22: daft.sandbox.v1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
+	23, // [23:23] is the sub-list for method output_type
+	23, // [23:23] is the sub-list for method input_type
+	23, // [23:23] is the sub-list for extension type_name
+	23, // [23:23] is the sub-list for extension extendee
+	0,  // [0:23] is the sub-list for field type_name
 }
 
 func init() { file_sandbox_v1_sandbox_proto_init() }
@@ -1569,7 +1630,7 @@ func file_sandbox_v1_sandbox_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sandbox_v1_sandbox_proto_rawDesc), len(file_sandbox_v1_sandbox_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -33,6 +33,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandboxexec"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/sandboxjob"
+	"github.com/richiejp/darkaifactory/internal/sandboxsecret"
 	"github.com/richiejp/darkaifactory/internal/version"
 	"github.com/richiejp/darkaifactory/internal/workspace"
 )
@@ -134,9 +135,13 @@ func runServe(
 	if err != nil {
 		return err
 	}
+	secretDeliverer, err := sandboxsecret.New(jobRegistry.Dial)
+	if err != nil {
+		return err
+	}
 
 	client, err := newServeNodeClient(orchestratorURL, id, peers, heartbeatInterval,
-		dispatcher, bridger, attachRegistry, observerRegistry, summaryRegistry, jobManager, stdout)
+		dispatcher, bridger, attachRegistry, observerRegistry, summaryRegistry, jobManager, secretDeliverer, stdout)
 	if err != nil {
 		return err
 	}
@@ -179,13 +184,14 @@ func newServeNodeClient(
 	observerRegistry *sandboxgateway.ObserverRegistry,
 	summaryRegistry *sandboxgateway.SummaryRegistry,
 	jobManager *nodejob.Manager,
+	secretDeliverer *sandboxsecret.Deliverer,
 	stderr io.Writer,
 ) (*nodectrlclient.Client, error) {
 	return nodectrlclient.New(nodectrlclient.Config{
 		URL: orchestratorURL, Identity: id, Peers: peers, Version: version.Version, Hostname: detectHostname(),
 		HeartbeatInterval: heartbeatInterval, SandboxEvents: dispatcher, LiveSnapshot: dispatcher.LiveSnapshot,
 		Bridger: bridger, AttachBridger: attachRegistry, ObserverResolver: observerRegistry,
-		SummaryResolver: summaryRegistry, JobManager: jobManager, Stderr: stderr,
+		SummaryResolver: summaryRegistry, JobManager: jobManager, SecretDeliverer: secretDeliverer, Stderr: stderr,
 	})
 }
 

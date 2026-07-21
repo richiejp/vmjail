@@ -95,6 +95,10 @@ type Config struct {
 	// onto GuestConfig.post_start_commands by buildGuestConfig.
 	PostStartCommands [][]string
 
+	// CredentialProvider is non-secret guest setup policy. "codex" creates a
+	// fixed tmpfs-backed CODEX_HOME and enables the dedicated install channel.
+	CredentialProvider string
+
 	// Vsock, when non-nil, exposes a Cloud Hypervisor hybrid-vsock
 	// device to the guest so the in-VM agent can stream data back
 	// to the sandbox-host without going through the serial console.

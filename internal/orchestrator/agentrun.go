@@ -213,7 +213,8 @@ func agentSandboxPolicy(req *agentrunv1.StartAgentRunRequest) (AgentSandboxPolic
 	return AgentSandboxPolicy{
 		ProfileDigest: req.GetProfileDigest(), ImageRef: req.GetImageRef(),
 		ResourcesEnable: resources.GetEnable(), CPUCores: resources.GetCpuCores(), MemoryBytes: resources.GetMemoryBytes(),
-		EgressEnable: req.GetEgress().GetEnable(),
+		EgressEnable:       req.GetEgress().GetEnable(),
+		CredentialProvider: req.GetCredentialProvider(),
 	}, nil
 }
 

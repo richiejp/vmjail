@@ -4,18 +4,24 @@ package mcpserver
 import (
 	"cmp"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"slices"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
+	"github.com/richiejp/darkaifactory/internal/agentcredential"
 	"github.com/richiejp/darkaifactory/internal/agentprofile"
 	"github.com/richiejp/darkaifactory/internal/agentruncatalog"
 	"github.com/richiejp/darkaifactory/internal/daftclient"
 	agentrunv1 "github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	operatorv1 "github.com/richiejp/darkaifactory/internal/genpb/operator/v1"
+	secretdeliveryv1 "github.com/richiejp/darkaifactory/internal/genpb/secretdelivery/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
@@ -378,11 +384,17 @@ type agentRunClient interface {
 	Cancel(context.Context, *connect.Request[agentrunv1.CancelAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error)
 }
 
+type secretDeliveryClient interface {
+	Deliver(context.Context, *connect.Request[secretdeliveryv1.DeliverSecretRequest]) (*connect.Response[secretdeliveryv1.DeliverSecretResponse], error)
+}
+
 type ConnectReader struct {
-	nodes     nodeLister
-	workspace workspaceReader
-	operator  operatorClient
-	agentRuns agentRunClient
+	nodes       nodeLister
+	workspace   workspaceReader
+	operator    operatorClient
+	agentRuns   agentRunClient
+	secrets     secretDeliveryClient
+	credentials *agentcredential.Catalog
 }
 
 func (r ConnectReader) StartAgentRun(ctx context.Context, workspaceUUID string, profile agentprofile.Entry, prompt string) (AgentRun, error) {
@@ -401,14 +413,50 @@ func (r ConnectReader) StartAgentRun(ctx context.Context, workspaceUUID string, 
 	if err != nil {
 		return AgentRun{}, err
 	}
+	if profile.Profile.Credentials.Enable {
+		if r.credentials == nil || r.secrets == nil {
+			return AgentRun{}, fmt.Errorf("mcpserver: credential delivery is not configured")
+		}
+		credential, ok := r.credentials.Get(profile.Profile.Credentials.Profile)
+		if !ok || string(credential.Provider) != credentialProvider {
+			return AgentRun{}, fmt.Errorf("mcpserver: credential profile %q does not match agent provider", profile.Profile.Credentials.Profile)
+		}
+		deliveryID, idErr := mintDeliveryID()
+		if idErr != nil {
+			return AgentRun{}, idErr
+		}
+		deliveryErr := credential.Secret.WithBytes(func(payload []byte) error {
+			_, callErr := r.secrets.Deliver(ctx, connect.NewRequest(&secretdeliveryv1.DeliverSecretRequest{AgentRunUuid: response.Msg.GetUuid(), DeliveryId: deliveryID, ExpiresAt: timestamppb.New(time.Now().Add(2 * time.Minute)), Kind: secretdeliveryv1.SecretKind_SECRET_KIND_CODEX_AUTH_JSON, Payload: payload}))
+			return callErr
+		})
+		if deliveryErr != nil {
+			return AgentRun{}, deliveryErr
+		}
+		response, err = r.agentRuns.Get(ctx, connect.NewRequest(&agentrunv1.GetAgentRunRequest{Uuid: response.Msg.GetUuid()}))
+		if err != nil {
+			return AgentRun{}, err
+		}
+	}
 	return mapAgentRun(response.Msg), nil
 }
 
 func NewConnectReader(client *daftclient.Client) (*ConnectReader, error) {
+	return NewConnectReaderWithCredentials(client, nil)
+}
+
+func NewConnectReaderWithCredentials(client *daftclient.Client, credentials *agentcredential.Catalog) (*ConnectReader, error) {
 	if client == nil || client.Nodes == nil || client.Workspace == nil || client.Operator == nil || client.AgentRuns == nil {
 		return nil, fmt.Errorf("mcpserver: daft client is required")
 	}
-	return &ConnectReader{nodes: client.Nodes, workspace: client.Workspace, operator: client.Operator, agentRuns: client.AgentRuns}, nil
+	return &ConnectReader{nodes: client.Nodes, workspace: client.Workspace, operator: client.Operator, agentRuns: client.AgentRuns, secrets: client.Secrets, credentials: credentials}, nil
+}
+
+func mintDeliveryID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("mcpserver: mint delivery ID: %w", err)
+	}
+	return hex.EncodeToString(raw[:]), nil
 }
 
 func (r ConnectReader) GetAgentRun(ctx context.Context, uuid string) (AgentRun, error) {

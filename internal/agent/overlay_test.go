@@ -31,7 +31,7 @@ func TestMountOverlayFirstMountsTmpfs(t *testing.T) {
 	if len(f.mounts) != 2 {
 		t.Fatalf("got %d mounts, want 2: %+v", len(f.mounts), f.mounts)
 	}
-	if f.mounts[0].fstype != "tmpfs" || f.mounts[0].target != OverlayStoreRoot {
+	if f.mounts[0].fstype != credentialFSType || f.mounts[0].target != OverlayStoreRoot {
 		t.Errorf("first mount = %+v, want tmpfs at %q", f.mounts[0], OverlayStoreRoot)
 	}
 	if f.mounts[0].data != "size="+OverlayTmpfsSize {

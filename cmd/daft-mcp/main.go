@@ -12,6 +12,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/richiejp/darkaifactory/internal/agentcredential"
 	"github.com/richiejp/darkaifactory/internal/agentprofile"
 	"github.com/richiejp/darkaifactory/internal/daftclient"
 	"github.com/richiejp/darkaifactory/internal/mcpserver"
@@ -21,7 +22,7 @@ import (
 var (
 	osExit     = os.Exit
 	openClient = daftclient.Open
-	newReader  = mcpserver.NewConnectReader
+	newReader  = mcpserver.NewConnectReaderWithCredentials
 	newServer  = mcpserver.NewWithProfiles
 	runServer  = runMCPServer
 )
@@ -47,6 +48,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	configDir := flags.String("config-dir", "", "daft client identity directory")
 	projectDir := flags.String("project-dir", ".", "project directory used for .daft discovery")
 	agentProfiles := flags.String("agent-profiles", "", "trusted-host AgentProfile JSON file")
+	agentCredentials := flags.String("agent-credentials", "", "trusted-host agent credential catalog JSON file")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -61,10 +63,6 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return reportError(stderr, err)
 	}
 	defer client.Close()
-	reader, err := newReader(client)
-	if err != nil {
-		return reportError(stderr, err)
-	}
 	var profiles []agentprofile.Entry
 	if *agentProfiles != "" {
 		catalog, loadErr := agentprofile.Load(*agentProfiles)
@@ -72,6 +70,21 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 			return reportError(stderr, loadErr)
 		}
 		profiles = catalog.List()
+	}
+	var credentials *agentcredential.Catalog
+	if *agentCredentials != "" {
+		credentials, err = agentcredential.Load(*agentCredentials)
+		if err != nil {
+			return reportError(stderr, err)
+		}
+		defer credentials.Destroy()
+	}
+	if err := validateCredentialBindings(profiles, credentials); err != nil {
+		return reportError(stderr, err)
+	}
+	reader, err := newReader(client, credentials)
+	if err != nil {
+		return reportError(stderr, err)
 	}
 	server, err := newServer(reader, profiles, version.Version)
 	if err != nil {
@@ -81,6 +94,26 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return reportError(stderr, err)
 	}
 	return 0
+}
+
+func validateCredentialBindings(profiles []agentprofile.Entry, credentials *agentcredential.Catalog) error {
+	for i := range profiles {
+		profile := &profiles[i]
+		if !profile.Profile.Credentials.Enable {
+			continue
+		}
+		if credentials == nil {
+			return fmt.Errorf("daft-mcp: AgentProfile %q requires --agent-credentials", profile.Profile.Name)
+		}
+		entry, ok := credentials.Get(profile.Profile.Credentials.Profile)
+		if !ok {
+			return fmt.Errorf("daft-mcp: AgentProfile %q references unknown credential %q", profile.Profile.Name, profile.Profile.Credentials.Profile)
+		}
+		if string(entry.Provider) != string(profile.Profile.Provider) {
+			return fmt.Errorf("daft-mcp: AgentProfile %q provider does not match credential %q", profile.Profile.Name, entry.Name)
+		}
+	}
+	return nil
 }
 
 func reportError(stderr io.Writer, err error) int {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/richiejp/darkaifactory/internal/agentcredential"
 	"github.com/richiejp/darkaifactory/internal/bundled"
 	"github.com/richiejp/darkaifactory/internal/imagestore"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
@@ -26,6 +27,7 @@ const (
 	testMountSource   = "/host/ws"
 	testMountTarget2  = "/data"
 	testMountTarget1  = "/workspace"
+	testCacheDir      = "/tmp/cache"
 )
 
 // fakeStore is a hand-rolled Store fake. Each method's behaviour
@@ -82,7 +84,7 @@ func happyPathDeps(t *testing.T, unlockCalls *int) Deps {
 	}
 	return Deps{
 		OpenStore: func() (Store, error) { return store, nil },
-		CacheDir:  func() (string, error) { return "/tmp/cache", nil },
+		CacheDir:  func() (string, error) { return testCacheDir, nil },
 		Extract: func(string) (bundled.Paths, error) {
 			return bundled.Paths{
 				CloudHypervisor: testCHPath,
@@ -544,7 +546,7 @@ func TestBuildBundleConfigAppliesMounts(t *testing.T) {
 	}
 	deps := Deps{
 		OpenStore: func() (Store, error) { return store, nil },
-		CacheDir:  func() (string, error) { return "/tmp/cache", nil },
+		CacheDir:  func() (string, error) { return testCacheDir, nil },
 		Extract: func(string) (bundled.Paths, error) {
 			return bundled.Paths{
 				CloudHypervisor: testCHPath,
@@ -584,13 +586,49 @@ func TestBuildBundleConfigAppliesMounts(t *testing.T) {
 		t.Fatalf("BundleOptions.ExtraMounts = %d, want 2", len(seenOpts.ExtraMounts))
 	}
 	if seenOpts.ExtraMounts[0].Destination != testMountTarget1 ||
-		seenOpts.ExtraMounts[0].Type != "bind" ||
+		seenOpts.ExtraMounts[0].Type != bundleMountTypeBind ||
 		seenOpts.ExtraMounts[0].Options[1] != "rw" {
 		t.Errorf("rw mount wrong: %+v", seenOpts.ExtraMounts[0])
 	}
 	if seenOpts.ExtraMounts[1].Destination != testMountTarget2 ||
 		seenOpts.ExtraMounts[1].Options[1] != "ro" {
 		t.Errorf("ro mount wrong: %+v", seenOpts.ExtraMounts[1])
+	}
+}
+
+func TestBuildBundleConfigAppliesFixedCodexCredentialHome(t *testing.T) {
+	var seen imagestore.BundleOptions
+	store := &fakeStore{pull: func(context.Context, string) (*imagestore.Image, error) {
+		return &imagestore.Image{Digest: testDigest}, nil
+	}, bundle: func(_ context.Context, _ string, opts imagestore.BundleOptions) (*imagestore.Bundle, error) {
+		seen = opts
+		return &imagestore.Bundle{Path: "/tmp/bundles/x"}, nil
+	}, lock: func(string) (func(), error) { return func() {}, nil }}
+	deps := Deps{OpenStore: func() (Store, error) { return store, nil }, CacheDir: func() (string, error) { return testCacheDir, nil }, Extract: func(string) (bundled.Paths, error) {
+		return bundled.Paths{CloudHypervisor: testCHPath, Kernel: testKernelPath, Initramfs: testInitramfsPath, Virtiofsd: testVirtiofsdPath}, nil
+	}}
+	cfg, _, err := BuildBundleConfig(t.Context(), "alpine:3", BootOptions{CredentialProvider: credentialProviderCodex}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CredentialProvider != credentialProviderCodex || len(seen.ExtraMounts) != 1 {
+		t.Fatalf("cfg=%+v opts=%+v", cfg, seen)
+	}
+	m := seen.ExtraMounts[0]
+	if m.Source != agentcredential.CodexHome || m.Destination != agentcredential.CodexHome || m.Type != bundleMountTypeBind {
+		t.Fatalf("mount=%+v", m)
+	}
+	found := false
+	for _, v := range seen.Env {
+		if v == "CODEX_HOME="+agentcredential.CodexHome {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("env=%v", seen.Env)
+	}
+	if _, _, err := BuildBundleConfig(t.Context(), "alpine:3", BootOptions{CredentialProvider: "claude"}, deps); err == nil {
+		t.Fatal("unsupported provider succeeded")
 	}
 }
 

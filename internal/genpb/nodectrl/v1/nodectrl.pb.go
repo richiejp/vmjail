@@ -455,6 +455,7 @@ type NodeEvent struct {
 	//	*NodeEvent_Attach
 	//	*NodeEvent_Observer
 	//	*NodeEvent_JobControl
+	//	*NodeEvent_SecretDelivery
 	Event         isNodeEvent_Event `protobuf_oneof:"event"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -551,6 +552,15 @@ func (x *NodeEvent) GetJobControl() *JobControlRequest {
 	return nil
 }
 
+func (x *NodeEvent) GetSecretDelivery() *SecretDeliveryRequest {
+	if x != nil {
+		if x, ok := x.Event.(*NodeEvent_SecretDelivery); ok {
+			return x.SecretDelivery
+		}
+	}
+	return nil
+}
+
 type isNodeEvent_Event interface {
 	isNodeEvent_Event()
 }
@@ -579,6 +589,10 @@ type NodeEvent_JobControl struct {
 	JobControl *JobControlRequest `protobuf:"bytes,6,opt,name=job_control,json=jobControl,proto3,oneof"`
 }
 
+type NodeEvent_SecretDelivery struct {
+	SecretDelivery *SecretDeliveryRequest `protobuf:"bytes,7,opt,name=secret_delivery,json=secretDelivery,proto3,oneof"`
+}
+
 func (*NodeEvent_Ready) isNodeEvent_Event() {}
 
 func (*NodeEvent_Sandbox) isNodeEvent_Event() {}
@@ -590,6 +604,196 @@ func (*NodeEvent_Attach) isNodeEvent_Event() {}
 func (*NodeEvent_Observer) isNodeEvent_Event() {}
 
 func (*NodeEvent_JobControl) isNodeEvent_Event() {}
+
+func (*NodeEvent_SecretDelivery) isNodeEvent_Event() {}
+
+type SecretDeliveryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	SandboxUid    string                 `protobuf:"bytes,2,opt,name=sandbox_uid,json=sandboxUid,proto3" json:"sandbox_uid,omitempty"`
+	DeliveryId    string                 `protobuf:"bytes,3,opt,name=delivery_id,json=deliveryId,proto3" json:"delivery_id,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Provider      string                 `protobuf:"bytes,5,opt,name=provider,proto3" json:"provider,omitempty"`
+	Payload       []byte                 `protobuf:"bytes,6,opt,name=payload,proto3" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SecretDeliveryRequest) Reset() {
+	*x = SecretDeliveryRequest{}
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SecretDeliveryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SecretDeliveryRequest) ProtoMessage() {}
+
+func (x *SecretDeliveryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SecretDeliveryRequest.ProtoReflect.Descriptor instead.
+func (*SecretDeliveryRequest) Descriptor() ([]byte, []int) {
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *SecretDeliveryRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SecretDeliveryRequest) GetSandboxUid() string {
+	if x != nil {
+		return x.SandboxUid
+	}
+	return ""
+}
+
+func (x *SecretDeliveryRequest) GetDeliveryId() string {
+	if x != nil {
+		return x.DeliveryId
+	}
+	return ""
+}
+
+func (x *SecretDeliveryRequest) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *SecretDeliveryRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *SecretDeliveryRequest) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+type SecretDeliveryResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestId     string                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	DeliveryId    string                 `protobuf:"bytes,2,opt,name=delivery_id,json=deliveryId,proto3" json:"delivery_id,omitempty"`
+	Installed     bool                   `protobuf:"varint,3,opt,name=installed,proto3" json:"installed,omitempty"`
+	Error         string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SecretDeliveryResponse) Reset() {
+	*x = SecretDeliveryResponse{}
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SecretDeliveryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SecretDeliveryResponse) ProtoMessage() {}
+
+func (x *SecretDeliveryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SecretDeliveryResponse.ProtoReflect.Descriptor instead.
+func (*SecretDeliveryResponse) Descriptor() ([]byte, []int) {
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SecretDeliveryResponse) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
+}
+
+func (x *SecretDeliveryResponse) GetDeliveryId() string {
+	if x != nil {
+		return x.DeliveryId
+	}
+	return ""
+}
+
+func (x *SecretDeliveryResponse) GetInstalled() bool {
+	if x != nil {
+		return x.Installed
+	}
+	return false
+}
+
+func (x *SecretDeliveryResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+type SecretDeliveryAck struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SecretDeliveryAck) Reset() {
+	*x = SecretDeliveryAck{}
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SecretDeliveryAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SecretDeliveryAck) ProtoMessage() {}
+
+func (x *SecretDeliveryAck) ProtoReflect() protoreflect.Message {
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SecretDeliveryAck.ProtoReflect.Descriptor instead.
+func (*SecretDeliveryAck) Descriptor() ([]byte, []int) {
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{6}
+}
 
 // JobControlRequest is an orchestrator-to-Node operation over the existing
 // outbound RegisterNode channel. request_id is a short-lived correlation ID;
@@ -611,7 +815,7 @@ type JobControlRequest struct {
 
 func (x *JobControlRequest) Reset() {
 	*x = JobControlRequest{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[4]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -623,7 +827,7 @@ func (x *JobControlRequest) String() string {
 func (*JobControlRequest) ProtoMessage() {}
 
 func (x *JobControlRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[4]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -636,7 +840,7 @@ func (x *JobControlRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobControlRequest.ProtoReflect.Descriptor instead.
 func (*JobControlRequest) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{4}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *JobControlRequest) GetRequestId() string {
@@ -728,7 +932,7 @@ type JobStartRequest struct {
 
 func (x *JobStartRequest) Reset() {
 	*x = JobStartRequest{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[5]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -740,7 +944,7 @@ func (x *JobStartRequest) String() string {
 func (*JobStartRequest) ProtoMessage() {}
 
 func (x *JobStartRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[5]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -753,7 +957,7 @@ func (x *JobStartRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobStartRequest.ProtoReflect.Descriptor instead.
 func (*JobStartRequest) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{5}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *JobStartRequest) GetIdempotencyKey() string {
@@ -789,7 +993,7 @@ type JobGetRequest struct {
 
 func (x *JobGetRequest) Reset() {
 	*x = JobGetRequest{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[6]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -801,7 +1005,7 @@ func (x *JobGetRequest) String() string {
 func (*JobGetRequest) ProtoMessage() {}
 
 func (x *JobGetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[6]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -814,7 +1018,7 @@ func (x *JobGetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobGetRequest.ProtoReflect.Descriptor instead.
 func (*JobGetRequest) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{6}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *JobGetRequest) GetJobId() string {
@@ -854,7 +1058,7 @@ type JobCancelRequest struct {
 
 func (x *JobCancelRequest) Reset() {
 	*x = JobCancelRequest{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[7]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -866,7 +1070,7 @@ func (x *JobCancelRequest) String() string {
 func (*JobCancelRequest) ProtoMessage() {}
 
 func (x *JobCancelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[7]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -879,7 +1083,7 @@ func (x *JobCancelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobCancelRequest.ProtoReflect.Descriptor instead.
 func (*JobCancelRequest) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{7}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *JobCancelRequest) GetJobId() string {
@@ -900,7 +1104,7 @@ type JobDeleteRequest struct {
 
 func (x *JobDeleteRequest) Reset() {
 	*x = JobDeleteRequest{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[8]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -912,7 +1116,7 @@ func (x *JobDeleteRequest) String() string {
 func (*JobDeleteRequest) ProtoMessage() {}
 
 func (x *JobDeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[8]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -925,7 +1129,7 @@ func (x *JobDeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobDeleteRequest.ProtoReflect.Descriptor instead.
 func (*JobDeleteRequest) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{8}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *JobDeleteRequest) GetJobId() string {
@@ -946,7 +1150,7 @@ type JobOutputChunk struct {
 
 func (x *JobOutputChunk) Reset() {
 	*x = JobOutputChunk{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[9]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -958,7 +1162,7 @@ func (x *JobOutputChunk) String() string {
 func (*JobOutputChunk) ProtoMessage() {}
 
 func (x *JobOutputChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[9]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -971,7 +1175,7 @@ func (x *JobOutputChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobOutputChunk.ProtoReflect.Descriptor instead.
 func (*JobOutputChunk) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{9}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *JobOutputChunk) GetData() []byte {
@@ -1014,7 +1218,7 @@ type JobSnapshot struct {
 
 func (x *JobSnapshot) Reset() {
 	*x = JobSnapshot{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[10]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1026,7 +1230,7 @@ func (x *JobSnapshot) String() string {
 func (*JobSnapshot) ProtoMessage() {}
 
 func (x *JobSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[10]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1039,7 +1243,7 @@ func (x *JobSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobSnapshot.ProtoReflect.Descriptor instead.
 func (*JobSnapshot) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{10}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *JobSnapshot) GetJobId() string {
@@ -1131,7 +1335,7 @@ type JobControlResponse struct {
 
 func (x *JobControlResponse) Reset() {
 	*x = JobControlResponse{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[11]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1143,7 +1347,7 @@ func (x *JobControlResponse) String() string {
 func (*JobControlResponse) ProtoMessage() {}
 
 func (x *JobControlResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[11]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1156,7 +1360,7 @@ func (x *JobControlResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobControlResponse.ProtoReflect.Descriptor instead.
 func (*JobControlResponse) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{11}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *JobControlResponse) GetRequestId() string {
@@ -1195,7 +1399,7 @@ type JobControlAck struct {
 
 func (x *JobControlAck) Reset() {
 	*x = JobControlAck{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[12]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1207,7 +1411,7 @@ func (x *JobControlAck) String() string {
 func (*JobControlAck) ProtoMessage() {}
 
 func (x *JobControlAck) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[12]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1220,7 +1424,7 @@ func (x *JobControlAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JobControlAck.ProtoReflect.Descriptor instead.
 func (*JobControlAck) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{12}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{15}
 }
 
 // OpenPortRequest asks the Node to dial OpenPortStream for one
@@ -1246,7 +1450,7 @@ type OpenPortRequest struct {
 
 func (x *OpenPortRequest) Reset() {
 	*x = OpenPortRequest{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[13]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1258,7 +1462,7 @@ func (x *OpenPortRequest) String() string {
 func (*OpenPortRequest) ProtoMessage() {}
 
 func (x *OpenPortRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[13]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1271,7 +1475,7 @@ func (x *OpenPortRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OpenPortRequest.ProtoReflect.Descriptor instead.
 func (*OpenPortRequest) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{13}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *OpenPortRequest) GetSessionId() string {
@@ -1310,7 +1514,7 @@ type PortStreamMessage struct {
 
 func (x *PortStreamMessage) Reset() {
 	*x = PortStreamMessage{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[14]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1322,7 +1526,7 @@ func (x *PortStreamMessage) String() string {
 func (*PortStreamMessage) ProtoMessage() {}
 
 func (x *PortStreamMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[14]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1335,7 +1539,7 @@ func (x *PortStreamMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortStreamMessage.ProtoReflect.Descriptor instead.
 func (*PortStreamMessage) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{14}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *PortStreamMessage) GetBody() isPortStreamMessage_Body {
@@ -1388,7 +1592,7 @@ type PortStreamHello struct {
 
 func (x *PortStreamHello) Reset() {
 	*x = PortStreamHello{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[15]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1400,7 +1604,7 @@ func (x *PortStreamHello) String() string {
 func (*PortStreamHello) ProtoMessage() {}
 
 func (x *PortStreamHello) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[15]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1413,7 +1617,7 @@ func (x *PortStreamHello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PortStreamHello.ProtoReflect.Descriptor instead.
 func (*PortStreamHello) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{15}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *PortStreamHello) GetSessionId() string {
@@ -1451,7 +1655,7 @@ type AttachRequest struct {
 
 func (x *AttachRequest) Reset() {
 	*x = AttachRequest{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[16]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1463,7 +1667,7 @@ func (x *AttachRequest) String() string {
 func (*AttachRequest) ProtoMessage() {}
 
 func (x *AttachRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[16]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1476,7 +1680,7 @@ func (x *AttachRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachRequest.ProtoReflect.Descriptor instead.
 func (*AttachRequest) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{16}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *AttachRequest) GetSessionId() string {
@@ -1539,7 +1743,7 @@ type AttachStreamMessage struct {
 
 func (x *AttachStreamMessage) Reset() {
 	*x = AttachStreamMessage{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[17]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1551,7 +1755,7 @@ func (x *AttachStreamMessage) String() string {
 func (*AttachStreamMessage) ProtoMessage() {}
 
 func (x *AttachStreamMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[17]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1564,7 +1768,7 @@ func (x *AttachStreamMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachStreamMessage.ProtoReflect.Descriptor instead.
 func (*AttachStreamMessage) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{17}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *AttachStreamMessage) GetBody() isAttachStreamMessage_Body {
@@ -1647,7 +1851,7 @@ type AttachStreamHello struct {
 
 func (x *AttachStreamHello) Reset() {
 	*x = AttachStreamHello{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[18]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1659,7 +1863,7 @@ func (x *AttachStreamHello) String() string {
 func (*AttachStreamHello) ProtoMessage() {}
 
 func (x *AttachStreamHello) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[18]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1672,7 +1876,7 @@ func (x *AttachStreamHello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachStreamHello.ProtoReflect.Descriptor instead.
 func (*AttachStreamHello) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{18}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *AttachStreamHello) GetSessionId() string {
@@ -1695,7 +1899,7 @@ type AttachStreamResize struct {
 
 func (x *AttachStreamResize) Reset() {
 	*x = AttachStreamResize{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[19]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1707,7 +1911,7 @@ func (x *AttachStreamResize) String() string {
 func (*AttachStreamResize) ProtoMessage() {}
 
 func (x *AttachStreamResize) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[19]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1720,7 +1924,7 @@ func (x *AttachStreamResize) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachStreamResize.ProtoReflect.Descriptor instead.
 func (*AttachStreamResize) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{19}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *AttachStreamResize) GetCols() uint32 {
@@ -1750,7 +1954,7 @@ type AttachStreamExit struct {
 
 func (x *AttachStreamExit) Reset() {
 	*x = AttachStreamExit{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[20]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1762,7 +1966,7 @@ func (x *AttachStreamExit) String() string {
 func (*AttachStreamExit) ProtoMessage() {}
 
 func (x *AttachStreamExit) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[20]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1775,7 +1979,7 @@ func (x *AttachStreamExit) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AttachStreamExit.ProtoReflect.Descriptor instead.
 func (*AttachStreamExit) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{20}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *AttachStreamExit) GetCode() int32 {
@@ -1818,7 +2022,7 @@ type ObserverRequest struct {
 
 func (x *ObserverRequest) Reset() {
 	*x = ObserverRequest{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[21]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1830,7 +2034,7 @@ func (x *ObserverRequest) String() string {
 func (*ObserverRequest) ProtoMessage() {}
 
 func (x *ObserverRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[21]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1843,7 +2047,7 @@ func (x *ObserverRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObserverRequest.ProtoReflect.Descriptor instead.
 func (*ObserverRequest) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{21}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ObserverRequest) GetSessionId() string {
@@ -1890,7 +2094,7 @@ type ObserverStreamMessage struct {
 
 func (x *ObserverStreamMessage) Reset() {
 	*x = ObserverStreamMessage{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[22]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1902,7 +2106,7 @@ func (x *ObserverStreamMessage) String() string {
 func (*ObserverStreamMessage) ProtoMessage() {}
 
 func (x *ObserverStreamMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[22]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1915,7 +2119,7 @@ func (x *ObserverStreamMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObserverStreamMessage.ProtoReflect.Descriptor instead.
 func (*ObserverStreamMessage) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{22}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ObserverStreamMessage) GetBody() isObserverStreamMessage_Body {
@@ -1968,7 +2172,7 @@ type ObserverStreamHello struct {
 
 func (x *ObserverStreamHello) Reset() {
 	*x = ObserverStreamHello{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[23]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1980,7 +2184,7 @@ func (x *ObserverStreamHello) String() string {
 func (*ObserverStreamHello) ProtoMessage() {}
 
 func (x *ObserverStreamHello) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[23]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1993,7 +2197,7 @@ func (x *ObserverStreamHello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ObserverStreamHello.ProtoReflect.Descriptor instead.
 func (*ObserverStreamHello) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{23}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ObserverStreamHello) GetSessionId() string {
@@ -2026,7 +2230,7 @@ type SandboxWatchEvent struct {
 
 func (x *SandboxWatchEvent) Reset() {
 	*x = SandboxWatchEvent{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[24]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2038,7 +2242,7 @@ func (x *SandboxWatchEvent) String() string {
 func (*SandboxWatchEvent) ProtoMessage() {}
 
 func (x *SandboxWatchEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[24]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2051,7 +2255,7 @@ func (x *SandboxWatchEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SandboxWatchEvent.ProtoReflect.Descriptor instead.
 func (*SandboxWatchEvent) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{24}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *SandboxWatchEvent) GetType() v1.EventType {
@@ -2087,7 +2291,7 @@ type SubscriptionReady struct {
 
 func (x *SubscriptionReady) Reset() {
 	*x = SubscriptionReady{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[25]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2099,7 +2303,7 @@ func (x *SubscriptionReady) String() string {
 func (*SubscriptionReady) ProtoMessage() {}
 
 func (x *SubscriptionReady) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[25]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2112,7 +2316,7 @@ func (x *SubscriptionReady) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SubscriptionReady.ProtoReflect.Descriptor instead.
 func (*SubscriptionReady) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{25}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SubscriptionReady) GetAcceptedAt() *timestamppb.Timestamp {
@@ -2153,7 +2357,7 @@ type HeartbeatRequest struct {
 
 func (x *HeartbeatRequest) Reset() {
 	*x = HeartbeatRequest{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[26]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2165,7 +2369,7 @@ func (x *HeartbeatRequest) String() string {
 func (*HeartbeatRequest) ProtoMessage() {}
 
 func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[26]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2178,7 +2382,7 @@ func (x *HeartbeatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatRequest.ProtoReflect.Descriptor instead.
 func (*HeartbeatRequest) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{26}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *HeartbeatRequest) GetCurrent() *HostResources {
@@ -2217,7 +2421,7 @@ type LiveSandbox struct {
 
 func (x *LiveSandbox) Reset() {
 	*x = LiveSandbox{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[27]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2229,7 +2433,7 @@ func (x *LiveSandbox) String() string {
 func (*LiveSandbox) ProtoMessage() {}
 
 func (x *LiveSandbox) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[27]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2242,7 +2446,7 @@ func (x *LiveSandbox) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LiveSandbox.ProtoReflect.Descriptor instead.
 func (*LiveSandbox) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{27}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *LiveSandbox) GetUid() string {
@@ -2277,7 +2481,7 @@ type HeartbeatResponse struct {
 
 func (x *HeartbeatResponse) Reset() {
 	*x = HeartbeatResponse{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[28]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2289,7 +2493,7 @@ func (x *HeartbeatResponse) String() string {
 func (*HeartbeatResponse) ProtoMessage() {}
 
 func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[28]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2302,7 +2506,7 @@ func (x *HeartbeatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatResponse.ProtoReflect.Descriptor instead.
 func (*HeartbeatResponse) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{28}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *HeartbeatResponse) GetSeenAt() *timestamppb.Timestamp {
@@ -2322,7 +2526,7 @@ type ListNodesRequest struct {
 
 func (x *ListNodesRequest) Reset() {
 	*x = ListNodesRequest{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[29]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2334,7 +2538,7 @@ func (x *ListNodesRequest) String() string {
 func (*ListNodesRequest) ProtoMessage() {}
 
 func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[29]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2347,7 +2551,7 @@ func (x *ListNodesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNodesRequest.ProtoReflect.Descriptor instead.
 func (*ListNodesRequest) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{29}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{32}
 }
 
 // Node mirrors nodectrl.Entry on the wire. Fingerprint is the
@@ -2374,7 +2578,7 @@ type Node struct {
 
 func (x *Node) Reset() {
 	*x = Node{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[30]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2386,7 +2590,7 @@ func (x *Node) String() string {
 func (*Node) ProtoMessage() {}
 
 func (x *Node) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[30]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2399,7 +2603,7 @@ func (x *Node) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Node.ProtoReflect.Descriptor instead.
 func (*Node) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{30}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *Node) GetFingerprint() string {
@@ -2453,7 +2657,7 @@ type ListNodesResponse struct {
 
 func (x *ListNodesResponse) Reset() {
 	*x = ListNodesResponse{}
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[31]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2465,7 +2669,7 @@ func (x *ListNodesResponse) String() string {
 func (*ListNodesResponse) ProtoMessage() {}
 
 func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[31]
+	mi := &file_nodectrl_v1_nodectrl_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2478,7 +2682,7 @@ func (x *ListNodesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListNodesResponse.ProtoReflect.Descriptor instead.
 func (*ListNodesResponse) Descriptor() ([]byte, []int) {
-	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{31}
+	return file_nodectrl_v1_nodectrl_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ListNodesResponse) GetNodes() []*Node {
@@ -2506,7 +2710,7 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\x10protocol_version\x18\x03 \x01(\v2!.daft.nodectrl.v1.ProtocolVersionR\x0fprotocolVersion\x12\x1a\n" +
 	"\bhostname\x18\x04 \x01(\tR\bhostname\x12\x1f\n" +
 	"\vinstance_id\x18\x05 \x01(\tR\n" +
-	"instanceId\"\x98\x03\n" +
+	"instanceId\"\xec\x03\n" +
 	"\tNodeEvent\x12;\n" +
 	"\x05ready\x18\x01 \x01(\v2#.daft.nodectrl.v1.SubscriptionReadyH\x00R\x05ready\x12?\n" +
 	"\asandbox\x18\x02 \x01(\v2#.daft.nodectrl.v1.SandboxWatchEventH\x00R\asandbox\x12@\n" +
@@ -2514,8 +2718,28 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\x06attach\x18\x04 \x01(\v2\x1f.daft.nodectrl.v1.AttachRequestH\x00R\x06attach\x12?\n" +
 	"\bobserver\x18\x05 \x01(\v2!.daft.nodectrl.v1.ObserverRequestH\x00R\bobserver\x12F\n" +
 	"\vjob_control\x18\x06 \x01(\v2#.daft.nodectrl.v1.JobControlRequestH\x00R\n" +
-	"jobControlB\a\n" +
-	"\x05event\"\xab\x02\n" +
+	"jobControl\x12R\n" +
+	"\x0fsecret_delivery\x18\a \x01(\v2'.daft.nodectrl.v1.SecretDeliveryRequestH\x00R\x0esecretDeliveryB\a\n" +
+	"\x05event\"\xe9\x01\n" +
+	"\x15SecretDeliveryRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1f\n" +
+	"\vsandbox_uid\x18\x02 \x01(\tR\n" +
+	"sandboxUid\x12\x1f\n" +
+	"\vdelivery_id\x18\x03 \x01(\tR\n" +
+	"deliveryId\x129\n" +
+	"\n" +
+	"expires_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x1a\n" +
+	"\bprovider\x18\x05 \x01(\tR\bprovider\x12\x18\n" +
+	"\apayload\x18\x06 \x01(\fR\apayload\"\x8c\x01\n" +
+	"\x16SecretDeliveryResponse\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\x01 \x01(\tR\trequestId\x12\x1f\n" +
+	"\vdelivery_id\x18\x02 \x01(\tR\n" +
+	"deliveryId\x12\x1c\n" +
+	"\tinstalled\x18\x03 \x01(\bR\tinstalled\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\"\x13\n" +
+	"\x11SecretDeliveryAck\"\xab\x02\n" +
 	"\x11JobControlRequest\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x129\n" +
@@ -2666,7 +2890,7 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\x0eObserverSource\x12\x1f\n" +
 	"\x1bOBSERVER_SOURCE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13OBSERVER_SOURCE_LOG\x10\x01\x12\x1b\n" +
-	"\x17OBSERVER_SOURCE_SUMMARY\x10\x022\xa9\x05\n" +
+	"\x17OBSERVER_SOURCE_SUMMARY\x10\x022\x92\x06\n" +
 	"\x12NodeControlService\x12V\n" +
 	"\fRegisterNode\x12%.daft.nodectrl.v1.RegisterNodeRequest\x1a\x1b.daft.nodectrl.v1.NodeEvent\"\x000\x01\x12V\n" +
 	"\tHeartbeat\x12\".daft.nodectrl.v1.HeartbeatRequest\x1a#.daft.nodectrl.v1.HeartbeatResponse\"\x00\x12V\n" +
@@ -2674,7 +2898,8 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\x0eOpenPortStream\x12#.daft.nodectrl.v1.PortStreamMessage\x1a#.daft.nodectrl.v1.PortStreamMessage\"\x00(\x010\x01\x12b\n" +
 	"\fAttachStream\x12%.daft.nodectrl.v1.AttachStreamMessage\x1a%.daft.nodectrl.v1.AttachStreamMessage\"\x00(\x010\x01\x12h\n" +
 	"\x0eObserverStream\x12'.daft.nodectrl.v1.ObserverStreamMessage\x1a'.daft.nodectrl.v1.ObserverStreamMessage\"\x00(\x010\x01\x12[\n" +
-	"\x10ReportJobControl\x12$.daft.nodectrl.v1.JobControlResponse\x1a\x1f.daft.nodectrl.v1.JobControlAck\"\x00BIZGgithub.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1;nodectrlv1b\x06proto3"
+	"\x10ReportJobControl\x12$.daft.nodectrl.v1.JobControlResponse\x1a\x1f.daft.nodectrl.v1.JobControlAck\"\x00\x12g\n" +
+	"\x14ReportSecretDelivery\x12(.daft.nodectrl.v1.SecretDeliveryResponse\x1a#.daft.nodectrl.v1.SecretDeliveryAck\"\x00BIZGgithub.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1;nodectrlv1b\x06proto3"
 
 var (
 	file_nodectrl_v1_nodectrl_proto_rawDescOnce sync.Once
@@ -2689,104 +2914,111 @@ func file_nodectrl_v1_nodectrl_proto_rawDescGZIP() []byte {
 }
 
 var file_nodectrl_v1_nodectrl_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_nodectrl_v1_nodectrl_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
+var file_nodectrl_v1_nodectrl_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_nodectrl_v1_nodectrl_proto_goTypes = []any{
-	(JobState)(0),                 // 0: daft.nodectrl.v1.JobState
-	(JobControlErrorCode)(0),      // 1: daft.nodectrl.v1.JobControlErrorCode
-	(ObserverSource)(0),           // 2: daft.nodectrl.v1.ObserverSource
-	(*ProtocolVersion)(nil),       // 3: daft.nodectrl.v1.ProtocolVersion
-	(*HostResources)(nil),         // 4: daft.nodectrl.v1.HostResources
-	(*RegisterNodeRequest)(nil),   // 5: daft.nodectrl.v1.RegisterNodeRequest
-	(*NodeEvent)(nil),             // 6: daft.nodectrl.v1.NodeEvent
-	(*JobControlRequest)(nil),     // 7: daft.nodectrl.v1.JobControlRequest
-	(*JobStartRequest)(nil),       // 8: daft.nodectrl.v1.JobStartRequest
-	(*JobGetRequest)(nil),         // 9: daft.nodectrl.v1.JobGetRequest
-	(*JobCancelRequest)(nil),      // 10: daft.nodectrl.v1.JobCancelRequest
-	(*JobDeleteRequest)(nil),      // 11: daft.nodectrl.v1.JobDeleteRequest
-	(*JobOutputChunk)(nil),        // 12: daft.nodectrl.v1.JobOutputChunk
-	(*JobSnapshot)(nil),           // 13: daft.nodectrl.v1.JobSnapshot
-	(*JobControlResponse)(nil),    // 14: daft.nodectrl.v1.JobControlResponse
-	(*JobControlAck)(nil),         // 15: daft.nodectrl.v1.JobControlAck
-	(*OpenPortRequest)(nil),       // 16: daft.nodectrl.v1.OpenPortRequest
-	(*PortStreamMessage)(nil),     // 17: daft.nodectrl.v1.PortStreamMessage
-	(*PortStreamHello)(nil),       // 18: daft.nodectrl.v1.PortStreamHello
-	(*AttachRequest)(nil),         // 19: daft.nodectrl.v1.AttachRequest
-	(*AttachStreamMessage)(nil),   // 20: daft.nodectrl.v1.AttachStreamMessage
-	(*AttachStreamHello)(nil),     // 21: daft.nodectrl.v1.AttachStreamHello
-	(*AttachStreamResize)(nil),    // 22: daft.nodectrl.v1.AttachStreamResize
-	(*AttachStreamExit)(nil),      // 23: daft.nodectrl.v1.AttachStreamExit
-	(*ObserverRequest)(nil),       // 24: daft.nodectrl.v1.ObserverRequest
-	(*ObserverStreamMessage)(nil), // 25: daft.nodectrl.v1.ObserverStreamMessage
-	(*ObserverStreamHello)(nil),   // 26: daft.nodectrl.v1.ObserverStreamHello
-	(*SandboxWatchEvent)(nil),     // 27: daft.nodectrl.v1.SandboxWatchEvent
-	(*SubscriptionReady)(nil),     // 28: daft.nodectrl.v1.SubscriptionReady
-	(*HeartbeatRequest)(nil),      // 29: daft.nodectrl.v1.HeartbeatRequest
-	(*LiveSandbox)(nil),           // 30: daft.nodectrl.v1.LiveSandbox
-	(*HeartbeatResponse)(nil),     // 31: daft.nodectrl.v1.HeartbeatResponse
-	(*ListNodesRequest)(nil),      // 32: daft.nodectrl.v1.ListNodesRequest
-	(*Node)(nil),                  // 33: daft.nodectrl.v1.Node
-	(*ListNodesResponse)(nil),     // 34: daft.nodectrl.v1.ListNodesResponse
-	(*timestamppb.Timestamp)(nil), // 35: google.protobuf.Timestamp
-	(v1.EventType)(0),             // 36: daft.sandbox.v1.EventType
-	(*v1.Sandbox)(nil),            // 37: daft.sandbox.v1.Sandbox
+	(JobState)(0),                  // 0: daft.nodectrl.v1.JobState
+	(JobControlErrorCode)(0),       // 1: daft.nodectrl.v1.JobControlErrorCode
+	(ObserverSource)(0),            // 2: daft.nodectrl.v1.ObserverSource
+	(*ProtocolVersion)(nil),        // 3: daft.nodectrl.v1.ProtocolVersion
+	(*HostResources)(nil),          // 4: daft.nodectrl.v1.HostResources
+	(*RegisterNodeRequest)(nil),    // 5: daft.nodectrl.v1.RegisterNodeRequest
+	(*NodeEvent)(nil),              // 6: daft.nodectrl.v1.NodeEvent
+	(*SecretDeliveryRequest)(nil),  // 7: daft.nodectrl.v1.SecretDeliveryRequest
+	(*SecretDeliveryResponse)(nil), // 8: daft.nodectrl.v1.SecretDeliveryResponse
+	(*SecretDeliveryAck)(nil),      // 9: daft.nodectrl.v1.SecretDeliveryAck
+	(*JobControlRequest)(nil),      // 10: daft.nodectrl.v1.JobControlRequest
+	(*JobStartRequest)(nil),        // 11: daft.nodectrl.v1.JobStartRequest
+	(*JobGetRequest)(nil),          // 12: daft.nodectrl.v1.JobGetRequest
+	(*JobCancelRequest)(nil),       // 13: daft.nodectrl.v1.JobCancelRequest
+	(*JobDeleteRequest)(nil),       // 14: daft.nodectrl.v1.JobDeleteRequest
+	(*JobOutputChunk)(nil),         // 15: daft.nodectrl.v1.JobOutputChunk
+	(*JobSnapshot)(nil),            // 16: daft.nodectrl.v1.JobSnapshot
+	(*JobControlResponse)(nil),     // 17: daft.nodectrl.v1.JobControlResponse
+	(*JobControlAck)(nil),          // 18: daft.nodectrl.v1.JobControlAck
+	(*OpenPortRequest)(nil),        // 19: daft.nodectrl.v1.OpenPortRequest
+	(*PortStreamMessage)(nil),      // 20: daft.nodectrl.v1.PortStreamMessage
+	(*PortStreamHello)(nil),        // 21: daft.nodectrl.v1.PortStreamHello
+	(*AttachRequest)(nil),          // 22: daft.nodectrl.v1.AttachRequest
+	(*AttachStreamMessage)(nil),    // 23: daft.nodectrl.v1.AttachStreamMessage
+	(*AttachStreamHello)(nil),      // 24: daft.nodectrl.v1.AttachStreamHello
+	(*AttachStreamResize)(nil),     // 25: daft.nodectrl.v1.AttachStreamResize
+	(*AttachStreamExit)(nil),       // 26: daft.nodectrl.v1.AttachStreamExit
+	(*ObserverRequest)(nil),        // 27: daft.nodectrl.v1.ObserverRequest
+	(*ObserverStreamMessage)(nil),  // 28: daft.nodectrl.v1.ObserverStreamMessage
+	(*ObserverStreamHello)(nil),    // 29: daft.nodectrl.v1.ObserverStreamHello
+	(*SandboxWatchEvent)(nil),      // 30: daft.nodectrl.v1.SandboxWatchEvent
+	(*SubscriptionReady)(nil),      // 31: daft.nodectrl.v1.SubscriptionReady
+	(*HeartbeatRequest)(nil),       // 32: daft.nodectrl.v1.HeartbeatRequest
+	(*LiveSandbox)(nil),            // 33: daft.nodectrl.v1.LiveSandbox
+	(*HeartbeatResponse)(nil),      // 34: daft.nodectrl.v1.HeartbeatResponse
+	(*ListNodesRequest)(nil),       // 35: daft.nodectrl.v1.ListNodesRequest
+	(*Node)(nil),                   // 36: daft.nodectrl.v1.Node
+	(*ListNodesResponse)(nil),      // 37: daft.nodectrl.v1.ListNodesResponse
+	(*timestamppb.Timestamp)(nil),  // 38: google.protobuf.Timestamp
+	(v1.EventType)(0),              // 39: daft.sandbox.v1.EventType
+	(*v1.Sandbox)(nil),             // 40: daft.sandbox.v1.Sandbox
 }
 var file_nodectrl_v1_nodectrl_proto_depIdxs = []int32{
 	4,  // 0: daft.nodectrl.v1.RegisterNodeRequest.resources:type_name -> daft.nodectrl.v1.HostResources
 	3,  // 1: daft.nodectrl.v1.RegisterNodeRequest.protocol_version:type_name -> daft.nodectrl.v1.ProtocolVersion
-	28, // 2: daft.nodectrl.v1.NodeEvent.ready:type_name -> daft.nodectrl.v1.SubscriptionReady
-	27, // 3: daft.nodectrl.v1.NodeEvent.sandbox:type_name -> daft.nodectrl.v1.SandboxWatchEvent
-	16, // 4: daft.nodectrl.v1.NodeEvent.open_port:type_name -> daft.nodectrl.v1.OpenPortRequest
-	19, // 5: daft.nodectrl.v1.NodeEvent.attach:type_name -> daft.nodectrl.v1.AttachRequest
-	24, // 6: daft.nodectrl.v1.NodeEvent.observer:type_name -> daft.nodectrl.v1.ObserverRequest
-	7,  // 7: daft.nodectrl.v1.NodeEvent.job_control:type_name -> daft.nodectrl.v1.JobControlRequest
-	8,  // 8: daft.nodectrl.v1.JobControlRequest.start:type_name -> daft.nodectrl.v1.JobStartRequest
-	9,  // 9: daft.nodectrl.v1.JobControlRequest.get:type_name -> daft.nodectrl.v1.JobGetRequest
-	10, // 10: daft.nodectrl.v1.JobControlRequest.cancel:type_name -> daft.nodectrl.v1.JobCancelRequest
-	11, // 11: daft.nodectrl.v1.JobControlRequest.delete:type_name -> daft.nodectrl.v1.JobDeleteRequest
-	0,  // 12: daft.nodectrl.v1.JobSnapshot.state:type_name -> daft.nodectrl.v1.JobState
-	12, // 13: daft.nodectrl.v1.JobSnapshot.stdout:type_name -> daft.nodectrl.v1.JobOutputChunk
-	12, // 14: daft.nodectrl.v1.JobSnapshot.stderr:type_name -> daft.nodectrl.v1.JobOutputChunk
-	35, // 15: daft.nodectrl.v1.JobSnapshot.created_at:type_name -> google.protobuf.Timestamp
-	35, // 16: daft.nodectrl.v1.JobSnapshot.started_at:type_name -> google.protobuf.Timestamp
-	35, // 17: daft.nodectrl.v1.JobSnapshot.completed_at:type_name -> google.protobuf.Timestamp
-	13, // 18: daft.nodectrl.v1.JobControlResponse.snapshot:type_name -> daft.nodectrl.v1.JobSnapshot
-	1,  // 19: daft.nodectrl.v1.JobControlResponse.error_code:type_name -> daft.nodectrl.v1.JobControlErrorCode
-	18, // 20: daft.nodectrl.v1.PortStreamMessage.hello:type_name -> daft.nodectrl.v1.PortStreamHello
-	21, // 21: daft.nodectrl.v1.AttachStreamMessage.hello:type_name -> daft.nodectrl.v1.AttachStreamHello
-	22, // 22: daft.nodectrl.v1.AttachStreamMessage.resize:type_name -> daft.nodectrl.v1.AttachStreamResize
-	23, // 23: daft.nodectrl.v1.AttachStreamMessage.exit:type_name -> daft.nodectrl.v1.AttachStreamExit
-	2,  // 24: daft.nodectrl.v1.ObserverRequest.source:type_name -> daft.nodectrl.v1.ObserverSource
-	26, // 25: daft.nodectrl.v1.ObserverStreamMessage.hello:type_name -> daft.nodectrl.v1.ObserverStreamHello
-	36, // 26: daft.nodectrl.v1.SandboxWatchEvent.type:type_name -> daft.sandbox.v1.EventType
-	37, // 27: daft.nodectrl.v1.SandboxWatchEvent.sandbox:type_name -> daft.sandbox.v1.Sandbox
-	35, // 28: daft.nodectrl.v1.SubscriptionReady.accepted_at:type_name -> google.protobuf.Timestamp
-	3,  // 29: daft.nodectrl.v1.SubscriptionReady.protocol_version:type_name -> daft.nodectrl.v1.ProtocolVersion
-	4,  // 30: daft.nodectrl.v1.HeartbeatRequest.current:type_name -> daft.nodectrl.v1.HostResources
-	30, // 31: daft.nodectrl.v1.HeartbeatRequest.live_sandboxes:type_name -> daft.nodectrl.v1.LiveSandbox
-	35, // 32: daft.nodectrl.v1.HeartbeatResponse.seen_at:type_name -> google.protobuf.Timestamp
-	4,  // 33: daft.nodectrl.v1.Node.resources:type_name -> daft.nodectrl.v1.HostResources
-	35, // 34: daft.nodectrl.v1.Node.registered_at:type_name -> google.protobuf.Timestamp
-	35, // 35: daft.nodectrl.v1.Node.last_seen_at:type_name -> google.protobuf.Timestamp
-	33, // 36: daft.nodectrl.v1.ListNodesResponse.nodes:type_name -> daft.nodectrl.v1.Node
-	5,  // 37: daft.nodectrl.v1.NodeControlService.RegisterNode:input_type -> daft.nodectrl.v1.RegisterNodeRequest
-	29, // 38: daft.nodectrl.v1.NodeControlService.Heartbeat:input_type -> daft.nodectrl.v1.HeartbeatRequest
-	32, // 39: daft.nodectrl.v1.NodeControlService.ListNodes:input_type -> daft.nodectrl.v1.ListNodesRequest
-	17, // 40: daft.nodectrl.v1.NodeControlService.OpenPortStream:input_type -> daft.nodectrl.v1.PortStreamMessage
-	20, // 41: daft.nodectrl.v1.NodeControlService.AttachStream:input_type -> daft.nodectrl.v1.AttachStreamMessage
-	25, // 42: daft.nodectrl.v1.NodeControlService.ObserverStream:input_type -> daft.nodectrl.v1.ObserverStreamMessage
-	14, // 43: daft.nodectrl.v1.NodeControlService.ReportJobControl:input_type -> daft.nodectrl.v1.JobControlResponse
-	6,  // 44: daft.nodectrl.v1.NodeControlService.RegisterNode:output_type -> daft.nodectrl.v1.NodeEvent
-	31, // 45: daft.nodectrl.v1.NodeControlService.Heartbeat:output_type -> daft.nodectrl.v1.HeartbeatResponse
-	34, // 46: daft.nodectrl.v1.NodeControlService.ListNodes:output_type -> daft.nodectrl.v1.ListNodesResponse
-	17, // 47: daft.nodectrl.v1.NodeControlService.OpenPortStream:output_type -> daft.nodectrl.v1.PortStreamMessage
-	20, // 48: daft.nodectrl.v1.NodeControlService.AttachStream:output_type -> daft.nodectrl.v1.AttachStreamMessage
-	25, // 49: daft.nodectrl.v1.NodeControlService.ObserverStream:output_type -> daft.nodectrl.v1.ObserverStreamMessage
-	15, // 50: daft.nodectrl.v1.NodeControlService.ReportJobControl:output_type -> daft.nodectrl.v1.JobControlAck
-	44, // [44:51] is the sub-list for method output_type
-	37, // [37:44] is the sub-list for method input_type
-	37, // [37:37] is the sub-list for extension type_name
-	37, // [37:37] is the sub-list for extension extendee
-	0,  // [0:37] is the sub-list for field type_name
+	31, // 2: daft.nodectrl.v1.NodeEvent.ready:type_name -> daft.nodectrl.v1.SubscriptionReady
+	30, // 3: daft.nodectrl.v1.NodeEvent.sandbox:type_name -> daft.nodectrl.v1.SandboxWatchEvent
+	19, // 4: daft.nodectrl.v1.NodeEvent.open_port:type_name -> daft.nodectrl.v1.OpenPortRequest
+	22, // 5: daft.nodectrl.v1.NodeEvent.attach:type_name -> daft.nodectrl.v1.AttachRequest
+	27, // 6: daft.nodectrl.v1.NodeEvent.observer:type_name -> daft.nodectrl.v1.ObserverRequest
+	10, // 7: daft.nodectrl.v1.NodeEvent.job_control:type_name -> daft.nodectrl.v1.JobControlRequest
+	7,  // 8: daft.nodectrl.v1.NodeEvent.secret_delivery:type_name -> daft.nodectrl.v1.SecretDeliveryRequest
+	38, // 9: daft.nodectrl.v1.SecretDeliveryRequest.expires_at:type_name -> google.protobuf.Timestamp
+	11, // 10: daft.nodectrl.v1.JobControlRequest.start:type_name -> daft.nodectrl.v1.JobStartRequest
+	12, // 11: daft.nodectrl.v1.JobControlRequest.get:type_name -> daft.nodectrl.v1.JobGetRequest
+	13, // 12: daft.nodectrl.v1.JobControlRequest.cancel:type_name -> daft.nodectrl.v1.JobCancelRequest
+	14, // 13: daft.nodectrl.v1.JobControlRequest.delete:type_name -> daft.nodectrl.v1.JobDeleteRequest
+	0,  // 14: daft.nodectrl.v1.JobSnapshot.state:type_name -> daft.nodectrl.v1.JobState
+	15, // 15: daft.nodectrl.v1.JobSnapshot.stdout:type_name -> daft.nodectrl.v1.JobOutputChunk
+	15, // 16: daft.nodectrl.v1.JobSnapshot.stderr:type_name -> daft.nodectrl.v1.JobOutputChunk
+	38, // 17: daft.nodectrl.v1.JobSnapshot.created_at:type_name -> google.protobuf.Timestamp
+	38, // 18: daft.nodectrl.v1.JobSnapshot.started_at:type_name -> google.protobuf.Timestamp
+	38, // 19: daft.nodectrl.v1.JobSnapshot.completed_at:type_name -> google.protobuf.Timestamp
+	16, // 20: daft.nodectrl.v1.JobControlResponse.snapshot:type_name -> daft.nodectrl.v1.JobSnapshot
+	1,  // 21: daft.nodectrl.v1.JobControlResponse.error_code:type_name -> daft.nodectrl.v1.JobControlErrorCode
+	21, // 22: daft.nodectrl.v1.PortStreamMessage.hello:type_name -> daft.nodectrl.v1.PortStreamHello
+	24, // 23: daft.nodectrl.v1.AttachStreamMessage.hello:type_name -> daft.nodectrl.v1.AttachStreamHello
+	25, // 24: daft.nodectrl.v1.AttachStreamMessage.resize:type_name -> daft.nodectrl.v1.AttachStreamResize
+	26, // 25: daft.nodectrl.v1.AttachStreamMessage.exit:type_name -> daft.nodectrl.v1.AttachStreamExit
+	2,  // 26: daft.nodectrl.v1.ObserverRequest.source:type_name -> daft.nodectrl.v1.ObserverSource
+	29, // 27: daft.nodectrl.v1.ObserverStreamMessage.hello:type_name -> daft.nodectrl.v1.ObserverStreamHello
+	39, // 28: daft.nodectrl.v1.SandboxWatchEvent.type:type_name -> daft.sandbox.v1.EventType
+	40, // 29: daft.nodectrl.v1.SandboxWatchEvent.sandbox:type_name -> daft.sandbox.v1.Sandbox
+	38, // 30: daft.nodectrl.v1.SubscriptionReady.accepted_at:type_name -> google.protobuf.Timestamp
+	3,  // 31: daft.nodectrl.v1.SubscriptionReady.protocol_version:type_name -> daft.nodectrl.v1.ProtocolVersion
+	4,  // 32: daft.nodectrl.v1.HeartbeatRequest.current:type_name -> daft.nodectrl.v1.HostResources
+	33, // 33: daft.nodectrl.v1.HeartbeatRequest.live_sandboxes:type_name -> daft.nodectrl.v1.LiveSandbox
+	38, // 34: daft.nodectrl.v1.HeartbeatResponse.seen_at:type_name -> google.protobuf.Timestamp
+	4,  // 35: daft.nodectrl.v1.Node.resources:type_name -> daft.nodectrl.v1.HostResources
+	38, // 36: daft.nodectrl.v1.Node.registered_at:type_name -> google.protobuf.Timestamp
+	38, // 37: daft.nodectrl.v1.Node.last_seen_at:type_name -> google.protobuf.Timestamp
+	36, // 38: daft.nodectrl.v1.ListNodesResponse.nodes:type_name -> daft.nodectrl.v1.Node
+	5,  // 39: daft.nodectrl.v1.NodeControlService.RegisterNode:input_type -> daft.nodectrl.v1.RegisterNodeRequest
+	32, // 40: daft.nodectrl.v1.NodeControlService.Heartbeat:input_type -> daft.nodectrl.v1.HeartbeatRequest
+	35, // 41: daft.nodectrl.v1.NodeControlService.ListNodes:input_type -> daft.nodectrl.v1.ListNodesRequest
+	20, // 42: daft.nodectrl.v1.NodeControlService.OpenPortStream:input_type -> daft.nodectrl.v1.PortStreamMessage
+	23, // 43: daft.nodectrl.v1.NodeControlService.AttachStream:input_type -> daft.nodectrl.v1.AttachStreamMessage
+	28, // 44: daft.nodectrl.v1.NodeControlService.ObserverStream:input_type -> daft.nodectrl.v1.ObserverStreamMessage
+	17, // 45: daft.nodectrl.v1.NodeControlService.ReportJobControl:input_type -> daft.nodectrl.v1.JobControlResponse
+	8,  // 46: daft.nodectrl.v1.NodeControlService.ReportSecretDelivery:input_type -> daft.nodectrl.v1.SecretDeliveryResponse
+	6,  // 47: daft.nodectrl.v1.NodeControlService.RegisterNode:output_type -> daft.nodectrl.v1.NodeEvent
+	34, // 48: daft.nodectrl.v1.NodeControlService.Heartbeat:output_type -> daft.nodectrl.v1.HeartbeatResponse
+	37, // 49: daft.nodectrl.v1.NodeControlService.ListNodes:output_type -> daft.nodectrl.v1.ListNodesResponse
+	20, // 50: daft.nodectrl.v1.NodeControlService.OpenPortStream:output_type -> daft.nodectrl.v1.PortStreamMessage
+	23, // 51: daft.nodectrl.v1.NodeControlService.AttachStream:output_type -> daft.nodectrl.v1.AttachStreamMessage
+	28, // 52: daft.nodectrl.v1.NodeControlService.ObserverStream:output_type -> daft.nodectrl.v1.ObserverStreamMessage
+	18, // 53: daft.nodectrl.v1.NodeControlService.ReportJobControl:output_type -> daft.nodectrl.v1.JobControlAck
+	9,  // 54: daft.nodectrl.v1.NodeControlService.ReportSecretDelivery:output_type -> daft.nodectrl.v1.SecretDeliveryAck
+	47, // [47:55] is the sub-list for method output_type
+	39, // [39:47] is the sub-list for method input_type
+	39, // [39:39] is the sub-list for extension type_name
+	39, // [39:39] is the sub-list for extension extendee
+	0,  // [0:39] is the sub-list for field type_name
 }
 
 func init() { file_nodectrl_v1_nodectrl_proto_init() }
@@ -2801,25 +3033,26 @@ func file_nodectrl_v1_nodectrl_proto_init() {
 		(*NodeEvent_Attach)(nil),
 		(*NodeEvent_Observer)(nil),
 		(*NodeEvent_JobControl)(nil),
+		(*NodeEvent_SecretDelivery)(nil),
 	}
-	file_nodectrl_v1_nodectrl_proto_msgTypes[4].OneofWrappers = []any{
+	file_nodectrl_v1_nodectrl_proto_msgTypes[7].OneofWrappers = []any{
 		(*JobControlRequest_Start)(nil),
 		(*JobControlRequest_Get)(nil),
 		(*JobControlRequest_Cancel)(nil),
 		(*JobControlRequest_Delete)(nil),
 	}
-	file_nodectrl_v1_nodectrl_proto_msgTypes[10].OneofWrappers = []any{}
-	file_nodectrl_v1_nodectrl_proto_msgTypes[14].OneofWrappers = []any{
+	file_nodectrl_v1_nodectrl_proto_msgTypes[13].OneofWrappers = []any{}
+	file_nodectrl_v1_nodectrl_proto_msgTypes[17].OneofWrappers = []any{
 		(*PortStreamMessage_Hello)(nil),
 		(*PortStreamMessage_Data)(nil),
 	}
-	file_nodectrl_v1_nodectrl_proto_msgTypes[17].OneofWrappers = []any{
+	file_nodectrl_v1_nodectrl_proto_msgTypes[20].OneofWrappers = []any{
 		(*AttachStreamMessage_Hello)(nil),
 		(*AttachStreamMessage_Data)(nil),
 		(*AttachStreamMessage_Resize)(nil),
 		(*AttachStreamMessage_Exit)(nil),
 	}
-	file_nodectrl_v1_nodectrl_proto_msgTypes[22].OneofWrappers = []any{
+	file_nodectrl_v1_nodectrl_proto_msgTypes[25].OneofWrappers = []any{
 		(*ObserverStreamMessage_Hello)(nil),
 		(*ObserverStreamMessage_Data)(nil),
 	}
@@ -2829,7 +3062,7 @@ func file_nodectrl_v1_nodectrl_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nodectrl_v1_nodectrl_proto_rawDesc), len(file_nodectrl_v1_nodectrl_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   32,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

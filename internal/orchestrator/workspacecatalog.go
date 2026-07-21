@@ -51,12 +51,13 @@ type WorkspaceNodeLister interface {
 // composition. It is resolved on the trusted host and is never accepted from
 // the public MCP schema.
 type AgentSandboxPolicy struct {
-	ProfileDigest   string
-	ImageRef        string
-	ResourcesEnable bool
-	CPUCores        uint32
-	MemoryBytes     uint64
-	EgressEnable    bool
+	ProfileDigest      string
+	ImageRef           string
+	ResourcesEnable    bool
+	CPUCores           uint32
+	MemoryBytes        uint64
+	EgressEnable       bool
+	CredentialProvider string
 }
 
 // WorkspacePortBridger is the seam ForwardPort uses to open a
@@ -795,6 +796,9 @@ func (h *WorkspaceCatalogHandler) LaunchAgentSandbox(owner identity.Fingerprint,
 	sandboxUID := mintWorkspaceUUID()
 	sandbox := workspaceToSandbox(launch, sandboxUID, targetFP)
 	sandbox.Spec.EgressPolicy = &sandboxv1.EgressPolicy{Enable: policy.EgressEnable}
+	if policy.CredentialProvider != "" {
+		sandbox.Spec.AgentCredential = &sandboxv1.AgentCredential{Provider: policy.CredentialProvider}
+	}
 	if pubErr := h.dispatcher.PublishSandboxEvent(targetFP, sandboxv1.EventType_EVENT_TYPE_ADDED, sandbox); pubErr != nil {
 		return workspacecatalog.SandboxRef{}, mapSandboxPublishError(pubErr)
 	}

@@ -143,7 +143,7 @@ func TestAgentRunHandlerStartBindsAndStartsIdempotentJob(t *testing.T) {
 	}
 	nodes := nodectrl.NewRegistry(nil)
 	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
-	starter := &fakeAgentStarter{snapshot: nodejob.Snapshot{ID: "job"}}
+	starter := &fakeAgentStarter{snapshot: nodejob.Snapshot{ID: orchestratorTestJobID}}
 	handler := NewAgentRunHandler(runs, nil)
 	handler.SetStartDependencies(workspaces, nodes, starter)
 	response, err := handler.Start(t.Context(), agentRunRequest(&agentrunv1.StartAgentRunRequest{

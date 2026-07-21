@@ -108,6 +108,16 @@ message SandboxSpec {
   // Set+disabled denies all guest egress; set+enabled requires and exclusively
   // uses the Node's terminating proxy lane.
   EgressPolicy egress_policy = 15;
+
+  // Fixed credential plumbing requested by a trusted AgentProfile. This is
+  // non-secret policy: it selects a built-in guest destination and environment
+  // mapping; neither callers nor Nodes can choose a path or variable name.
+  AgentCredential agent_credential = 16;
+}
+
+message AgentCredential {
+  // Currently only "codex" is valid. Empty disables credential plumbing.
+  string provider = 1;
 }
 
 // SandboxStatus is the orchestrator's observed runtime state.

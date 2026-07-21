@@ -16,6 +16,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1/nodectrlv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/operator/v1/operatorv1connect"
+	"github.com/richiejp/darkaifactory/internal/genpb/secretdelivery/v1/secretdeliveryv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
@@ -38,6 +39,7 @@ type Client struct {
 	Operator  operatorv1connect.OperatorServiceClient
 	Health    healthv1connect.HealthServiceClient
 	AgentRuns agentrunv1connect.AgentRunServiceClient
+	Secrets   secretdeliveryv1connect.SecretDeliveryServiceClient
 
 	transport *http2.Transport
 }
@@ -95,6 +97,7 @@ func open(cfg Config, bootstrap bool) (*Client, error) {
 		Operator:  operatorv1connect.NewOperatorServiceClient(httpClient, baseURL, cfg.Options...),
 		Health:    healthv1connect.NewHealthServiceClient(httpClient, baseURL, cfg.Options...),
 		AgentRuns: agentrunv1connect.NewAgentRunServiceClient(httpClient, baseURL, cfg.Options...),
+		Secrets:   secretdeliveryv1connect.NewSecretDeliveryServiceClient(httpClient, baseURL, cfg.Options...),
 		transport: transport,
 	}, nil
 }

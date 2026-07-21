@@ -72,7 +72,11 @@ func TestBuildGuestConfigProjectsFeatureToggles(t *testing.T) {
 		Trace:      true,
 		Attach:     true,
 	}
+	cfg.CredentialProvider = "codex"
 	gc := buildGuestConfig(cfg)
+	if gc.GetCredentialProvider() != "codex" {
+		t.Errorf("credential provider = %q", gc.GetCredentialProvider())
+	}
 	if !gc.GetTraceEnabled() || !gc.GetAttachEnabled() {
 		t.Errorf("toggles = trace %v / attach %v, want both true", gc.GetTraceEnabled(), gc.GetAttachEnabled())
 	}

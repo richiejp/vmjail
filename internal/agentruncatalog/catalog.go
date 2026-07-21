@@ -54,29 +54,30 @@ func (s State) Terminal() bool {
 }
 
 type Run struct {
-	UUID               string               `json:"uuid"`
-	OwnerFingerprint   identity.Fingerprint `json:"owner_fingerprint"`
-	WorkspaceUUID      string               `json:"workspace_uuid"`
-	ProfileName        string               `json:"profile_name"`
-	ProfileDigest      string               `json:"profile_digest"`
-	CredentialRequired bool                 `json:"credential_required,omitempty"`
-	CredentialProvider string               `json:"credential_provider,omitempty"`
-	Prompt             string               `json:"prompt"`
-	Command            []string             `json:"command"`
-	State              State                `json:"state"`
-	SandboxUID         string               `json:"sandbox_uid,omitempty"`
-	NodeFingerprint    identity.Fingerprint `json:"node_fingerprint,omitempty"`
-	NodeInstanceID     string               `json:"node_instance_id,omitempty"`
-	NodeJobID          string               `json:"node_job_id,omitempty"`
-	CreatedAt          time.Time            `json:"created_at"`
-	UpdatedAt          time.Time            `json:"updated_at"`
-	StartedAt          time.Time            `json:"started_at,omitempty"`
-	CompletedAt        time.Time            `json:"completed_at,omitempty"`
-	ExitCode           int32                `json:"exit_code,omitempty"`
-	ExitCodeSet        bool                 `json:"exit_code_set,omitempty"`
-	Reason             string               `json:"reason,omitempty"`
-	Result             string               `json:"result,omitempty"`
-	LastEventCursor    uint64               `json:"last_event_cursor"`
+	UUID                 string               `json:"uuid"`
+	OwnerFingerprint     identity.Fingerprint `json:"owner_fingerprint"`
+	WorkspaceUUID        string               `json:"workspace_uuid"`
+	ProfileName          string               `json:"profile_name"`
+	ProfileDigest        string               `json:"profile_digest"`
+	CredentialRequired   bool                 `json:"credential_required,omitempty"`
+	CredentialProvider   string               `json:"credential_provider,omitempty"`
+	CredentialDeliveryID string               `json:"credential_delivery_id,omitempty"`
+	Prompt               string               `json:"prompt"`
+	Command              []string             `json:"command"`
+	State                State                `json:"state"`
+	SandboxUID           string               `json:"sandbox_uid,omitempty"`
+	NodeFingerprint      identity.Fingerprint `json:"node_fingerprint,omitempty"`
+	NodeInstanceID       string               `json:"node_instance_id,omitempty"`
+	NodeJobID            string               `json:"node_job_id,omitempty"`
+	CreatedAt            time.Time            `json:"created_at"`
+	UpdatedAt            time.Time            `json:"updated_at"`
+	StartedAt            time.Time            `json:"started_at,omitempty"`
+	CompletedAt          time.Time            `json:"completed_at,omitempty"`
+	ExitCode             int32                `json:"exit_code,omitempty"`
+	ExitCodeSet          bool                 `json:"exit_code_set,omitempty"`
+	Reason               string               `json:"reason,omitempty"`
+	Result               string               `json:"result,omitempty"`
+	LastEventCursor      uint64               `json:"last_event_cursor"`
 }
 
 type Event struct {
@@ -95,12 +96,12 @@ type CreateInput struct {
 }
 
 type TransitionInput struct {
-	From                                                           []State
-	To                                                             State
-	Message, SandboxUID, NodeInstanceID, NodeJobID, Reason, Result string
-	NodeFingerprint                                                identity.Fingerprint
-	ExitCode                                                       int32
-	ExitCodeSet                                                    bool
+	From                                                                                 []State
+	To                                                                                   State
+	Message, SandboxUID, NodeInstanceID, NodeJobID, CredentialDeliveryID, Reason, Result string
+	NodeFingerprint                                                                      identity.Fingerprint
+	ExitCode                                                                             int32
+	ExitCodeSet                                                                          bool
 }
 
 var (
@@ -274,6 +275,12 @@ func (s *Store) Transition(owner identity.Fingerprint, uuid string, in Transitio
 	if in.NodeJobID != "" {
 		next.NodeJobID = in.NodeJobID
 	}
+	if in.CredentialDeliveryID != "" {
+		if next.CredentialDeliveryID != "" && next.CredentialDeliveryID != in.CredentialDeliveryID {
+			return Run{}, fmt.Errorf("%w: credential delivery ID is immutable", ErrInvalid)
+		}
+		next.CredentialDeliveryID = in.CredentialDeliveryID
+	}
 	if next.State == StateRunning && next.StartedAt.IsZero() {
 		next.StartedAt = now
 	}
@@ -414,6 +421,9 @@ func validateBindings(r Run) error {
 	}
 	if r.State == StateAwaitingCredential && !r.CredentialRequired {
 		return fmt.Errorf("%w: awaiting-credential state requires credentials", ErrInvalid)
+	}
+	if r.CredentialDeliveryID != "" && (!r.CredentialRequired || r.State == StateQueued || r.State == StateAwaitingCredential) {
+		return fmt.Errorf("%w: credential delivery binding is inconsistent", ErrInvalid)
 	}
 	switch r.State {
 	case StateRunning, StateCanceling, StateSucceeded:

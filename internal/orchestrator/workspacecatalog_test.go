@@ -1401,6 +1401,7 @@ func TestLaunchAgentSandboxAppliesFrozenPolicyAndReusesExactDigest(t *testing.T)
 	policy := AgentSandboxPolicy{
 		ProfileDigest: testAgentDigest, ImageRef: testAgentImage,
 		ResourcesEnable: true, CPUCores: 8, MemoryBytes: 16 << 30, EgressEnable: true,
+		CredentialProvider: testAgentProfile,
 	}
 	ref, err := h.LaunchAgentSandbox(owner, ws.Metadata.UUID, policy)
 	if err != nil {
@@ -1416,6 +1417,9 @@ func TestLaunchAgentSandboxAppliesFrozenPolicyAndReusesExactDigest(t *testing.T)
 	}
 	if !spec.GetEgressPolicy().GetEnable() || len(spec.GetMounts()) != 1 {
 		t.Errorf("published policy/mounts = %#v, %#v", spec.GetEgressPolicy(), spec.GetMounts())
+	}
+	if spec.GetAgentCredential().GetProvider() != testAgentProfile {
+		t.Errorf("agent credential = %#v", spec.GetAgentCredential())
 	}
 	got, _ := store.Get(ws.Metadata.UUID)
 	if got.Spec.ImageRef != "example.com/project:latest" || got.Spec.CPUCores != 2 || got.Spec.MemoryBytes != 2<<30 {

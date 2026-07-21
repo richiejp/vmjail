@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"connectrpc.com/connect"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/richiejp/darkaifactory/internal/agentcredential"
 	"github.com/richiejp/darkaifactory/internal/agentprofile"
 	"github.com/richiejp/darkaifactory/internal/agentruncatalog"
 	"github.com/richiejp/darkaifactory/internal/daftclient"
@@ -16,6 +19,7 @@ import (
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	operatorv1 "github.com/richiejp/darkaifactory/internal/genpb/operator/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	secretdeliveryv1 "github.com/richiejp/darkaifactory/internal/genpb/secretdelivery/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
@@ -29,6 +33,7 @@ const (
 	mcpTestProfile   = "codex"
 	mcpTestPrompt    = "fix it"
 	mcpTestWorkspace = "workspace"
+	mcpMissing       = "missing"
 	profileNameKey   = "profile_name"
 	promptKey        = "prompt"
 	workspaceUUIDKey = "workspace_uuid"
@@ -112,7 +117,7 @@ func TestAgentStartResolvesTrustedProfile(t *testing.T) {
 		t.Fatalf("resolved start = workspace=%q profile=%#v prompt=%q", reader.requestedUUID, reader.startedProfile, reader.startedPrompt)
 	}
 	for name, arguments := range map[string]map[string]any{
-		"unknown profile": {workspaceUUIDKey: mcpTestWorkspace, profileNameKey: "missing", promptKey: mcpTestPrompt},
+		"unknown profile": {workspaceUUIDKey: mcpTestWorkspace, profileNameKey: mcpMissing, promptKey: mcpTestPrompt},
 		"oversize prompt": {workspaceUUIDKey: mcpTestWorkspace, profileNameKey: mcpTestProfile, promptKey: string(make([]byte, agentruncatalog.MaxPromptBytes+1))},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -362,7 +367,7 @@ func TestToolErrorsAreReturnedToTheMCPCaller(t *testing.T) {
 	}{
 		{name: nodeListTool, reader: &fakeReader{listNodesErr: errors.New("nodes unavailable")}, args: map[string]any{}},
 		{name: workspaceListTool, reader: &fakeReader{listWorkErr: errors.New("catalog unavailable")}, args: map[string]any{}},
-		{name: workspaceGetTool, reader: &fakeReader{getWorkErr: errors.New("not found")}, args: map[string]any{uuidKey: "missing"}},
+		{name: workspaceGetTool, reader: &fakeReader{getWorkErr: errors.New("not found")}, args: map[string]any{uuidKey: mcpMissing}},
 		{name: nodeStatusTool, reader: &fakeReader{operatorErr: errors.New("status unavailable")}, args: validFingerprintArgs(t)},
 		{name: nodeAuthorizeTool, reader: &fakeReader{operatorErr: errors.New("authorize unavailable")}, args: validFingerprintArgs(t)},
 		{name: nodeRevokeTool, reader: &fakeReader{operatorErr: errors.New("revoke unavailable")}, args: validFingerprintArgs(t)},
@@ -445,16 +450,53 @@ type fakeAgentRunClient struct {
 	run          *agentrunv1.AgentRun
 	events       *agentrunv1.AgentRunEventsResponse
 	err          error
+	startErr     error
+	getErr       error
 	captureStart func(*agentrunv1.StartAgentRunRequest)
 }
 
+type fakeSecretClient struct {
+	request *secretdeliveryv1.DeliverSecretRequest
+	err     error
+}
+
+func (f *fakeSecretClient) Deliver(_ context.Context, request *connect.Request[secretdeliveryv1.DeliverSecretRequest]) (*connect.Response[secretdeliveryv1.DeliverSecretResponse], error) {
+	f.request = request.Msg
+	return connect.NewResponse(&secretdeliveryv1.DeliverSecretResponse{Installed: true}), f.err
+}
+
+func testCredentialCatalog(t *testing.T) *agentcredential.Catalog {
+	t.Helper()
+	dir := t.TempDir()
+	auth := filepath.Join(dir, "auth.json")
+	catalog := filepath.Join(dir, "credentials.json")
+	if err := os.WriteFile(auth, []byte(`{"token":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(catalog, []byte(`{"version":1,"credentials":[{"name":"host-only","provider":"codex","source":{"file":"auth.json"}}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := agentcredential.Load(catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(c.Destroy)
+	return c
+}
+
 func (f fakeAgentRunClient) Get(context.Context, *connect.Request[agentrunv1.GetAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error) {
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
 	return connect.NewResponse(f.run), f.err
 }
 
 func (f fakeAgentRunClient) Start(_ context.Context, request *connect.Request[agentrunv1.StartAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error) {
 	if f.captureStart != nil {
 		f.captureStart(request.Msg)
+	}
+	if f.startErr != nil {
+		return nil, f.startErr
 	}
 	return connect.NewResponse(f.run), f.err
 }
@@ -490,6 +532,7 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 		listResponse: &workspacev1.ListWorkspacesResponse{Workspaces: []*workspacev1.Workspace{protoWorkspace}},
 	}
 	var startRequest *agentrunv1.StartAgentRunRequest
+	secretClient := &fakeSecretClient{}
 	reader := ConnectReader{
 		nodes: fakeNodeLister{response: &nodectrlv1.ListNodesResponse{Nodes: []*nodectrlv1.Node{{
 			Fingerprint: "fingerprint",
@@ -500,6 +543,7 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 		workspace: workspaces,
 		operator:  fakeOperatorClient{status: &operatorv1.NodeStatus{Fingerprint: "fingerprint", Authorized: true}},
 		agentRuns: fakeAgentRunClient{run: &agentrunv1.AgentRun{Uuid: testRunValue, State: agentrunv1.AgentRunState_AGENT_RUN_STATE_SUCCEEDED, Result: doneValue}, events: &agentrunv1.AgentRunEventsResponse{Events: []*agentrunv1.AgentRunEvent{{Cursor: 1}}, NextCursor: 1}, captureStart: func(request *agentrunv1.StartAgentRunRequest) { startRequest = request }},
+		secrets:   secretClient, credentials: testCredentialCatalog(t),
 	}
 	nodes, err := reader.ListNodes(t.Context())
 	if err != nil || len(nodes) != 1 || nodes[0].CPUs != 8 || nodes[0].MemoryBytes != 16 {
@@ -554,6 +598,9 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	if !startRequest.GetCredentialRequired() || startRequest.GetCredentialProvider() != "codex" {
 		t.Fatalf("Start credential marker = %#v", startRequest)
 	}
+	if secretClient.request.GetAgentRunUuid() != testRunValue || secretClient.request.GetKind() != secretdeliveryv1.SecretKind_SECRET_KIND_CODEX_AUTH_JSON {
+		t.Fatalf("secret request=%+v", secretClient.request)
+	}
 }
 
 func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
@@ -593,6 +640,27 @@ func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
 	}
 	if _, err := reader.CancelAgentRun(t.Context(), testRunValue); !errors.Is(err, wantErr) {
 		t.Errorf("CancelAgentRun error = %v", err)
+	}
+}
+
+func TestConnectReaderCredentialDeliveryFailures(t *testing.T) {
+	profile := agentprofile.Entry{Profile: agentprofile.Profile{Provider: agentprofile.ProviderCodex, Credentials: agentprofile.CredentialsSection{Enable: true, Profile: "host-only"}}}
+	run := &agentrunv1.AgentRun{Uuid: testRunValue}
+	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run}}).StartAgentRun(t.Context(), "w", profile, ""); err == nil {
+		t.Fatal("missing credential catalog succeeded")
+	}
+	missing := profile
+	missing.Profile.Credentials.Profile = mcpMissing
+	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run}, credentials: testCredentialCatalog(t), secrets: &fakeSecretClient{}}).StartAgentRun(t.Context(), "w", missing, ""); err == nil {
+		t.Fatal("unknown credential succeeded")
+	}
+	want := errors.New("deliver")
+	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run}, credentials: testCredentialCatalog(t), secrets: &fakeSecretClient{err: want}}).StartAgentRun(t.Context(), "w", profile, ""); !errors.Is(err, want) {
+		t.Fatalf("delivery error=%v", err)
+	}
+	want = errors.New("refresh")
+	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run, getErr: want}, credentials: testCredentialCatalog(t), secrets: &fakeSecretClient{}}).StartAgentRun(t.Context(), "w", profile, ""); !errors.Is(err, want) {
+		t.Fatalf("refresh error=%v", err)
 	}
 }
 

@@ -90,6 +90,9 @@ type NodeControlHandler struct {
 	// pendingJobs correlates short-lived control operations with the
 	// authenticated Node callback. Detached job lifetime remains Node-owned.
 	pendingJobs map[string]*pendingJobControl
+	// pendingSecrets is separate from jobs: it correlates only bounded,
+	// expiring credential installation acknowledgements.
+	pendingSecrets map[string]*pendingSecretDelivery
 }
 
 type nodeRegistration struct {
@@ -124,6 +127,7 @@ func NewNodeControlHandler(reg *nodectrl.Registry, peerStores ...*identity.PeerS
 		pendingAttaches:  map[string]*pendingAttach{},
 		pendingObservers: map[string]*pendingObserver{},
 		pendingJobs:      map[string]*pendingJobControl{},
+		pendingSecrets:   map[string]*pendingSecretDelivery{},
 	}, nil
 }
 
@@ -205,8 +209,24 @@ func (h *NodeControlHandler) detachRegistration(fp identity.Fingerprint, registr
 		delete(h.streams, fp)
 		h.reg.Forget(fp)
 		h.failPendingJobsLocked(fp, ErrNodeNotConnected)
+		h.failPendingSecretsLocked(fp, ErrNodeNotConnected)
 	}
 	h.mu.Unlock()
+	clearQueuedSecretEvents(registration.events)
+}
+
+func clearQueuedSecretEvents(events chan *nodectrlv1.NodeEvent) {
+	//daft:lint:disable=forloopbound reason="terminates immediately when the bounded registration queue is empty"
+	for {
+		select {
+		case event := <-events:
+			if secret := event.GetSecretDelivery(); secret != nil {
+				clear(secret.Payload)
+			}
+		default:
+			return
+		}
+	}
 }
 
 // RevokeRegistration immediately disconnects an already-authorized Node. TLS
@@ -219,6 +239,7 @@ func (h *NodeControlHandler) RevokeRegistration(fp identity.Fingerprint) {
 		close(registration.revoked)
 	}
 	h.failPendingJobsLocked(fp, ErrNodeNotConnected)
+	h.failPendingSecretsLocked(fp, ErrNodeNotConnected)
 	h.reg.Forget(fp)
 	h.mu.Unlock()
 }

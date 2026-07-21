@@ -188,7 +188,7 @@ func readContainerProcess(w io.Writer, bundle string) containerProcess {
 // listener so Accept returns net.ErrClosed.
 func runAttachListener(ctx context.Context, w io.Writer, port uint32, d attachDeps, proc containerProcess) {
 	_, span := trace.Start(ctx, "agent.attach.listener.start",
-		trace.WithAttributes(trace.KV{Key: "vsock_port", Value: strconv.FormatUint(uint64(port), 10)}))
+		trace.WithAttributes(trace.KV{Key: traceAttrVsockPort, Value: strconv.FormatUint(uint64(port), 10)}))
 	defer span.End()
 	ln, err := d.listenVsock(port)
 	if err != nil {

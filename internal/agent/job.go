@@ -67,7 +67,7 @@ func startJobListener(ctx context.Context, w io.Writer, d runDeps) {
 
 func runJobListener(ctx context.Context, w io.Writer, port uint32, d jobDeps, proc containerProcess) {
 	_, span := trace.Start(ctx, "agent.job.listener.start",
-		trace.WithAttributes(trace.KV{Key: "vsock_port", Value: strconv.FormatUint(uint64(port), 10)}))
+		trace.WithAttributes(trace.KV{Key: traceAttrVsockPort, Value: strconv.FormatUint(uint64(port), 10)}))
 	defer span.End()
 	ln, err := d.listenVsock(port)
 	if err != nil {

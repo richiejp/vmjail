@@ -159,7 +159,7 @@ func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootC
 // This is the sole channel for per-VM settings — the kernel cmdline
 // carries no daft.* tokens at all.
 func buildGuestConfig(cfg Config) *agentv1.GuestConfig {
-	gc := &agentv1.GuestConfig{Bundle: cfg.Bundle}
+	gc := &agentv1.GuestConfig{Bundle: cfg.Bundle, CredentialProvider: cfg.CredentialProvider}
 	for _, s := range cfg.Shares {
 		gc.Shares = append(gc.Shares, &agentv1.GuestConfig_Share{
 			Tag:        s.Tag,

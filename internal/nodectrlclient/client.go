@@ -30,6 +30,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/nodejob"
+	"github.com/richiejp/darkaifactory/internal/sandboxsecret"
 )
 
 // DefaultHeartbeatInterval is the cadence at which RegisterAndServe
@@ -70,6 +71,10 @@ type JobManager interface {
 	Get(id string, stdoutCursor, stderrCursor uint64, maxBytes int) (nodejob.Snapshot, error)
 	Cancel(id string) (nodejob.Snapshot, error)
 	Delete(id string) error
+}
+
+type SecretDeliverer interface {
+	Deliver(context.Context, sandboxsecret.Request) error
 }
 
 // Config is everything the client needs to dial the orchestrator
@@ -144,6 +149,9 @@ type Config struct {
 	// JobManager executes correlated JobControlRequest events. Nil means the
 	// node cannot accept detached jobs and reports a structured internal error.
 	JobManager JobManager
+	// SecretDeliverer forwards a one-shot credential to the exact live VM.
+	// It is intentionally independent of JobManager and has no persistence.
+	SecretDeliverer SecretDeliverer
 	// Stderr is where per-bridge errors are logged. Defaults to
 	// os.Stderr when nil.
 	Stderr io.Writer
@@ -385,6 +393,14 @@ func (c *Client) dispatchEvent(ctx context.Context, msg *nodectrlv1.NodeEvent) e
 		go func() {
 			if err := c.handleJobControl(ctx, job); err != nil {
 				_, _ = fmt.Fprintf(c.cfg.openPortLogSink(), "nodectrlclient: job control: %v\n", err)
+			}
+		}()
+		return nil
+	}
+	if secret := msg.GetSecretDelivery(); secret != nil {
+		go func() {
+			if err := c.handleSecretDelivery(ctx, secret); err != nil {
+				_, _ = fmt.Fprintf(c.cfg.openPortLogSink(), "nodectrlclient: secret delivery: %v\n", err)
 			}
 		}()
 		return nil

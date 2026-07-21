@@ -72,6 +72,9 @@ const (
 	// NodeControlServiceReportJobControlProcedure is the fully-qualified name of the
 	// NodeControlService's ReportJobControl RPC.
 	NodeControlServiceReportJobControlProcedure = "/daft.nodectrl.v1.NodeControlService/ReportJobControl"
+	// NodeControlServiceReportSecretDeliveryProcedure is the fully-qualified name of the
+	// NodeControlService's ReportSecretDelivery RPC.
+	NodeControlServiceReportSecretDeliveryProcedure = "/daft.nodectrl.v1.NodeControlService/ReportSecretDelivery"
 )
 
 // NodeControlServiceClient is a client for the daft.nodectrl.v1.NodeControlService service.
@@ -137,6 +140,10 @@ type NodeControlServiceClient interface {
 	// the orchestrator matches request_id and the authenticated peer before
 	// releasing the waiting internal controller.
 	ReportJobControl(context.Context, *connect.Request[v1.JobControlResponse]) (*connect.Response[v1.JobControlAck], error)
+	// ReportSecretDelivery completes a correlated, one-shot secret operation.
+	// It is deliberately separate from detached job control so credential bytes
+	// cannot enter job persistence, output, or arbitrary-command surfaces.
+	ReportSecretDelivery(context.Context, *connect.Request[v1.SecretDeliveryResponse]) (*connect.Response[v1.SecretDeliveryAck], error)
 }
 
 // NewNodeControlServiceClient constructs a client for the daft.nodectrl.v1.NodeControlService
@@ -192,18 +199,25 @@ func NewNodeControlServiceClient(httpClient connect.HTTPClient, baseURL string, 
 			connect.WithSchema(nodeControlServiceMethods.ByName("ReportJobControl")),
 			connect.WithClientOptions(opts...),
 		),
+		reportSecretDelivery: connect.NewClient[v1.SecretDeliveryResponse, v1.SecretDeliveryAck](
+			httpClient,
+			baseURL+NodeControlServiceReportSecretDeliveryProcedure,
+			connect.WithSchema(nodeControlServiceMethods.ByName("ReportSecretDelivery")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // nodeControlServiceClient implements NodeControlServiceClient.
 type nodeControlServiceClient struct {
-	registerNode     *connect.Client[v1.RegisterNodeRequest, v1.NodeEvent]
-	heartbeat        *connect.Client[v1.HeartbeatRequest, v1.HeartbeatResponse]
-	listNodes        *connect.Client[v1.ListNodesRequest, v1.ListNodesResponse]
-	openPortStream   *connect.Client[v1.PortStreamMessage, v1.PortStreamMessage]
-	attachStream     *connect.Client[v1.AttachStreamMessage, v1.AttachStreamMessage]
-	observerStream   *connect.Client[v1.ObserverStreamMessage, v1.ObserverStreamMessage]
-	reportJobControl *connect.Client[v1.JobControlResponse, v1.JobControlAck]
+	registerNode         *connect.Client[v1.RegisterNodeRequest, v1.NodeEvent]
+	heartbeat            *connect.Client[v1.HeartbeatRequest, v1.HeartbeatResponse]
+	listNodes            *connect.Client[v1.ListNodesRequest, v1.ListNodesResponse]
+	openPortStream       *connect.Client[v1.PortStreamMessage, v1.PortStreamMessage]
+	attachStream         *connect.Client[v1.AttachStreamMessage, v1.AttachStreamMessage]
+	observerStream       *connect.Client[v1.ObserverStreamMessage, v1.ObserverStreamMessage]
+	reportJobControl     *connect.Client[v1.JobControlResponse, v1.JobControlAck]
+	reportSecretDelivery *connect.Client[v1.SecretDeliveryResponse, v1.SecretDeliveryAck]
 }
 
 // RegisterNode calls daft.nodectrl.v1.NodeControlService.RegisterNode.
@@ -239,6 +253,11 @@ func (c *nodeControlServiceClient) ObserverStream(ctx context.Context) *connect.
 // ReportJobControl calls daft.nodectrl.v1.NodeControlService.ReportJobControl.
 func (c *nodeControlServiceClient) ReportJobControl(ctx context.Context, req *connect.Request[v1.JobControlResponse]) (*connect.Response[v1.JobControlAck], error) {
 	return c.reportJobControl.CallUnary(ctx, req)
+}
+
+// ReportSecretDelivery calls daft.nodectrl.v1.NodeControlService.ReportSecretDelivery.
+func (c *nodeControlServiceClient) ReportSecretDelivery(ctx context.Context, req *connect.Request[v1.SecretDeliveryResponse]) (*connect.Response[v1.SecretDeliveryAck], error) {
+	return c.reportSecretDelivery.CallUnary(ctx, req)
 }
 
 // NodeControlServiceHandler is an implementation of the daft.nodectrl.v1.NodeControlService
@@ -305,6 +324,10 @@ type NodeControlServiceHandler interface {
 	// the orchestrator matches request_id and the authenticated peer before
 	// releasing the waiting internal controller.
 	ReportJobControl(context.Context, *connect.Request[v1.JobControlResponse]) (*connect.Response[v1.JobControlAck], error)
+	// ReportSecretDelivery completes a correlated, one-shot secret operation.
+	// It is deliberately separate from detached job control so credential bytes
+	// cannot enter job persistence, output, or arbitrary-command surfaces.
+	ReportSecretDelivery(context.Context, *connect.Request[v1.SecretDeliveryResponse]) (*connect.Response[v1.SecretDeliveryAck], error)
 }
 
 // NewNodeControlServiceHandler builds an HTTP handler from the service implementation. It returns
@@ -356,6 +379,12 @@ func NewNodeControlServiceHandler(svc NodeControlServiceHandler, opts ...connect
 		connect.WithSchema(nodeControlServiceMethods.ByName("ReportJobControl")),
 		connect.WithHandlerOptions(opts...),
 	)
+	nodeControlServiceReportSecretDeliveryHandler := connect.NewUnaryHandler(
+		NodeControlServiceReportSecretDeliveryProcedure,
+		svc.ReportSecretDelivery,
+		connect.WithSchema(nodeControlServiceMethods.ByName("ReportSecretDelivery")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.nodectrl.v1.NodeControlService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case NodeControlServiceRegisterNodeProcedure:
@@ -372,6 +401,8 @@ func NewNodeControlServiceHandler(svc NodeControlServiceHandler, opts ...connect
 			nodeControlServiceObserverStreamHandler.ServeHTTP(w, r)
 		case NodeControlServiceReportJobControlProcedure:
 			nodeControlServiceReportJobControlHandler.ServeHTTP(w, r)
+		case NodeControlServiceReportSecretDeliveryProcedure:
+			nodeControlServiceReportSecretDeliveryHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -407,4 +438,8 @@ func (UnimplementedNodeControlServiceHandler) ObserverStream(context.Context, *c
 
 func (UnimplementedNodeControlServiceHandler) ReportJobControl(context.Context, *connect.Request[v1.JobControlResponse]) (*connect.Response[v1.JobControlAck], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.nodectrl.v1.NodeControlService.ReportJobControl is not implemented"))
+}
+
+func (UnimplementedNodeControlServiceHandler) ReportSecretDelivery(context.Context, *connect.Request[v1.SecretDeliveryResponse]) (*connect.Response[v1.SecretDeliveryAck], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.nodectrl.v1.NodeControlService.ReportSecretDelivery is not implemented"))
 }

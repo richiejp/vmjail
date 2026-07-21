@@ -3771,7 +3771,7 @@ Slices:
   MCP exposes bounded `agent_status`, `agent_events`, `agent_result`, and
   `agent_cancel`; status deliberately omits the potentially large terminal
   result, and result refuses non-terminal runs. AgentRun creation/start schemas
-  and SecretDelivery channel implementation remain. The trusted-host
+  are now landed. The trusted-host
   credential catalog now loads named Codex provider-native JSON auth stores
   from owner-only regular files, resolves relative paths against the catalog,
   freezes their bytes at startup, exposes them only through the redacted
@@ -3785,6 +3785,20 @@ Slices:
   guessing whether the secret reached the guest. Race-gate coverage added
   alongside this slice also closed Serve/Shutdown worker-publication races and
   made broker relays join both transport handlers before either response closes.
+  The dedicated SecretDelivery contract is now implemented across the trusted
+  client, orchestrator, Node, and guest. It is owner-scoped to an AgentRun,
+  bound to that run's exact Node process and Sandbox, capped at 1 MiB, limited
+  to a five-minute expiry window, and records only a non-secret immutable
+  delivery ID. The Node callback is authenticated against the targeted Node;
+  payloads are cleared at the Connect handler and Node/guest relay boundaries.
+  The guest accepts only Codex provider-native JSON on fixed vsock port 9200,
+  rejects expired/conflicting replay, and atomically installs `auth.json` mode
+  0600 into a fixed tmpfs-backed `CODEX_HOME` bind-mounted before `crun`
+  starts. The trusted MCP process loads and cross-validates a separate
+  owner-only credential catalog, performs the one-shot delivery after Start,
+  and cannot select a guest path or environment variable. Guest tmpfs cleanup
+  is defense in depth; VM teardown remains the definitive destruction boundary.
+  Real-VM visibility/non-retention proof and completion-time teardown remain.
 - **L1 — read-only MCP.** Land `cmd/daft-mcp` over stdio with initialize,
   tool discovery and ownership-safe Node/Workspace reads. The first release is
   deliberately only `node_list`, `workspace_list` (forced to the authenticated
@@ -3924,8 +3938,7 @@ Slices:
   structured exit and terminal deletion. Detached Node execution is now wired
   end to end. Immutable AgentProfile loading and read-only MCP discovery are
   now landed. Owner-scoped AgentRun status/events/result/cancel wire and MCP
-  tools are landed as well. Secret delivery and completion-time Sandbox
-  shutdown remain.
+  tools are landed as well. Completion-time Sandbox shutdown remains.
   Node registration now carries a random process-lifetime instance UUID in
   addition to its stable certificate fingerprint. This supplies the missing
   evidence AgentRun reconciliation needs to classify process-local detached
@@ -3973,7 +3986,14 @@ Slices:
   future C4 work. Focused launch/reuse, policy projection, MCP propagation, and
   egress fail-closed tests are landed. Coverage gates now use invocation-local
   profiles, so concurrent overseer/editor checks cannot delete each other's
-  transient results. Real-VM AgentRun lifecycle coverage remains.
+  transient results. Credentialed starts now stop in AWAITING_CREDENTIAL until
+  the separately authenticated delivery succeeds; the guest tmpfs install is
+  acknowledged before the durable delivery ID and STARTING transition are
+  committed, then the existing idempotent job start runs. Same-ID retries are
+  acknowledged without re-delivery after the durable transition. Dedicated
+  protocol, replay, expiry, ownership, wrong-Node, payload-zeroing, fixed-mount,
+  and MCP catalog tests are landed. Real-VM AgentRun lifecycle and credential
+  non-retention coverage remain.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->

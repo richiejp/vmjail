@@ -22,6 +22,10 @@ const (
 	MaxFileBytes = 1 << 20
 	MaxEntries   = 128
 	MaxNameBytes = 128
+	// CodexHome is the fixed tmpfs-backed directory exposed to sandboxed
+	// Codex processes. Callers cannot override this path or its env name.
+	CodexHome     = "/run/daft/agent-home/codex"
+	AgentHomeRoot = "/run/daft/agent-home"
 )
 
 type Provider string

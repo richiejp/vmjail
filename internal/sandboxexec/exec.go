@@ -896,6 +896,7 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 		PrivilegedFuseMounts: spec.GetPrivilegedFuseMounts().GetEnable(),
 		PrivilegedBuild:      spec.GetPrivilegedBuild().GetEnable(),
 		PostStartCommands:    postStart,
+		CredentialProvider:   spec.GetAgentCredential().GetProvider(),
 	}
 	// Layer the egress-proxy env after the workspace's own env so the
 	// proxy vars win on a key clash (a workload can't unset the proxy the
