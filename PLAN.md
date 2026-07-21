@@ -3798,7 +3798,15 @@ Slices:
   owner-only credential catalog, performs the one-shot delivery after Start,
   and cannot select a guest path or environment variable. Guest tmpfs cleanup
   is defense in depth; VM teardown remains the definitive destruction boundary.
-  Real-VM visibility/non-retention proof and completion-time teardown remain.
+  A real-KVM guest proof now delivers a unique fake OAuth token through the
+  production secret channel, executes a detached container job that validates
+  the fixed `CODEX_HOME` provider store while emitting only a constant
+  sentinel, and rejects the marker in job output, VM console, and the staged
+  host bundle tree. Completion-time teardown and the broader daemon/MCP
+  lifecycle proof remain.
+  The coverage recipes now fail immediately when `go test` fails, rather than
+  accidentally accepting and ratcheting a partial profile (exposed when a
+  restricted runner denied the loopback sockets used by several packages).
 - **L1 — read-only MCP.** Land `cmd/daft-mcp` over stdio with initialize,
   tool discovery and ownership-safe Node/Workspace reads. The first release is
   deliberately only `node_list`, `workspace_list` (forced to the authenticated
@@ -3993,7 +4001,8 @@ Slices:
   acknowledged without re-delivery after the durable transition. Dedicated
   protocol, replay, expiry, ownership, wrong-Node, payload-zeroing, fixed-mount,
   and MCP catalog tests are landed. Real-VM AgentRun lifecycle and credential
-  non-retention coverage remain.
+  non-retention coverage now includes the direct real-VM secret/job path;
+  black-box daemon/MCP lifecycle coverage remains.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and
   verify through MCP -> apply/push workspace -> start agent -> poll events ->

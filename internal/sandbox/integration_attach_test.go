@@ -19,10 +19,12 @@ import (
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/richiejp/darkaifactory/internal/agentcredential"
 	"github.com/richiejp/darkaifactory/internal/nodejob"
 	"github.com/richiejp/darkaifactory/internal/sandboxattach"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/sandboxjob"
+	"github.com/richiejp/darkaifactory/internal/sandboxsecret"
 )
 
 // TestAttachExecE2E is the D2 attach end-to-end proof: boot a
@@ -44,6 +46,7 @@ func TestAttachExecE2E(t *testing.T) {
 		Mountpoint: "/bundles",
 	}}
 	cfg.Bundle = filepath.Join("/bundles", filepath.Base(bundleDir))
+	cfg.CredentialProvider = "codex"
 	cfg.Vsock = &VsockConfig{
 		HostSocket: filepath.Join(t.TempDir(), "v.sock"),
 		GuestCID:   3,
@@ -73,6 +76,30 @@ func TestAttachExecE2E(t *testing.T) {
 	// keepalive block, leaving the container running so a `crun
 	// exec` can land in it.
 	waitForLine(t, console, agent.ContainerBanner, 45*time.Second)
+	waitForLine(t, console, "secretready vsock 9200", 10*time.Second)
+
+	// Deliver a unique fake OAuth token through the same bounded guest channel
+	// production AgentRuns use. The helper command below proves the token is
+	// readable through fixed CODEX_HOME without reflecting it (or a digest) into
+	// stdout/stderr. It is intentionally not a real subscription credential.
+	const secretMarker = "daft-e2e-oauth-marker-74f88cb4"
+	auth := []byte(`{"tokens":{"access_token":"` + secretMarker + `"}}`)
+	deliverer, err := sandboxsecret.New(func(ctx context.Context, sandboxUID string, port uint32) (net.Conn, error) {
+		if sandboxUID != "d2d-sandbox" {
+			return nil, fmt.Errorf("unexpected sandbox UID %q", sandboxUID)
+		}
+		return DialGuestVsock(ctx, cfg.Vsock.HostSocket, port)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deliverer.Deliver(ctx, sandboxsecret.Request{
+		SandboxUID: "d2d-sandbox", DeliveryID: "credential-e2e", Provider: "codex",
+		ExpiresAt: time.Now().Add(time.Minute), Payload: auth,
+	}); err != nil {
+		t.Fatalf("deliver credential: %v\n--- console ---\n%s", err, console.String())
+	}
+	clear(auth)
 
 	// Open the attach channel: dial guest vsock at AttachPort,
 	// send the Hello with Command=["/hello"]. The agent will
@@ -163,6 +190,59 @@ func TestAttachExecE2E(t *testing.T) {
 	if err := manager.Delete(started.ID); err != nil {
 		t.Fatalf("Delete job: %v", err)
 	}
+
+	proof, err := manager.Start(nodejob.StartRequest{
+		IdempotencyKey: "credential-e2e", SandboxUID: "d2d-sandbox",
+		Command: []string{"/hello", "--credential-proof"},
+	})
+	if err != nil {
+		t.Fatalf("Start credential proof: %v", err)
+	}
+	var proofResult nodejob.Snapshot
+	proofDeadline := time.Now().Add(10 * time.Second)
+	//daft:lint:disable=forloopbound reason="bounded by the ten-second real-VM credential proof deadline"
+	for time.Now().Before(proofDeadline) {
+		proofResult, err = manager.Get(proof.ID, 0, 0, nodejob.DefaultMaxReadBytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if proofResult.State.Terminal() {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	combined := append(append([]byte(nil), proofResult.Stdout.Data...), proofResult.Stderr.Data...)
+	if proofResult.State != nodejob.StateSucceeded || string(proofResult.Stdout.Data) != "codex credential available\n" ||
+		len(proofResult.Stderr.Data) != 0 || bytes.Contains(combined, []byte(secretMarker)) || strings.Contains(console.String(), secretMarker) {
+		t.Fatalf("credential proof result=%+v\n--- console ---\n%s", proofResult, console.String())
+	}
+	if err := manager.Delete(proof.ID); err != nil {
+		t.Fatalf("Delete credential proof: %v", err)
+	}
+	assertTreeExcludes(t, filepath.Dir(bundleDir), []byte(secretMarker))
+}
+
+func assertTreeExcludes(t *testing.T, root string, forbidden []byte) {
+	t.Helper()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		content, err := os.ReadFile(path) //nolint:gosec // root is the test's private TempDir.
+		if err != nil {
+			return err
+		}
+		if bytes.Contains(content, forbidden) {
+			return fmt.Errorf("secret marker retained in %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 // prepareKeepaliveBundle materialises a bundle under t.TempDir()
@@ -195,6 +275,16 @@ func prepareKeepaliveBundle(t *testing.T, srcBundle string) string {
 		t.Fatalf("source config.json has no process object: %v", spec)
 	}
 	proc["args"] = []string{"/hello", "--keepalive"}
+	env, _ := proc["env"].([]any)
+	env = append(env, "CODEX_HOME="+agentcredential.CodexHome)
+	proc["env"] = env
+	mounts, _ := spec["mounts"].([]any)
+	spec["mounts"] = append(mounts, map[string]any{
+		"destination": agentcredential.CodexHome,
+		"type":        "bind",
+		"source":      agentcredential.CodexHome,
+		"options":     []string{"rbind", "rw", "nosuid", "nodev", "noexec"},
+	})
 	patched, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal patched config.json: %v", err)

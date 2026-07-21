@@ -122,7 +122,7 @@ COVER_OUT_PREFIX := coverage.out
 COVER_BASELINE := coverage.txt
 
 cover:
-	@profile=$$(mktemp ./$(COVER_OUT_PREFIX).XXXXXX); \
+	@set -e; profile=$$(mktemp ./$(COVER_OUT_PREFIX).XXXXXX); \
 	trap 'rm -f "$$profile"' EXIT; \
 	go test -covermode=atomic -coverprofile="$$profile" $(OUR_GO_PKGS) > /dev/null; \
 	scripts/cover-check.sh --update "$$profile" $(COVER_BASELINE)
@@ -133,7 +133,7 @@ cover:
 #      more than 10 statements.
 #   3. (--update mode) baseline only ever rises.
 cover-check:
-	@profile=$$(mktemp ./$(COVER_OUT_PREFIX).XXXXXX); \
+	@set -e; profile=$$(mktemp ./$(COVER_OUT_PREFIX).XXXXXX); \
 	trap 'rm -f "$$profile"' EXIT; \
 	go test -covermode=atomic -coverprofile="$$profile" $(OUR_GO_PKGS) > /dev/null; \
 	scripts/cover-check.sh "$$profile" $(COVER_BASELINE)

@@ -22,6 +22,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,6 +33,7 @@ import (
 	"syscall"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/richiejp/darkaifactory/internal/agentcredential"
 )
 
 // writeErrf forwards a diagnostic to out, swallowing the (rare)
@@ -45,7 +47,11 @@ func writeErrf(out io.Writer, format string, args ...any) {
 }
 
 // keepaliveFlag enables long-running PID-1 mode.
-const keepaliveFlag = "--keepalive"
+const (
+	keepaliveFlag = "--keepalive"
+	proofFlag     = "--credential-proof"
+	proofOK       = "codex credential available"
+)
 
 //nolint:gochecknoglobals // test seams: tests stub these to avoid blocking on real signals or touching the real fs.
 var (
@@ -55,16 +61,25 @@ var (
 	// boundary without needing a real /workspace.
 	fsRead  = os.ReadFile
 	fsWrite = os.WriteFile
+	fsStat  = os.Stat
+	getenv  = os.Getenv
 	// block waits for a SIGTERM/SIGINT and returns. Stubbed in
 	// tests so they don't actually pin the test process.
 	block = blockUntilTerminationSignal
 )
 
 func main() {
-	osExit(run(stdout, slices.Contains(os.Args[1:], keepaliveFlag)))
+	osExit(run(
+		stdout,
+		slices.Contains(os.Args[1:], keepaliveFlag),
+		slices.Contains(os.Args[1:], proofFlag),
+	))
 }
 
-func run(out io.Writer, keepalive bool) int {
+func run(out io.Writer, keepalive, credentialProof bool) int {
+	if credentialProof {
+		return proveCredential(out)
+	}
 	if code := workspaceRoundTrip(out); code != 0 {
 		return code
 	}
@@ -73,6 +88,42 @@ func run(out io.Writer, keepalive bool) int {
 	}
 	if keepalive {
 		block()
+	}
+	return 0
+}
+
+// proveCredential is a test-workload mode used by the real-VM credential
+// delivery proof. It verifies the fixed CODEX_HOME contract and a non-empty
+// provider-native token, but emits only a constant success sentinel: secret
+// bytes and derived hashes must never enter the detached job spool.
+func proveCredential(out io.Writer) int {
+	if getenv("CODEX_HOME") != agentcredential.CodexHome {
+		writeErrf(out, "credential proof error: CODEX_HOME is not the fixed guest path\n")
+		return 3
+	}
+	authPath := agentcredential.CodexHome + "/auth.json"
+	info, err := fsStat(authPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		writeErrf(out, "credential proof error: auth store permissions invalid\n")
+		return 3
+	}
+	payload, err := fsRead(authPath)
+	if err != nil {
+		writeErrf(out, "credential proof error: auth store unavailable\n")
+		return 3
+	}
+	defer clear(payload)
+	var auth struct {
+		Tokens struct {
+			AccessToken string `json:"access_token"`
+		} `json:"tokens"`
+	}
+	if err := json.Unmarshal(payload, &auth); err != nil || auth.Tokens.AccessToken == "" {
+		writeErrf(out, "credential proof error: provider-native token unavailable\n")
+		return 3
+	}
+	if _, err := fmt.Fprintln(out, proofOK); err != nil {
+		return 1
 	}
 	return 0
 }
