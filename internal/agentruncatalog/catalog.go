@@ -77,6 +77,7 @@ type Run struct {
 	ExitCodeSet          bool                 `json:"exit_code_set,omitempty"`
 	Reason               string               `json:"reason,omitempty"`
 	Result               string               `json:"result,omitempty"`
+	TeardownPending      bool                 `json:"teardown_pending,omitempty"`
 	LastEventCursor      uint64               `json:"last_event_cursor"`
 }
 
@@ -192,16 +193,16 @@ func (s *Store) List(owner identity.Fingerprint) []Run {
 	return out
 }
 
-// Active returns a stable copy of every non-terminal run. It is intentionally
-// not owner-scoped: only the internal reconciliation controller uses it, while
-// all externally reachable reads continue to require the authenticated owner.
+// Active returns non-terminal runs plus terminal runs whose Sandbox teardown
+// is still durably pending. It is intentionally not owner-scoped: only the
+// internal reconciliation controller uses it.
 func (s *Store) Active() []Run {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]Run, 0)
 	for uuid := range s.runs {
 		run := s.runs[uuid]
-		if !run.State.Terminal() {
+		if !run.State.Terminal() || run.TeardownPending {
 			out = append(out, cloneRun(run))
 		}
 	}
@@ -290,6 +291,7 @@ func (s *Store) Transition(owner identity.Fingerprint, uuid string, in Transitio
 		next.ExitCodeSet = in.ExitCodeSet
 		next.Reason = in.Reason
 		next.Result = in.Result
+		next.TeardownPending = next.SandboxUID != ""
 	}
 	if err := validateBindings(next); err != nil {
 		return Run{}, err
@@ -300,6 +302,35 @@ func (s *Store) Transition(owner identity.Fingerprint, uuid string, in Transitio
 	}
 	s.runs[uuid] = next
 	return cloneRun(next), nil
+}
+
+// CompleteTeardown clears the durable retry marker without appending a state
+// event. The externally visible AgentRun state/result are already terminal and
+// immutable; this transaction records completion of its internal cleanup.
+func (s *Store) CompleteTeardown(owner identity.Fingerprint, uuid string) (Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run, ok := s.runs[uuid]
+	if !ok {
+		return Run{}, ErrNotFound
+	}
+	if run.OwnerFingerprint != owner {
+		return Run{}, ErrNotOwner
+	}
+	if !run.State.Terminal() || !run.TeardownPending {
+		return Run{}, ErrConflict
+	}
+	run.TeardownPending = false
+	run.UpdatedAt = s.now().UTC()
+	encoded, err := encodeJSON(persisted[Run]{Version: recordVersion, Value: run})
+	if err != nil {
+		return Run{}, err
+	}
+	if err := s.db.Update(func(txn *badger.Txn) error { return txn.Set([]byte(runPrefix+run.UUID), encoded) }); err != nil {
+		return Run{}, err
+	}
+	s.runs[uuid] = run
+	return cloneRun(run), nil
 }
 
 func cloneRun(run Run) Run {
@@ -410,6 +441,9 @@ func validState(s State) bool {
 }
 
 func validateBindings(r Run) error {
+	if r.TeardownPending && (!r.State.Terminal() || r.SandboxUID == "") {
+		return fmt.Errorf("%w: teardown marker requires a terminal bound run", ErrInvalid)
+	}
 	switch r.State {
 	case StateAwaitingCredential, StateStarting, StateRunning, StateCanceling, StateSucceeded:
 		if r.SandboxUID == "" || r.NodeFingerprint.IsZero() || r.NodeInstanceID == "" {

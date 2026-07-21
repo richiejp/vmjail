@@ -55,6 +55,13 @@ type fakeAgentSandboxLauncher struct {
 	policy    AgentSandboxPolicy
 	ref       workspacecatalog.SandboxRef
 	err       error
+	stopped   string
+	stopErr   error
+}
+
+func (f *fakeAgentSandboxLauncher) StopAgentSandbox(_ identity.Fingerprint, _, sandboxUID string) error {
+	f.stopped = sandboxUID
+	return f.stopErr
 }
 
 func (f *fakeAgentSandboxLauncher) LaunchAgentSandbox(owner identity.Fingerprint, workspace string, policy AgentSandboxPolicy) (workspacecatalog.SandboxRef, error) {
@@ -351,6 +358,8 @@ func TestAgentRunReconcileRecoversStartAndCollectsResult(t *testing.T) {
 	jobs := &fakeAgentStarter{snapshot: nodejob.Snapshot{ID: testAgentJob}}
 	handler := NewAgentRunHandler(runs, nil)
 	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodes, jobs)
+	launcher := &fakeAgentSandboxLauncher{}
+	handler.SetSandboxLauncher(launcher)
 	if err := handler.ReconcileOnce(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -363,8 +372,148 @@ func TestAgentRunReconcileRecoversStartAndCollectsResult(t *testing.T) {
 		t.Fatal(err)
 	}
 	run, err = runs.Get(owner, run.UUID)
-	if err != nil || run.State != agentruncatalog.StateSucceeded || run.Result != "done" || jobs.deleted != testAgentJob {
+	if err != nil || run.State != agentruncatalog.StateSucceeded || run.Result != "done" || run.TeardownPending || jobs.deleted != testAgentJob || launcher.stopped != testAgentSandbox {
 		t.Fatalf("completed = %#v, deleted=%q, %v", run, jobs.deleted, err)
+	}
+}
+
+func TestAgentRunTerminalTeardownRetriesDurably(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	run := createAgentRun(t, runs, owner, "teardown-retry")
+	var err error
+	run, err = runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting, SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, NodeJobID: testAgentJob})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	jobs := &fakeAgentStarter{get: nodejob.Snapshot{ID: testAgentJob, State: nodejob.StateSucceeded, Stdout: nodejob.Chunk{Data: []byte("durable")}, ExitCodeSet: true}}
+	deleteErr := errors.New("job deletion unavailable")
+	jobs.deleteErr = deleteErr
+	stopErr := errors.New("stop transport unavailable")
+	launcher := &fakeAgentSandboxLauncher{stopErr: stopErr}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodes, jobs)
+	handler.SetSandboxLauncher(launcher)
+	if err := handler.ReconcileOnce(t.Context()); !errors.Is(err, deleteErr) {
+		t.Fatalf("first reconcile = %v", err)
+	}
+	terminal, err := runs.Get(owner, run.UUID)
+	if err != nil || terminal.State != agentruncatalog.StateSucceeded || terminal.Result != "durable" || !terminal.TeardownPending {
+		t.Fatalf("terminal pending = %#v, %v", terminal, err)
+	}
+	jobs.deleteErr = nil
+	if err := handler.ReconcileOnce(t.Context()); !errors.Is(err, stopErr) {
+		t.Fatalf("stop retry = %v", err)
+	}
+	launcher.stopErr = nil
+	jobs.deleteErr = nodejob.ErrNotFound
+	if err := handler.ReconcileOnce(t.Context()); err != nil {
+		t.Fatalf("retry teardown = %v", err)
+	}
+	terminal, err = runs.Get(owner, run.UUID)
+	if err != nil || terminal.TeardownPending || launcher.stopped != testAgentSandbox {
+		t.Fatalf("terminal after teardown = %#v, %v", terminal, err)
+	}
+}
+
+func TestAgentRunReconcileStartingRetriesAmbiguousStart(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	run := createAgentRun(t, runs, owner, "ambiguous-start")
+	run, err := runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting, SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Prompt = testAgentPrompt
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	startErr := errors.New("ambiguous start")
+	jobs := &fakeAgentStarter{err: startErr}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodes, jobs)
+	if err := handler.reconcileRun(t.Context(), run); err != nil {
+		t.Fatalf("ambiguous start surfaced instead of remaining retryable: %v", err)
+	}
+	got, err := runs.Get(owner, run.UUID)
+	if err != nil || got.State != agentruncatalog.StateStarting || jobs.request.IdempotencyKey != run.UUID || len(jobs.request.Command) != 2 || jobs.request.Command[1] != testAgentPrompt {
+		t.Fatalf("retryable run = %#v, request=%#v, %v", got, jobs.request, err)
+	}
+}
+
+func TestAgentRunTerminalTeardownRequiresStopper(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	run := createAgentRun(t, runs, owner, "teardown-not-configured")
+	run, err := runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting, SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateFailed, Reason: "failed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodectrl.NewRegistry(nil), &fakeAgentStarter{})
+	if err := handler.reconcileRun(t.Context(), run); err == nil {
+		t.Fatal("terminal teardown without a Sandbox stopper succeeded")
+	}
+}
+
+func TestAgentRunTerminalTeardownWithoutNodeJob(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	run := createAgentRun(t, runs, owner, "teardown-without-job")
+	run, err := runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting, SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateFailed, Reason: "startup failed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcher := &fakeAgentSandboxLauncher{}
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodectrl.NewRegistry(nil), &fakeAgentStarter{})
+	handler.SetSandboxLauncher(launcher)
+	if err := handler.reconcileRun(t.Context(), run); err != nil {
+		t.Fatal(err)
+	}
+	got, err := runs.Get(owner, run.UUID)
+	if err != nil || got.TeardownPending || launcher.stopped != testAgentSandbox {
+		t.Fatalf("completed teardown = %#v, stopped=%q, %v", got, launcher.stopped, err)
+	}
+}
+
+func TestAgentRunReconcileStartingWithoutLaunchSnapshotBecomesLost(t *testing.T) {
+	runs, _ := agentRunStore(t)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	run := createAgentRun(t, runs, owner, "missing-launch-snapshot")
+	run, err := runs.Transition(owner, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateQueued}, To: agentruncatalog.StateStarting, SandboxUID: testAgentSandbox, NodeFingerprint: node, NodeInstanceID: testAgentBootID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Command = nil // Simulates an older persisted record without the launch snapshot.
+	nodes := nodectrl.NewRegistry(nil)
+	nodes.RegisterInstance(node, testAgentBootID, "node", "v1", nodectrl.Resources{})
+	handler := NewAgentRunHandler(runs, nil)
+	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodes, &fakeAgentStarter{})
+	if err := handler.reconcileRun(t.Context(), run); err != nil {
+		t.Fatal(err)
+	}
+	got, err := runs.Get(owner, run.UUID)
+	if err != nil || got.State != agentruncatalog.StateLost || !got.TeardownPending {
+		t.Fatalf("run after missing snapshot = %#v, %v", got, err)
 	}
 }
 
@@ -463,6 +612,7 @@ func TestAgentRunReconcileHandlesOutputExpiryAndDisconnectedNode(t *testing.T) {
 	jobs := &fakeAgentStarter{get: nodejob.Snapshot{ID: testAgentJob, State: nodejob.StateSucceeded, Stdout: nodejob.Chunk{CursorExpired: true}, ExitCodeSet: true}}
 	handler := NewAgentRunHandler(runs, nil)
 	handler.SetStartDependencies(workspacecatalog.NewStore(nil), nodes, jobs)
+	handler.SetSandboxLauncher(&fakeAgentSandboxLauncher{})
 	if err := handler.ReconcileOnce(t.Context()); err != nil {
 		t.Fatal(err)
 	}

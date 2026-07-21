@@ -122,9 +122,9 @@ COVER_OUT_PREFIX := coverage.out
 COVER_BASELINE := coverage.txt
 
 cover:
-	@set -e; profile=$$(mktemp ./$(COVER_OUT_PREFIX).XXXXXX); \
-	trap 'rm -f "$$profile"' EXIT; \
-	go test -covermode=atomic -coverprofile="$$profile" $(OUR_GO_PKGS) > /dev/null; \
+	@set -e; profile=$$(mktemp ./$(COVER_OUT_PREFIX).XXXXXX); log=$$(mktemp); \
+	trap 'rm -f "$$profile" "$$log"' EXIT; \
+	if ! go test -covermode=atomic -coverprofile="$$profile" $(OUR_GO_PKGS) > "$$log"; then cat "$$log"; exit 1; fi; \
 	scripts/cover-check.sh --update "$$profile" $(COVER_BASELINE)
 
 # cover-check: three gates (see CONTRIBUTING.md and scripts/cover-check.sh).
@@ -133,9 +133,9 @@ cover:
 #      more than 10 statements.
 #   3. (--update mode) baseline only ever rises.
 cover-check:
-	@set -e; profile=$$(mktemp ./$(COVER_OUT_PREFIX).XXXXXX); \
-	trap 'rm -f "$$profile"' EXIT; \
-	go test -covermode=atomic -coverprofile="$$profile" $(OUR_GO_PKGS) > /dev/null; \
+	@set -e; profile=$$(mktemp ./$(COVER_OUT_PREFIX).XXXXXX); log=$$(mktemp); \
+	trap 'rm -f "$$profile" "$$log"' EXIT; \
+	if ! go test -covermode=atomic -coverprofile="$$profile" $(OUR_GO_PKGS) > "$$log"; then cat "$$log"; exit 1; fi; \
 	scripts/cover-check.sh "$$profile" $(COVER_BASELINE)
 
 ## Benchmarks ----------------------------------------------------------------

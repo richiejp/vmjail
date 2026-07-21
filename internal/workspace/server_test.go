@@ -289,6 +289,75 @@ func TestGetManifestLiveMountBuildError(t *testing.T) {
 	}
 }
 
+func TestPreserveLiveMountMakesFinalWritesDurable(t *testing.T) {
+	srv, store := mustNewServer(t)
+	const key = "preserve\x00/workspace"
+	live := t.TempDir()
+	mustWriteFile(t, filepath.Join(live, "agent.txt"), []byte("final write"))
+	srv.SetLiveMount(key, live)
+	if err := srv.PreserveLiveMount(t.Context(), key); err != nil {
+		t.Fatalf("PreserveLiveMount: %v", err)
+	}
+	if _, ok := srv.liveDir(key); ok {
+		t.Fatal("live registration remained after preservation")
+	}
+	if err := os.RemoveAll(live); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := srv.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: key}))
+	if err != nil || !manifestHasPath(resp.Msg.GetManifest(), "agent.txt") {
+		t.Fatalf("preserved manifest = %v, %v", resp, err)
+	}
+	var digest string
+	for _, entry := range resp.Msg.GetManifest().GetEntries() {
+		if entry.GetPath() == "agent.txt" && len(entry.GetChunks()) > 0 {
+			digest = entry.GetChunks()[0].GetDigest()
+		}
+	}
+	has, err := store.Has(digest)
+	if err != nil || digest == "" || !has {
+		t.Fatal("preserved manifest chunk was not installed in CAS")
+	}
+}
+
+func TestPreserveLiveMountFailureKeepsOnlyCopyReachable(t *testing.T) {
+	srv, _ := mustNewServer(t)
+	const key = "failed"
+	dir := filepath.Join(t.TempDir(), "missing")
+	srv.SetLiveMount(key, dir)
+	if err := srv.PreserveLiveMount(t.Context(), key); err == nil {
+		t.Fatal("expected preservation failure")
+	}
+	if got, ok := srv.liveDir(key); !ok || got != dir {
+		t.Fatalf("live registration = %q, %v", got, ok)
+	}
+	if err := srv.PreserveLiveMount(t.Context(), "absent"); err != nil {
+		t.Fatalf("absent preservation = %v", err)
+	}
+}
+
+func TestPreserveLiveMountCannotReplaceNewRegistration(t *testing.T) {
+	srv, store := mustNewServer(t)
+	const key = "replaced"
+	oldDir := t.TempDir()
+	newDir := t.TempDir()
+	mustWriteFile(t, filepath.Join(oldDir, "old.txt"), []byte("old"))
+	manifest, err := BuildManifest(oldDir, store, BuildOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.SetLiveMount(key, newDir)
+	if err := srv.commitPreservedLiveMount(key, oldDir, manifest); err == nil {
+		t.Fatal("stale preservation replaced a newer live registration")
+	}
+	if got, ok := srv.liveDir(key); !ok || got != newDir {
+		t.Fatalf("live registration = %q, %v; want %q", got, ok, newDir)
+	}
+	if _, ok := srv.manifests[key]; ok {
+		t.Fatal("stale manifest was published")
+	}
+}
+
 func manifestHasPath(m *workspacev1.Manifest, path string) bool {
 	for _, e := range m.GetEntries() {
 		if e.GetPath() == path {

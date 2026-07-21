@@ -24,6 +24,7 @@ const (
 	testJobID         = "job"
 	testRunA          = "run-a"
 	testMutated       = "mutated"
+	testResult        = "done"
 )
 
 func testOwner(b byte) identity.Fingerprint {
@@ -74,11 +75,11 @@ func TestRunTransitionsPersistWithEvents(t *testing.T) {
 		t.Fatalf("running: %v", err)
 	}
 	now = now.Add(time.Second)
-	run, err = store.Transition(owner, run.UUID, TransitionInput{From: []State{StateRunning}, To: StateSucceeded, Message: "finished", ExitCodeSet: true, Result: "done"})
+	run, err = store.Transition(owner, run.UUID, TransitionInput{From: []State{StateRunning}, To: StateSucceeded, Message: "finished", ExitCodeSet: true, Result: testResult})
 	if err != nil {
 		t.Fatalf("succeeded: %v", err)
 	}
-	if !run.State.Terminal() || !run.ExitCodeSet || run.Result != "done" || run.CompletedAt.IsZero() {
+	if !run.State.Terminal() || !run.ExitCodeSet || run.Result != testResult || run.CompletedAt.IsZero() {
 		t.Fatalf("terminal = %#v", run)
 	}
 	if _, err := store.Transition(owner, run.UUID, TransitionInput{From: []State{StateSucceeded}, To: StateFailed}); !errors.Is(err, ErrConflict) {
@@ -112,7 +113,7 @@ func TestRunTransitionsPersistWithEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get reopened: %v", err)
 	}
-	if got.State != StateSucceeded || got.LastEventCursor != 4 || got.NodeJobID != "job-1" {
+	if got.State != StateSucceeded || got.LastEventCursor != 4 || got.NodeJobID != "job-1" || !got.TeardownPending {
 		t.Fatalf("reopened = %#v", got)
 	}
 }
@@ -251,6 +252,48 @@ func TestCreateValidatesAndCopiesCommand(t *testing.T) {
 	}
 }
 
+func TestTerminalBoundRunRemainsActiveUntilTeardownCompletes(t *testing.T) {
+	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = control.Close() }()
+	store, err := Open(control.DB(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, node := testOwner(1), testOwner(2)
+	run, err := store.Create(CreateInput{Command: []string{testProfileName}, UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = store.Transition(owner, run.UUID, TransitionInput{From: []State{StateQueued}, To: StateStarting, SandboxUID: testSandboxUID, NodeFingerprint: node, NodeInstanceID: testNodeInstance})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = store.Transition(owner, run.UUID, TransitionInput{From: []State{StateStarting}, To: StateRunning, NodeJobID: testJobID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err = store.Transition(owner, run.UUID, TransitionInput{From: []State{StateRunning}, To: StateSucceeded, Result: testResult, ExitCodeSet: true})
+	if err != nil || !run.TeardownPending || len(store.Active()) != 1 {
+		t.Fatalf("terminal run = %#v, %v", run, err)
+	}
+	if _, err := store.CompleteTeardown(testOwner(3), run.UUID); !errors.Is(err, ErrNotOwner) {
+		t.Fatalf("other owner teardown = %v", err)
+	}
+	if _, err := store.CompleteTeardown(owner, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing teardown = %v", err)
+	}
+	run, err = store.CompleteTeardown(owner, run.UUID)
+	if err != nil || run.TeardownPending || len(store.Active()) != 0 {
+		t.Fatalf("completed teardown = %#v, %v", run, err)
+	}
+	if _, err := store.CompleteTeardown(owner, run.UUID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("repeat teardown = %v", err)
+	}
+}
+
 func TestAllLegalAndIllegalTransitions(t *testing.T) {
 	legal := map[State][]State{
 		StateQueued:             {StateAwaitingCredential, StateStarting, StateCanceled, StateFailed},
@@ -266,6 +309,12 @@ func TestAllLegalAndIllegalTransitions(t *testing.T) {
 				t.Errorf("validTransition(%s,%s) = %v, want %v", from, to, got, want)
 			}
 		}
+	}
+}
+
+func TestTeardownMarkerRequiresTerminalBinding(t *testing.T) {
+	if err := validateBindings(Run{TeardownPending: true}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid teardown marker = %v", err)
 	}
 }
 

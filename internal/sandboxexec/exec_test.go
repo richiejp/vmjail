@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
@@ -56,6 +57,15 @@ func addedEvent(uid string, spec *sandboxv1.SandboxSpec) *nodectrlv1.SandboxWatc
 	}
 }
 
+func deletedEvent(uid string) *nodectrlv1.SandboxWatchEvent {
+	return &nodectrlv1.SandboxWatchEvent{
+		Type: sandboxv1.EventType_EVENT_TYPE_DELETED,
+		Sandbox: &sandboxv1.Sandbox{
+			Metadata: &sandboxv1.SandboxMetadata{Uid: uid},
+		},
+	}
+}
+
 func TestNewRejectsNilStdout(t *testing.T) {
 	_, err := New(Config{Runner: noopRunner()})
 	if err == nil {
@@ -72,6 +82,114 @@ func TestNewDefaultsRunnerToHello(t *testing.T) {
 	}
 	if e.run == nil {
 		t.Fatal("runner not defaulted")
+	}
+}
+
+func TestDeletedSandboxCancelsExactRunningVM(t *testing.T) {
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	e, err := New(Config{Stdout: io.Discard, Runner: func(ctx context.Context, _ io.Writer, _ sandbox.Config) error {
+		close(started)
+		<-ctx.Done()
+		close(stopped)
+		return ctx.Err()
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- e.HandleSandboxEvent(t.Context(), addedEvent(testSandboxID, &sandboxv1.SandboxSpec{})) }()
+	<-started
+	if err := e.HandleSandboxEvent(t.Context(), deletedEvent("other")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stopped:
+		t.Fatal("deleting another Sandbox canceled the running VM")
+	default:
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent(testSandboxID, &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatalf("duplicate ADDED: %v", err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), deletedEvent(testSandboxID)); err != nil {
+		t.Fatal(err)
+	}
+	<-stopped
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("ADDED handler error = %v", err)
+	}
+}
+
+func TestDeleteBeforeAddedPreventsBootAndIsIdempotent(t *testing.T) {
+	calls := 0
+	e, err := New(Config{Stdout: io.Discard, Runner: func(context.Context, io.Writer, sandbox.Config) error {
+		calls++
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), deletedEvent(testSandboxID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent(testSandboxID, &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("runner called %d times after delete-before-add", calls)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), deletedEvent(testSandboxID)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExpiredDeleteTombstonesDoNotExhaustCapacity(t *testing.T) {
+	e, err := New(Config{Stdout: io.Discard, Runner: noopRunner()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxPendingSandboxDeletes {
+		e.deleted[fmt.Sprintf("old-%d", i)] = time.Now().Add(-pendingSandboxDeleteTTL)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), deletedEvent(testSandboxID)); err != nil {
+		t.Fatalf("delete after expired tombstones: %v", err)
+	}
+	if len(e.deleted) != 1 {
+		t.Fatalf("pending deletes = %d, want 1", len(e.deleted))
+	}
+}
+
+func TestPendingDeleteCapacityFailsClosed(t *testing.T) {
+	e, err := New(Config{Stdout: io.Discard, Runner: noopRunner()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxPendingSandboxDeletes {
+		e.deleted[fmt.Sprintf("pending-%d", i)] = time.Now()
+	}
+	if err := e.HandleSandboxEvent(t.Context(), deletedEvent(testSandboxID)); err == nil {
+		t.Fatal("delete beyond tombstone capacity succeeded")
+	}
+}
+
+func TestTerminalSnapshotEntryIgnoresLateDeleteAndDuplicateAdd(t *testing.T) {
+	calls := 0
+	e, err := New(Config{Stdout: io.Discard, Runner: func(context.Context, io.Writer, sandbox.Config) error {
+		calls++
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.markPhase(testSandboxID, phaseExited, 0)
+	if err := e.HandleSandboxEvent(t.Context(), deletedEvent(testSandboxID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent(testSandboxID, &sandboxv1.SandboxSpec{})); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("runner called %d times for a completed Sandbox", calls)
 	}
 }
 
@@ -525,9 +643,11 @@ type fakeMaterializer struct {
 	// seed, when set, populates the freshly-materialised dest dir — used
 	// to drop a devcontainer.json into the workspace content for the
 	// node-side overlay test. Implies mkdir.
-	seed    func(dest string) error
-	liveSet map[string]string
-	cleared []string
+	seed        func(dest string) error
+	liveSet     map[string]string
+	preserved   []string
+	cleared     []string
+	preserveErr error
 }
 
 func (f *fakeMaterializer) MaterializeMount(_ context.Context, key, dest string) (bool, error) {
@@ -553,6 +673,11 @@ func (f *fakeMaterializer) SetLiveMount(key, dir string) {
 		f.liveSet = map[string]string{}
 	}
 	f.liveSet[key] = dir
+}
+
+func (f *fakeMaterializer) PreserveLiveMount(_ context.Context, key string) error {
+	f.preserved = append(f.preserved, key)
+	return f.preserveErr
 }
 
 func (f *fakeMaterializer) ClearLiveMount(key string) {
@@ -1060,21 +1185,41 @@ func TestHandleSandboxEventMaterializesMounts(t *testing.T) {
 		}
 	}
 	// The rw mount is registered live (so a pull re-manifests it); the
-	// ro mount is not (the VM can't have changed it). Both are cleared
-	// on teardown.
+	// ro mount is not (the VM can't have changed it). The writable mount is
+	// durably preserved on teardown.
 	if _, ok := fm.liveSet[workspace.SyncKey(testWSUUID, mntWorkspace)]; !ok {
 		t.Error("rw mount not registered live")
 	}
 	if _, ok := fm.liveSet[workspace.SyncKey(testWSUUID, mntData)]; ok {
 		t.Error("ro mount should not be registered live")
 	}
-	if !slices.Contains(fm.cleared, workspace.SyncKey(testWSUUID, mntWorkspace)) {
-		t.Errorf("rw mount not cleared on teardown: %v", fm.cleared)
+	if !slices.Contains(fm.preserved, workspace.SyncKey(testWSUUID, mntWorkspace)) {
+		t.Errorf("rw mount not preserved on teardown: %v", fm.preserved)
 	}
 
 	// The backing tree is cleaned up once the dispatch returns.
 	if _, statErr := os.Stat(filepath.Join(backing, "sb-mat")); !os.IsNotExist(statErr) {
 		t.Errorf("backing dir not cleaned up: stat err = %v", statErr)
+	}
+}
+
+func TestTeardownKeepsBackingTreeWhenPreservationFails(t *testing.T) {
+	backing := t.TempDir()
+	uid := "preserve-failed"
+	dir := filepath.Join(backing, uid, "mnt0")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("CAS unavailable")
+	fm := &fakeMaterializer{preserveErr: want}
+	var out bytes.Buffer
+	e := &Executor{stdout: &out, mountMaterializer: fm, mountBackingDir: backing}
+	e.teardownMounts(t.Context(), uid, &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{{Source: testWSUUID, Target: mntWorkspace}}})
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatalf("backing tree was removed after preserve failure: %v", err)
+	}
+	if !strings.Contains(out.String(), want.Error()) {
+		t.Fatalf("teardown output = %q", out.String())
 	}
 }
 

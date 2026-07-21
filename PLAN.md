@@ -3803,10 +3803,20 @@ Slices:
   the fixed `CODEX_HOME` provider store while emitting only a constant
   sentinel, and rejects the marker in job output, VM console, and the staged
   host bundle tree. Completion-time teardown and the broader daemon/MCP
-  lifecycle proof remain.
+  lifecycle proof remains. Terminal AgentRuns now persist a teardown-pending
+  marker with their result, retry exact-Sandbox shutdown across orchestrator
+  restarts, and clear that marker only after Node job deletion and Sandbox
+  teardown complete. Workspace Stop publishes an idempotent DELETED event;
+  sandboxd cancels only the matching VM (including delete-before-add races).
+  Writable live mounts are re-manifested into the Node CAS before their backing
+  trees are removed, so post-stop pull/relaunch sees final agent writes; a
+  preservation failure deliberately retains the live directory instead of
+  losing data.
   The coverage recipes now fail immediately when `go test` fails, rather than
   accidentally accepting and ratcheting a partial profile (exposed when a
-  restricted runner denied the loopback sockets used by several packages).
+  restricted runner denied the loopback sockets used by several packages),
+  and retain quiet successful runs while printing the captured test output on
+  failure so pre-commit regressions remain diagnosable.
 - **L1 — read-only MCP.** Land `cmd/daft-mcp` over stdio with initialize,
   tool discovery and ownership-safe Node/Workspace reads. The first release is
   deliberately only `node_list`, `workspace_list` (forced to the authenticated
@@ -4001,7 +4011,8 @@ Slices:
   acknowledged without re-delivery after the durable transition. Dedicated
   protocol, replay, expiry, ownership, wrong-Node, payload-zeroing, fixed-mount,
   and MCP catalog tests are landed. Real-VM AgentRun lifecycle and credential
-  non-retention coverage now includes the direct real-VM secret/job path;
+  non-retention coverage now includes the direct real-VM secret/job path.
+  Completion-time teardown is now durable and preserves writable mount state;
   black-box daemon/MCP lifecycle coverage remains.
 - **L5 — overseer workflow and recovery.** Extend the skill (or add a compact
   companion skill) to describe `probe/install node over SSH -> authorize and

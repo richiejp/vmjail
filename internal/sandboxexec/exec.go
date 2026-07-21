@@ -77,6 +77,7 @@ type Assembler func(ctx context.Context, ref string, opts sandboxboot.BootOption
 type MountMaterializer interface {
 	MaterializeMount(ctx context.Context, syncKey, dest string) (applied bool, err error)
 	SetLiveMount(syncKey, dir string)
+	PreserveLiveMount(ctx context.Context, syncKey string) error
 	ClearLiveMount(syncKey string)
 }
 
@@ -187,8 +188,10 @@ type Executor struct {
 	// CID the ABI allows for a guest (0/1/2 are reserved).
 	nextCID atomic.Uint32
 
-	mu   sync.Mutex
-	live map[string]*liveSandbox
+	mu      sync.Mutex
+	live    map[string]*liveSandbox
+	running map[string]context.CancelFunc
+	deleted map[string]time.Time
 }
 
 // Config bundles the Executor's dependencies. The baseline
@@ -386,6 +389,8 @@ func New(cfg Config) (*Executor, error) {
 		buildRunner:       cfg.BuildRunner,
 		buildTimeout:      cfg.BuildTimeout,
 		live:              map[string]*liveSandbox{},
+		running:           map[string]context.CancelFunc{},
+		deleted:           map[string]time.Time{},
 	}
 	// New guarantees BuildPushTransport is non-nil whenever a build can run
 	// (BuildImageRef set), so the closure needs no nil guard of its own.
@@ -465,10 +470,11 @@ func ProductionAssembler(deps sandboxboot.Deps) Assembler {
 	}
 }
 
-// HandleSandboxEvent is the SandboxEventHandler entrypoint. ADDED
-// events trigger a VM boot for the embedded Sandbox.spec; other
-// types are ignored for now (MODIFIED is unused in v1 since Sandbox
-// specs are immutable; DELETED teardown wiring lands in B5).
+// HandleSandboxEvent is the SandboxEventHandler entrypoint. ADDED events boot
+// a VM for the immutable Sandbox spec; DELETED cancels that exact VM. The
+// registration client invokes events on separate goroutines because an ADDED
+// handler blocks for the VM lifetime, so a bounded delete tombstone closes the
+// delete-before-add scheduling race without allowing an unbounded map.
 //
 // When spec.image_ref is non-empty, the executor delegates to its
 // Assembler to pull the image and build the bootable sandbox.Config,
@@ -492,18 +498,27 @@ func (e *Executor) HandleSandboxEvent(
 ) error {
 	assert.True(evt != nil,
 		"SandboxEventHandler must never be called with a nil event — nodectrlclient filters them upstream")
-	if evt.GetType() != sandboxv1.EventType_EVENT_TYPE_ADDED {
-		// MODIFIED/DELETED handling lands with the reconciler.
-		return nil
-	}
 	sb := evt.GetSandbox()
 	assert.True(sb != nil,
-		"SandboxWatchEvent ADDED without a Sandbox payload is an orchestrator bug — the wire schema makes the field optional, but every ADDED code path sets it")
+		"SandboxWatchEvent without a Sandbox payload is an orchestrator bug")
 	uid := sb.GetMetadata().GetUid()
+	assert.True(uid != "", "SandboxWatchEvent without metadata.uid is an orchestrator bug")
+	if evt.GetType() == sandboxv1.EventType_EVENT_TYPE_DELETED {
+		return e.deleteSandbox(uid)
+	}
+	if evt.GetType() != sandboxv1.EventType_EVENT_TYPE_ADDED {
+		return nil
+	}
 	spec := sb.GetSpec()
 	assert.True(spec != nil,
 		"Sandbox without a Spec is an orchestrator bug — Launch always composes one before publishing")
-	ctx, span := trace.Start(ctx, "sandboxexec.sandbox_added",
+	runCtx, cancel := context.WithCancel(ctx)
+	if !e.beginSandbox(uid, cancel) {
+		cancel()
+		return nil
+	}
+	defer e.finishSandbox(uid, cancel)
+	ctx, span := trace.Start(runCtx, "sandboxexec.sandbox_added",
 		trace.WithAttributes(
 			trace.KV{Key: "sandbox.uid", Value: uid},
 			trace.KV{Key: "spec.image_ref", Value: spec.GetImageRef()},
@@ -523,7 +538,7 @@ func (e *Executor) HandleSandboxEvent(
 		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
 	}
 	defer unlock()
-	defer e.teardownMounts(uid, spec)
+	defer e.teardownMounts(context.WithoutCancel(ctx), uid, spec)
 
 	unregisterPorts := e.registerPortRoutes(cfg, spec.GetWorkspaceUuid())
 	defer unregisterPorts()
@@ -542,6 +557,65 @@ func (e *Executor) HandleSandboxEvent(
 	}
 	e.markPhase(uid, phaseExited, 0)
 	return nil
+}
+
+const (
+	maxPendingSandboxDeletes = 256
+	pendingSandboxDeleteTTL  = time.Minute
+)
+
+func (e *Executor) beginSandbox(uid string, cancel context.CancelFunc) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.expireSandboxDeletes(time.Now())
+	if _, deleted := e.deleted[uid]; deleted {
+		delete(e.deleted, uid)
+		return false
+	}
+	if _, exists := e.running[uid]; exists {
+		return false
+	}
+	if _, seen := e.live[uid]; seen {
+		return false
+	}
+	e.running[uid] = cancel
+	return true
+}
+
+func (e *Executor) finishSandbox(uid string, cancel context.CancelFunc) {
+	e.mu.Lock()
+	delete(e.running, uid)
+	e.mu.Unlock()
+	cancel()
+}
+
+func (e *Executor) deleteSandbox(uid string) error {
+	e.mu.Lock()
+	e.expireSandboxDeletes(time.Now())
+	if cancel := e.running[uid]; cancel != nil {
+		e.mu.Unlock()
+		cancel()
+		return nil
+	}
+	if _, seen := e.live[uid]; seen {
+		e.mu.Unlock()
+		return nil
+	}
+	if len(e.deleted) >= maxPendingSandboxDeletes {
+		e.mu.Unlock()
+		return errors.New("sandboxexec: pending Sandbox delete capacity exceeded")
+	}
+	e.deleted[uid] = time.Now()
+	e.mu.Unlock()
+	return nil
+}
+
+func (e *Executor) expireSandboxDeletes(now time.Time) {
+	for uid, added := range e.deleted {
+		if now.Sub(added) >= pendingSandboxDeleteTTL {
+			delete(e.deleted, uid)
+		}
+	}
 }
 
 // registerPortRoutes adds one Bridger route per PortForward on cfg,
@@ -1125,23 +1199,29 @@ func (e *Executor) mountDir(uid string, i int) string {
 	return filepath.Join(e.mountBackingDir, uid, fmt.Sprintf("mnt%d", i))
 }
 
-// teardownMounts ends the dispatch's mount lifetime: it clears every
-// live-mount registration (so a post-stop pull falls back to the
-// last-pushed snapshot, Slice S4) and then removes the per-Sandbox
-// backing tree. Order matters — unregister before removing, so a
-// concurrent pull can't re-manifest a half-deleted dir. Materialised
-// mounts are reconstructed fresh from the node CAS on every launch, so
-// leaving the tree around only leaks disk.
-func (e *Executor) teardownMounts(uid string, spec *sandboxv1.SandboxSpec) {
+// teardownMounts snapshots every writable live mount into the Node CAS before
+// unregistering and removing its backing tree. This makes a post-stop pull (or
+// later relaunch) observe the agent's final writes. A snapshot failure keeps
+// the live registration and backing directory intact: leaking bounded disk is
+// preferable to silently discarding project changes.
+func (e *Executor) teardownMounts(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) {
 	if e.mountMaterializer == nil || e.mountBackingDir == "" {
 		return
 	}
 	workspaceUUID := spec.GetWorkspaceUuid()
+	preserveFailed := false
 	for _, m := range spec.GetMounts() {
 		if filepath.IsAbs(m.GetSource()) || m.GetReadOnly() {
 			continue
 		}
-		e.mountMaterializer.ClearLiveMount(workspace.SyncKey(workspaceUUID, m.GetTarget()))
+		key := workspace.SyncKey(workspaceUUID, m.GetTarget())
+		if err := e.mountMaterializer.PreserveLiveMount(ctx, key); err != nil {
+			preserveFailed = true
+			_, _ = fmt.Fprintf(e.stdout, "sandboxexec: preserve mount %s: %v\n", m.GetTarget(), err)
+		}
+	}
+	if preserveFailed {
+		return
 	}
 	if err := os.RemoveAll(filepath.Join(e.mountBackingDir, uid)); err != nil {
 		_, _ = fmt.Fprintf(e.stdout, "sandboxexec: cleanup mount backing dir: %v\n", err)

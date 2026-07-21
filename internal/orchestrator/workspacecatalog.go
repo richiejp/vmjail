@@ -888,29 +888,81 @@ func (h *WorkspaceCatalogHandler) reconcileBefore(uuid string) {
 	}
 }
 
-// Stop clears the current_sandbox ref and flips the Dispatched
-// condition to False. Catalog-only — the wire teardown signal to
-// the Node (a SandboxWatchEvent DELETED) follows in B5 alongside
-// the reconciler.
+// Stop publishes an exact Sandbox DELETED event before clearing the binding.
+// A publish failure leaves the catalog dispatched so a retry cannot silently
+// strand a VM. The Node-side delete is idempotent.
 func (h *WorkspaceCatalogHandler) Stop(
 	_ context.Context,
 	req *connect.Request[workspacev1.StopRequest],
 ) (*connect.Response[workspacev1.WorkspaceResponse], error) {
-	return h.mutateKind(req.Header(), req.Msg.GetHandle(), workspacecatalog.MutateStatus,
-		func(w *workspacecatalog.Workspace) error {
-			if !w.Status.IsTrue(workspacecatalog.ConditionDispatched) {
-				return connect.NewError(connect.CodeFailedPrecondition,
-					errors.New("workspace: not dispatched; nothing to stop"))
-			}
-			w.Status.CurrentSandbox = nil
-			w.Status.SetCondition(
-				workspacecatalog.ConditionDispatched,
-				workspacecatalog.ConditionStatusFalse,
-				"Stopped", "",
-				time.Now(),
-			)
-			return nil
-		})
+	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	ws, err := h.resolveHandle(fp, req.Msg.GetHandle())
+	if err != nil {
+		return nil, err
+	}
+	if err := guardLock(ws, fp); err != nil {
+		return nil, err
+	}
+	h.reconcileBefore(ws.Metadata.UUID)
+	ws, err = h.store.Get(ws.Metadata.UUID)
+	if err != nil {
+		return nil, mapCatalogErr(err)
+	}
+	if !ws.Status.IsTrue(workspacecatalog.ConditionDispatched) || ws.Status.CurrentSandbox == nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("workspace: not dispatched; nothing to stop"))
+	}
+	if err := h.StopAgentSandbox(fp, ws.Metadata.UUID, ws.Status.CurrentSandbox.UID); err != nil {
+		return nil, err
+	}
+	updated, err := h.store.Get(ws.Metadata.UUID)
+	if err != nil {
+		return nil, mapCatalogErr(err)
+	}
+	return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: workspaceToProto(updated)}), nil
+}
+
+var errSandboxBindingChanged = errors.New("workspace: Sandbox binding changed")
+
+// StopAgentSandbox idempotently tears down one exact Workspace Sandbox. A
+// stale AgentRun can never clear or stop a newer binding because both UUIDs are
+// checked before publication and again in the catalog transaction.
+func (h *WorkspaceCatalogHandler) StopAgentSandbox(owner identity.Fingerprint, workspaceUUID, sandboxUID string) error {
+	if h.dispatcher == nil {
+		return connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator: no dispatcher configured"))
+	}
+	if owner.IsZero() || workspaceUUID == "" || sandboxUID == "" {
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("orchestrator: incomplete Sandbox stop binding"))
+	}
+	ws, err := h.store.Get(workspaceUUID)
+	if err != nil || ws.Metadata.OwnerFingerprint != owner {
+		return connect.NewError(connect.CodeNotFound, errors.New("orchestrator: Workspace not found"))
+	}
+	current := ws.Status.CurrentSandbox
+	if current == nil || current.UID != sandboxUID {
+		return nil
+	}
+	sandbox := &sandboxv1.Sandbox{Metadata: &sandboxv1.SandboxMetadata{Uid: sandboxUID}}
+	if err := h.dispatcher.PublishSandboxEvent(current.NodeFingerprint, sandboxv1.EventType_EVENT_TYPE_DELETED, sandbox); err != nil {
+		return mapSandboxPublishError(err)
+	}
+	_, err = h.store.Update(workspaceUUID, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
+		if w.Status.CurrentSandbox == nil || w.Status.CurrentSandbox.UID != sandboxUID {
+			return errSandboxBindingChanged
+		}
+		w.Status.CurrentSandbox = nil
+		w.Status.SetCondition(workspacecatalog.ConditionDispatched, workspacecatalog.ConditionStatusFalse, "Stopped", "", time.Now())
+		return nil
+	})
+	if errors.Is(err, errSandboxBindingChanged) {
+		return nil
+	}
+	if err != nil {
+		return mapCatalogErr(err)
+	}
+	return nil
 }
 
 // Acquire takes or refreshes the workspace's write lock. Refresh

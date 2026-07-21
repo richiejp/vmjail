@@ -47,6 +47,10 @@ type agentSandboxLauncher interface {
 	LaunchAgentSandbox(identity.Fingerprint, string, AgentSandboxPolicy) (workspacecatalog.SandboxRef, error)
 }
 
+type agentSandboxStopper interface {
+	StopAgentSandbox(identity.Fingerprint, string, string) error
+}
+
 type AgentRunHandler struct {
 	agentrunv1connect.UnimplementedAgentRunServiceHandler
 	store           *agentruncatalog.Store
@@ -56,6 +60,7 @@ type AgentRunHandler struct {
 	workspaces      *workspacecatalog.Store
 	nodes           *nodectrl.Registry
 	launcher        agentSandboxLauncher
+	stopper         agentSandboxStopper
 	now             func() time.Time
 	nodeGrace       time.Duration
 	missingMu       sync.Mutex
@@ -90,6 +95,7 @@ func (h *AgentRunHandler) SetStartDependencies(workspaces *workspacecatalog.Stor
 
 func (h *AgentRunHandler) SetSandboxLauncher(launcher agentSandboxLauncher) {
 	h.launcher = launcher
+	h.stopper, _ = launcher.(agentSandboxStopper)
 }
 
 func NewAgentRunHandler(store *agentruncatalog.Store, canceler agentJobCanceler) *AgentRunHandler {
@@ -238,6 +244,9 @@ func (h *AgentRunHandler) ReconcileOnce(ctx context.Context) error {
 }
 
 func (h *AgentRunHandler) reconcileRun(ctx context.Context, run agentruncatalog.Run) error {
+	if run.State.Terminal() && run.TeardownPending {
+		return h.reconcileTerminalTeardown(ctx, run)
+	}
 	if run.State == agentruncatalog.StateQueued {
 		_, err := h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: agentruncatalog.StateFailed, Message: "startup binding unavailable", Reason: "orchestrator restarted before the run was bound to a Sandbox"})
 		return err
@@ -259,20 +268,7 @@ func (h *AgentRunHandler) reconcileRun(ctx context.Context, run agentruncatalog.
 		return err
 	}
 	if run.State == agentruncatalog.StateStarting {
-		if len(run.Command) == 0 {
-			_, err := h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: agentruncatalog.StateLost, Message: "launch snapshot unavailable", Reason: "launch snapshot unavailable after upgrade"})
-			return err
-		}
-		command := append([]string(nil), run.Command...)
-		if run.Prompt != "" {
-			command = append(command, run.Prompt)
-		}
-		job, err := h.reconciler.StartNodeJob(ctx, run.NodeFingerprint, nodejob.StartRequest{IdempotencyKey: run.UUID, SandboxUID: run.SandboxUID, Command: command})
-		if err != nil {
-			return nil //nolint:nilerr // an ambiguous idempotent start remains retryable
-		}
-		_, err = h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, Message: "job recovered", NodeJobID: job.ID})
-		return err
+		return h.reconcileStarting(ctx, run)
 	}
 	if run.State != agentruncatalog.StateRunning && run.State != agentruncatalog.StateCanceling {
 		return nil
@@ -299,11 +295,46 @@ func (h *AgentRunHandler) reconcileRun(ctx context.Context, run agentruncatalog.
 		to, result = agentruncatalog.StateFailed, ""
 		job.Reason = "detached job output expired before collection"
 	}
-	_, err = h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: to, Message: "job completed", ExitCode: job.ExitCode, ExitCodeSet: job.ExitCodeSet, Reason: job.Reason, Result: result})
+	terminal, err := h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: to, Message: "job completed", ExitCode: job.ExitCode, ExitCodeSet: job.ExitCodeSet, Reason: job.Reason, Result: result})
 	if err != nil {
 		return err
 	}
-	return h.reconciler.DeleteNodeJob(ctx, run.NodeFingerprint, run.NodeJobID)
+	return h.reconcileTerminalTeardown(ctx, terminal)
+}
+
+func (h *AgentRunHandler) reconcileStarting(ctx context.Context, run agentruncatalog.Run) error {
+	if len(run.Command) == 0 {
+		_, err := h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{run.State}, To: agentruncatalog.StateLost, Message: "launch snapshot unavailable", Reason: "launch snapshot unavailable after upgrade"})
+		return err
+	}
+	command := append([]string(nil), run.Command...)
+	if run.Prompt != "" {
+		command = append(command, run.Prompt)
+	}
+	job, err := h.reconciler.StartNodeJob(ctx, run.NodeFingerprint, nodejob.StartRequest{IdempotencyKey: run.UUID, SandboxUID: run.SandboxUID, Command: command})
+	if err != nil {
+		return nil //nolint:nilerr // an ambiguous idempotent start remains retryable
+	}
+	_, err = h.store.Transition(run.OwnerFingerprint, run.UUID, agentruncatalog.TransitionInput{From: []agentruncatalog.State{agentruncatalog.StateStarting}, To: agentruncatalog.StateRunning, Message: "job recovered", NodeJobID: job.ID})
+	return err
+}
+
+func (h *AgentRunHandler) reconcileTerminalTeardown(ctx context.Context, run agentruncatalog.Run) error {
+	if h.stopper == nil {
+		return errors.New("orchestrator: AgentRun Sandbox teardown is not configured")
+	}
+	if run.NodeJobID != "" {
+		if node, connected := h.nodes.Lookup(run.NodeFingerprint); connected && node.InstanceID == run.NodeInstanceID {
+			if err := h.reconciler.DeleteNodeJob(ctx, run.NodeFingerprint, run.NodeJobID); err != nil && !errors.Is(err, nodejob.ErrNotFound) {
+				return err
+			}
+		}
+	}
+	if err := h.stopper.StopAgentSandbox(run.OwnerFingerprint, run.WorkspaceUUID, run.SandboxUID); err != nil {
+		return err
+	}
+	_, err := h.store.CompleteTeardown(run.OwnerFingerprint, run.UUID)
+	return err
 }
 
 func (h *AgentRunHandler) reconcileCredentialWait(run agentruncatalog.Run) error {

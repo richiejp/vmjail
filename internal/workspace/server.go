@@ -60,6 +60,37 @@ func (s *Server) SetLiveMount(key, dir string) {
 	s.liveMu.Unlock()
 }
 
+// PreserveLiveMount snapshots a running mount into the durable manifest/CAS
+// lane, then unregisters that exact live directory. It is idempotent when no
+// live mount exists. The registration remains intact on failure so callers can
+// retry or pull directly instead of losing the only reference to guest writes.
+func (s *Server) PreserveLiveMount(ctx context.Context, key string) error {
+	dir, ok := s.liveDir(key)
+	if !ok {
+		return nil
+	}
+	m, err := BuildManifest(dir, s.store, BuildOptions{})
+	if err != nil {
+		return fmt.Errorf("workspace: preserve live mount %q: %w", key, err)
+	}
+	return s.commitPreservedLiveMount(key, dir, m)
+}
+
+func (s *Server) commitPreservedLiveMount(key, dir string, m *workspacev1.Manifest) error {
+	s.mu.Lock()
+	s.liveMu.Lock()
+	if current, exists := s.live[key]; !exists || current != dir {
+		s.liveMu.Unlock()
+		s.mu.Unlock()
+		return fmt.Errorf("workspace: live mount %q changed during preservation", key)
+	}
+	s.manifests[key] = m
+	delete(s.live, key)
+	s.liveMu.Unlock()
+	s.mu.Unlock()
+	return nil
+}
+
 // ClearLiveMount removes the live-dir registration for key. Idempotent:
 // clearing an absent key is a no-op, so the executor can clear keys it
 // may never have set without bookkeeping.

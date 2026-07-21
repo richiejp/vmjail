@@ -220,6 +220,14 @@ type fakeDispatcher struct {
 	nextError error
 }
 
+type callbackDispatcher struct {
+	callback func() error
+}
+
+func (d callbackDispatcher) PublishSandboxEvent(identity.Fingerprint, sandboxv1.EventType, *sandboxv1.Sandbox) error {
+	return d.callback()
+}
+
 type dispatchCall struct {
 	fp        identity.Fingerprint
 	eventType sandboxv1.EventType
@@ -1384,7 +1392,7 @@ func TestLaunchAgentSandboxAppliesFrozenPolicyAndReusesExactDigest(t *testing.T)
 	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
 	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
 	h.SetNodeLister(fakeNodeLister{fps: []identity.Fingerprint{node}})
-	ws, err := store.Create(workspacecatalog.CreateInput{UUID: "agent-workspace", Name: "project", OwnerFingerprint: owner})
+	ws, err := store.Create(workspacecatalog.CreateInput{UUID: "agent-workspace", Name: testAgentProject, OwnerFingerprint: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1465,7 +1473,7 @@ func TestLaunchAgentSandboxRejectsInvalidStateAndMapsDispatchErrors(t *testing.T
 		t.Errorf("missing workspace code = %s", connect.CodeOf(err))
 	}
 	other := mustGenerate(t, identity.RoleOperator).Fingerprint()
-	ws, err := store.Create(workspacecatalog.CreateInput{UUID: "invalid-agent-workspace", Name: "project", OwnerFingerprint: owner})
+	ws, err := store.Create(workspacecatalog.CreateInput{UUID: "invalid-agent-workspace", Name: testAgentProject, OwnerFingerprint: owner})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1829,6 +1837,106 @@ func TestStopFromRunningTransitionsAndClearsDispatch(t *testing.T) {
 	if ws.GetStatus().GetCurrentSandbox().GetUid() != "" {
 		t.Errorf("current_sandbox.uid = %q, want empty after Stop", ws.GetStatus().GetCurrentSandbox().GetUid())
 	}
+	fake.mu.Lock()
+	last := fake.calls[len(fake.calls)-1]
+	fake.mu.Unlock()
+	if last.eventType != sandboxv1.EventType_EVENT_TYPE_DELETED || last.sandbox.GetMetadata().GetUid() == "" {
+		t.Fatalf("stop dispatch = %+v", last)
+	}
+}
+
+func TestStopPublishFailureKeepsSandboxBound(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
+	uuid := readyWorkspace(t, rig, "stop-failure", target)
+	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.client.Launch(t.Context(), connect.NewRequest(&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)})); err != nil {
+		t.Fatal(err)
+	}
+	fake.mu.Lock()
+	fake.nextError = ErrNodeNotConnected
+	fake.mu.Unlock()
+	if _, err := rig.client.Stop(t.Context(), connect.NewRequest(&workspacev1.StopRequest{Handle: uuidHandle(uuid)})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("Stop error = %v", err)
+	}
+	ws, err := rig.catalog.Get(uuid)
+	if err != nil || ws.Status.CurrentSandbox == nil || !ws.Status.IsTrue(workspacecatalog.ConditionDispatched) {
+		t.Fatalf("workspace after failed stop = %+v, %v", ws, err)
+	}
+}
+
+func TestStopAgentSandboxValidatesAndIgnoresStaleBindings(t *testing.T) {
+	store := workspacecatalog.NewStore(nil)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	other := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	ws, err := store.Create(workspacecatalog.CreateInput{UUID: "stop-agent", Name: testAgentProject, OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	withoutDispatcher, err := NewWorkspaceCatalogHandler(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := withoutDispatcher.StopAgentSandbox(owner, ws.Metadata.UUID, "sandbox"); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("missing dispatcher error = %v", err)
+	}
+	h, err := NewWorkspaceCatalogHandler(store, &fakeDispatcher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.StopAgentSandbox(identity.Fingerprint{}, ws.Metadata.UUID, "sandbox"); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("incomplete binding error = %v", err)
+	}
+	if err := h.StopAgentSandbox(owner, "missing", "sandbox"); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("missing workspace error = %v", err)
+	}
+	if err := h.StopAgentSandbox(other, ws.Metadata.UUID, "sandbox"); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("foreign workspace error = %v", err)
+	}
+	if err := h.StopAgentSandbox(owner, ws.Metadata.UUID, "stale-sandbox"); err != nil {
+		t.Fatalf("stale binding: %v", err)
+	}
+}
+
+func TestStopAgentSandboxCannotClearNewBindingAfterPublish(t *testing.T) {
+	store := workspacecatalog.NewStore(nil)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	ws, err := store.Create(workspacecatalog.CreateInput{UUID: "stop-race", Name: testAgentProject, OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const oldUID = "old-sandbox"
+	const newUID = "new-sandbox"
+	_, err = store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: oldUID, NodeFingerprint: node}
+		value.Status.SetCondition(workspacecatalog.ConditionDispatched, workspacecatalog.ConditionStatusTrue, "Launched", "", time.Now())
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := callbackDispatcher{callback: func() error {
+		_, updateErr := store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+			value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: newUID, NodeFingerprint: node}
+			return nil
+		})
+		return updateErr
+	}}
+	h, err := NewWorkspaceCatalogHandler(store, dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.StopAgentSandbox(owner, ws.Metadata.UUID, oldUID); err != nil {
+		t.Fatalf("stale teardown: %v", err)
+	}
+	got, err := store.Get(ws.Metadata.UUID)
+	if err != nil || got.Status.CurrentSandbox == nil || got.Status.CurrentSandbox.UID != newUID || !got.Status.IsTrue(workspacecatalog.ConditionDispatched) {
+		t.Fatalf("new binding after stale teardown = %+v, %v", got.Status, err)
+	}
 }
 
 // TestStopWithoutLaunchIsRejected pins that Stop requires
@@ -1844,6 +1952,21 @@ func TestStopWithoutLaunchIsRejected(t *testing.T) {
 	))
 	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
 		t.Errorf("code = %s, want FailedPrecondition", code)
+	}
+}
+
+func TestStopRejectsUnauthenticatedAndMissingWorkspace(t *testing.T) {
+	h, err := NewWorkspaceCatalogHandler(workspacecatalog.NewStore(nil), &fakeDispatcher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Stop(t.Context(), connect.NewRequest(&workspacev1.StopRequest{})); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("unauthenticated Stop error = %v", err)
+	}
+	req := connect.NewRequest(&workspacev1.StopRequest{Handle: uuidHandle("missing")})
+	req.Header().Set(peerFingerprintHeader, mustGenerate(t, identity.RoleOperator).Fingerprint().String())
+	if _, err := h.Stop(t.Context(), req); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("missing workspace Stop error = %v", err)
 	}
 }
 
