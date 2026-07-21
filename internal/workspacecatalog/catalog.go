@@ -22,6 +22,7 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sync"
 	"time"
@@ -261,10 +262,13 @@ type Workspace struct {
 // NotFound; ErrImmutableField lets callers detect attempts to
 // mutate identity fields without wrapping every Update result.
 var (
-	ErrNotFound       = errors.New("workspacecatalog: workspace not found")
-	ErrAliasInUse     = errors.New("workspacecatalog: name already used by this owner")
-	ErrImmutableField = errors.New("workspacecatalog: refusing to mutate immutable field")
-	ErrClosed         = errors.New("workspacecatalog: store closed")
+	ErrNotFound           = errors.New("workspacecatalog: workspace not found")
+	ErrNotOwner           = errors.New("workspacecatalog: workspace belongs to another owner")
+	ErrAliasInUse         = errors.New("workspacecatalog: name already used by this owner")
+	ErrImmutableField     = errors.New("workspacecatalog: refusing to mutate immutable field")
+	ErrGenerationConflict = errors.New("workspacecatalog: generation precondition failed")
+	ErrGenerationOverflow = errors.New("workspacecatalog: generation exhausted")
+	ErrClosed             = errors.New("workspacecatalog: store closed")
 	// ErrLockHeldByOther is returned by mutators when the
 	// workspace lock is held by an identity other than the caller.
 	// Maps to FailedPrecondition at the Connect surface.
@@ -478,6 +482,72 @@ func (s *Store) Update(uuid string, kind MutateKind, fn func(*Workspace) error) 
 	}
 	s.all[uuid] = next
 	return cloneWorkspace(next), nil
+}
+
+// ApplySpec atomically replaces the complete declared spec when the caller
+// owns the Workspace, no foreign write lock is active, and the generation
+// precondition matches. Reapplying an identical spec is a no-op even when
+// expectedGeneration is stale, making a lost successful response safe to
+// retry without incrementing Generation twice.
+func (s *Store) ApplySpec(
+	uuid string,
+	owner identity.Fingerprint,
+	expectedGeneration uint64,
+	desired Spec,
+) (Workspace, error) {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return Workspace{}, ErrClosed
+	}
+	prev, ok := s.all[uuid]
+	if !ok {
+		return Workspace{}, ErrNotFound
+	}
+	if prev.Metadata.OwnerFingerprint != owner {
+		return Workspace{}, ErrNotOwner
+	}
+	if prev.Status.Lock.HeldByOther(owner, now) {
+		return Workspace{}, ErrLockHeldByOther
+	}
+	if specsEqual(prev.Spec, desired) {
+		return cloneWorkspace(prev), nil
+	}
+	if expectedGeneration == 0 || prev.Metadata.Generation != expectedGeneration {
+		return Workspace{}, ErrGenerationConflict
+	}
+	if prev.Metadata.Generation == math.MaxUint64 {
+		return Workspace{}, ErrGenerationOverflow
+	}
+	next := cloneWorkspace(prev)
+	next.Spec = cloneSpec(desired)
+	next.Metadata.Generation++
+	next.Metadata.UpdatedAt = now
+	next.Status.Missing = missingFields(next.Spec)
+	next.Status.Conditions = recomputeConditions(next.Status.Conditions, next.Status.Missing, next.Status.IsTrue(ConditionDispatched), now)
+	if s.backend != nil {
+		if err := s.backend.Save(next); err != nil {
+			return Workspace{}, fmt.Errorf("workspacecatalog: persist apply: %w", err)
+		}
+	}
+	s.all[uuid] = next
+	return cloneWorkspace(next), nil
+}
+
+func specsEqual(a, b Spec) bool {
+	return a.ImageRef == b.ImageRef && a.PendingBuildID == b.PendingBuildID && a.DevcontainerPath == b.DevcontainerPath &&
+		slices.Equal(a.Mounts, b.Mounts) && slices.Equal(a.Env, b.Env) && slices.Equal(a.Ports, b.Ports) &&
+		a.TargetSandboxFingerprint == b.TargetSandboxFingerprint && a.GpuCount == b.GpuCount && a.GpuMinVRAM == b.GpuMinVRAM &&
+		a.Isolation == b.Isolation && a.MemoryBytes == b.MemoryBytes && a.CPUCores == b.CPUCores && a.NestedVirt == b.NestedVirt &&
+		a.PrivilegedFuseMounts == b.PrivilegedFuseMounts && a.PrivilegedBuild == b.PrivilegedBuild
+}
+
+func cloneSpec(in Spec) Spec {
+	in.Mounts = slices.Clone(in.Mounts)
+	in.Env = slices.Clone(in.Env)
+	in.Ports = slices.Clone(in.Ports)
+	return in
 }
 
 // Delete removes the workspace if present. Idempotent.

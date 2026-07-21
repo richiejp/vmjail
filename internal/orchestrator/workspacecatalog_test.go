@@ -28,7 +28,9 @@ const (
 	testMountTarget = "/workspace"
 	// testMountSource is the canonical Source value paired with
 	// testMountTarget — opaque to the catalog at this stage.
-	testMountSource = "src"
+	testMountSource      = "src"
+	testEnvValue         = "test"
+	testDevcontainerPath = ".devcontainer/devcontainer.json"
 )
 
 // TestServerExposesWorkspaceCatalog mirrors
@@ -108,6 +110,10 @@ func TestWorkspaceCatalogHandlerRejectsMissingPeerIdentity(t *testing.T) {
 				connect.NewRequest(&workspacev1.ListWorkspacesRequest{}))
 			return e
 		}},
+		{"Apply", func() error {
+			_, e := h.Apply(t.Context(), connect.NewRequest(&workspacev1.ApplyWorkspaceRequest{}))
+			return e
+		}},
 		{"SetImage", func() error {
 			_, e := h.SetImage(t.Context(),
 				connect.NewRequest(&workspacev1.SetImageRequest{}))
@@ -148,6 +154,10 @@ func TestWorkspaceCatalogHandlerRejectsMissingPeerIdentity(t *testing.T) {
 				connect.NewRequest(&workspacev1.RemovePortRequest{
 					ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP,
 				}))
+			return e
+		}},
+		{"Validate", func() error {
+			_, e := h.Validate(t.Context(), connect.NewRequest(&workspacev1.ValidateRequest{}))
 			return e
 		}},
 	}
@@ -734,15 +744,14 @@ func TestSetDevcontainerRoundTripsAndClears(t *testing.T) {
 	))
 	handle := uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())
 
-	const wantPath = ".devcontainer/devcontainer.json"
 	set, err := rig.client.SetDevcontainer(t.Context(), connect.NewRequest(
-		&workspacev1.SetDevcontainerRequest{Handle: handle, DevcontainerPath: wantPath},
+		&workspacev1.SetDevcontainerRequest{Handle: handle, DevcontainerPath: testDevcontainerPath},
 	))
 	if err != nil {
 		t.Fatalf("SetDevcontainer: %v", err)
 	}
-	if got := set.Msg.GetWorkspace().GetSpec().GetDevcontainerPath(); got != wantPath {
-		t.Errorf("devcontainer_path = %q, want %q", got, wantPath)
+	if got := set.Msg.GetWorkspace().GetSpec().GetDevcontainerPath(); got != testDevcontainerPath {
+		t.Errorf("devcontainer_path = %q, want %q", got, testDevcontainerPath)
 	}
 
 	cleared, err := rig.client.SetDevcontainer(t.Context(), connect.NewRequest(
@@ -1191,6 +1200,157 @@ func TestValidatePromotesDraftToReady(t *testing.T) {
 	}
 }
 
+func TestApplyWorkspaceIsAtomicRetrySafeAndReadOnlyValidate(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, err := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "apply"},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := created.Msg.GetWorkspace()
+	target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
+	desired := &workspacev1.WorkspaceSpec{
+		ImageRef:                 testImageRef,
+		TargetSandboxFingerprint: target,
+		Mounts: []*sandboxv1.Mount{{
+			Target: testMountTarget,
+		}},
+		Env: []*sandboxv1.EnvVar{{Name: "MODE", Value: testEnvValue}},
+		Ports: []*sandboxv1.PortMapping{{
+			ContainerPort: 8080,
+			Protocol:      sandboxv1.Protocol_PROTOCOL_TCP,
+		}},
+	}
+	request := &workspacev1.ApplyWorkspaceRequest{
+		Handle:             uuidHandle(before.GetMetadata().GetUuid()),
+		ExpectedGeneration: before.GetMetadata().GetGeneration(),
+		Spec:               desired,
+	}
+	applied, err := rig.client.Apply(t.Context(), connect.NewRequest(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applied.Msg.GetChanged() || applied.Msg.GetWorkspace().GetMetadata().GetGeneration() != before.GetMetadata().GetGeneration()+1 {
+		t.Fatalf("applied = %+v", applied.Msg)
+	}
+	if got := applied.Msg.GetWorkspace().GetSpec().GetMounts()[0].GetSource(); got != before.GetMetadata().GetUuid() {
+		t.Fatalf("default mount source = %q", got)
+	}
+	retry, err := rig.client.Apply(t.Context(), connect.NewRequest(request))
+	if err != nil || retry.Msg.GetChanged() {
+		t.Fatalf("identical stale retry = %+v, %v", retry.Msg, err)
+	}
+	desired.CpuCores = 2
+	if _, err := rig.client.Apply(t.Context(), connect.NewRequest(request)); connect.CodeOf(err) != connect.CodeAborted {
+		t.Fatalf("stale changed apply code = %s, error = %v", connect.CodeOf(err), err)
+	}
+	validated, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: request.Handle},
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validated.Msg.GetWorkspace().GetMetadata().GetGeneration() != applied.Msg.GetWorkspace().GetMetadata().GetGeneration() ||
+		!validated.Msg.GetWorkspace().GetMetadata().GetUpdatedAt().AsTime().Equal(applied.Msg.GetWorkspace().GetMetadata().GetUpdatedAt().AsTime()) {
+		t.Fatalf("Validate mutated metadata: before=%+v after=%+v", applied.Msg.GetWorkspace().GetMetadata(), validated.Msg.GetWorkspace().GetMetadata())
+	}
+}
+
+func TestApplyWorkspaceRejectsMalformedSpecAndForeignUUID(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	foreign := mustGenerate(t, identity.RoleClient).Fingerprint()
+	seeded, err := rig.catalog.Create(workspacecatalog.CreateInput{
+		UUID:             "11111111-1111-4111-8111-bbbbbbbbbbbb",
+		Name:             "foreign-apply",
+		OwnerFingerprint: foreign,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.client.Apply(t.Context(), connect.NewRequest(&workspacev1.ApplyWorkspaceRequest{
+		Handle: uuidHandle(seeded.Metadata.UUID), ExpectedGeneration: seeded.Metadata.Generation, Spec: &workspacev1.WorkspaceSpec{},
+	})); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("foreign UUID code = %s, error = %v", connect.CodeOf(err), err)
+	}
+	created, err := rig.client.Create(t.Context(), connect.NewRequest(&workspacev1.CreateWorkspaceRequest{Name: "malformed"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := &workspacev1.ApplyWorkspaceRequest{
+		Handle:             uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid()),
+		ExpectedGeneration: created.Msg.GetWorkspace().GetMetadata().GetGeneration(),
+		Spec: &workspacev1.WorkspaceSpec{Mounts: []*sandboxv1.Mount{
+			{Target: "/same"}, {Target: "/same"},
+		}},
+	}
+	if _, err := rig.client.Apply(t.Context(), connect.NewRequest(base)); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("duplicate mount code = %s, error = %v", connect.CodeOf(err), err)
+	}
+	base.Spec = nil
+	if _, err := rig.client.Apply(t.Context(), connect.NewRequest(base)); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("nil spec code = %s, error = %v", connect.CodeOf(err), err)
+	}
+}
+
+func TestWorkspaceSpecFromProtoValidationAndProjection(t *testing.T) {
+	const applyWorkspaceUUID = "11111111-1111-4111-8111-111111111111"
+	validTarget := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
+	invalid := []struct {
+		name string
+		spec *workspacev1.WorkspaceSpec
+	}{
+		{name: "nil spec"},
+		{name: "two image sources", spec: &workspacev1.WorkspaceSpec{ImageRef: "a", PendingBuildId: "b"}},
+		{name: "bad target", spec: &workspacev1.WorkspaceSpec{TargetSandboxFingerprint: "bad"}},
+		{name: "absolute devcontainer", spec: &workspacev1.WorkspaceSpec{DevcontainerPath: "/devcontainer.json"}},
+		{name: "escaping devcontainer", spec: &workspacev1.WorkspaceSpec{DevcontainerPath: "../devcontainer.json"}},
+		{name: "invalid isolation", spec: &workspacev1.WorkspaceSpec{Isolation: sandboxv1.Isolation(99)}},
+		{name: "nil mount", spec: &workspacev1.WorkspaceSpec{Mounts: []*sandboxv1.Mount{nil}}},
+		{name: "relative mount", spec: &workspacev1.WorkspaceSpec{Mounts: []*sandboxv1.Mount{{Target: "relative"}}}},
+		{name: "duplicate mount", spec: &workspacev1.WorkspaceSpec{Mounts: []*sandboxv1.Mount{{Target: "/x"}, {Target: "/x"}}}},
+		{name: "nil env", spec: &workspacev1.WorkspaceSpec{Env: []*sandboxv1.EnvVar{nil}}},
+		{name: "empty env", spec: &workspacev1.WorkspaceSpec{Env: []*sandboxv1.EnvVar{{}}}},
+		{name: "duplicate env", spec: &workspacev1.WorkspaceSpec{Env: []*sandboxv1.EnvVar{{Name: "X"}, {Name: "X"}}}},
+		{name: "nil port", spec: &workspacev1.WorkspaceSpec{Ports: []*sandboxv1.PortMapping{nil}}},
+		{name: "unspecified port", spec: &workspacev1.WorkspaceSpec{Ports: []*sandboxv1.PortMapping{{ContainerPort: 80}}}},
+		{name: "large port", spec: &workspacev1.WorkspaceSpec{Ports: []*sandboxv1.PortMapping{{ContainerPort: 65536, Protocol: sandboxv1.Protocol_PROTOCOL_TCP}}}},
+		{name: "duplicate port", spec: &workspacev1.WorkspaceSpec{Ports: []*sandboxv1.PortMapping{{ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP}, {ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP}}}},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := workspaceSpecFromProto(tc.spec, applyWorkspaceUUID); err == nil {
+				t.Fatal("invalid spec accepted")
+			}
+		})
+	}
+
+	got, err := workspaceSpecFromProto(&workspacev1.WorkspaceSpec{
+		ImageRef:                 testImageRef,
+		DevcontainerPath:         testDevcontainerPath,
+		TargetSandboxFingerprint: validTarget,
+		Isolation:                sandboxv1.Isolation_ISOLATION_STRICT,
+		MemoryBytes:              1 << 30,
+		CpuCores:                 4,
+		GpuRequest:               &sandboxv1.GpuRequest{Count: 2, MinVramBytes: 8 << 30},
+		NestedVirtualization:     &sandboxv1.NestedVirtualization{Enable: true},
+		PrivilegedFuseMounts:     &sandboxv1.PrivilegedFuseMounts{Enable: true},
+		PrivilegedBuild:          &sandboxv1.PrivilegedBuild{Enable: true},
+		Mounts:                   []*sandboxv1.Mount{{Target: testMountTarget}},
+		Env:                      []*sandboxv1.EnvVar{{Name: "MODE", Value: testEnvValue}},
+		Ports:                    []*sandboxv1.PortMapping{{ContainerPort: 53, Protocol: sandboxv1.Protocol_PROTOCOL_UDP}},
+	}, applyWorkspaceUUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ImageRef != testImageRef || got.TargetSandboxFingerprint != validTarget || got.GpuCount != 2 || got.GpuMinVRAM != 8<<30 ||
+		got.Isolation != int32(sandboxv1.Isolation_ISOLATION_STRICT) || got.MemoryBytes != 1<<30 || got.CPUCores != 4 ||
+		!got.NestedVirt || !got.PrivilegedFuseMounts || !got.PrivilegedBuild || got.Mounts[0].Source != applyWorkspaceUUID ||
+		got.Env[0].Value != testEnvValue || got.Ports[0].Protocol != int32(sandboxv1.Protocol_PROTOCOL_UDP) {
+		t.Fatalf("projected spec = %+v", got)
+	}
+}
+
 // TestValidateKeepsIncompleteAsNotReady pins the negative half —
 // a workspace still missing a field stays Ready=False after
 // Validate.
@@ -1262,7 +1422,7 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 		t.Fatalf("SetNestedVirtualization: %v", err)
 	}
 	if _, err := rig.client.SetDevcontainer(t.Context(), connect.NewRequest(
-		&workspacev1.SetDevcontainerRequest{Handle: uuidHandle(uuid), DevcontainerPath: ".devcontainer/devcontainer.json"},
+		&workspacev1.SetDevcontainerRequest{Handle: uuidHandle(uuid), DevcontainerPath: testDevcontainerPath},
 	)); err != nil {
 		t.Fatalf("SetDevcontainer: %v", err)
 	}
@@ -1300,7 +1460,7 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	if call.sandbox.GetSpec().GetWorkspaceUuid() != uuid {
 		t.Errorf("spec.workspace_uuid = %q, want %q", call.sandbox.GetSpec().GetWorkspaceUuid(), uuid)
 	}
-	if got := call.sandbox.GetSpec().GetDevcontainerPath(); got != ".devcontainer/devcontainer.json" {
+	if got := call.sandbox.GetSpec().GetDevcontainerPath(); got != testDevcontainerPath {
 		t.Errorf("spec.devcontainer_path = %q, want it projected to the node", got)
 	}
 	if len(call.sandbox.GetSpec().GetMounts()) != 1 || call.sandbox.GetSpec().GetMounts()[0].GetTarget() != testMountTarget {

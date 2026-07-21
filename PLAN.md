@@ -3886,6 +3886,21 @@ Slices:
   design if preconditions prove awkward. Make repeated identical calls no-ops
   so two overseers cannot overwrite each other. A real-VM e2e drives the
   complete lifecycle using only MCP calls.
+  **In progress (2026-07-21):** the catalog now has an atomic, owner-scoped
+  full-spec Apply transaction with an expected-generation precondition. The
+  ownership check, active-lock check, identical-request detection, generation
+  comparison, derived readiness update, persistence, and publication all occur
+  under one store mutex. Identical stale retries are true no-ops, while changed
+  stale requests return Aborted and foreign UUIDs do not reveal existence.
+  Validate is now a genuinely read-only readiness query instead of manufacturing
+  a spec generation. Connect coverage includes malformed declarations,
+  ownership, persistence, and retry semantics. The trusted MCP apply/status
+  projection, create-by-name semantics, project-root-confined push extraction,
+  idempotent launch/stop, and MCP-only real-VM proof remain in this phase.
+  Owner-scoping UUID resolution also applies to attach and the other existing
+  Workspace operations; their transport tests now use the actual owner and
+  bound pipe reads have deadlines, preventing an authorization regression from
+  consuming the package-wide ten-minute gate timeout.
 - **L3 — adaptive SSH Node installation skill.** Add
   `.agents/skills/deploy-daft-node` with concise workflow instructions,
   supervisor/cgroup reference material, and deterministic read-only probe,

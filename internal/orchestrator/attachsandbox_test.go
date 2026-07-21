@@ -199,7 +199,7 @@ func TestRunAttachSandboxSplicesBytesAndResize(t *testing.T) {
 	t.Cleanup(func() { _ = sessLocal.Close() })
 	session := &fakeAttachSession{Conn: sessRemote}
 	br := &fakeAttachBridger{sessions: []sandboxgateway.AttachSession{session}}
-	h, uid, _ := newAttachTestHandlerWithWorkspace(t, br)
+	h, uid, owner := newAttachTestHandlerWithWorkspace(t, br)
 
 	stream := newFakeAttachClientStream()
 	stream.push(attachHelloFrame(uid))
@@ -207,18 +207,24 @@ func TestRunAttachSandboxSplicesBytesAndResize(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	runDone := make(chan error, 1)
-	go func() { runDone <- h.runAttachSandbox(ctx, identity.Fingerprint{}, stream) }()
+	go func() { runDone <- h.runAttachSandbox(ctx, owner, stream) }()
 
 	// client → session: bytes
 	stream.push(&workspacev1.AttachFrame{
 		Body: &workspacev1.AttachFrame_Data{Data: []byte("typed")},
 	})
+	if err := sessLocal.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
 	got := make([]byte, len("typed"))
 	if _, err := io.ReadFull(sessLocal, got); err != nil {
 		t.Fatalf("sessLocal.Read: %v", err)
 	}
 	if !bytes.Equal(got, []byte("typed")) {
 		t.Errorf("session got %q, want typed", got)
+	}
+	if err := sessLocal.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
 	}
 
 	// client → session: resize
@@ -325,7 +331,7 @@ func TestRunAttachSandboxNotRunning(t *testing.T) {
 	}
 	stream := newFakeAttachClientStream()
 	stream.push(attachHelloFrame(uid))
-	got := h.runAttachSandbox(context.Background(), identity.Fingerprint{}, stream)
+	got := h.runAttachSandbox(context.Background(), owner, stream)
 	if !errors.Is(got, ErrAttachWorkspaceNotRunning) {
 		t.Errorf("err = %v, want ErrAttachWorkspaceNotRunning", got)
 	}
@@ -352,10 +358,10 @@ func TestRunAttachSandboxNoBridger(t *testing.T) {
 // TestRunAttachSandboxBridgerError pins the bridger-failure branch.
 func TestRunAttachSandboxBridgerError(t *testing.T) {
 	br := &fakeAttachBridger{err: errors.New("synthetic bridge fail")}
-	h, uid, _ := newAttachTestHandlerWithWorkspace(t, br)
+	h, uid, owner := newAttachTestHandlerWithWorkspace(t, br)
 	stream := newFakeAttachClientStream()
 	stream.push(attachHelloFrame(uid))
-	err := h.runAttachSandbox(context.Background(), identity.Fingerprint{}, stream)
+	err := h.runAttachSandbox(context.Background(), owner, stream)
 	if err == nil {
 		t.Error("expected error when bridger fails")
 	}

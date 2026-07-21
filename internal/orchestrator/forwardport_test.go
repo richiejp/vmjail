@@ -146,7 +146,7 @@ func TestRunForwardPortSplicesEndToEnd(t *testing.T) {
 	dsLocal, dsRemote := net.Pipe()
 	t.Cleanup(func() { _ = dsLocal.Close() })
 	br := &fakeBridger{conns: []net.Conn{dsRemote}}
-	h, uid, _ := newForwardingTestHandler(t, br)
+	h, uid, owner := newForwardingTestHandler(t, br)
 
 	stream := newFakeForwardStream()
 	stream.push(helloFrame(uid, 80))
@@ -155,18 +155,24 @@ func TestRunForwardPortSplicesEndToEnd(t *testing.T) {
 	defer cancel()
 	runDone := make(chan error, 1)
 	go func() {
-		runDone <- h.runForwardPort(ctx, identity.Fingerprint{}, stream)
+		runDone <- h.runForwardPort(ctx, owner, stream)
 	}()
 
 	// upstream → downstream: a Data frame pushed on the stream is
 	// io.Copy'd to dsLocal.
 	stream.push(&workspacev1.ForwardFrame{Body: &workspacev1.ForwardFrame_Data{Data: []byte("to-vm")}})
+	if err := dsLocal.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("SetReadDeadline: %v", err)
+	}
 	gotDS := make([]byte, len("to-vm"))
 	if _, err := io.ReadFull(dsLocal, gotDS); err != nil {
 		t.Fatalf("dsLocal.Read: %v", err)
 	}
 	if !bytes.Equal(gotDS, []byte("to-vm")) {
 		t.Errorf("dsLocal got %q, want to-vm", gotDS)
+	}
+	if err := dsLocal.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear read deadline: %v", err)
 	}
 
 	// downstream → upstream: bytes written on dsLocal are sent as
@@ -254,7 +260,7 @@ func TestRunForwardPortNotRunning(t *testing.T) {
 	}
 	stream := newFakeForwardStream()
 	stream.push(helloFrame(uid, 80))
-	got := h.runForwardPort(context.Background(), identity.Fingerprint{}, stream)
+	got := h.runForwardPort(context.Background(), owner, stream)
 	if !errors.Is(got, ErrForwardWorkspaceNotRunning) {
 		t.Errorf("err = %v, want ErrForwardWorkspaceNotRunning", got)
 	}
@@ -284,10 +290,10 @@ func TestRunForwardPortNoBridger(t *testing.T) {
 // an OpenPortBridge error propagates wrapped via mapCatalogErr.
 func TestRunForwardPortBridgerError(t *testing.T) {
 	br := &fakeBridger{err: errors.New("synthetic bridge fail")}
-	h, uid, _ := newForwardingTestHandler(t, br)
+	h, uid, owner := newForwardingTestHandler(t, br)
 	stream := newFakeForwardStream()
 	stream.push(helloFrame(uid, 80))
-	err := h.runForwardPort(context.Background(), identity.Fingerprint{}, stream)
+	err := h.runForwardPort(context.Background(), owner, stream)
 	if err == nil {
 		t.Error("expected error when bridger fails")
 	}

@@ -2,6 +2,7 @@ package workspacecatalog
 
 import (
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -9,8 +10,9 @@ import (
 )
 
 const (
-	uuidA = "11111111-1111-4111-8111-111111111111"
-	uuidB = "22222222-2222-4222-8222-222222222222"
+	uuidA                = "11111111-1111-4111-8111-111111111111"
+	uuidB                = "22222222-2222-4222-8222-222222222222"
+	workspaceMountTarget = "/workspace"
 
 	missingTarget = "target"
 )
@@ -177,7 +179,7 @@ func TestSpecUpdatePopulatesMissingAndBumpsGeneration(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 	after, err := s.Update(uuidA, MutateSpec, func(ws *Workspace) error {
-		ws.Spec.Mounts = []Mount{{Target: "/workspace", Source: uuidA}}
+		ws.Spec.Mounts = []Mount{{Target: workspaceMountTarget, Source: uuidA}}
 		ws.Spec.ImageRef = "alpine:3"
 		return nil
 	})
@@ -205,6 +207,82 @@ func TestSpecUpdatePopulatesMissingAndBumpsGeneration(t *testing.T) {
 	}
 	if last.Metadata.Generation != 3 {
 		t.Errorf("Generation = %d, want 3 after two spec edits", last.Metadata.Generation)
+	}
+}
+
+func TestApplySpecIsAtomicGenerationCheckedAndRetrySafe(t *testing.T) {
+	s := NewStore(fixedClock(t))
+	owner := mustOwner(t)
+	created, err := s.Create(CreateInput{UUID: uuidA, Name: "ws", OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := Spec{
+		ImageRef:                 "example.com/dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Mounts:                   []Mount{{Target: workspaceMountTarget, Source: "project", ReadOnly: false}},
+		Env:                      []EnvVar{{Name: "MODE", Value: "test"}},
+		Ports:                    []PortMapping{{ContainerPort: 8080, Protocol: 1}},
+		TargetSandboxFingerprint: "sha256:node",
+		MemoryBytes:              1 << 30, CPUCores: 2,
+	}
+	applied, err := s.ApplySpec(uuidA, owner, created.Metadata.Generation, desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.Metadata.Generation != created.Metadata.Generation+1 || len(applied.Status.Missing) != 0 || !applied.Status.IsTrue(ConditionReady) {
+		t.Fatalf("applied = %#v", applied)
+	}
+	// Mutating the caller's slices after Apply cannot mutate the catalog.
+	desired.Mounts[0].Target = "/changed"
+	stored, err := s.Get(uuidA)
+	if err != nil || stored.Spec.Mounts[0].Target != workspaceMountTarget {
+		t.Fatalf("stored after caller mutation = %#v, %v", stored.Spec, err)
+	}
+	desired.Mounts[0].Target = workspaceMountTarget
+	retried, err := s.ApplySpec(uuidA, owner, created.Metadata.Generation, desired)
+	if err != nil || retried.Metadata.Generation != applied.Metadata.Generation {
+		t.Fatalf("identical stale retry = %#v, %v", retried, err)
+	}
+	desired.CPUCores = 4
+	if _, err := s.ApplySpec(uuidA, owner, created.Metadata.Generation, desired); !errors.Is(err, ErrGenerationConflict) {
+		t.Fatalf("stale changed ApplySpec error = %v", err)
+	}
+	if _, err := s.ApplySpec("missing", owner, applied.Metadata.Generation, desired); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing ApplySpec error = %v", err)
+	}
+	foreign := mustOwner(t)
+	if _, err := s.ApplySpec(uuidA, foreign, applied.Metadata.Generation, desired); !errors.Is(err, ErrNotOwner) {
+		t.Fatalf("foreign-owner ApplySpec error = %v", err)
+	}
+	_, err = s.Update(uuidA, MutateStatus, func(ws *Workspace) error {
+		ws.Status.Lock = Lock{OwnerFingerprint: foreign, ExpiresAt: created.Metadata.CreatedAt.Add(time.Hour)}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired.CPUCores = 8
+	if _, err := s.ApplySpec(uuidA, owner, applied.Metadata.Generation, desired); !errors.Is(err, ErrLockHeldByOther) {
+		t.Fatalf("foreign-lock ApplySpec error = %v", err)
+	}
+}
+
+func TestApplySpecRejectsGenerationOverflow(t *testing.T) {
+	s := NewStore(fixedClock(t))
+	owner := mustOwner(t)
+	created, err := s.Create(CreateInput{UUID: uuidA, Name: "overflow", OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Update(created.Metadata.UUID, MutateMetadata, func(ws *Workspace) error {
+		ws.Metadata.Generation = math.MaxUint64
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplySpec(created.Metadata.UUID, owner, math.MaxUint64, Spec{ImageRef: "changed"}); !errors.Is(err, ErrGenerationOverflow) {
+		t.Fatalf("ApplySpec overflow error = %v", err)
 	}
 }
 

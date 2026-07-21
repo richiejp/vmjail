@@ -52,6 +52,11 @@ service WorkspaceCatalogService {
   // read-only; persistence (Slice B5) will reuse the same shape.
   rpc List(ListWorkspacesRequest) returns (ListWorkspacesResponse) {}
 
+  // Apply atomically replaces the complete declared WorkspaceSpec. A changed
+  // spec requires expected_generation to match metadata.generation; an
+  // identical retry is a no-op even when its generation is stale.
+  rpc Apply(ApplyWorkspaceRequest) returns (ApplyWorkspaceResponse) {}
+
   // SetImage records an OCI image reference. Replaces any prior
   // image_ref or pending_build_id. Empty image_ref clears the
   // field (reverts to DRAFT if no other image source set).
@@ -370,6 +375,18 @@ message ListWorkspacesRequest {
 
 message ListWorkspacesResponse {
   repeated Workspace workspaces = 1;
+}
+
+message ApplyWorkspaceRequest {
+  WorkspaceHandle handle = 1;
+  uint64 expected_generation = 2;
+  WorkspaceSpec spec = 3;
+}
+
+message ApplyWorkspaceResponse {
+  Workspace workspace = 1;
+  // False when an identical retry made no durable change.
+  bool changed = 2;
 }
 
 message SetImageRequest {

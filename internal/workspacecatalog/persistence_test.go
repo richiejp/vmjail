@@ -28,7 +28,7 @@ func TestPersistentStoreRoundTripResetsRuntimeStatus(t *testing.T) {
 	want, err := store.Update(created.Metadata.UUID, MutateSpec, func(ws *Workspace) error {
 		ws.Spec.ImageRef = "example.invalid/agent@sha256:abc"
 		ws.Spec.TargetSandboxFingerprint = "sha256:node"
-		ws.Spec.Mounts = []Mount{{Target: "/workspace", Source: "project"}}
+		ws.Spec.Mounts = []Mount{{Target: workspaceMountTarget, Source: "project"}}
 		return nil
 	})
 	if err != nil {
@@ -74,6 +74,50 @@ func TestPersistentStoreRoundTripResetsRuntimeStatus(t *testing.T) {
 	}
 	if !got.Status.IsTrue(ConditionReady) {
 		t.Fatalf("Ready was not reconstructed: %#v", got.Status.Conditions)
+	}
+}
+
+func TestPersistentApplySurvivesRestartAndIdenticalRetryDoesNotWrite(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "workspaces")
+	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+	store, err := Open(path, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := mustOwner(t)
+	created, err := store.Create(CreateInput{UUID: "workspace-apply", Name: "apply", OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := Spec{ImageRef: "alpine:3", Mounts: []Mount{{Target: workspaceMountTarget, Source: "workspace-apply"}}, TargetSandboxFingerprint: owner.String()}
+	now = now.Add(time.Minute)
+	applied, err := store.ApplySpec(created.Metadata.UUID, owner, created.Metadata.Generation, desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	retried, err := store.ApplySpec(created.Metadata.UUID, owner, created.Metadata.Generation, desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried.Metadata != applied.Metadata {
+		t.Fatalf("identical retry changed metadata: before=%+v after=%+v", applied.Metadata, retried.Metadata)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Errorf("Close reopened: %v", err)
+		}
+	})
+	got, err := reopened.Get(created.Metadata.UUID)
+	if err != nil || !specsEqual(got.Spec, desired) || got.Metadata != applied.Metadata {
+		t.Fatalf("reopened = %+v, %v", got, err)
 	}
 }
 
@@ -248,6 +292,13 @@ func TestPersistenceFailureLeavesMemoryUnchanged(t *testing.T) {
 		t.Fatalf("seed Create: %v", err)
 	}
 	store.backend = backend
+	if _, err := store.ApplySpec(created.Metadata.UUID, created.Metadata.OwnerFingerprint, created.Metadata.Generation, Spec{ImageRef: "changed"}); err == nil {
+		t.Fatal("ApplySpec succeeded through failing backend")
+	}
+	got, err := store.Get(created.Metadata.UUID)
+	if err != nil || got.Spec.ImageRef != "" || got.Metadata.Generation != created.Metadata.Generation {
+		t.Fatalf("failed ApplySpec changed memory: %+v, %v", got, err)
+	}
 	if _, err := store.Update(created.Metadata.UUID, MutateMetadata, func(ws *Workspace) error {
 		ws.Metadata.Name = "renamed"
 		return nil

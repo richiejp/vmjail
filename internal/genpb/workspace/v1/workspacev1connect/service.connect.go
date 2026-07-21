@@ -70,6 +70,9 @@ const (
 	// WorkspaceCatalogServiceListProcedure is the fully-qualified name of the WorkspaceCatalogService's
 	// List RPC.
 	WorkspaceCatalogServiceListProcedure = "/daft.workspace.v1.WorkspaceCatalogService/List"
+	// WorkspaceCatalogServiceApplyProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's Apply RPC.
+	WorkspaceCatalogServiceApplyProcedure = "/daft.workspace.v1.WorkspaceCatalogService/Apply"
 	// WorkspaceCatalogServiceSetImageProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's SetImage RPC.
 	WorkspaceCatalogServiceSetImageProcedure = "/daft.workspace.v1.WorkspaceCatalogService/SetImage"
@@ -154,6 +157,10 @@ type WorkspaceCatalogServiceClient interface {
 	// filters to those owned by the calling identity. List is
 	// read-only; persistence (Slice B5) will reuse the same shape.
 	List(context.Context, *connect.Request[v1.ListWorkspacesRequest]) (*connect.Response[v1.ListWorkspacesResponse], error)
+	// Apply atomically replaces the complete declared WorkspaceSpec. A changed
+	// spec requires expected_generation to match metadata.generation; an
+	// identical retry is a no-op even when its generation is stale.
+	Apply(context.Context, *connect.Request[v1.ApplyWorkspaceRequest]) (*connect.Response[v1.ApplyWorkspaceResponse], error)
 	// SetImage records an OCI image reference. Replaces any prior
 	// image_ref or pending_build_id. Empty image_ref clears the
 	// field (reverts to DRAFT if no other image source set).
@@ -345,6 +352,12 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("List")),
 			connect.WithClientOptions(opts...),
 		),
+		apply: connect.NewClient[v1.ApplyWorkspaceRequest, v1.ApplyWorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceApplyProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("Apply")),
+			connect.WithClientOptions(opts...),
+		),
 		setImage: connect.NewClient[v1.SetImageRequest, v1.WorkspaceResponse](
 			httpClient,
 			baseURL+WorkspaceCatalogServiceSetImageProcedure,
@@ -485,6 +498,7 @@ type workspaceCatalogServiceClient struct {
 	create                  *connect.Client[v1.CreateWorkspaceRequest, v1.WorkspaceResponse]
 	get                     *connect.Client[v1.GetWorkspaceRequest, v1.WorkspaceResponse]
 	list                    *connect.Client[v1.ListWorkspacesRequest, v1.ListWorkspacesResponse]
+	apply                   *connect.Client[v1.ApplyWorkspaceRequest, v1.ApplyWorkspaceResponse]
 	setImage                *connect.Client[v1.SetImageRequest, v1.WorkspaceResponse]
 	setDevcontainer         *connect.Client[v1.SetDevcontainerRequest, v1.WorkspaceResponse]
 	setTarget               *connect.Client[v1.SetTargetRequest, v1.WorkspaceResponse]
@@ -522,6 +536,11 @@ func (c *workspaceCatalogServiceClient) Get(ctx context.Context, req *connect.Re
 // List calls daft.workspace.v1.WorkspaceCatalogService.List.
 func (c *workspaceCatalogServiceClient) List(ctx context.Context, req *connect.Request[v1.ListWorkspacesRequest]) (*connect.Response[v1.ListWorkspacesResponse], error) {
 	return c.list.CallUnary(ctx, req)
+}
+
+// Apply calls daft.workspace.v1.WorkspaceCatalogService.Apply.
+func (c *workspaceCatalogServiceClient) Apply(ctx context.Context, req *connect.Request[v1.ApplyWorkspaceRequest]) (*connect.Response[v1.ApplyWorkspaceResponse], error) {
+	return c.apply.CallUnary(ctx, req)
 }
 
 // SetImage calls daft.workspace.v1.WorkspaceCatalogService.SetImage.
@@ -650,6 +669,10 @@ type WorkspaceCatalogServiceHandler interface {
 	// filters to those owned by the calling identity. List is
 	// read-only; persistence (Slice B5) will reuse the same shape.
 	List(context.Context, *connect.Request[v1.ListWorkspacesRequest]) (*connect.Response[v1.ListWorkspacesResponse], error)
+	// Apply atomically replaces the complete declared WorkspaceSpec. A changed
+	// spec requires expected_generation to match metadata.generation; an
+	// identical retry is a no-op even when its generation is stale.
+	Apply(context.Context, *connect.Request[v1.ApplyWorkspaceRequest]) (*connect.Response[v1.ApplyWorkspaceResponse], error)
 	// SetImage records an OCI image reference. Replaces any prior
 	// image_ref or pending_build_id. Empty image_ref clears the
 	// field (reverts to DRAFT if no other image source set).
@@ -837,6 +860,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("List")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceApplyHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceApplyProcedure,
+		svc.Apply,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("Apply")),
+		connect.WithHandlerOptions(opts...),
+	)
 	workspaceCatalogServiceSetImageHandler := connect.NewUnaryHandler(
 		WorkspaceCatalogServiceSetImageProcedure,
 		svc.SetImage,
@@ -977,6 +1006,8 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceGetHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceListProcedure:
 			workspaceCatalogServiceListHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceApplyProcedure:
+			workspaceCatalogServiceApplyHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceSetImageProcedure:
 			workspaceCatalogServiceSetImageHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceSetDevcontainerProcedure:
@@ -1040,6 +1071,10 @@ func (UnimplementedWorkspaceCatalogServiceHandler) Get(context.Context, *connect
 
 func (UnimplementedWorkspaceCatalogServiceHandler) List(context.Context, *connect.Request[v1.ListWorkspacesRequest]) (*connect.Response[v1.ListWorkspacesResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.List is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) Apply(context.Context, *connect.Request[v1.ApplyWorkspaceRequest]) (*connect.Response[v1.ApplyWorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.Apply is not implemented"))
 }
 
 func (UnimplementedWorkspaceCatalogServiceHandler) SetImage(context.Context, *connect.Request[v1.SetImageRequest]) (*connect.Response[v1.WorkspaceResponse], error) {

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	pathpkg "path"
 	"slices"
 	"time"
 
@@ -197,6 +198,39 @@ func (h *WorkspaceCatalogHandler) List(
 	}
 	return connect.NewResponse(&workspacev1.ListWorkspacesResponse{
 		Workspaces: out,
+	}), nil
+}
+
+// Apply atomically replaces the complete declared Workspace spec. Ownership,
+// lock state, equality, and the generation precondition are checked together
+// by the store so concurrent overseers cannot overwrite each other.
+func (h *WorkspaceCatalogHandler) Apply(
+	_ context.Context,
+	req *connect.Request[workspacev1.ApplyWorkspaceRequest],
+) (*connect.Response[workspacev1.ApplyWorkspaceResponse], error) {
+	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	if req.Msg.GetExpectedGeneration() == 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			errors.New("workspace: expected_generation is required"))
+	}
+	ws, err := h.resolveHandle(fp, req.Msg.GetHandle())
+	if err != nil {
+		return nil, err
+	}
+	desired, err := workspaceSpecFromProto(req.Msg.GetSpec(), ws.Metadata.UUID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	updated, err := h.store.ApplySpec(ws.Metadata.UUID, fp, req.Msg.GetExpectedGeneration(), desired)
+	if err != nil {
+		return nil, mapCatalogErr(err)
+	}
+	return connect.NewResponse(&workspacev1.ApplyWorkspaceResponse{
+		Workspace: workspaceToProto(updated),
+		Changed:   updated.Metadata.Generation != ws.Metadata.Generation,
 	}), nil
 }
 
@@ -623,6 +657,9 @@ func (h *WorkspaceCatalogHandler) resolveHandle(
 				errors.New("workspace: handle.uuid is empty"))
 		}
 		ws, err := h.store.Get(t.Uuid)
+		if err == nil && ws.Metadata.OwnerFingerprint != ownerFP {
+			err = workspacecatalog.ErrNotFound
+		}
 		return ws, mapCatalogErr(err)
 	case *workspacev1.WorkspaceHandle_Name:
 		if t.Name == "" {
@@ -637,20 +674,23 @@ func (h *WorkspaceCatalogHandler) resolveHandle(
 	}
 }
 
-// Validate is a no-op trigger for the Store's spec-derivation
-// pass — Store.Update with MutateSpec recomputes Missing and
-// refreshes the Ready condition on every mutation, so Validate
-// just round-trips the workspace and returns the projection. Kept
-// as a distinct RPC so the CLI surface stays explicit ("did I miss
-// anything?") rather than relying on the user noticing missing[]
-// in a setter's response.
+// Validate returns the store-derived readiness projection without mutating the
+// spec, timestamps, or generation. Every spec mutation derives readiness in
+// the same atomic store transaction, so an extra write here would only create
+// false generation drift.
 func (h *WorkspaceCatalogHandler) Validate(
 	_ context.Context,
 	req *connect.Request[workspacev1.ValidateRequest],
 ) (*connect.Response[workspacev1.WorkspaceResponse], error) {
-	return h.mutate(req.Header(), req.Msg.GetHandle(), func(*workspacecatalog.Workspace) error {
-		return nil
-	})
+	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	ws, err := h.resolveHandle(fp, req.Msg.GetHandle())
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: workspaceToProto(ws)}), nil
 }
 
 // Launch composes a Sandbox resource from the workspace and ships
@@ -1072,6 +1112,124 @@ func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Finge
 // mountsToProto / envToProto / portsToProto project the catalog's
 // Go-native slices onto their wire forms. Shared by workspaceToProto
 // (catalog → CLI) and workspaceToSandboxSpec (catalog → Node).
+func workspaceSpecFromProto(in *workspacev1.WorkspaceSpec, workspaceUUID string) (workspacecatalog.Spec, error) {
+	if in == nil {
+		return workspacecatalog.Spec{}, errors.New("workspace: spec is required")
+	}
+	if in.GetImageRef() != "" && in.GetPendingBuildId() != "" {
+		return workspacecatalog.Spec{}, errors.New("workspace: image_ref and pending_build_id are mutually exclusive")
+	}
+	if target := in.GetTargetSandboxFingerprint(); target != "" {
+		if _, err := identity.ParseFingerprint(target); err != nil {
+			return workspacecatalog.Spec{}, fmt.Errorf("workspace: invalid target fingerprint: %w", err)
+		}
+	}
+	if dc := in.GetDevcontainerPath(); dc != "" && (pathpkg.IsAbs(dc) || pathpkg.Clean(dc) == ".." || len(pathpkg.Clean(dc)) >= 3 && pathpkg.Clean(dc)[:3] == "../") {
+		return workspacecatalog.Spec{}, fmt.Errorf("workspace: devcontainer_path %q must stay within workspace content", dc)
+	}
+	if in.GetIsolation() != sandboxv1.Isolation_ISOLATION_UNSPECIFIED &&
+		in.GetIsolation() != sandboxv1.Isolation_ISOLATION_SHARED &&
+		in.GetIsolation() != sandboxv1.Isolation_ISOLATION_STRICT {
+		return workspacecatalog.Spec{}, fmt.Errorf("workspace: invalid isolation %d", in.GetIsolation())
+	}
+	out := workspacecatalog.Spec{
+		ImageRef:                 in.GetImageRef(),
+		PendingBuildID:           in.GetPendingBuildId(),
+		DevcontainerPath:         in.GetDevcontainerPath(),
+		TargetSandboxFingerprint: in.GetTargetSandboxFingerprint(),
+		Isolation:                int32(in.GetIsolation()),
+		MemoryBytes:              in.GetMemoryBytes(),
+		CPUCores:                 in.GetCpuCores(),
+	}
+	if gpu := in.GetGpuRequest(); gpu != nil {
+		out.GpuCount = gpu.GetCount()
+		out.GpuMinVRAM = gpu.GetMinVramBytes()
+	}
+	if nested := in.GetNestedVirtualization(); nested != nil {
+		out.NestedVirt = nested.GetEnable()
+	}
+	if fuse := in.GetPrivilegedFuseMounts(); fuse != nil {
+		out.PrivilegedFuseMounts = fuse.GetEnable()
+	}
+	if build := in.GetPrivilegedBuild(); build != nil {
+		out.PrivilegedBuild = build.GetEnable()
+	}
+	var err error
+	out.Mounts, err = workspaceMountsFromProto(in.GetMounts(), workspaceUUID)
+	if err != nil {
+		return workspacecatalog.Spec{}, err
+	}
+	out.Env, err = workspaceEnvFromProto(in.GetEnv())
+	if err != nil {
+		return workspacecatalog.Spec{}, err
+	}
+	out.Ports, err = workspacePortsFromProto(in.GetPorts())
+	if err != nil {
+		return workspacecatalog.Spec{}, err
+	}
+	return out, nil
+}
+
+func workspaceMountsFromProto(in []*sandboxv1.Mount, workspaceUUID string) ([]workspacecatalog.Mount, error) {
+	out := make([]workspacecatalog.Mount, 0, len(in))
+	mountTargets := make(map[string]struct{}, len(in))
+	for _, mount := range in {
+		if mount == nil || !pathpkg.IsAbs(mount.GetTarget()) {
+			return nil, fmt.Errorf("workspace: mount target %q must be absolute", mount.GetTarget())
+		}
+		if _, duplicate := mountTargets[mount.GetTarget()]; duplicate {
+			return nil, fmt.Errorf("workspace: duplicate mount target %q", mount.GetTarget())
+		}
+		mountTargets[mount.GetTarget()] = struct{}{}
+		source := mount.GetSource()
+		if source == "" {
+			source = workspaceUUID
+		}
+		out = append(out, workspacecatalog.Mount{Target: mount.GetTarget(), Source: source, ReadOnly: mount.GetReadOnly()})
+	}
+	return out, nil
+}
+
+func workspaceEnvFromProto(in []*sandboxv1.EnvVar) ([]workspacecatalog.EnvVar, error) {
+	out := make([]workspacecatalog.EnvVar, 0, len(in))
+	envNames := make(map[string]struct{}, len(in))
+	for _, env := range in {
+		if env == nil || env.GetName() == "" {
+			return nil, errors.New("workspace: env.name is required")
+		}
+		if _, duplicate := envNames[env.GetName()]; duplicate {
+			return nil, fmt.Errorf("workspace: duplicate env %q", env.GetName())
+		}
+		envNames[env.GetName()] = struct{}{}
+		out = append(out, workspacecatalog.EnvVar{Name: env.GetName(), Value: env.GetValue()})
+	}
+	return out, nil
+}
+
+func workspacePortsFromProto(in []*sandboxv1.PortMapping) ([]workspacecatalog.PortMapping, error) {
+	out := make([]workspacecatalog.PortMapping, 0, len(in))
+	type portKey struct {
+		port     uint32
+		protocol sandboxv1.Protocol
+	}
+	ports := make(map[portKey]struct{}, len(in))
+	for _, portMapping := range in {
+		if portMapping == nil || (portMapping.GetProtocol() != sandboxv1.Protocol_PROTOCOL_TCP && portMapping.GetProtocol() != sandboxv1.Protocol_PROTOCOL_UDP) {
+			return nil, errors.New("workspace: port.protocol must be TCP or UDP")
+		}
+		if portMapping.GetContainerPort() > 65535 {
+			return nil, fmt.Errorf("workspace: container port %d exceeds 65535", portMapping.GetContainerPort())
+		}
+		key := portKey{port: portMapping.GetContainerPort(), protocol: portMapping.GetProtocol()}
+		if _, duplicate := ports[key]; duplicate {
+			return nil, fmt.Errorf("workspace: duplicate port %d/%s", key.port, key.protocol)
+		}
+		ports[key] = struct{}{}
+		out = append(out, workspacecatalog.PortMapping{ContainerPort: key.port, Protocol: int32(key.protocol)})
+	}
+	return out, nil
+}
+
 func mountsToProto(in []workspacecatalog.Mount) []*sandboxv1.Mount {
 	out := make([]*sandboxv1.Mount, len(in))
 	for i, m := range in {
@@ -1149,8 +1307,15 @@ func mapCatalogErr(err error) error {
 		return nil
 	case errors.Is(err, workspacecatalog.ErrNotFound):
 		return connect.NewError(connect.CodeNotFound, err)
+	case errors.Is(err, workspacecatalog.ErrNotOwner):
+		return connect.NewError(connect.CodeNotFound, workspacecatalog.ErrNotFound)
 	case errors.Is(err, workspacecatalog.ErrAliasInUse):
 		return connect.NewError(connect.CodeAlreadyExists, err)
+	case errors.Is(err, workspacecatalog.ErrGenerationConflict):
+		return connect.NewError(connect.CodeAborted, err)
+	case errors.Is(err, workspacecatalog.ErrGenerationOverflow),
+		errors.Is(err, workspacecatalog.ErrLockHeldByOther):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, workspacecatalog.ErrImmutableField):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	}
