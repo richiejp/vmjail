@@ -28,7 +28,11 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
-const maxResults = 200
+const (
+	defaultResults = 50
+	maxResults     = 200
+	maxCursorBytes = 512
+)
 
 const (
 	maxWorkspaceItems = 256
@@ -190,13 +194,15 @@ type AgentEvents struct {
 }
 
 type listNodesOutput struct {
-	Nodes     []Node `json:"nodes"`
-	Truncated bool   `json:"truncated"`
+	Nodes      []Node `json:"nodes"`
+	Truncated  bool   `json:"truncated"`
+	NextCursor string `json:"next_cursor,omitempty"`
 }
 
 type listWorkspacesOutput struct {
 	Workspaces []WorkspaceSummary `json:"workspaces"`
 	Truncated  bool               `json:"truncated"`
+	NextCursor string             `json:"next_cursor,omitempty"`
 }
 
 type agentProfileOutput struct {
@@ -211,7 +217,14 @@ type agentProfileOutput struct {
 }
 
 type listAgentProfilesOutput struct {
-	Profiles []agentProfileOutput `json:"profiles"`
+	Profiles   []agentProfileOutput `json:"profiles"`
+	Truncated  bool                 `json:"truncated"`
+	NextCursor string               `json:"next_cursor,omitempty"`
+}
+
+type listInput struct {
+	After string `json:"after,omitempty" jsonschema:"return entries with stable key lexically after this cursor"`
+	Limit uint32 `json:"limit,omitempty" jsonschema:"maximum entries to return, 1 to 200; default 50"`
 }
 
 type getWorkspaceInput struct {
@@ -310,13 +323,13 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 	annotations := &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(false)}
 	addAgentProfileListTool(server, annotations, profiles)
 	addAgentRunTools(server, annotations, reader, profiles)
-	mcp.AddTool(server, &mcp.Tool{Name: nodeListTool, Description: "List live daft Nodes visible to the orchestrator.", Annotations: annotations},
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listNodesOutput, error) {
-			nodes, truncated, err := readBounded(ctx, reader.ListNodes, func(node Node) string { return node.Fingerprint })
+	mcp.AddTool(server, &mcp.Tool{Name: nodeListTool, Description: "List a bounded, cursor-resumable page of live daft Nodes visible to the orchestrator.", Annotations: annotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, listNodesOutput, error) {
+			nodes, next, truncated, err := readPage(ctx, reader.ListNodes, input, func(node Node) string { return node.Fingerprint })
 			if err != nil {
 				return nil, listNodesOutput{}, fmt.Errorf("list nodes: %w", err)
 			}
-			return nil, listNodesOutput{Nodes: nodes, Truncated: truncated}, nil
+			return nil, listNodesOutput{Nodes: nodes, Truncated: truncated, NextCursor: next}, nil
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: nodeStatusTool, Description: "Get durable authorization and live registration status for one Node.", Annotations: annotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input nodeFingerprintInput) (*mcp.CallToolResult, nodeOutput, error) {
@@ -358,9 +371,9 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 }
 
 func addWorkspaceTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations, reader Reader) {
-	mcp.AddTool(server, &mcp.Tool{Name: workspaceListTool, Description: "List Workspaces owned by the authenticated client.", Annotations: readAnnotations},
-		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listWorkspacesOutput, error) {
-			workspaces, truncated, err := readBounded(ctx, reader.ListWorkspaces, func(workspace Workspace) string { return workspace.UUID })
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceListTool, Description: "List a bounded, cursor-resumable page of Workspaces owned by the authenticated client.", Annotations: readAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, listWorkspacesOutput, error) {
+			workspaces, next, truncated, err := readPage(ctx, reader.ListWorkspaces, input, func(workspace Workspace) string { return workspace.UUID })
 			if err != nil {
 				return nil, listWorkspacesOutput{}, fmt.Errorf("list workspaces: %w", err)
 			}
@@ -368,7 +381,7 @@ func addWorkspaceTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations,
 			for i := range workspaces {
 				summaries[i] = workspaceSummary(workspaces[i])
 			}
-			return nil, listWorkspacesOutput{Workspaces: summaries, Truncated: truncated}, nil
+			return nil, listWorkspacesOutput{Workspaces: summaries, Truncated: truncated, NextCursor: next}, nil
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: workspaceGetTool, Description: "Get one owned Workspace by canonical UUID.", Annotations: readAnnotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, getWorkspaceOutput, error) {
@@ -585,32 +598,64 @@ func addAgentProfileListTool(server *mcp.Server, annotations *mcp.ToolAnnotation
 		profileOutputs[i] = agentProfileOutput{Name: entry.Profile.Name, Digest: entry.Digest, Provider: entry.Profile.Provider, Image: entry.Profile.Image, Command: slices.Clone(entry.Profile.Command), CredentialsEnabled: entry.Profile.Credentials.Enable, Resources: entry.Profile.Resources, Egress: entry.Profile.Egress}
 	}
 	slices.SortFunc(profileOutputs, func(a, b agentProfileOutput) int { return cmp.Compare(a.Name, b.Name) })
-	mcp.AddTool(server, &mcp.Tool{Name: agentProfileListTool, Description: "List immutable coding-agent profiles configured on this trusted host.", Annotations: annotations},
-		func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, listAgentProfilesOutput, error) {
-			out := slices.Clone(profileOutputs)
+	mcp.AddTool(server, &mcp.Tool{Name: agentProfileListTool, Description: "List a bounded, cursor-resumable page of immutable coding-agent profiles configured on this trusted host.", Annotations: annotations},
+		func(_ context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, listAgentProfilesOutput, error) {
+			out, next, truncated, err := pageSorted(profileOutputs, input, func(profile agentProfileOutput) string { return profile.Name })
+			if err != nil {
+				return nil, listAgentProfilesOutput{}, fmt.Errorf("list agent profiles: %w", err)
+			}
 			for i := range out {
 				out[i].Command = slices.Clone(out[i].Command)
 			}
-			return nil, listAgentProfilesOutput{Profiles: out}, nil
+			return nil, listAgentProfilesOutput{Profiles: out, Truncated: truncated, NextCursor: next}, nil
 		})
 }
 
-func boundedSorted[T any](values []T, key func(T) string) ([]T, bool) {
-	slices.SortFunc(values, func(a, b T) int { return cmp.Compare(key(a), key(b)) })
-	truncated := len(values) > maxResults
-	if truncated {
-		values = values[:maxResults]
+func pageSorted[T any](values []T, input listInput, key func(T) string) (page []T, next string, truncated bool, err error) {
+	limit, err := listLimit(input)
+	if err != nil {
+		return nil, "", false, err
 	}
-	return values, truncated
+	values = slices.Clone(values)
+	slices.SortFunc(values, func(a, b T) int { return cmp.Compare(key(a), key(b)) })
+	start := 0
+	for start < len(values) && key(values[start]) <= input.After {
+		start++
+	}
+	values = values[start:]
+	truncated = len(values) > limit
+	if truncated {
+		values = values[:limit]
+	}
+	if truncated && len(values) > 0 {
+		next = key(values[len(values)-1])
+	}
+	return values, next, truncated, nil
 }
 
-func readBounded[T any](ctx context.Context, read func(context.Context) ([]T, error), key func(T) string) (values []T, truncated bool, err error) {
+func listLimit(input listInput) (int, error) {
+	if len(input.After) > maxCursorBytes {
+		return 0, fmt.Errorf("after cursor exceeds %d bytes", maxCursorBytes)
+	}
+	if input.Limit > maxResults {
+		return 0, fmt.Errorf("limit exceeds %d", maxResults)
+	}
+	limit := int(input.Limit)
+	if limit == 0 {
+		limit = defaultResults
+	}
+	return limit, nil
+}
+
+func readPage[T any](ctx context.Context, read func(context.Context) ([]T, error), input listInput, key func(T) string) (values []T, next string, truncated bool, err error) {
+	if _, err := listLimit(input); err != nil {
+		return nil, "", false, err
+	}
 	values, err = read(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, "", false, err
 	}
-	values, truncated = boundedSorted(values, key)
-	return values, truncated, nil
+	return pageSorted(values, input, key)
 }
 
 type nodeLister interface {

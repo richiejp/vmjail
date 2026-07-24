@@ -41,6 +41,8 @@ const (
 	requestIDKey     = "request_id"
 	workspaceUUIDKey = "workspace_uuid"
 	nameKey          = "name"
+	afterKey         = "after"
+	limitKey         = "limit"
 	specKey          = "spec"
 	mcpTestImage     = "alpine:3"
 	mcpTestProject   = "project"
@@ -127,12 +129,21 @@ func TestAgentProfileListIsSortedAndOmitsCredentialProfileName(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = session.Close() })
 	result := callTool(t, session, agentProfileListTool, map[string]any{})
-	listed := requireSlice(t, requireMap(t, result.StructuredContent)["profiles"])
+	output := requireMap(t, result.StructuredContent)
+	listed := requireSlice(t, output["profiles"])
 	if requireMap(t, listed[0])["name"] != "a" || requireMap(t, listed[1])["name"] != "z" {
 		t.Fatalf("profiles not sorted: %#v", listed)
 	}
 	if _, leaked := requireMap(t, listed[1])["profile"]; leaked {
 		t.Fatalf("credential profile leaked: %#v", listed[1])
+	}
+	first := requireMap(t, callTool(t, session, agentProfileListTool, map[string]any{limitKey: 1}).StructuredContent)
+	if first["truncated"] != true || first["next_cursor"] != "a" || len(requireSlice(t, first["profiles"])) != 1 {
+		t.Fatalf("first profile page = %#v", first)
+	}
+	second := requireMap(t, callTool(t, session, agentProfileListTool, map[string]any{afterKey: "a", limitKey: 1}).StructuredContent)
+	if second["truncated"] != false || len(requireSlice(t, second["profiles"])) != 1 || requireMap(t, requireSlice(t, second["profiles"])[0])["name"] != "z" {
+		t.Fatalf("second profile page = %#v", second)
 	}
 }
 
@@ -296,22 +307,45 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 	}
 }
 
-func TestNodeListSortsAndCapsOutput(t *testing.T) {
+func TestNodeListSortsAndPaginatesOutput(t *testing.T) {
 	reader := &fakeReader{nodes: make([]Node, maxResults+1)}
 	for i := range reader.nodes {
 		reader.nodes[i] = Node{Fingerprint: fmt.Sprintf("%03d", maxResults-i)}
 	}
-	result := callTool(t, connectClient(t, reader), nodeListTool, map[string]any{})
+	session := connectClient(t, reader)
+	result := callTool(t, session, nodeListTool, map[string]any{})
 	output := requireMap(t, result.StructuredContent)
 	nodes := requireSlice(t, output["nodes"])
-	if len(nodes) != maxResults || output["truncated"] != true {
-		t.Fatalf("got len=%d truncated=%v", len(nodes), output["truncated"])
+	if len(nodes) != defaultResults || output["truncated"] != true || output["next_cursor"] != "049" {
+		t.Fatalf("first page len=%d output=%#v", len(nodes), output)
 	}
 	if got := requireMap(t, nodes[0])["fingerprint"]; got != "000" {
 		t.Errorf("first fingerprint = %v, want 000", got)
 	}
-	if got := requireMap(t, nodes[len(nodes)-1])["fingerprint"]; got != "199" {
-		t.Errorf("last fingerprint = %v, want 199", got)
+	second := requireMap(t, callTool(t, session, nodeListTool, map[string]any{afterKey: "049", limitKey: maxResults}).StructuredContent)
+	secondNodes := requireSlice(t, second["nodes"])
+	if len(secondNodes) != 151 || second["truncated"] != false {
+		t.Fatalf("second page len=%d output=%#v", len(secondNodes), second)
+	}
+	if got := requireMap(t, secondNodes[len(secondNodes)-1])["fingerprint"]; got != "200" {
+		t.Errorf("last fingerprint = %v, want 200", got)
+	}
+}
+
+func TestListPaginationRejectsUnboundedInputs(t *testing.T) {
+	session := connectClient(t, &fakeReader{})
+	for name, args := range map[string]map[string]any{
+		"oversize_limit":  {limitKey: maxResults + 1},
+		"oversize_cursor": {afterKey: string(make([]byte, maxCursorBytes+1))},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, tool := range []string{nodeListTool, agentProfileListTool} {
+				result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: tool, Arguments: args})
+				if err != nil || !result.IsError {
+					t.Fatalf("%s result = %#v, err = %v; want tool error", tool, result, err)
+				}
+			}
+		})
 	}
 }
 

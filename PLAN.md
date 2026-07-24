@@ -140,13 +140,20 @@ Landed:
   sessions, pushes distinct projects to Workspaces pinned to independently
   identified Nodes, overlaps their sandboxed AgentRuns, and verifies each run
   remains bound to its selected Node and returns only its own project result.
+- MCP discovery lists use stable lexical cursors, a concise 50-item default,
+  a hard 200-item maximum, and explicit `truncated`/`next_cursor`
+  continuation. Agent events already use durable numeric cursors and are
+  structurally limited to five 16 KiB messages per run; terminal results are
+  capped at 1 MiB.
 
 Remaining:
 
 - Prove the full overseer recipe across a remote Node: install, trust,
   apply/push, start, poll/result, teardown, retry, and recovery.
-- Bound every MCP list, event, log, and observability response by pagination or
-  byte limit, with concise defaults and explicit continuation.
+- Add ownership-safe MCP observability v1 tools for Sandbox progress, summary,
+  and a byte/line-capped observer tail. No log or observability tool is exposed
+  by the current MCP server; future trace/query surfaces must be
+  cursor-paginated server-side before exposure.
 - Document takeover requirements for a future terminal/web attachment path;
   direct interactive control remains deferred.
 
