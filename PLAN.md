@@ -136,6 +136,10 @@ Landed:
   rollback generation, a later Node's failed post-stage validation restores
   its old release, and rolling back only the changed subset reconverges the
   fleet.
+- Real multi-Node concurrency proof: one trusted overseer drives two MCP
+  sessions, pushes distinct projects to Workspaces pinned to independently
+  identified Nodes, overlaps their sandboxed AgentRuns, and verifies each run
+  remains bound to its selected Node and returns only its own project result.
 
 Remaining:
 

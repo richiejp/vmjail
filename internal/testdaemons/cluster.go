@@ -73,7 +73,7 @@ const peersFile = "peers.json"
 // orchestrator's listener to accept connections.
 const daemonReadyTimeout = 10 * time.Second
 
-// Cluster is a one-test orchestrator + sandboxd pair plus a
+// Cluster is a one-test orchestrator plus one or more sandboxd Nodes and a
 // pre-bootstrapped client config dir the test can hand to the
 // daft CLI via --config-dir / --orchestrator.
 type Cluster struct {
@@ -102,7 +102,10 @@ type Cluster struct {
 
 	OrchestratorFP identity.Fingerprint
 	SandboxdFP     identity.Fingerprint
-	ClientFP       identity.Fingerprint
+	// SandboxdFPs contains every Node fingerprint in startup order.
+	// SandboxdFP remains an alias for the first entry for existing tests.
+	SandboxdFPs []identity.Fingerprint
+	ClientFP    identity.Fingerprint
 
 	// ObserverDir is the per-sandbox state root NewCluster points the
 	// sandboxd subprocess at (via DAFT_STATE_DIR), so every
@@ -264,9 +267,12 @@ func readTail(path string, maxBytes int64, maxLines int) (string, error) {
 func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	t.Helper()
 
-	var o clusterOpts
+	o := clusterOpts{sandboxdCount: 1}
 	for _, fn := range opts {
 		fn(&o)
+	}
+	if o.sandboxdCount < 1 {
+		t.Fatalf("sandboxd count must be at least 1, got %d", o.sandboxdCount)
 	}
 
 	// The bundled binary carries its artefacts embedded, so it needs
@@ -282,33 +288,33 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 
 	base := t.TempDir()
 	orchDir := mkConfigDir(t, base, "orch")
-	sbxDir := mkConfigDir(t, base, "sbx")
 	cliDir := mkConfigDir(t, base, "cli")
 
 	orchID := mustLoadOrGen(t, orchDir, identity.RoleOrchestrator)
-	sbxID := mustLoadOrGen(t, sbxDir, identity.RoleSandboxHost)
+	sbxDirs := make([]string, o.sandboxdCount)
+	sbxFPs := make([]identity.Fingerprint, o.sandboxdCount)
 	clientRole := o.clientRole
 	if clientRole == "" {
 		clientRole = identity.RoleClient
 	}
 	cliID := mustLoadOrGen(t, cliDir, clientRole)
 
-	// Four-way cross-approval: each side trusts the others it
-	// will interact with. Orchestrator talks to sandboxd + client;
-	// sandboxd + client both dial the orchestrator.
-	approvePeer(t, orchDir, sbxID.Fingerprint(), identity.RoleSandboxHost)
+	// Cross-approve every Node before starting the orchestrator, which loads
+	// its peer store at startup. Nodes and the client only dial orchestrator.
+	for i := range o.sandboxdCount {
+		sbxDirs[i] = mkConfigDir(t, base, fmt.Sprintf("sbx-%d", i))
+		sbxID := mustLoadOrGen(t, sbxDirs[i], identity.RoleSandboxHost)
+		sbxFPs[i] = sbxID.Fingerprint()
+		approvePeer(t, orchDir, sbxFPs[i], identity.RoleSandboxHost)
+		approvePeer(t, sbxDirs[i], orchID.Fingerprint(), identity.RoleOrchestrator)
+	}
 	approvePeer(t, orchDir, cliID.Fingerprint(), clientRole)
-	approvePeer(t, sbxDir, orchID.Fingerprint(), identity.RoleOrchestrator)
 	approvePeer(t, cliDir, orchID.Fingerprint(), identity.RoleOrchestrator)
-
-	observerDir := newObserverStateDir(t, base)
 
 	addr := freeLoopbackAddr(t)
 	url := "https://" + addr
 
 	orchOut := newOutputCapture(t, "daft-orchestrator")
-	sbxOut := newOutputCapture(t, "daft-sandboxd")
-
 	orchestratorBin := bins.orchestrator
 	orchReady := daemonReadyTimeout
 	if o.bundledOrchestrator != "" {
@@ -356,12 +362,6 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		}
 	}
 
-	// Redirect sandboxd's per-sandbox state root at the per-test dir so
-	// the observer logs are isolated and discoverable (sandboxesStateRoot
-	// honours DAFT_STATE_DIR ahead of XDG_STATE_HOME). Appended after the
-	// egress branch, which reassigns sbxEnv wholesale.
-	sbxEnv = append(sbxEnv, sandboxdcli.EnvStateDir+"="+observerDir)
-
 	// Opt the node into in-sandbox devcontainer builds when the test
 	// supplied a builder ref (#101 slice 3c).
 	if o.buildImageRef != "" {
@@ -378,9 +378,18 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		// vars are exported at all.
 		sbxScrub = artefactEnvKeys
 	}
-	sandboxdCmd := startDaemon(t, sbxOut, sbxEnv, sbxScrub, sandboxdBin,
-		"serve", "--orchestrator", url, "--config-dir", sbxDir)
-	waitForNode(t, bins.daft, cliDir, url, sbxID.Fingerprint(), daemonReadyTimeout)
+	observerDirs := make([]string, o.sandboxdCount)
+	sandboxdOuts := make([]*outputCapture, o.sandboxdCount)
+	sandboxdCmds := make([]*exec.Cmd, o.sandboxdCount)
+	for i := range o.sandboxdCount {
+		observerDirs[i] = newObserverStateDir(t, filepath.Join(base, fmt.Sprintf("node-%d", i)))
+		sandboxdOuts[i] = newOutputCapture(t, fmt.Sprintf("daft-sandboxd-%d", i))
+		nodeEnv := append([]string(nil), sbxEnv...)
+		nodeEnv = append(nodeEnv, sandboxdcli.EnvStateDir+"="+observerDirs[i])
+		sandboxdCmds[i] = startDaemon(t, sandboxdOuts[i], nodeEnv, sbxScrub, sandboxdBin,
+			"serve", "--orchestrator", url, "--config-dir", sbxDirs[i])
+		waitForNode(t, bins.daft, cliDir, url, sbxFPs[i], daemonReadyTimeout)
+	}
 
 	return &Cluster{
 		DaftBin:         bins.daft,
@@ -390,11 +399,12 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		MitmProxyBin:    bins.mitmProxy,
 		EgressProxyURL:  proxyURL,
 		OrchestratorFP:  orchID.Fingerprint(),
-		SandboxdFP:      sbxID.Fingerprint(),
+		SandboxdFP:      sbxFPs[0],
+		SandboxdFPs:     sbxFPs,
 		ClientFP:        cliID.Fingerprint(),
-		ObserverDir:     observerDir,
-		sandboxdOut:     sbxOut,
-		sandboxdCmd:     sandboxdCmd,
+		ObserverDir:     observerDirs[0],
+		sandboxdOut:     sandboxdOuts[0],
+		sandboxdCmd:     sandboxdCmds[0],
 	}
 }
 
@@ -425,8 +435,9 @@ func waitForNode(t *testing.T, daftBin, configDir, orchestratorURL string, fp id
 type ClusterOption func(*clusterOpts)
 
 type clusterOpts struct {
-	egressProxy bool
-	clientRole  identity.Role
+	egressProxy   bool
+	clientRole    identity.Role
+	sandboxdCount int
 	// egressReplayCache opts THIS cluster into the recorded egress-replay
 	// cache env (DAFT_EGRESS_PROXY_CACHE / _RECORD). Without it a
 	// WithEgressProxy cluster always records live into a throwaway dir and
@@ -445,6 +456,11 @@ type clusterOpts struct {
 	// buildImageRef, when set, is exported as DAFT_BUILD_IMAGE_REF so the
 	// node can build a build-based devcontainer in an ephemeral sandbox.
 	buildImageRef string
+}
+
+// WithSandboxdCount starts count independently identified sandbox Nodes.
+func WithSandboxdCount(count int) ClusterOption {
+	return func(o *clusterOpts) { o.sandboxdCount = count }
 }
 
 // WithOperatorClient gives the cluster's trusted client identity the operator
