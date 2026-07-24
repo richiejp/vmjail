@@ -41,6 +41,12 @@ const (
 	testBuildImageRef      = "daft-registry.internal/builder:v1"
 )
 
+func TestProductionAssemblerReturnsConfiguredAssembler(t *testing.T) {
+	if assembler := ProductionAssembler(sandboxboot.Deps{}); assembler == nil {
+		t.Fatal("ProductionAssembler returned nil")
+	}
+}
+
 func noopRunner() Runner {
 	return func(context.Context, io.Writer, sandbox.Config) error { return nil }
 }

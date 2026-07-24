@@ -17,6 +17,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspace"
+	"github.com/richiejp/darkaifactory/internal/workspacesync"
 )
 
 const (
@@ -141,6 +142,15 @@ func runWorkspaceSync(
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
+	if dir == syncPush {
+		if err := pushWorkspaceMounts(ctx, cmd.OutOrStdout(), orchestrator, uuid, cc, catalog); err != nil {
+			return trace.RecordError(ctx, err)
+		}
+		if owned {
+			shipTraces(ctx, tracer, httpc, trimURLScheme(orchestrator), spanName(verb))
+		}
+		return nil
+	}
 	wsClient, closeRelay, err := dialNodeWorkspaceService(ctx, cc, orchestrator, uuid, nodeFP, tracer)
 	if err != nil {
 		return trace.RecordError(ctx, err)
@@ -152,6 +162,30 @@ func runWorkspaceSync(
 	}
 	if owned {
 		shipTraces(ctx, tracer, httpc, trimURLScheme(orchestrator), spanName(verb))
+	}
+	return nil
+}
+
+func pushWorkspaceMounts(
+	ctx context.Context,
+	out io.Writer,
+	orchestrator, uuid string,
+	cc *clientCtx,
+	catalog workspacev1connect.WorkspaceCatalogServiceClient,
+) error {
+	projectDir, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("daft workspace push: get project directory: %w", err)
+	}
+	result, err := workspacesync.Push(ctx, workspacesync.PushConfig{
+		Orchestrator: orchestrator, ProjectDir: projectDir, WorkspaceUUID: uuid,
+		Identity: cc.id, Peers: cc.peers, Store: cc.store, Catalog: catalog,
+	})
+	if err != nil {
+		return err
+	}
+	for _, mount := range result.Mounts {
+		_, _ = fmt.Fprintf(out, "pushed %s -> %s (%d entries)\n", mount.Local, mount.Remote, mount.Entries)
 	}
 	return nil
 }

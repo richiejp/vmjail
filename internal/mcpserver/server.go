@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"time"
 
@@ -50,6 +51,7 @@ const (
 	workspaceGetTool      = "workspace_get"
 	workspaceListTool     = "workspace_list"
 	workspaceApplyTool    = "workspace_apply"
+	workspacePushTool     = "workspace_push"
 	workspaceValidateTool = "workspace_validate"
 	workspaceStatusTool   = "workspace_status"
 	workspaceLaunchTool   = "workspace_launch"
@@ -67,6 +69,7 @@ type Reader interface {
 	ListWorkspaces(context.Context) ([]Workspace, error)
 	GetWorkspace(context.Context, string) (Workspace, error)
 	ApplyWorkspace(context.Context, WorkspaceApply) (WorkspaceApplyResult, error)
+	PushWorkspace(context.Context, string, string) (daftclient.WorkspacePushResult, error)
 	ValidateWorkspace(context.Context, string) (Workspace, error)
 	LaunchWorkspace(context.Context, string) (Workspace, error)
 	StopWorkspace(context.Context, string) (Workspace, error)
@@ -232,6 +235,21 @@ type workspaceApplyOutput struct {
 	Changed   bool      `json:"changed"`
 }
 
+type workspacePushInput struct {
+	UUID        string `json:"uuid" jsonschema:"canonical workspace UUID"`
+	ProjectPath string `json:"project_path" jsonschema:"absolute trusted-host project directory containing .daft/config.json"`
+}
+
+type workspacePushOutput struct {
+	ProjectPath string                     `json:"project_path"`
+	Mounts      []workspacesyncMountOutput `json:"mounts"`
+}
+
+type workspacesyncMountOutput struct {
+	Remote  string `json:"remote"`
+	Entries int    `json:"entries"`
+}
+
 type nodeFingerprintInput struct {
 	Fingerprint string `json:"fingerprint" jsonschema:"canonical sha256 certificate fingerprint"`
 }
@@ -387,6 +405,7 @@ func addWorkspaceTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations,
 			result, err := reader.ApplyWorkspace(ctx, WorkspaceApply(input))
 			return nil, workspaceApplyOutput(result), err
 		})
+	addWorkspacePushTool(server, reader)
 	launchAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
 	mcp.AddTool(server, &mcp.Tool{Name: workspaceLaunchTool, Description: "Idempotently launch one ready owned Workspace.", Annotations: launchAnnotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, getWorkspaceOutput, error) {
@@ -404,6 +423,28 @@ func addWorkspaceTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations,
 			}
 			workspace, err := reader.StopWorkspace(ctx, input.UUID)
 			return nil, getWorkspaceOutput{Workspace: workspace}, err
+		})
+}
+
+func addWorkspacePushTool(server *mcp.Server, reader Reader) {
+	annotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: workspacePushTool, Description: "Upload project-root-confined mounts from an explicit trusted-host path to one Workspace's assigned Node.", Annotations: annotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input workspacePushInput) (*mcp.CallToolResult, workspacePushOutput, error) {
+			if input.UUID == "" || input.ProjectPath == "" {
+				return nil, workspacePushOutput{}, fmt.Errorf("uuid and project_path are required")
+			}
+			if !filepath.IsAbs(input.ProjectPath) || len(input.ProjectPath) > 4096 {
+				return nil, workspacePushOutput{}, fmt.Errorf("project_path must be an absolute path of at most 4096 bytes")
+			}
+			result, err := reader.PushWorkspace(ctx, input.UUID, input.ProjectPath)
+			if err != nil {
+				return nil, workspacePushOutput{}, fmt.Errorf("push workspace: %w", err)
+			}
+			mounts := make([]workspacesyncMountOutput, len(result.Mounts))
+			for i := range result.Mounts {
+				mounts[i] = workspacesyncMountOutput{Remote: result.Mounts[i].Remote, Entries: result.Mounts[i].Entries}
+			}
+			return nil, workspacePushOutput{ProjectPath: result.ProjectDir, Mounts: mounts}, nil
 		})
 }
 
@@ -586,6 +627,7 @@ type secretDeliveryClient interface {
 }
 
 type ConnectReader struct {
+	client      *daftclient.Client
 	nodes       nodeLister
 	workspace   workspaceReader
 	operator    operatorClient
@@ -645,7 +687,14 @@ func NewConnectReaderWithCredentials(client *daftclient.Client, credentials *age
 	if client == nil || client.Nodes == nil || client.Workspace == nil || client.Operator == nil || client.AgentRuns == nil {
 		return nil, fmt.Errorf("mcpserver: daft client is required")
 	}
-	return &ConnectReader{nodes: client.Nodes, workspace: client.Workspace, operator: client.Operator, agentRuns: client.AgentRuns, secrets: client.Secrets, credentials: credentials}, nil
+	return &ConnectReader{client: client, nodes: client.Nodes, workspace: client.Workspace, operator: client.Operator, agentRuns: client.AgentRuns, secrets: client.Secrets, credentials: credentials}, nil
+}
+
+func (r ConnectReader) PushWorkspace(ctx context.Context, uuid, projectPath string) (daftclient.WorkspacePushResult, error) {
+	return r.client.PushWorkspace(ctx, daftclient.WorkspacePushOptions{
+		WorkspaceUUID: uuid,
+		ProjectDir:    projectPath,
+	})
 }
 
 func mintDeliveryID() (string, error) {

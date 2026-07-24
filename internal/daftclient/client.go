@@ -2,6 +2,7 @@
 package daftclient
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,6 +12,7 @@ import (
 	"connectrpc.com/connect"
 	"golang.org/x/net/http2"
 
+	"github.com/richiejp/darkaifactory/internal/cas"
 	"github.com/richiejp/darkaifactory/internal/clientconfig"
 	"github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1/agentrunv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
@@ -19,6 +21,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/genpb/secretdelivery/v1/secretdeliveryv1connect"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/workspacesync"
 )
 
 const peersFilename = "peers.json"
@@ -42,7 +45,20 @@ type Client struct {
 	Secrets   secretdeliveryv1connect.SecretDeliveryServiceClient
 
 	transport *http2.Transport
+	identity  *identity.Identity
+	peers     *identity.PeerStore
 }
+
+type WorkspacePushOptions struct {
+	WorkspaceUUID string
+	ProjectDir    string
+	CASDir        string
+}
+
+type (
+	WorkspacePushResult      = workspacesync.PushResult
+	WorkspacePushMountResult = workspacesync.MountResult
+)
 
 // Open loads an existing client identity. It never creates credentials, which
 // makes daemon startup free of implicit trust-identity mutations.
@@ -99,7 +115,34 @@ func open(cfg Config, bootstrap bool) (*Client, error) {
 		AgentRuns: agentrunv1connect.NewAgentRunServiceClient(httpClient, baseURL, cfg.Options...),
 		Secrets:   secretdeliveryv1connect.NewSecretDeliveryServiceClient(httpClient, baseURL, cfg.Options...),
 		transport: transport,
+		identity:  id,
+		peers:     peers,
 	}, nil
+}
+
+// PushWorkspace uploads the mounts declared by one explicit project root to
+// the Workspace's assigned Node. It never consults or changes process cwd.
+func (c *Client) PushWorkspace(ctx context.Context, opts WorkspacePushOptions) (WorkspacePushResult, error) {
+	if c == nil || c.Workspace == nil || c.identity == nil || c.peers == nil {
+		return WorkspacePushResult{}, fmt.Errorf("daft: initialized client is required")
+	}
+	casDir := opts.CASDir
+	if casDir == "" {
+		casDir = filepath.Join(c.Resolved.IdentityDir, "cas")
+	}
+	store, err := cas.Open(casDir)
+	if err != nil {
+		return WorkspacePushResult{}, fmt.Errorf("daft: open workspace CAS: %w", err)
+	}
+	return workspacesync.Push(ctx, workspacesync.PushConfig{
+		Orchestrator:  c.Resolved.OrchestratorURL,
+		ProjectDir:    opts.ProjectDir,
+		WorkspaceUUID: opts.WorkspaceUUID,
+		Identity:      c.identity,
+		Peers:         c.peers,
+		Store:         store,
+		Catalog:       c.Workspace,
+	})
 }
 
 func canonicalURL(raw string) (string, error) {

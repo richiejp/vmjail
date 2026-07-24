@@ -96,6 +96,12 @@ func TestRunToCompletionZeroTimeoutWaitsOnContext(t *testing.T) {
 	}
 }
 
+func TestRunToCompletionRejectsInvalidConfig(t *testing.T) {
+	if err := RunToCompletion(t.Context(), io.Discard, Config{}); err == nil {
+		t.Fatal("RunToCompletion accepted invalid config")
+	}
+}
+
 // TestContextWithOptionalTimeout covers both arms: a zero timeout yields a
 // ctx bounded only by its parent (RunToCompletion's long-build case),
 // while a positive timeout installs one of its own (Hello's 30s cap).

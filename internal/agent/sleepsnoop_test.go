@@ -172,4 +172,11 @@ func TestDefaultSleepsnoopDeps(t *testing.T) {
 	if ns, err := d.selfPIDNS(); err != nil || ns == 0 {
 		t.Fatalf("selfPIDNS() = (%d, %v), want a non-zero inode and no error", ns, err)
 	}
+	log, err := d.openLog(t.TempDir() + "/sleepsnoop.log")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := log.Close(); err != nil {
+		t.Fatal(err)
+	}
 }

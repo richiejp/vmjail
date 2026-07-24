@@ -23,6 +23,9 @@ func TestFingerprintCertHashesSPKI(t *testing.T) {
 	if id.Fingerprint() != want {
 		t.Errorf("Identity.Fingerprint mismatch")
 	}
+	if (Fingerprint{}).IsZero() != true || id.Fingerprint().IsZero() {
+		t.Error("IsZero did not distinguish empty and generated fingerprints")
+	}
 }
 
 func TestPeerFingerprintFromTLS(t *testing.T) {

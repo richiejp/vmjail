@@ -31,7 +31,21 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 
 	cluster := testdaemons.NewCluster(t, testdaemons.WithOperatorClient())
 	workspaceName := "mcp-agent-run"
-	mountSource := t.TempDir()
+	projectDir := t.TempDir()
+	mountSource := filepath.Join(projectDir, "src")
+	if err := os.MkdirAll(filepath.Join(projectDir, ".daft"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(mountSource, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mountSource, "input.txt"), []byte("MCP-PUSH-OK\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	projectConfig := []byte(`{"mounts":[{"local":"src","remote":"/workspace"}]}`)
+	if err := os.WriteFile(filepath.Join(projectDir, ".daft", "config.json"), projectConfig, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	runDaft(
 		t, cluster,
 		"workspace", "create", "--name", workspaceName,
@@ -39,7 +53,7 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 	)
 	runDaft(
 		t, cluster,
-		"workspace", "mount", "add", "/workspace", "--source", mountSource,
+		"workspace", "mount", "add", "/workspace",
 		"--name", workspaceName, "--orchestrator", cluster.OrchestratorURL,
 	)
 	runDaft(
@@ -56,7 +70,7 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 		processCtx, cluster.MCPBin, //nolint:gosec // test-owned binary and paths.
 		"--orchestrator", cluster.OrchestratorURL,
 		"--config-dir", cluster.ClientConfigDir,
-		"--project-dir", mountSource,
+		"--project-dir", projectDir,
 		"--agent-profiles", profilePath,
 	)
 	command.Stderr = &stderr
@@ -73,10 +87,21 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 
 	workspaceList := callMCPTool(t, session, "workspace_list", map[string]any{})
 	workspaceUUID := findWorkspaceUUID(t, workspaceList, workspaceName)
+	pushed := callMCPTool(t, session, "workspace_push", map[string]any{
+		"uuid": workspaceUUID, "project_path": projectDir,
+	})
+	mounts, ok := pushed["mounts"].([]any)
+	if !ok || len(mounts) != 1 {
+		t.Fatalf("workspace_push result = %#v", pushed)
+	}
+	firstMount, ok := mounts[0].(map[string]any)
+	if !ok || numberField(t, firstMount, "entries") == 0 {
+		t.Fatalf("workspace_push mount result = %#v", mounts[0])
+	}
 	started := callMCPTool(t, session, "agent_start", map[string]any{
 		"workspace_uuid": workspaceUUID,
 		"profile_name":   "integration",
-		"prompt":         "printf 'MCP-AGENT-OK\\n'",
+		"prompt":         "cat /workspace/input.txt && printf 'MCP-AGENT-OK\\n'",
 	})
 	runUUID := stringField(t, mapField(t, started, "run"), "uuid")
 	if runUUID == "" {
@@ -111,6 +136,9 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 	result := callMCPTool(t, session, "agent_result", map[string]any{"uuid": runUUID})
 	if got := stringField(t, result, "result"); !strings.Contains(got, "MCP-AGENT-OK") {
 		t.Fatalf("agent_result = %q, want job sentinel; result=%#v", got, result)
+	}
+	if got := stringField(t, result, "result"); !strings.Contains(got, "MCP-PUSH-OK") {
+		t.Fatalf("agent_result = %q, want pushed-file sentinel; result=%#v", got, result)
 	}
 
 	// Terminal reconciliation must also tear down the exact Sandbox and clear

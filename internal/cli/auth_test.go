@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
+
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
@@ -26,6 +28,12 @@ func TestResolveClientDirHonoursOverride(t *testing.T) {
 	}
 	if got != "/tmp/explicit" {
 		t.Errorf("got %q, want /tmp/explicit", got)
+	}
+}
+
+func TestConfigDirFromFlagRequiresRegisteredFlag(t *testing.T) {
+	if _, err := configDirFromFlag(&cobra.Command{}); err == nil {
+		t.Fatal("configDirFromFlag accepted command without config-dir flag")
 	}
 }
 

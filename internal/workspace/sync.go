@@ -13,6 +13,11 @@ import (
 	"github.com/richiejp/darkaifactory/internal/trace"
 )
 
+type PushClient interface {
+	PutManifest(context.Context, *connect.Request[workspacev1.PutManifestRequest]) (*connect.Response[workspacev1.PutManifestResponse], error)
+	PutChunk(context.Context, *connect.Request[workspacev1.PutChunkRequest]) (*connect.Response[workspacev1.PutChunkResponse], error)
+}
+
 // syncKeySep separates the workspace name from the in-VM target in a
 // SyncKey. NUL can't appear in either component (workspace names are
 // validated identifiers; targets are sanitised paths), so it's an
@@ -35,7 +40,7 @@ func SyncKey(workspace, target string) string {
 // skipped, so steady-state pushes move only the delta.
 func Push(
 	ctx context.Context,
-	client workspacev1connect.WorkspaceServiceClient,
+	client PushClient,
 	store *cas.Store,
 	name string,
 	m *workspacev1.Manifest,
@@ -74,7 +79,7 @@ func Push(
 // surfaces rather than being skipped.
 func pushChunk(
 	ctx context.Context,
-	client workspacev1connect.WorkspaceServiceClient,
+	client PushClient,
 	store *cas.Store,
 	digest string,
 ) error {

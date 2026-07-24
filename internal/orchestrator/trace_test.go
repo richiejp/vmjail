@@ -29,6 +29,13 @@ func TestNewTraceHandlerNilTracer(t *testing.T) {
 	}
 }
 
+func TestServerTracerReturnsConfiguredTracer(t *testing.T) {
+	tracer := trace.New("test")
+	if got := (&Server{tracer: tracer}).Tracer(); got != tracer {
+		t.Fatalf("Tracer() = %p, want %p", got, tracer)
+	}
+}
+
 func TestTraceHandlerIngestsSpans(t *testing.T) {
 	tr := trace.New("test")
 	h, err := NewTraceHandler(tr)

@@ -36,6 +36,7 @@ const (
 	mcpTestWorkspace = "workspace"
 	mcpMissing       = "missing"
 	profileNameKey   = "profile_name"
+	projectPathKey   = "project_path"
 	promptKey        = "prompt"
 	workspaceUUIDKey = "workspace_uuid"
 	nameKey          = "name"
@@ -66,6 +67,9 @@ type fakeReader struct {
 	validatedUUID    string
 	launchedUUID     string
 	stoppedUUID      string
+	pushedUUID       string
+	pushedPath       string
+	pushResult       daftclient.WorkspacePushResult
 }
 
 func (f *fakeReader) StartAgentRun(_ context.Context, workspace string, profile agentprofile.Entry, prompt string) (AgentRun, error) {
@@ -195,6 +199,11 @@ func (f *fakeReader) StopWorkspace(_ context.Context, uuid string) (Workspace, e
 	return f.workspace, f.getWorkErr
 }
 
+func (f *fakeReader) PushWorkspace(_ context.Context, uuid, projectPath string) (daftclient.WorkspacePushResult, error) {
+	f.pushedUUID, f.pushedPath = uuid, projectPath
+	return f.pushResult, f.getWorkErr
+}
+
 func connectClient(t *testing.T, reader Reader) *mcp.ClientSession {
 	return connectClientProfiles(t, reader, nil)
 }
@@ -235,7 +244,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceApplyTool, workspaceGetTool, workspaceLaunchTool, workspaceListTool, workspaceStatusTool, workspaceStopTool, workspaceValidateTool}
+	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceApplyTool, workspaceGetTool, workspaceLaunchTool, workspaceListTool, workspacePushTool, workspaceStatusTool, workspaceStopTool, workspaceValidateTool}
 	if len(result.Tools) != len(wantNames) {
 		t.Fatalf("got %d tools, want %d", len(result.Tools), len(wantNames))
 	}
@@ -250,7 +259,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 			t.Errorf("tool %q is missing an inferred schema", tool.Name)
 		}
 		switch tool.Name {
-		case nodeAuthorizeTool, workspaceApplyTool, workspaceLaunchTool:
+		case nodeAuthorizeTool, workspaceApplyTool, workspaceLaunchTool, workspacePushTool:
 			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint || !tool.Annotations.IdempotentHint {
 				t.Errorf("authorize annotations = %#v", tool.Annotations)
 			}
@@ -315,7 +324,11 @@ func TestWorkspaceReads(t *testing.T) {
 func TestWorkspaceLifecycleToolsApplyValidateAndProjectStatus(t *testing.T) {
 	const workspaceID = "123e4567-e89b-12d3-a456-426614174000"
 	workspace := Workspace{UUID: workspaceID, Name: mcpTestProject, Generation: 1, Ready: true, Missing: []string{}, Spec: WorkspaceSpec{ImageRef: mcpTestImage, Isolation: isolationStrict, Mounts: []WorkspaceMount{{Target: mcpTestMount, Source: workspaceID}}, Ports: []WorkspacePort{{ContainerPort: 8080, Protocol: protocolTCP}}}}
-	reader := &fakeReader{workspace: workspace, applyResult: WorkspaceApplyResult{Workspace: workspace, Created: true, Changed: true}}
+	projectPath := t.TempDir()
+	reader := &fakeReader{
+		workspace: workspace, applyResult: WorkspaceApplyResult{Workspace: workspace, Created: true, Changed: true},
+		pushResult: daftclient.WorkspacePushResult{ProjectDir: projectPath, Mounts: []daftclient.WorkspacePushMountResult{{Remote: mcpTestMount, Entries: 2}}},
+	}
 	session := connectClient(t, reader)
 	result := callTool(t, session, workspaceApplyTool, map[string]any{
 		nameKey: mcpTestProject, "expected_generation": 0,
@@ -341,6 +354,13 @@ func TestWorkspaceLifecycleToolsApplyValidateAndProjectStatus(t *testing.T) {
 		requireMap(t, requireMap(t, stopped.StructuredContent)[mcpTestWorkspace])[uuidKey] != workspaceID {
 		t.Fatalf("launch/stop results: launched=%#v stopped=%#v reader=%#v", launched, stopped, reader)
 	}
+	pushed := requireMap(t, callTool(t, session, workspacePushTool, map[string]any{
+		uuidKey: workspaceID, projectPathKey: projectPath,
+	}).StructuredContent)
+	if reader.pushedUUID != workspaceID || reader.pushedPath != projectPath ||
+		pushed["project_path"] != projectPath || requireMap(t, requireSlice(t, pushed["mounts"])[0])["entries"] != float64(2) {
+		t.Fatalf("push output=%#v reader=%#v", pushed, reader)
+	}
 }
 
 func TestWorkspaceApplyRejectsUnboundedAndAmbiguousInputs(t *testing.T) {
@@ -358,6 +378,31 @@ func TestWorkspaceApplyRejectsUnboundedAndAmbiguousInputs(t *testing.T) {
 		if err == nil && (response == nil || !response.IsError) {
 			t.Errorf("case %d response=%#v error=%v", i, response, err)
 		}
+	}
+}
+
+func TestWorkspacePushRequiresExplicitAbsoluteProjectPath(t *testing.T) {
+	session := connectClient(t, &fakeReader{})
+	for _, arguments := range []map[string]any{
+		{},
+		{uuidKey: mcpTestWorkspace, projectPathKey: "relative"},
+		{uuidKey: mcpTestWorkspace, projectPathKey: "/" + string(make([]byte, 4096))},
+	} {
+		response, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+			Name: workspacePushTool, Arguments: arguments,
+		})
+		if err == nil && (response == nil || !response.IsError) {
+			t.Fatalf("workspace_push(%#v) = %#v, %v", arguments, response, err)
+		}
+	}
+	failed := connectClient(t, &fakeReader{getWorkErr: errors.New("push failed")})
+	response, err := failed.CallTool(t.Context(), &mcp.CallToolParams{
+		Name: workspacePushTool, Arguments: map[string]any{
+			uuidKey: mcpTestWorkspace, projectPathKey: t.TempDir(),
+		},
+	})
+	if err != nil || !response.IsError {
+		t.Fatalf("workspace_push reader error = %#v, %v", response, err)
 	}
 }
 
@@ -901,5 +946,30 @@ func TestConstructorsRejectMissingDependencies(t *testing.T) {
 	}
 	if _, err := NewConnectReader(&daftclient.Client{}); err == nil {
 		t.Error("NewConnectReader accepted a client without services")
+	}
+}
+
+func TestConnectReaderPushesExplicitEmptyProject(t *testing.T) {
+	project := t.TempDir()
+	if err := os.Mkdir(filepath.Join(project, ".daft"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".daft", "config.json"), []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := daftclient.Bootstrap(daftclient.Config{
+		Orchestrator: "https://example.test", ConfigDir: t.TempDir(), ProjectDir: project,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	reader, err := NewConnectReader(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := reader.PushWorkspace(t.Context(), mcpTestWorkspace, project)
+	if err != nil || result.ProjectDir != project {
+		t.Fatalf("PushWorkspace = %#v, %v", result, err)
 	}
 }

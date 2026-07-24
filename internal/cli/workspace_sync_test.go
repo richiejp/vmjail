@@ -197,16 +197,22 @@ func TestWorkspacePushPullRoundTrip(t *testing.T) {
 	// A project dir with a recorded rw mount (real files) + a ro mount.
 	projectDir := t.TempDir()
 	t.Chdir(projectDir)
-	srcDir := t.TempDir()
+	srcDir := filepath.Join(projectDir, "src")
+	roDir := filepath.Join(projectDir, "ro")
+	if err := os.MkdirAll(srcDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(roDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	const fileName, fileBody = "hello.txt", "round-trip payload\n"
 	if err := os.WriteFile(filepath.Join(srcDir, fileName), []byte(fileBody), 0o600); err != nil {
 		t.Fatalf("write src file: %v", err)
 	}
-	roDir := t.TempDir()
-	if _, err := addDirLocalMount(mountMapping{Local: srcDir, Remote: workRemote}); err != nil {
+	if _, err := addDirLocalMount(mountMapping{Local: "src", Remote: workRemote}); err != nil {
 		t.Fatalf("addDirLocalMount rw: %v", err)
 	}
-	if _, err := addDirLocalMount(mountMapping{Local: roDir, Remote: "/ro", ReadOnly: true}); err != nil {
+	if _, err := addDirLocalMount(mountMapping{Local: "ro", Remote: "/ro", ReadOnly: true}); err != nil {
 		t.Fatalf("addDirLocalMount ro: %v", err)
 	}
 
