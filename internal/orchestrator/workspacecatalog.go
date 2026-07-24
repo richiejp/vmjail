@@ -10,6 +10,7 @@ import (
 	"net/http"
 	pathpkg "path"
 	"slices"
+	"sync"
 	"time"
 
 	"connectrpc.com/connect"
@@ -95,6 +96,13 @@ type WorkspaceCatalogHandler struct {
 	portBridger     WorkspacePortBridger
 	attachBridger   WorkspaceAttachBridger
 	observerBridger WorkspaceObserverBridger
+	lifecycleMu     sync.Mutex
+	lifecycleLocks  map[string]*workspaceLifecycleLock
+}
+
+type workspaceLifecycleLock struct {
+	mu   sync.Mutex
+	refs uint64
 }
 
 // SetNodeLister wires the registry Launch consults to auto-pin the
@@ -125,7 +133,32 @@ func NewWorkspaceCatalogHandler(store *workspacecatalog.Store, dispatcher Dispat
 	if store == nil {
 		return nil, errors.New("orchestrator: nil workspace catalog")
 	}
-	return &WorkspaceCatalogHandler{store: store, dispatcher: dispatcher}, nil
+	return &WorkspaceCatalogHandler{
+		store: store, dispatcher: dispatcher,
+		lifecycleLocks: make(map[string]*workspaceLifecycleLock),
+	}, nil
+}
+
+func (h *WorkspaceCatalogHandler) lockLifecycle(workspaceUUID string) func() {
+	h.lifecycleMu.Lock()
+	entry := h.lifecycleLocks[workspaceUUID]
+	if entry == nil {
+		entry = &workspaceLifecycleLock{}
+		h.lifecycleLocks[workspaceUUID] = entry
+	}
+	entry.refs++
+	h.lifecycleMu.Unlock()
+
+	entry.mu.Lock()
+	return func() {
+		entry.mu.Unlock()
+		h.lifecycleMu.Lock()
+		entry.refs--
+		if entry.refs == 0 {
+			delete(h.lifecycleLocks, workspaceUUID)
+		}
+		h.lifecycleMu.Unlock()
+	}
 }
 
 // Create implements WorkspaceCatalogService.Create. The
@@ -438,6 +471,12 @@ func (h *WorkspaceCatalogHandler) AddMount(
 	if err != nil {
 		return nil, err
 	}
+	unlock := h.lockLifecycle(ws.Metadata.UUID)
+	defer unlock()
+	ws, err = h.store.Get(ws.Metadata.UUID)
+	if err != nil {
+		return nil, mapCatalogErr(err)
+	}
 	if err := guardLock(ws, fp); err != nil {
 		return nil, err
 	}
@@ -732,33 +771,32 @@ func (h *WorkspaceCatalogHandler) Launch(
 	if err := guardLock(ws, fp); err != nil {
 		return nil, err
 	}
-	// Apply any pending phantom-cleanup decisions before reading
-	// status fields the precondition check below depends on.
 	h.reconcileBefore(ws.Metadata.UUID)
 	ws, err = h.store.Get(ws.Metadata.UUID)
 	if err != nil {
 		return nil, mapCatalogErr(err)
 	}
-	// Single-node convenience: select the sole registered node without
-	// mutating the workspace yet. The selection is persisted only after
-	// publication succeeds, so a disconnect cannot strand the workspace
-	// pinned to a dead node.
+	// Persist automatic node selection only after publication succeeds.
 	autoTarget, autoSelected := h.autoSelectSoleNode(ws)
 	if !ws.Status.IsTrue(workspacecatalog.ConditionReady) && !autoSelected {
 		return nil, connect.NewError(connect.CodeFailedPrecondition,
 			fmt.Errorf("workspace: not ready, missing: %v", ws.Status.Missing))
 	}
-	if ws.Status.IsTrue(workspacecatalog.ConditionDispatched) {
-		return nil, connect.NewError(connect.CodeFailedPrecondition,
-			errors.New("workspace: already dispatched; Stop before relaunching"))
-	}
-	targetFP := autoTarget
-	if !autoSelected {
-		targetFP, err = identity.ParseFingerprint(ws.Spec.TargetSandboxFingerprint)
-		if err != nil {
+	dispatched := ws.Status.IsTrue(workspacecatalog.ConditionDispatched)
+	if dispatched && ws.Status.CurrentSandbox != nil {
+		if ws.Status.CurrentSandbox.AgentProfileDigest != "" {
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("workspace: invalid target fingerprint: %w", err))
+				errors.New("workspace: current Sandbox belongs to an AgentRun; stop it before launching the Workspace"))
 		}
+		return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: workspaceToProto(ws)}), nil
+	}
+	if dispatched || ws.Status.CurrentSandbox != nil {
+		return nil, connect.NewError(connect.CodeInternal,
+			errors.New("workspace: inconsistent dispatched Sandbox binding"))
+	}
+	targetFP, err := launchTarget(ws, autoTarget, autoSelected)
+	if err != nil {
+		return nil, err
 	}
 
 	sandboxUID := mintWorkspaceUUID()
@@ -796,6 +834,22 @@ func (h *WorkspaceCatalogHandler) Launch(
 	}), nil
 }
 
+func launchTarget(
+	ws workspacecatalog.Workspace,
+	autoTarget identity.Fingerprint,
+	autoSelected bool,
+) (identity.Fingerprint, error) {
+	if autoSelected {
+		return autoTarget, nil
+	}
+	target, err := identity.ParseFingerprint(ws.Spec.TargetSandboxFingerprint)
+	if err != nil {
+		return identity.Fingerprint{}, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("workspace: invalid target fingerprint: %w", err))
+	}
+	return target, nil
+}
+
 // LaunchAgentSandbox composes an agent-specific Sandbox without mutating the
 // Workspace's project spec. An existing Sandbox is reusable only when it was
 // launched from the exact same immutable AgentProfile digest.
@@ -806,6 +860,8 @@ func (h *WorkspaceCatalogHandler) LaunchAgentSandbox(owner identity.Fingerprint,
 	if owner.IsZero() || workspaceUUID == "" || policy.ProfileDigest == "" || policy.ImageRef == "" {
 		return workspacecatalog.SandboxRef{}, connect.NewError(connect.CodeInvalidArgument, errors.New("orchestrator: incomplete AgentProfile launch policy"))
 	}
+	unlock := h.lockLifecycle(workspaceUUID)
+	defer unlock()
 	ws, err := h.store.Get(workspaceUUID)
 	if err != nil || ws.Metadata.OwnerFingerprint != owner {
 		return workspacecatalog.SandboxRef{}, connect.NewError(connect.CodeNotFound, errors.New("orchestrator: Workspace not found"))
@@ -958,6 +1014,12 @@ func (h *WorkspaceCatalogHandler) Stop(
 	if err != nil {
 		return nil, err
 	}
+	unlock := h.lockLifecycle(ws.Metadata.UUID)
+	defer unlock()
+	ws, err = h.store.Get(ws.Metadata.UUID)
+	if err != nil {
+		return nil, mapCatalogErr(err)
+	}
 	if err := guardLock(ws, fp); err != nil {
 		return nil, err
 	}
@@ -966,10 +1028,14 @@ func (h *WorkspaceCatalogHandler) Stop(
 	if err != nil {
 		return nil, mapCatalogErr(err)
 	}
-	if !ws.Status.IsTrue(workspacecatalog.ConditionDispatched) || ws.Status.CurrentSandbox == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("workspace: not dispatched; nothing to stop"))
+	dispatched := ws.Status.IsTrue(workspacecatalog.ConditionDispatched)
+	if !dispatched && ws.Status.CurrentSandbox == nil {
+		return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: workspaceToProto(ws)}), nil
 	}
-	if err := h.StopAgentSandbox(fp, ws.Metadata.UUID, ws.Status.CurrentSandbox.UID); err != nil {
+	if !dispatched || ws.Status.CurrentSandbox == nil {
+		return nil, connect.NewError(connect.CodeInternal, errors.New("workspace: inconsistent dispatched Sandbox binding"))
+	}
+	if err := h.stopAgentSandbox(fp, ws.Metadata.UUID, ws.Status.CurrentSandbox.UID); err != nil {
 		return nil, err
 	}
 	updated, err := h.store.Get(ws.Metadata.UUID)
@@ -985,11 +1051,17 @@ var errSandboxBindingChanged = errors.New("workspace: Sandbox binding changed")
 // stale AgentRun can never clear or stop a newer binding because both UUIDs are
 // checked before publication and again in the catalog transaction.
 func (h *WorkspaceCatalogHandler) StopAgentSandbox(owner identity.Fingerprint, workspaceUUID, sandboxUID string) error {
-	if h.dispatcher == nil {
-		return connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator: no dispatcher configured"))
-	}
 	if owner.IsZero() || workspaceUUID == "" || sandboxUID == "" {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("orchestrator: incomplete Sandbox stop binding"))
+	}
+	unlock := h.lockLifecycle(workspaceUUID)
+	defer unlock()
+	return h.stopAgentSandbox(owner, workspaceUUID, sandboxUID)
+}
+
+func (h *WorkspaceCatalogHandler) stopAgentSandbox(owner identity.Fingerprint, workspaceUUID, sandboxUID string) error {
+	if h.dispatcher == nil {
+		return connect.NewError(connect.CodeUnimplemented, errors.New("orchestrator: no dispatcher configured"))
 	}
 	ws, err := h.store.Get(workspaceUUID)
 	if err != nil || ws.Metadata.OwnerFingerprint != owner {

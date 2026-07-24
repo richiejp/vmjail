@@ -52,6 +52,8 @@ const (
 	workspaceApplyTool    = "workspace_apply"
 	workspaceValidateTool = "workspace_validate"
 	workspaceStatusTool   = "workspace_status"
+	workspaceLaunchTool   = "workspace_launch"
+	workspaceStopTool     = "workspace_stop"
 	agentProfileListTool  = "agent_profile_list"
 	agentStartTool        = "agent_start"
 	agentStatusTool       = "agent_status"
@@ -66,6 +68,8 @@ type Reader interface {
 	GetWorkspace(context.Context, string) (Workspace, error)
 	ApplyWorkspace(context.Context, WorkspaceApply) (WorkspaceApplyResult, error)
 	ValidateWorkspace(context.Context, string) (Workspace, error)
+	LaunchWorkspace(context.Context, string) (Workspace, error)
+	StopWorkspace(context.Context, string) (Workspace, error)
 	GetNode(context.Context, string) (Node, error)
 	AuthorizeNode(context.Context, string, string) (Node, error)
 	RevokeNode(context.Context, string) (Node, error)
@@ -383,6 +387,24 @@ func addWorkspaceTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations,
 			result, err := reader.ApplyWorkspace(ctx, WorkspaceApply(input))
 			return nil, workspaceApplyOutput(result), err
 		})
+	launchAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceLaunchTool, Description: "Idempotently launch one ready owned Workspace.", Annotations: launchAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, getWorkspaceOutput, error) {
+			if input.UUID == "" {
+				return nil, getWorkspaceOutput{}, fmt.Errorf("uuid is required")
+			}
+			workspace, err := reader.LaunchWorkspace(ctx, input.UUID)
+			return nil, getWorkspaceOutput{Workspace: workspace}, err
+		})
+	stopAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceStopTool, Description: "Idempotently stop the current Sandbox of one owned Workspace.", Annotations: stopAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, getWorkspaceOutput, error) {
+			if input.UUID == "" {
+				return nil, getWorkspaceOutput{}, fmt.Errorf("uuid is required")
+			}
+			workspace, err := reader.StopWorkspace(ctx, input.UUID)
+			return nil, getWorkspaceOutput{Workspace: workspace}, err
+		})
 }
 
 func workspaceSummary(input Workspace) WorkspaceSummary {
@@ -541,6 +563,8 @@ type workspaceReader interface {
 	Get(context.Context, *connect.Request[workspacev1.GetWorkspaceRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error)
 	Apply(context.Context, *connect.Request[workspacev1.ApplyWorkspaceRequest]) (*connect.Response[workspacev1.ApplyWorkspaceResponse], error)
 	Validate(context.Context, *connect.Request[workspacev1.ValidateRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error)
+	Launch(context.Context, *connect.Request[workspacev1.LaunchRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error)
+	Stop(context.Context, *connect.Request[workspacev1.StopRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error)
 }
 
 type operatorClient interface {
@@ -731,6 +755,22 @@ func (r ConnectReader) GetWorkspace(ctx context.Context, uuid string) (Workspace
 
 func (r ConnectReader) ValidateWorkspace(ctx context.Context, uuid string) (Workspace, error) {
 	response, err := r.workspace.Validate(ctx, connect.NewRequest(&workspacev1.ValidateRequest{Handle: workspaceUUIDHandle(uuid)}))
+	if err != nil {
+		return Workspace{}, err
+	}
+	return checkedWorkspace(response.Msg.GetWorkspace())
+}
+
+func (r ConnectReader) LaunchWorkspace(ctx context.Context, uuid string) (Workspace, error) {
+	response, err := r.workspace.Launch(ctx, connect.NewRequest(&workspacev1.LaunchRequest{Handle: workspaceUUIDHandle(uuid)}))
+	if err != nil {
+		return Workspace{}, err
+	}
+	return checkedWorkspace(response.Msg.GetWorkspace())
+}
+
+func (r ConnectReader) StopWorkspace(ctx context.Context, uuid string) (Workspace, error) {
+	response, err := r.workspace.Stop(ctx, connect.NewRequest(&workspacev1.StopRequest{Handle: workspaceUUIDHandle(uuid)}))
 	if err != nil {
 		return Workspace{}, err
 	}

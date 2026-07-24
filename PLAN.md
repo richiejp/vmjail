@@ -108,6 +108,8 @@ Landed:
 - Durable AgentRun records and events.
 - Workspace apply-by-generation, including atomic create-by-owner-scoped-name,
   concurrent create convergence, and retry-safe `created`/`changed` results.
+- Idempotent, per-workspace-serialized launch and stop operations, exposed
+  through the trusted MCP facade with bounded workspace results.
 - Detached agent execution with one-shot OAuth delivery.
 - Trusted stdio MCP facade with owner-scoped workspace and agent operations.
 - Real daemon/MCP lifecycle tests for workspace and AgentRun paths.
@@ -118,7 +120,6 @@ Remaining:
 
 - Extract project-root-confined `workspace_push` from CLI-only logic into the
   reusable client surface.
-- Finish idempotent `workspace_launch` and `workspace_stop` behavior.
 - Prove the full overseer recipe across a remote Node: install, trust,
   apply/push, start, poll/result, teardown, retry, and recovery.
 - Bound every MCP list, event, log, and observability response by pagination or

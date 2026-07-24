@@ -178,7 +178,7 @@ type workspaceCatalogRig struct {
 	// dispatcher is the fake injected when newWorkspaceCatalogRig
 	// is called with a non-nil dispatcher option; nil otherwise so
 	// the production NodeControlHandler is in play.
-	dispatcher *fakeDispatcher
+	dispatcher Dispatcher
 	// nodes is the registry the handler's single-node auto-pin
 	// consults. Empty by default (no auto-pin); tests register
 	// fingerprints via registerNode to exercise the behaviour.
@@ -189,7 +189,7 @@ func newWorkspaceCatalogRig(t *testing.T) *workspaceCatalogRig {
 	return newWorkspaceCatalogRigWith(t, nil)
 }
 
-func newWorkspaceCatalogRigWith(t *testing.T, dispatcher *fakeDispatcher) *workspaceCatalogRig {
+func newWorkspaceCatalogRigWith(t *testing.T, dispatcher Dispatcher) *workspaceCatalogRig {
 	t.Helper()
 	cat := workspacecatalog.NewStore(nil)
 	nodes := nodectrl.NewRegistry(nil)
@@ -232,6 +232,25 @@ type fakeDispatcher struct {
 
 type callbackDispatcher struct {
 	callback func() error
+}
+
+type blockingDispatcher struct {
+	entered chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	calls   []dispatchCall
+}
+
+func (d *blockingDispatcher) PublishSandboxEvent(fp identity.Fingerprint, eventType sandboxv1.EventType, sandbox *sandboxv1.Sandbox) error {
+	d.mu.Lock()
+	d.calls = append(d.calls, dispatchCall{fp: fp, eventType: eventType, sandbox: sandbox})
+	first := len(d.calls) == 1
+	d.mu.Unlock()
+	if first {
+		close(d.entered)
+		<-d.release
+	}
+	return nil
 }
 
 func (d callbackDispatcher) PublishSandboxEvent(identity.Fingerprint, sandboxv1.EventType, *sandboxv1.Sandbox) error {
@@ -1421,10 +1440,7 @@ func TestValidateDemotesReadyOnDrift(t *testing.T) {
 	}
 }
 
-// TestLaunchDispatchesComposedSandboxSpec drives the happy path:
-// Validate first to reach READY, then Launch composes the spec and
-// hands it to the dispatcher. Asserts the spec carries every field
-// the workspace declared.
+// TestLaunchDispatchesComposedSandboxSpec checks the complete projected spec.
 func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	fake := &fakeDispatcher{}
 	rig := newWorkspaceCatalogRigWith(t, fake)
@@ -1494,6 +1510,58 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	}
 	if !call.sandbox.GetSpec().GetNestedVirtualization().GetEnable() {
 		t.Error("spec.nested_virtualization.enable = false, want true (projected from workspace)")
+	}
+	assertIdempotentLaunch(t, rig, fake, uuid, got.GetStatus().GetCurrentSandbox().GetUid())
+}
+
+func assertIdempotentLaunch(t *testing.T, rig *workspaceCatalogRig, fake *fakeDispatcher, uuid, sandboxUID string) {
+	t.Helper()
+	retried, err := rig.client.Launch(t.Context(), connect.NewRequest(
+		&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)},
+	))
+	if err != nil || retried.Msg.GetWorkspace().GetStatus().GetCurrentSandbox().GetUid() != sandboxUID {
+		t.Fatalf("idempotent Launch retry = %+v, %v", retried, err)
+	}
+	fake.mu.Lock()
+	callCount := len(fake.calls)
+	fake.mu.Unlock()
+	if callCount != 1 {
+		t.Fatalf("Launch retry published %d events, want 1", callCount)
+	}
+}
+
+func TestConcurrentLaunchPublishesOneSandbox(t *testing.T) {
+	dispatcher := &blockingDispatcher{entered: make(chan struct{}), release: make(chan struct{})}
+	rig := newWorkspaceCatalogRigWith(t, dispatcher)
+	target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
+	uuid := readyWorkspace(t, rig, "launch-concurrent", target)
+	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)})); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		response *connect.Response[workspacev1.WorkspaceResponse]
+		err      error
+	}
+	results := make(chan result, 2)
+	launch := func() {
+		response, err := rig.client.Launch(t.Context(), connect.NewRequest(&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)}))
+		results <- result{response: response, err: err}
+	}
+	go launch()
+	<-dispatcher.entered
+	go launch()
+	close(dispatcher.release)
+	first, second := <-results, <-results
+	if first.err != nil || second.err != nil {
+		t.Fatalf("concurrent Launch errors: %v, %v", first.err, second.err)
+	}
+	firstUID := first.response.Msg.GetWorkspace().GetStatus().GetCurrentSandbox().GetUid()
+	secondUID := second.response.Msg.GetWorkspace().GetStatus().GetCurrentSandbox().GetUid()
+	dispatcher.mu.Lock()
+	callCount := len(dispatcher.calls)
+	dispatcher.mu.Unlock()
+	if firstUID == "" || firstUID != secondUID || callCount != 1 {
+		t.Fatalf("concurrent Launch UIDs %q/%q, events=%d", firstUID, secondUID, callCount)
 	}
 }
 
@@ -2026,6 +2094,18 @@ func TestStopFromRunningTransitionsAndClearsDispatch(t *testing.T) {
 	if last.eventType != sandboxv1.EventType_EVENT_TYPE_DELETED || last.sandbox.GetMetadata().GetUid() == "" {
 		t.Fatalf("stop dispatch = %+v", last)
 	}
+	retried, err := rig.client.Stop(t.Context(), connect.NewRequest(
+		&workspacev1.StopRequest{Handle: uuidHandle(uuid)},
+	))
+	if err != nil || retried.Msg.GetWorkspace().GetStatus().GetCurrentSandbox().GetUid() != "" {
+		t.Fatalf("idempotent Stop retry = %+v, %v", retried, err)
+	}
+	fake.mu.Lock()
+	callCount := len(fake.calls)
+	fake.mu.Unlock()
+	if callCount != 2 {
+		t.Fatalf("Stop retry published %d total events, want 2", callCount)
+	}
 }
 
 func TestStopPublishFailureKeepsSandboxBound(t *testing.T) {
@@ -2122,19 +2202,18 @@ func TestStopAgentSandboxCannotClearNewBindingAfterPublish(t *testing.T) {
 	}
 }
 
-// TestStopWithoutLaunchIsRejected pins that Stop requires
-// Dispatched=True; calling it on a workspace that's never been
-// launched returns FailedPrecondition.
-func TestStopWithoutLaunchIsRejected(t *testing.T) {
+// TestStopWithoutLaunchIsIdempotent pins the desired-state contract: a stop
+// retry succeeds when no Sandbox is bound and emits no event.
+func TestStopWithoutLaunchIsIdempotent(t *testing.T) {
 	rig := newWorkspaceCatalogRig(t)
 	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
 		&workspacev1.CreateWorkspaceRequest{Name: "stop-fresh"},
 	))
-	_, err := rig.client.Stop(t.Context(), connect.NewRequest(
+	response, err := rig.client.Stop(t.Context(), connect.NewRequest(
 		&workspacev1.StopRequest{Handle: uuidHandle(created.Msg.GetWorkspace().GetMetadata().GetUuid())},
 	))
-	if code := connect.CodeOf(err); code != connect.CodeFailedPrecondition {
-		t.Errorf("code = %s, want FailedPrecondition", code)
+	if err != nil || response.Msg.GetWorkspace().GetStatus().GetCurrentSandbox().GetUid() != "" {
+		t.Fatalf("Stop fresh Workspace = %+v, %v", response, err)
 	}
 }
 
