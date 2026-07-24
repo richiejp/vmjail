@@ -160,6 +160,38 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 		t.Fatalf("canceled agent_result state = %q; result=%#v", got, canceledResult)
 	}
 	waitWorkspaceStopped(t, session, workspaceUUID, deadline, stderr)
+
+	lostRun := mapField(t, callMCPTool(t, session, "agent_start", map[string]any{
+		"request_id":     "323e4567-e89b-42d3-a456-426614174000",
+		"workspace_uuid": workspaceUUID,
+		"profile_name":   "integration",
+		"prompt":         "printf 'MCP-LOSS-READY\\n'; sleep 300",
+	}), "run")
+	lostUUID := stringField(t, lostRun, "uuid")
+	deadline = time.Now().Add(90 * time.Second)
+	waitAgentState(t, session, lostUUID, "AGENT_RUN_STATE_RUNNING", deadline, stderr)
+	if err := cluster.StopSandboxd(); err != nil {
+		t.Fatalf("stop sandboxd: %v", err)
+	}
+	waitNodeDisconnected(t, session, cluster.SandboxdFP.String(), deadline)
+	waitAgentState(t, session, lostUUID, "AGENT_RUN_STATE_LOST", deadline, stderr)
+	lostResult := callMCPTool(t, session, "agent_result", map[string]any{"uuid": lostUUID})
+	if got := stringField(t, lostResult, "state"); got != "AGENT_RUN_STATE_LOST" {
+		t.Fatalf("lost agent_result state = %q; result=%#v", got, lostResult)
+	}
+}
+
+func waitNodeDisconnected(t *testing.T, session *mcp.ClientSession, fingerprint string, deadline time.Time) {
+	t.Helper()
+	for time.Now().Before(deadline) {
+		node := mapField(t, callMCPTool(t, session, "node_registration_status", map[string]any{"fingerprint": fingerprint}), "node")
+		connected, _ := node["connected"].(bool)
+		if !connected {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Node %s remained connected after sandboxd stopped", fingerprint)
 }
 
 func waitAgentState(t *testing.T, session *mcp.ClientSession, uuid, want string, deadline time.Time, stderr *bytes.Buffer) {

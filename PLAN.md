@@ -129,6 +129,9 @@ Landed:
 - Real-VM cancellation proof: MCP stops an indefinitely running Node job,
   repeated cancellation converges, durable state/result become `CANCELED`, and
   terminal reconciliation tears down the exact Sandbox.
+- Real-Node-loss proof: terminating the registered sandboxd while its job is
+  running leaves MCP/orchestrator available, reports the Node disconnected,
+  and durably resolves the affected AgentRun and result as `LOST`.
 
 Remaining:
 

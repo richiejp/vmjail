@@ -117,6 +117,20 @@ type Cluster struct {
 	// writes to stdout/stderr (in addition to t.Log forwarding).
 	// Tests assert on it via WaitForSandboxdOutput.
 	sandboxdOut *outputCapture
+	sandboxdCmd *exec.Cmd
+}
+
+// StopSandboxd terminates the test Node process group without stopping the
+// orchestrator. It lets recovery tests exercise a genuine registered-Node
+// disconnect while keeping the public control plane available.
+func (c *Cluster) StopSandboxd() error {
+	if c == nil || c.sandboxdCmd == nil || c.sandboxdCmd.Process == nil {
+		return nil
+	}
+	if err := syscall.Kill(-c.sandboxdCmd.Process.Pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return err
+	}
+	return nil
 }
 
 // WaitForSandboxdOutput polls the captured sandboxd output until
@@ -364,7 +378,7 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		// vars are exported at all.
 		sbxScrub = artefactEnvKeys
 	}
-	startDaemon(t, sbxOut, sbxEnv, sbxScrub, sandboxdBin,
+	sandboxdCmd := startDaemon(t, sbxOut, sbxEnv, sbxScrub, sandboxdBin,
 		"serve", "--orchestrator", url, "--config-dir", sbxDir)
 	waitForNode(t, bins.daft, cliDir, url, sbxID.Fingerprint(), daemonReadyTimeout)
 
@@ -380,6 +394,7 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		ClientFP:        cliID.Fingerprint(),
 		ObserverDir:     observerDir,
 		sandboxdOut:     sbxOut,
+		sandboxdCmd:     sandboxdCmd,
 	}
 }
 
