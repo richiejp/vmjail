@@ -169,6 +169,9 @@ maintainability requirements.
   parent transcript. Long milestones end with a concise handoff into a fresh
   session.
 - MCP and observability APIs must paginate or cap potentially unbounded output.
+- Keep Nix derivation source closures narrow. In particular, the kernel's
+  `kconfig-verify` dependency includes only its command/package and module
+  metadata, so unrelated code, test, plan, or skill edits do not rebuild Linux.
 
 ## Open design questions
 

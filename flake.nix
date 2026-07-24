@@ -57,6 +57,20 @@
             in !(type == "directory" && (name == "third_party" || name == "vendor"));
         };
 
+        # The kernel depends on kconfig-verify, but that tiny build-time tool
+        # does not depend on the rest of the repository. Giving it the broad
+        # goSrc made every unrelated source/test/doc edit invalidate the
+        # expensive Linux derivation.
+        kconfigVerifySrc = pkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = pkgs.lib.fileset.unions [
+            ./go.mod
+            ./go.sum
+            ./cmd/kconfig-verify
+            ./internal/kconfig
+          ];
+        };
+
         # mkDaftBinary builds one of our cmd/ binaries from the repo's
         # go.mod. Shared so vendorHash stays defined once — otherwise
         # it drifts the next time go.mod changes.
@@ -80,10 +94,11 @@
           cgoEnabled ? false,
           platforms ? pkgs.lib.platforms.unix,
           preBuild ? "",
+          src ? goSrc,
         }: pkgs.buildGoModule ({
           pname = name;
           inherit version;
-          src = goSrc;
+          inherit src;
           vendorHash = "sha256-EwZee0qVr8QoU6LBzXuGuv8lHd7CJoKaozq2IxrvNAg=";
           env.CGO_ENABLED = if cgoEnabled then "1" else "0";
           ldflags = [
@@ -279,6 +294,7 @@
             subPackage = "cmd/kconfig-verify";
             description = "darkaifactory kernel-config survival checker";
             platforms = pkgs.lib.platforms.linux;
+            src = kconfigVerifySrc;
           };
 
           # daft-hello-container is the workload binary in the v0
