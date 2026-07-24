@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"connectrpc.com/connect"
@@ -37,24 +38,32 @@ const (
 	profileNameKey   = "profile_name"
 	promptKey        = "prompt"
 	workspaceUUIDKey = "workspace_uuid"
+	nameKey          = "name"
+	specKey          = "spec"
+	mcpTestImage     = "alpine:3"
+	mcpTestProject   = "project"
+	mcpTestMount     = "/workspace"
 )
 
 type fakeReader struct {
-	nodes          []Node
-	workspaces     []Workspace
-	workspace      Workspace
-	listNodesErr   error
-	listWorkErr    error
-	getWorkErr     error
-	requestedUUID  string
-	listWorkCalled int
-	operatorNode   Node
-	operatorErr    error
-	agentRun       AgentRun
-	agentEvents    AgentEvents
-	agentErr       error
-	startedProfile agentprofile.Entry
-	startedPrompt  string
+	nodes            []Node
+	workspaces       []Workspace
+	workspace        Workspace
+	listNodesErr     error
+	listWorkErr      error
+	getWorkErr       error
+	requestedUUID    string
+	listWorkCalled   int
+	operatorNode     Node
+	operatorErr      error
+	agentRun         AgentRun
+	agentEvents      AgentEvents
+	agentErr         error
+	startedProfile   agentprofile.Entry
+	startedPrompt    string
+	appliedWorkspace WorkspaceApply
+	applyResult      WorkspaceApplyResult
+	validatedUUID    string
 }
 
 func (f *fakeReader) StartAgentRun(_ context.Context, workspace string, profile agentprofile.Entry, prompt string) (AgentRun, error) {
@@ -164,6 +173,16 @@ func (f *fakeReader) GetWorkspace(_ context.Context, uuid string) (Workspace, er
 	return f.workspace, f.getWorkErr
 }
 
+func (f *fakeReader) ApplyWorkspace(_ context.Context, input WorkspaceApply) (WorkspaceApplyResult, error) {
+	f.appliedWorkspace = input
+	return f.applyResult, f.getWorkErr
+}
+
+func (f *fakeReader) ValidateWorkspace(_ context.Context, uuid string) (Workspace, error) {
+	f.validatedUUID = uuid
+	return f.workspace, f.getWorkErr
+}
+
 func connectClient(t *testing.T, reader Reader) *mcp.ClientSession {
 	return connectClientProfiles(t, reader, nil)
 }
@@ -204,7 +223,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceGetTool, workspaceListTool}
+	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceApplyTool, workspaceGetTool, workspaceListTool, workspaceStatusTool, workspaceValidateTool}
 	if len(result.Tools) != len(wantNames) {
 		t.Fatalf("got %d tools, want %d", len(result.Tools), len(wantNames))
 	}
@@ -219,7 +238,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 			t.Errorf("tool %q is missing an inferred schema", tool.Name)
 		}
 		switch tool.Name {
-		case nodeAuthorizeTool:
+		case nodeAuthorizeTool, workspaceApplyTool:
 			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint || !tool.Annotations.IdempotentHint {
 				t.Errorf("authorize annotations = %#v", tool.Annotations)
 			}
@@ -278,6 +297,48 @@ func TestWorkspaceReads(t *testing.T) {
 	workspace := requireMap(t, requireMap(t, getResult.StructuredContent)[mcpTestWorkspace])
 	if workspace["name"] != first {
 		t.Errorf("workspace name = %v, want %s", workspace["name"], first)
+	}
+}
+
+func TestWorkspaceLifecycleToolsApplyValidateAndProjectStatus(t *testing.T) {
+	const workspaceID = "123e4567-e89b-12d3-a456-426614174000"
+	workspace := Workspace{UUID: workspaceID, Name: mcpTestProject, Generation: 1, Ready: true, Missing: []string{}, Spec: WorkspaceSpec{ImageRef: mcpTestImage, Isolation: isolationStrict, Mounts: []WorkspaceMount{{Target: mcpTestMount, Source: workspaceID}}, Ports: []WorkspacePort{{ContainerPort: 8080, Protocol: protocolTCP}}}}
+	reader := &fakeReader{workspace: workspace, applyResult: WorkspaceApplyResult{Workspace: workspace, Created: true, Changed: true}}
+	session := connectClient(t, reader)
+	result := callTool(t, session, workspaceApplyTool, map[string]any{
+		nameKey: mcpTestProject, "expected_generation": 0,
+		specKey: map[string]any{"image_ref": mcpTestImage, "isolation": isolationStrict, "mounts": []any{map[string]any{"target": mcpTestMount}}, "ports": []any{map[string]any{"container_port": 8080, "protocol": protocolTCP}}},
+	})
+	applyOutput := requireMap(t, result.StructuredContent)
+	if applyOutput["created"] != true || applyOutput["changed"] != true || reader.appliedWorkspace.Name != mcpTestProject || reader.appliedWorkspace.Spec.Ports[0].Protocol != protocolTCP {
+		t.Fatalf("apply output=%#v input=%#v", applyOutput, reader.appliedWorkspace)
+	}
+	validated := callTool(t, session, workspaceValidateTool, map[string]any{uuidKey: workspaceID})
+	if reader.validatedUUID != workspaceID || requireMap(t, requireMap(t, validated.StructuredContent)[mcpTestWorkspace])["ready"] != true {
+		t.Fatalf("validated=%#v uuid=%q", validated.StructuredContent, reader.validatedUUID)
+	}
+	status := callTool(t, session, workspaceStatusTool, map[string]any{uuidKey: workspaceID})
+	projected := requireMap(t, requireMap(t, status.StructuredContent)[mcpTestWorkspace])
+	if requireMap(t, projected[specKey])["image_ref"] != mcpTestImage {
+		t.Fatalf("status = %#v", projected)
+	}
+}
+
+func TestWorkspaceApplyRejectsUnboundedAndAmbiguousInputs(t *testing.T) {
+	session := connectClient(t, &fakeReader{})
+	tests := []map[string]any{
+		{},
+		{"uuid": "id", nameKey: nameKey, "expected_generation": 1, specKey: map[string]any{}},
+		{"uuid": "id", specKey: map[string]any{}},
+		{nameKey: nameKey, specKey: map[string]any{"isolation": "unknown"}},
+		{nameKey: nameKey, specKey: map[string]any{"ports": []any{map[string]any{"container_port": 80, "protocol": "sctp"}}}},
+		{nameKey: nameKey, specKey: map[string]any{"image_ref": string(make([]byte, 1<<20))}},
+	}
+	for i, arguments := range tests {
+		response, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: workspaceApplyTool, Arguments: arguments})
+		if err == nil && (response == nil || !response.IsError) {
+			t.Errorf("case %d response=%#v error=%v", i, response, err)
+		}
 	}
 }
 
@@ -417,12 +478,96 @@ func TestMapWorkspacesHandlesCompleteAndMissingMessages(t *testing.T) {
 			},
 		},
 	})
-	if len(got) != 2 || got[0] != (Workspace{}) {
+	if len(got) != 2 || got[0].UUID != "" || got[0].Spec.ImageRef != "" {
 		t.Fatalf("mapped missing workspace = %#v", got)
 	}
-	want := Workspace{UUID: "id", Name: "name", Generation: 4, ObservedGeneration: 3, CurrentSandboxUUID: "sandbox"}
-	if got[1] != want {
-		t.Errorf("mapped workspace = %#v, want %#v", got[1], want)
+	if got[1].UUID != "id" || got[1].Name != "name" || got[1].Generation != 4 || got[1].ObservedGeneration != 3 || got[1].CurrentSandboxUUID != "sandbox" {
+		t.Errorf("mapped workspace = %#v", got[1])
+	}
+}
+
+func TestCheckedWorkspaceRejectsUnboundedExistingDeclarations(t *testing.T) {
+	input := &workspacev1.Workspace{Metadata: &workspacev1.WorkspaceMetadata{Name: mcpTestProject}, Spec: &workspacev1.WorkspaceSpec{Env: make([]*sandboxv1.EnvVar, maxWorkspaceItems+1)}}
+	if _, err := checkedWorkspace(input); err == nil {
+		t.Fatal("oversized existing Workspace was projected into MCP output")
+	}
+	unboundedSpec := input
+	input = &workspacev1.Workspace{
+		Metadata: &workspacev1.WorkspaceMetadata{Name: string(make([]byte, 256))},
+		Status:   &workspacev1.WorkspaceStatus{Missing: make([]string, maxWorkspaceItems+1)},
+	}
+	if _, err := checkedWorkspace(input); err == nil {
+		t.Fatal("oversized Workspace metadata was projected into MCP output")
+	}
+	// List is deliberately summary-only and therefore remains bounded even if a
+	// Workspace was created by an older or non-MCP client with a large spec.
+	if got := mapWorkspaces([]*workspacev1.Workspace{unboundedSpec}); len(got) != 1 || got[0].Name != mcpTestProject || len(got[0].Spec.Env) != 0 {
+		t.Fatalf("summary mapping = %#v", got)
+	}
+}
+
+func TestMapWorkspaceBaseDerivesReadyCondition(t *testing.T) {
+	input := &workspacev1.Workspace{Status: &workspacev1.WorkspaceStatus{Conditions: []*sandboxv1.Condition{
+		{Type: "Other", Status: sandboxv1.ConditionStatus_CONDITION_STATUS_TRUE},
+		{Type: conditionReady, Status: sandboxv1.ConditionStatus_CONDITION_STATUS_FALSE},
+		{Type: conditionReady, Status: sandboxv1.ConditionStatus_CONDITION_STATUS_TRUE},
+	}}}
+	if got := mapWorkspaceBase(input); !got.Ready {
+		t.Fatalf("Ready = false for conditions %#v", input.GetStatus().GetConditions())
+	}
+}
+
+func TestWorkspaceSpecProjectionRoundTripsAllFields(t *testing.T) {
+	input := WorkspaceSpec{
+		ImageRef:              mcpTestImage,
+		DevcontainerPath:      ".devcontainer/devcontainer.json",
+		Mounts:                []WorkspaceMount{{Target: mcpTestMount, Source: "source", ReadOnly: true}},
+		Env:                   []WorkspaceEnv{{Name: "MODE", Value: "test"}},
+		Ports:                 []WorkspacePort{{ContainerPort: 53, Protocol: protocolUDP}, {ContainerPort: 443, Protocol: protocolTCP}},
+		TargetNodeFingerprint: "sha256:node",
+		GPUCount:              2,
+		GPUMinVRAMBytes:       8 << 30,
+		Isolation:             isolationShared,
+		MemoryBytes:           16 << 30,
+		CPUCores:              8,
+		NestedVirtualization:  true,
+		PrivilegedFuseMounts:  true,
+		PrivilegedBuild:       true,
+	}
+	wire := workspaceSpecToProto(input)
+	got := workspaceSpecFromProto(wire)
+	if !reflect.DeepEqual(got, input) {
+		t.Fatalf("round trip = %#v, want %#v", got, input)
+	}
+	input.Isolation = isolationStrict
+	if got := workspaceSpecFromProto(workspaceSpecToProto(input)); got.Isolation != isolationStrict {
+		t.Fatalf("strict isolation round trip = %#v", got)
+	}
+	if protocolName(sandboxv1.Protocol_PROTOCOL_UNSPECIFIED) != "" ||
+		protocolFromName("invalid") != sandboxv1.Protocol_PROTOCOL_UNSPECIFIED {
+		t.Fatal("unspecified protocol did not remain unspecified")
+	}
+}
+
+func TestWorkspaceBoundsRejectEveryUnboundedDimension(t *testing.T) {
+	tooManyMounts := make([]WorkspaceMount, maxWorkspaceItems+1)
+	tooManyPorts := make([]WorkspacePort, maxWorkspaceItems+1)
+	tooManyEnv := make([]WorkspaceEnv, maxWorkspaceItems+1)
+	tests := []WorkspaceSpec{
+		{Mounts: tooManyMounts},
+		{Ports: tooManyPorts},
+		{Env: tooManyEnv},
+		{DevcontainerPath: string(make([]byte, 4097))},
+		{TargetNodeFingerprint: string(make([]byte, 257))},
+		{Env: []WorkspaceEnv{{Name: "VALUE", Value: string(make([]byte, maxWorkspaceBytes+1))}}},
+	}
+	for i, input := range tests {
+		if err := validateWorkspaceSpecBounds(input); err == nil {
+			t.Errorf("case %d accepted an unbounded declaration", i)
+		}
+	}
+	if err := validateWorkspaceApply(workspaceApplyInput{Name: string(make([]byte, 256))}); err == nil {
+		t.Fatal("oversized workspace name accepted")
 	}
 }
 
@@ -436,9 +581,14 @@ func (f fakeNodeLister) ListNodes(context.Context, *connect.Request[nodectrlv1.L
 }
 
 type fakeWorkspaceReader struct {
-	listResponse *workspacev1.ListWorkspacesResponse
-	err          error
-	mineOnly     bool
+	listResponse  *workspacev1.ListWorkspacesResponse
+	workspace     *workspacev1.Workspace
+	applyResponse *workspacev1.ApplyWorkspaceResponse
+	applyRequest  *workspacev1.ApplyWorkspaceRequest
+	getUUID       string
+	validateUUID  string
+	err           error
+	mineOnly      bool
 }
 
 type fakeOperatorClient struct {
@@ -526,10 +676,27 @@ func (f *fakeWorkspaceReader) List(_ context.Context, request *connect.Request[w
 	return connect.NewResponse(f.listResponse), f.err
 }
 
+func (f *fakeWorkspaceReader) Get(_ context.Context, request *connect.Request[workspacev1.GetWorkspaceRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	f.getUUID = request.Msg.GetHandle().GetUuid()
+	return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: f.workspace}), f.err
+}
+
+func (f *fakeWorkspaceReader) Apply(_ context.Context, request *connect.Request[workspacev1.ApplyWorkspaceRequest]) (*connect.Response[workspacev1.ApplyWorkspaceResponse], error) {
+	f.applyRequest = request.Msg
+	return connect.NewResponse(f.applyResponse), f.err
+}
+
+func (f *fakeWorkspaceReader) Validate(_ context.Context, request *connect.Request[workspacev1.ValidateRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	f.validateUUID = request.Msg.GetHandle().GetUuid()
+	return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: f.workspace}), f.err
+}
+
 func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	protoWorkspace := &workspacev1.Workspace{Metadata: &workspacev1.WorkspaceMetadata{Uuid: mcpTestWorkspace}}
 	workspaces := &fakeWorkspaceReader{
-		listResponse: &workspacev1.ListWorkspacesResponse{Workspaces: []*workspacev1.Workspace{protoWorkspace}},
+		listResponse:  &workspacev1.ListWorkspacesResponse{Workspaces: []*workspacev1.Workspace{protoWorkspace}},
+		workspace:     protoWorkspace,
+		applyResponse: &workspacev1.ApplyWorkspaceResponse{Workspace: protoWorkspace, Created: true, Changed: true},
 	}
 	var startRequest *agentrunv1.StartAgentRunRequest
 	secretClient := &fakeSecretClient{}
@@ -549,17 +716,7 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	if err != nil || len(nodes) != 1 || nodes[0].CPUs != 8 || nodes[0].MemoryBytes != 16 {
 		t.Fatalf("ListNodes() = %#v, %v", nodes, err)
 	}
-	listed, err := reader.ListWorkspaces(t.Context())
-	if err != nil || len(listed) != 1 || !workspaces.mineOnly {
-		t.Fatalf("ListWorkspaces() = %#v, %v; mine_only=%v", listed, err, workspaces.mineOnly)
-	}
-	got, err := reader.GetWorkspace(t.Context(), mcpTestWorkspace)
-	if err != nil || got.UUID != mcpTestWorkspace {
-		t.Fatalf("GetWorkspace() = %#v, %v", got, err)
-	}
-	if _, err := reader.GetWorkspace(t.Context(), "someone-elses-workspace"); err == nil {
-		t.Fatal("GetWorkspace returned a workspace outside the owned list")
-	}
+	testConnectReaderWorkspaceRPCs(t, reader, workspaces)
 	status, err := reader.GetNode(t.Context(), "fingerprint")
 	if err != nil || !status.Authorized {
 		t.Fatalf("GetNode() = %#v, %v", status, err)
@@ -603,6 +760,25 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	}
 }
 
+func testConnectReaderWorkspaceRPCs(t *testing.T, reader ConnectReader, workspaces *fakeWorkspaceReader) {
+	t.Helper()
+	listed, err := reader.ListWorkspaces(t.Context())
+	if err != nil || len(listed) != 1 || !workspaces.mineOnly {
+		t.Fatalf("ListWorkspaces() = %#v, %v; mine_only=%v", listed, err, workspaces.mineOnly)
+	}
+	got, err := reader.GetWorkspace(t.Context(), mcpTestWorkspace)
+	if err != nil || got.UUID != mcpTestWorkspace || workspaces.getUUID != mcpTestWorkspace {
+		t.Fatalf("GetWorkspace() = %#v, %v; request=%q", got, err, workspaces.getUUID)
+	}
+	if validated, err := reader.ValidateWorkspace(t.Context(), mcpTestWorkspace); err != nil || validated.UUID != mcpTestWorkspace || workspaces.validateUUID != mcpTestWorkspace {
+		t.Fatalf("ValidateWorkspace = %#v, %v", validated, err)
+	}
+	applied, err := reader.ApplyWorkspace(t.Context(), WorkspaceApply{Name: mcpTestProject, Spec: WorkspaceSpec{Isolation: isolationStrict, Ports: []WorkspacePort{{ContainerPort: 80, Protocol: protocolTCP}}}})
+	if err != nil || !applied.Created || !applied.Changed || workspaces.applyRequest.GetHandle().GetName() != mcpTestProject || workspaces.applyRequest.GetSpec().GetIsolation() != sandboxv1.Isolation_ISOLATION_STRICT || workspaces.applyRequest.GetSpec().GetPorts()[0].GetProtocol() != sandboxv1.Protocol_PROTOCOL_TCP {
+		t.Fatalf("ApplyWorkspace = %#v request=%#v error=%v", applied, workspaces.applyRequest, err)
+	}
+}
+
 func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
 	wantErr := errors.New("rpc failed")
 	reader := ConnectReader{
@@ -619,6 +795,12 @@ func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
 	}
 	if _, err := reader.GetWorkspace(t.Context(), mcpTestWorkspace); !errors.Is(err, wantErr) {
 		t.Errorf("GetWorkspace error = %v", err)
+	}
+	if _, err := reader.ValidateWorkspace(t.Context(), mcpTestWorkspace); !errors.Is(err, wantErr) {
+		t.Errorf("ValidateWorkspace error = %v", err)
+	}
+	if _, err := reader.ApplyWorkspace(t.Context(), WorkspaceApply{Name: mcpTestProject}); !errors.Is(err, wantErr) {
+		t.Errorf("ApplyWorkspace error = %v", err)
 	}
 	if _, err := reader.GetNode(t.Context(), "fingerprint"); !errors.Is(err, wantErr) {
 		t.Errorf("GetNode error = %v", err)

@@ -106,7 +106,8 @@ Landed:
 
 - Durable operator authorization and revocation.
 - Durable AgentRun records and events.
-- Workspace apply-by-generation.
+- Workspace apply-by-generation, including atomic create-by-owner-scoped-name,
+  concurrent create convergence, and retry-safe `created`/`changed` results.
 - Detached agent execution with one-shot OAuth delivery.
 - Trusted stdio MCP facade with owner-scoped workspace and agent operations.
 - Real daemon/MCP lifecycle tests for workspace and AgentRun paths.

@@ -157,9 +157,10 @@ type WorkspaceCatalogServiceClient interface {
 	// filters to those owned by the calling identity. List is
 	// read-only; persistence (Slice B5) will reuse the same shape.
 	List(context.Context, *connect.Request[v1.ListWorkspacesRequest]) (*connect.Response[v1.ListWorkspacesResponse], error)
-	// Apply atomically replaces the complete declared WorkspaceSpec. A changed
-	// spec requires expected_generation to match metadata.generation; an
-	// identical retry is a no-op even when its generation is stale.
+	// Apply atomically creates or replaces the complete declared WorkspaceSpec.
+	// A name handle with expected_generation=0 creates when absent; positive
+	// generations update an existing name or UUID. An identical retry is a
+	// no-op even when its generation is stale.
 	Apply(context.Context, *connect.Request[v1.ApplyWorkspaceRequest]) (*connect.Response[v1.ApplyWorkspaceResponse], error)
 	// SetImage records an OCI image reference. Replaces any prior
 	// image_ref or pending_build_id. Empty image_ref clears the
@@ -669,9 +670,10 @@ type WorkspaceCatalogServiceHandler interface {
 	// filters to those owned by the calling identity. List is
 	// read-only; persistence (Slice B5) will reuse the same shape.
 	List(context.Context, *connect.Request[v1.ListWorkspacesRequest]) (*connect.Response[v1.ListWorkspacesResponse], error)
-	// Apply atomically replaces the complete declared WorkspaceSpec. A changed
-	// spec requires expected_generation to match metadata.generation; an
-	// identical retry is a no-op even when its generation is stale.
+	// Apply atomically creates or replaces the complete declared WorkspaceSpec.
+	// A name handle with expected_generation=0 creates when absent; positive
+	// generations update an existing name or UUID. An identical retry is a
+	// no-op even when its generation is stale.
 	Apply(context.Context, *connect.Request[v1.ApplyWorkspaceRequest]) (*connect.Response[v1.ApplyWorkspaceResponse], error)
 	// SetImage records an OCI image reference. Replaces any prior
 	// image_ref or pending_build_id. Empty image_ref clears the

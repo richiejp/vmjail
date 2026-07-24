@@ -21,6 +21,7 @@ import (
 	agentrunv1 "github.com/richiejp/darkaifactory/internal/genpb/agentrun/v1"
 	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	operatorv1 "github.com/richiejp/darkaifactory/internal/genpb/operator/v1"
+	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	secretdeliveryv1 "github.com/richiejp/darkaifactory/internal/genpb/secretdelivery/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
@@ -29,24 +30,42 @@ import (
 const maxResults = 200
 
 const (
-	nodeListTool         = "node_list"
-	nodeStatusTool       = "node_registration_status"
-	nodeAuthorizeTool    = "node_authorize"
-	nodeRevokeTool       = "node_revoke"
-	workspaceGetTool     = "workspace_get"
-	workspaceListTool    = "workspace_list"
-	agentProfileListTool = "agent_profile_list"
-	agentStartTool       = "agent_start"
-	agentStatusTool      = "agent_status"
-	agentEventsTool      = "agent_events"
-	agentCancelTool      = "agent_cancel"
-	agentResultTool      = "agent_result"
+	maxWorkspaceItems = 256
+	maxWorkspaceBytes = 1 << 20
+)
+
+const (
+	isolationShared = "shared"
+	isolationStrict = "strict"
+	protocolTCP     = "tcp"
+	protocolUDP     = "udp"
+	conditionReady  = "Ready"
+)
+
+const (
+	nodeListTool          = "node_list"
+	nodeStatusTool        = "node_registration_status"
+	nodeAuthorizeTool     = "node_authorize"
+	nodeRevokeTool        = "node_revoke"
+	workspaceGetTool      = "workspace_get"
+	workspaceListTool     = "workspace_list"
+	workspaceApplyTool    = "workspace_apply"
+	workspaceValidateTool = "workspace_validate"
+	workspaceStatusTool   = "workspace_status"
+	agentProfileListTool  = "agent_profile_list"
+	agentStartTool        = "agent_start"
+	agentStatusTool       = "agent_status"
+	agentEventsTool       = "agent_events"
+	agentCancelTool       = "agent_cancel"
+	agentResultTool       = "agent_result"
 )
 
 type Reader interface {
 	ListNodes(context.Context) ([]Node, error)
 	ListWorkspaces(context.Context) ([]Workspace, error)
 	GetWorkspace(context.Context, string) (Workspace, error)
+	ApplyWorkspace(context.Context, WorkspaceApply) (WorkspaceApplyResult, error)
+	ValidateWorkspace(context.Context, string) (Workspace, error)
 	GetNode(context.Context, string) (Node, error)
 	AuthorizeNode(context.Context, string, string) (Node, error)
 	RevokeNode(context.Context, string) (Node, error)
@@ -68,11 +87,69 @@ type Node struct {
 }
 
 type Workspace struct {
+	UUID               string        `json:"uuid"`
+	Name               string        `json:"name"`
+	Generation         uint64        `json:"generation"`
+	ObservedGeneration uint64        `json:"observed_generation"`
+	CurrentSandboxUUID string        `json:"current_sandbox_uuid,omitempty"`
+	Ready              bool          `json:"ready"`
+	Missing            []string      `json:"missing"`
+	Spec               WorkspaceSpec `json:"spec"`
+}
+
+type WorkspaceSummary struct {
 	UUID               string `json:"uuid"`
 	Name               string `json:"name"`
 	Generation         uint64 `json:"generation"`
 	ObservedGeneration uint64 `json:"observed_generation"`
 	CurrentSandboxUUID string `json:"current_sandbox_uuid,omitempty"`
+	Ready              bool   `json:"ready"`
+}
+
+type WorkspaceSpec struct {
+	ImageRef              string           `json:"image_ref,omitempty"`
+	DevcontainerPath      string           `json:"devcontainer_path,omitempty"`
+	Mounts                []WorkspaceMount `json:"mounts,omitempty"`
+	Env                   []WorkspaceEnv   `json:"env,omitempty"`
+	Ports                 []WorkspacePort  `json:"ports,omitempty"`
+	TargetNodeFingerprint string           `json:"target_node_fingerprint,omitempty"`
+	GPUCount              uint32           `json:"gpu_count,omitempty"`
+	GPUMinVRAMBytes       uint64           `json:"gpu_min_vram_bytes,omitempty"`
+	Isolation             string           `json:"isolation,omitempty"`
+	MemoryBytes           uint64           `json:"memory_bytes,omitempty"`
+	CPUCores              uint32           `json:"cpu_cores,omitempty"`
+	NestedVirtualization  bool             `json:"nested_virtualization,omitempty"`
+	PrivilegedFuseMounts  bool             `json:"privileged_fuse_mounts,omitempty"`
+	PrivilegedBuild       bool             `json:"privileged_build,omitempty"`
+}
+
+type WorkspaceMount struct {
+	Target   string `json:"target"`
+	Source   string `json:"source,omitempty"`
+	ReadOnly bool   `json:"read_only,omitempty"`
+}
+
+type WorkspaceEnv struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type WorkspacePort struct {
+	ContainerPort uint32 `json:"container_port"`
+	Protocol      string `json:"protocol"`
+}
+
+type WorkspaceApply struct {
+	UUID               string
+	Name               string
+	ExpectedGeneration uint64
+	Spec               WorkspaceSpec
+}
+
+type WorkspaceApplyResult struct {
+	Workspace Workspace
+	Created   bool
+	Changed   bool
 }
 
 type AgentRun struct {
@@ -111,8 +188,8 @@ type listNodesOutput struct {
 }
 
 type listWorkspacesOutput struct {
-	Workspaces []Workspace `json:"workspaces"`
-	Truncated  bool        `json:"truncated"`
+	Workspaces []WorkspaceSummary `json:"workspaces"`
+	Truncated  bool               `json:"truncated"`
 }
 
 type agentProfileOutput struct {
@@ -136,6 +213,19 @@ type getWorkspaceInput struct {
 
 type getWorkspaceOutput struct {
 	Workspace Workspace `json:"workspace"`
+}
+
+type workspaceApplyInput struct {
+	UUID               string        `json:"uuid,omitempty" jsonschema:"existing canonical Workspace UUID; mutually exclusive with name"`
+	Name               string        `json:"name,omitempty" jsonschema:"owner-scoped Workspace name; use with expected_generation 0 to create"`
+	ExpectedGeneration uint64        `json:"expected_generation" jsonschema:"0 creates by name; positive values conditionally update"`
+	Spec               WorkspaceSpec `json:"spec"`
+}
+
+type workspaceApplyOutput struct {
+	Workspace Workspace `json:"workspace"`
+	Created   bool      `json:"created"`
+	Changed   bool      `json:"changed"`
 }
 
 type nodeFingerprintInput struct {
@@ -240,15 +330,24 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 			}
 			return nil, nodeOutput{Node: node}, nil
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: workspaceListTool, Description: "List Workspaces owned by the authenticated client.", Annotations: annotations},
+	addWorkspaceTools(server, annotations, reader)
+	return server, nil
+}
+
+func addWorkspaceTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations, reader Reader) {
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceListTool, Description: "List Workspaces owned by the authenticated client.", Annotations: readAnnotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, listWorkspacesOutput, error) {
 			workspaces, truncated, err := readBounded(ctx, reader.ListWorkspaces, func(workspace Workspace) string { return workspace.UUID })
 			if err != nil {
 				return nil, listWorkspacesOutput{}, fmt.Errorf("list workspaces: %w", err)
 			}
-			return nil, listWorkspacesOutput{Workspaces: workspaces, Truncated: truncated}, nil
+			summaries := make([]WorkspaceSummary, len(workspaces))
+			for i := range workspaces {
+				summaries[i] = workspaceSummary(workspaces[i])
+			}
+			return nil, listWorkspacesOutput{Workspaces: summaries, Truncated: truncated}, nil
 		})
-	mcp.AddTool(server, &mcp.Tool{Name: workspaceGetTool, Description: "Get one owned Workspace by canonical UUID.", Annotations: annotations},
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceGetTool, Description: "Get one owned Workspace by canonical UUID.", Annotations: readAnnotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, getWorkspaceOutput, error) {
 			if input.UUID == "" {
 				return nil, getWorkspaceOutput{}, fmt.Errorf("uuid is required")
@@ -259,7 +358,76 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 			}
 			return nil, getWorkspaceOutput{Workspace: workspace}, nil
 		})
-	return server, nil
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceStatusTool, Description: "Get the complete bounded status and declaration of one owned Workspace.", Annotations: readAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, getWorkspaceOutput, error) {
+			if input.UUID == "" {
+				return nil, getWorkspaceOutput{}, fmt.Errorf("uuid is required")
+			}
+			workspace, err := reader.GetWorkspace(ctx, input.UUID)
+			return nil, getWorkspaceOutput{Workspace: workspace}, err
+		})
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceValidateTool, Description: "Read the server-derived readiness of one owned Workspace without mutation.", Annotations: readAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, getWorkspaceOutput, error) {
+			if input.UUID == "" {
+				return nil, getWorkspaceOutput{}, fmt.Errorf("uuid is required")
+			}
+			workspace, err := reader.ValidateWorkspace(ctx, input.UUID)
+			return nil, getWorkspaceOutput{Workspace: workspace}, err
+		})
+	applyAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceApplyTool, Description: "Atomically create or converge one owned Workspace declaration with optimistic concurrency.", Annotations: applyAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input workspaceApplyInput) (*mcp.CallToolResult, workspaceApplyOutput, error) {
+			if err := validateWorkspaceApply(input); err != nil {
+				return nil, workspaceApplyOutput{}, err
+			}
+			result, err := reader.ApplyWorkspace(ctx, WorkspaceApply(input))
+			return nil, workspaceApplyOutput(result), err
+		})
+}
+
+func workspaceSummary(input Workspace) WorkspaceSummary {
+	return WorkspaceSummary{UUID: input.UUID, Name: input.Name, Generation: input.Generation, ObservedGeneration: input.ObservedGeneration, CurrentSandboxUUID: input.CurrentSandboxUUID, Ready: input.Ready}
+}
+
+func validateWorkspaceApply(input workspaceApplyInput) error {
+	if (input.UUID == "") == (input.Name == "") {
+		return fmt.Errorf("exactly one of uuid or name is required")
+	}
+	if input.UUID != "" && input.ExpectedGeneration == 0 {
+		return fmt.Errorf("uuid updates require expected_generation")
+	}
+	if len(input.Name) > 255 {
+		return fmt.Errorf("workspace declaration exceeds bounded input limits")
+	}
+	return validateWorkspaceSpecBounds(input.Spec)
+}
+
+func validateWorkspaceSpecBounds(spec WorkspaceSpec) error {
+	if len(spec.Mounts) > maxWorkspaceItems || len(spec.Env) > maxWorkspaceItems || len(spec.Ports) > maxWorkspaceItems {
+		return fmt.Errorf("workspace declaration exceeds bounded input limits")
+	}
+	if len(spec.ImageRef) > 4096 || len(spec.DevcontainerPath) > 4096 || len(spec.TargetNodeFingerprint) > 256 {
+		return fmt.Errorf("workspace declaration contains an oversized field")
+	}
+	if spec.Isolation != "" && spec.Isolation != isolationShared && spec.Isolation != isolationStrict {
+		return fmt.Errorf("isolation must be shared or strict")
+	}
+	totalBytes := len(spec.ImageRef) + len(spec.DevcontainerPath) + len(spec.TargetNodeFingerprint)
+	for _, mount := range spec.Mounts {
+		totalBytes += len(mount.Target) + len(mount.Source)
+	}
+	for _, env := range spec.Env {
+		totalBytes += len(env.Name) + len(env.Value)
+	}
+	for _, port := range spec.Ports {
+		if port.Protocol != protocolTCP && port.Protocol != protocolUDP {
+			return fmt.Errorf("port protocol must be tcp or udp")
+		}
+	}
+	if totalBytes > maxWorkspaceBytes {
+		return fmt.Errorf("workspace declaration exceeds 1 MiB")
+	}
+	return nil
 }
 
 func addAgentRunTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations, reader Reader, profiles []agentprofile.Entry) {
@@ -367,8 +535,12 @@ type nodeLister interface {
 	ListNodes(context.Context, *connect.Request[nodectrlv1.ListNodesRequest]) (*connect.Response[nodectrlv1.ListNodesResponse], error)
 }
 
+//nolint:dupl // Generated Workspace and AgentRun client seams are necessarily parallel but carry distinct protocol types.
 type workspaceReader interface {
 	List(context.Context, *connect.Request[workspacev1.ListWorkspacesRequest]) (*connect.Response[workspacev1.ListWorkspacesResponse], error)
+	Get(context.Context, *connect.Request[workspacev1.GetWorkspaceRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error)
+	Apply(context.Context, *connect.Request[workspacev1.ApplyWorkspaceRequest]) (*connect.Response[workspacev1.ApplyWorkspaceResponse], error)
+	Validate(context.Context, *connect.Request[workspacev1.ValidateRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error)
 }
 
 type operatorClient interface {
@@ -377,6 +549,7 @@ type operatorClient interface {
 	GetNode(context.Context, *connect.Request[operatorv1.GetNodeRequest]) (*connect.Response[operatorv1.NodeStatus], error)
 }
 
+//nolint:dupl // Generated Workspace and AgentRun client seams are necessarily parallel but carry distinct protocol types.
 type agentRunClient interface {
 	Start(context.Context, *connect.Request[agentrunv1.StartAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error)
 	Get(context.Context, *connect.Request[agentrunv1.GetAgentRunRequest]) (*connect.Response[agentrunv1.AgentRun], error)
@@ -549,28 +722,139 @@ func (r ConnectReader) ListWorkspaces(ctx context.Context) ([]Workspace, error) 
 }
 
 func (r ConnectReader) GetWorkspace(ctx context.Context, uuid string) (Workspace, error) {
-	workspaces, err := r.ListWorkspaces(ctx)
+	response, err := r.workspace.Get(ctx, connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: workspaceUUIDHandle(uuid)}))
 	if err != nil {
 		return Workspace{}, err
 	}
-	for _, workspace := range workspaces {
-		if workspace.UUID == uuid {
-			return workspace, nil
-		}
+	return checkedWorkspace(response.Msg.GetWorkspace())
+}
+
+func (r ConnectReader) ValidateWorkspace(ctx context.Context, uuid string) (Workspace, error) {
+	response, err := r.workspace.Validate(ctx, connect.NewRequest(&workspacev1.ValidateRequest{Handle: workspaceUUIDHandle(uuid)}))
+	if err != nil {
+		return Workspace{}, err
 	}
-	return Workspace{}, fmt.Errorf("owned workspace %q not found", uuid)
+	return checkedWorkspace(response.Msg.GetWorkspace())
+}
+
+func (r ConnectReader) ApplyWorkspace(ctx context.Context, input WorkspaceApply) (WorkspaceApplyResult, error) {
+	handle := &workspacev1.WorkspaceHandle{}
+	if input.UUID != "" {
+		handle.Handle = &workspacev1.WorkspaceHandle_Uuid{Uuid: input.UUID}
+	} else {
+		handle.Handle = &workspacev1.WorkspaceHandle_Name{Name: input.Name}
+	}
+	response, err := r.workspace.Apply(ctx, connect.NewRequest(&workspacev1.ApplyWorkspaceRequest{
+		Handle: handle, ExpectedGeneration: input.ExpectedGeneration, Spec: workspaceSpecToProto(input.Spec),
+	}))
+	if err != nil {
+		return WorkspaceApplyResult{}, err
+	}
+	workspace, err := checkedWorkspace(response.Msg.GetWorkspace())
+	if err != nil {
+		return WorkspaceApplyResult{}, err
+	}
+	return WorkspaceApplyResult{Workspace: workspace, Created: response.Msg.GetCreated(), Changed: response.Msg.GetChanged()}, nil
+}
+
+func workspaceUUIDHandle(uuid string) *workspacev1.WorkspaceHandle {
+	return &workspacev1.WorkspaceHandle{Handle: &workspacev1.WorkspaceHandle_Uuid{Uuid: uuid}}
 }
 
 func mapWorkspaces(input []*workspacev1.Workspace) []Workspace {
 	out := make([]Workspace, 0, len(input))
 	for _, workspace := range input {
-		out = append(out, mapWorkspace(workspace))
+		out = append(out, mapWorkspaceBase(workspace))
 	}
 	return out
 }
 
 func mapWorkspace(input *workspacev1.Workspace) Workspace {
-	return Workspace{UUID: input.GetMetadata().GetUuid(), Name: input.GetMetadata().GetName(), Generation: input.GetMetadata().GetGeneration(), ObservedGeneration: input.GetStatus().GetObservedGeneration(), CurrentSandboxUUID: input.GetStatus().GetCurrentSandbox().GetUid()}
+	out := mapWorkspaceBase(input)
+	out.Missing = slices.Clone(input.GetStatus().GetMissing())
+	out.Spec = workspaceSpecFromProto(input.GetSpec())
+	return out
+}
+
+func mapWorkspaceBase(input *workspacev1.Workspace) Workspace {
+	ready := false
+	for _, condition := range input.GetStatus().GetConditions() {
+		if condition.GetType() == conditionReady && condition.GetStatus() == sandboxv1.ConditionStatus_CONDITION_STATUS_TRUE {
+			ready = true
+		}
+	}
+	return Workspace{UUID: input.GetMetadata().GetUuid(), Name: input.GetMetadata().GetName(), Generation: input.GetMetadata().GetGeneration(), ObservedGeneration: input.GetStatus().GetObservedGeneration(), CurrentSandboxUUID: input.GetStatus().GetCurrentSandbox().GetUid(), Ready: ready}
+}
+
+func checkedWorkspace(input *workspacev1.Workspace) (Workspace, error) {
+	out := mapWorkspace(input)
+	if len(out.Name) > 255 || len(out.Missing) > maxWorkspaceItems {
+		return Workspace{}, fmt.Errorf("workspace response exceeds bounded output limits")
+	}
+	if err := validateWorkspaceSpecBounds(out.Spec); err != nil {
+		return Workspace{}, fmt.Errorf("workspace response: %w", err)
+	}
+	return out, nil
+}
+
+func workspaceSpecFromProto(input *workspacev1.WorkspaceSpec) WorkspaceSpec {
+	out := WorkspaceSpec{ImageRef: input.GetImageRef(), DevcontainerPath: input.GetDevcontainerPath(), TargetNodeFingerprint: input.GetTargetSandboxFingerprint(), GPUCount: input.GetGpuRequest().GetCount(), GPUMinVRAMBytes: input.GetGpuRequest().GetMinVramBytes(), MemoryBytes: input.GetMemoryBytes(), CPUCores: input.GetCpuCores(), NestedVirtualization: input.GetNestedVirtualization().GetEnable(), PrivilegedFuseMounts: input.GetPrivilegedFuseMounts().GetEnable(), PrivilegedBuild: input.GetPrivilegedBuild().GetEnable()}
+	switch input.GetIsolation() {
+	case sandboxv1.Isolation_ISOLATION_SHARED:
+		out.Isolation = isolationShared
+	case sandboxv1.Isolation_ISOLATION_STRICT:
+		out.Isolation = isolationStrict
+	}
+	for _, mount := range input.GetMounts() {
+		out.Mounts = append(out.Mounts, WorkspaceMount{Target: mount.GetTarget(), Source: mount.GetSource(), ReadOnly: mount.GetReadOnly()})
+	}
+	for _, env := range input.GetEnv() {
+		out.Env = append(out.Env, WorkspaceEnv{Name: env.GetName(), Value: env.GetValue()})
+	}
+	for _, port := range input.GetPorts() {
+		out.Ports = append(out.Ports, WorkspacePort{ContainerPort: port.GetContainerPort(), Protocol: protocolName(port.GetProtocol())})
+	}
+	return out
+}
+
+func workspaceSpecToProto(input WorkspaceSpec) *workspacev1.WorkspaceSpec {
+	out := &workspacev1.WorkspaceSpec{ImageRef: input.ImageRef, DevcontainerPath: input.DevcontainerPath, TargetSandboxFingerprint: input.TargetNodeFingerprint, GpuRequest: &sandboxv1.GpuRequest{Count: input.GPUCount, MinVramBytes: input.GPUMinVRAMBytes}, MemoryBytes: input.MemoryBytes, CpuCores: input.CPUCores, NestedVirtualization: &sandboxv1.NestedVirtualization{Enable: input.NestedVirtualization}, PrivilegedFuseMounts: &sandboxv1.PrivilegedFuseMounts{Enable: input.PrivilegedFuseMounts}, PrivilegedBuild: &sandboxv1.PrivilegedBuild{Enable: input.PrivilegedBuild}}
+	switch input.Isolation {
+	case isolationShared:
+		out.Isolation = sandboxv1.Isolation_ISOLATION_SHARED
+	case isolationStrict:
+		out.Isolation = sandboxv1.Isolation_ISOLATION_STRICT
+	}
+	for _, mount := range input.Mounts {
+		out.Mounts = append(out.Mounts, &sandboxv1.Mount{Target: mount.Target, Source: mount.Source, ReadOnly: mount.ReadOnly})
+	}
+	for _, env := range input.Env {
+		out.Env = append(out.Env, &sandboxv1.EnvVar{Name: env.Name, Value: env.Value})
+	}
+	for _, port := range input.Ports {
+		out.Ports = append(out.Ports, &sandboxv1.PortMapping{ContainerPort: port.ContainerPort, Protocol: protocolFromName(port.Protocol)})
+	}
+	return out
+}
+
+func protocolName(protocol sandboxv1.Protocol) string {
+	if protocol == sandboxv1.Protocol_PROTOCOL_TCP {
+		return protocolTCP
+	}
+	if protocol == sandboxv1.Protocol_PROTOCOL_UDP {
+		return protocolUDP
+	}
+	return ""
+}
+
+func protocolFromName(protocol string) sandboxv1.Protocol {
+	if protocol == protocolTCP {
+		return sandboxv1.Protocol_PROTOCOL_TCP
+	}
+	if protocol == protocolUDP {
+		return sandboxv1.Protocol_PROTOCOL_UDP
+	}
+	return sandboxv1.Protocol_PROTOCOL_UNSPECIFIED
 }
 
 func boolPtr(value bool) *bool { return &value }

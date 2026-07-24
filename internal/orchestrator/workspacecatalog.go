@@ -212,25 +212,40 @@ func (h *WorkspaceCatalogHandler) Apply(
 	if !ok {
 		return nil, errUnauthenticated
 	}
-	if req.Msg.GetExpectedGeneration() == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			errors.New("workspace: expected_generation is required"))
+	handle := req.Msg.GetHandle()
+	if handle == nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("workspace: handle is required"))
 	}
-	ws, err := h.resolveHandle(fp, req.Msg.GetHandle())
-	if err != nil {
-		return nil, err
-	}
-	desired, err := workspaceSpecFromProto(req.Msg.GetSpec(), ws.Metadata.UUID)
+	desired, err := workspaceSpecFromProto(req.Msg.GetSpec())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	updated, err := h.store.ApplySpec(ws.Metadata.UUID, fp, req.Msg.GetExpectedGeneration(), desired)
+	var updated workspacecatalog.Workspace
+	var created, changed bool
+	switch value := handle.GetHandle().(type) {
+	case *workspacev1.WorkspaceHandle_Name:
+		if value.Name == "" {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("workspace: handle.name is empty"))
+		}
+		updated, created, changed, err = h.store.ApplySpecByName(
+			mintWorkspaceUUID(), value.Name, fp, req.Msg.GetExpectedGeneration(), desired,
+		)
+	case *workspacev1.WorkspaceHandle_Uuid:
+		if value.Uuid == "" || req.Msg.GetExpectedGeneration() == 0 {
+			return nil, connect.NewError(connect.CodeInvalidArgument,
+				errors.New("workspace: non-empty handle.uuid and expected_generation are required"))
+		}
+		updated, changed, err = h.store.ApplySpec(value.Uuid, fp, req.Msg.GetExpectedGeneration(), desired)
+	default:
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("workspace: handle.uuid or handle.name required"))
+	}
 	if err != nil {
 		return nil, mapCatalogErr(err)
 	}
 	return connect.NewResponse(&workspacev1.ApplyWorkspaceResponse{
 		Workspace: workspaceToProto(updated),
-		Changed:   updated.Metadata.Generation != ws.Metadata.Generation,
+		Changed:   changed,
+		Created:   created,
 	}), nil
 }
 
@@ -1112,7 +1127,7 @@ func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Finge
 // mountsToProto / envToProto / portsToProto project the catalog's
 // Go-native slices onto their wire forms. Shared by workspaceToProto
 // (catalog → CLI) and workspaceToSandboxSpec (catalog → Node).
-func workspaceSpecFromProto(in *workspacev1.WorkspaceSpec, workspaceUUID string) (workspacecatalog.Spec, error) {
+func workspaceSpecFromProto(in *workspacev1.WorkspaceSpec) (workspacecatalog.Spec, error) {
 	if in == nil {
 		return workspacecatalog.Spec{}, errors.New("workspace: spec is required")
 	}
@@ -1155,7 +1170,7 @@ func workspaceSpecFromProto(in *workspacev1.WorkspaceSpec, workspaceUUID string)
 		out.PrivilegedBuild = build.GetEnable()
 	}
 	var err error
-	out.Mounts, err = workspaceMountsFromProto(in.GetMounts(), workspaceUUID)
+	out.Mounts, err = workspaceMountsFromProto(in.GetMounts())
 	if err != nil {
 		return workspacecatalog.Spec{}, err
 	}
@@ -1170,7 +1185,7 @@ func workspaceSpecFromProto(in *workspacev1.WorkspaceSpec, workspaceUUID string)
 	return out, nil
 }
 
-func workspaceMountsFromProto(in []*sandboxv1.Mount, workspaceUUID string) ([]workspacecatalog.Mount, error) {
+func workspaceMountsFromProto(in []*sandboxv1.Mount) ([]workspacecatalog.Mount, error) {
 	out := make([]workspacecatalog.Mount, 0, len(in))
 	mountTargets := make(map[string]struct{}, len(in))
 	for _, mount := range in {
@@ -1181,11 +1196,7 @@ func workspaceMountsFromProto(in []*sandboxv1.Mount, workspaceUUID string) ([]wo
 			return nil, fmt.Errorf("workspace: duplicate mount target %q", mount.GetTarget())
 		}
 		mountTargets[mount.GetTarget()] = struct{}{}
-		source := mount.GetSource()
-		if source == "" {
-			source = workspaceUUID
-		}
-		out = append(out, workspacecatalog.Mount{Target: mount.GetTarget(), Source: source, ReadOnly: mount.GetReadOnly()})
+		out = append(out, workspacecatalog.Mount{Target: mount.GetTarget(), Source: mount.GetSource(), ReadOnly: mount.GetReadOnly()})
 	}
 	return out, nil
 }

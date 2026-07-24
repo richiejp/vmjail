@@ -1083,7 +1083,9 @@ type ApplyWorkspaceResponse struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Workspace *Workspace             `protobuf:"bytes,1,opt,name=workspace,proto3" json:"workspace,omitempty"`
 	// False when an identical retry made no durable change.
-	Changed       bool `protobuf:"varint,2,opt,name=changed,proto3" json:"changed,omitempty"`
+	Changed bool `protobuf:"varint,2,opt,name=changed,proto3" json:"changed,omitempty"`
+	// True only when this call created the Workspace.
+	Created       bool `protobuf:"varint,3,opt,name=created,proto3" json:"created,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1128,6 +1130,13 @@ func (x *ApplyWorkspaceResponse) GetWorkspace() *Workspace {
 func (x *ApplyWorkspaceResponse) GetChanged() bool {
 	if x != nil {
 		return x.Changed
+	}
+	return false
+}
+
+func (x *ApplyWorkspaceResponse) GetCreated() bool {
+	if x != nil {
+		return x.Created
 	}
 	return false
 }
@@ -2132,10 +2141,11 @@ const file_workspace_v1_service_proto_rawDesc = "" +
 	"\x15ApplyWorkspaceRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12/\n" +
 	"\x13expected_generation\x18\x02 \x01(\x04R\x12expectedGeneration\x124\n" +
-	"\x04spec\x18\x03 \x01(\v2 .daft.workspace.v1.WorkspaceSpecR\x04spec\"n\n" +
+	"\x04spec\x18\x03 \x01(\v2 .daft.workspace.v1.WorkspaceSpecR\x04spec\"\x88\x01\n" +
 	"\x16ApplyWorkspaceResponse\x12:\n" +
 	"\tworkspace\x18\x01 \x01(\v2\x1c.daft.workspace.v1.WorkspaceR\tworkspace\x12\x18\n" +
-	"\achanged\x18\x02 \x01(\bR\achanged\"j\n" +
+	"\achanged\x18\x02 \x01(\bR\achanged\x12\x18\n" +
+	"\acreated\x18\x03 \x01(\bR\acreated\"j\n" +
 	"\x0fSetImageRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12\x1b\n" +
 	"\timage_ref\x18\x02 \x01(\tR\bimageRef\"\x81\x01\n" +

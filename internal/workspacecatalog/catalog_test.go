@@ -3,6 +3,7 @@ package workspacecatalog
 import (
 	"errors"
 	"math"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +14,8 @@ const (
 	uuidA                = "11111111-1111-4111-8111-111111111111"
 	uuidB                = "22222222-2222-4222-8222-222222222222"
 	workspaceMountTarget = "/workspace"
+	catalogTestImage     = "alpine:3"
+	catalogChangedImage  = "changed"
 
 	missingTarget = "target"
 )
@@ -180,7 +183,7 @@ func TestSpecUpdatePopulatesMissingAndBumpsGeneration(t *testing.T) {
 	}
 	after, err := s.Update(uuidA, MutateSpec, func(ws *Workspace) error {
 		ws.Spec.Mounts = []Mount{{Target: workspaceMountTarget, Source: uuidA}}
-		ws.Spec.ImageRef = "alpine:3"
+		ws.Spec.ImageRef = catalogTestImage
 		return nil
 	})
 	if err != nil {
@@ -225,9 +228,12 @@ func TestApplySpecIsAtomicGenerationCheckedAndRetrySafe(t *testing.T) {
 		TargetSandboxFingerprint: "sha256:node",
 		MemoryBytes:              1 << 30, CPUCores: 2,
 	}
-	applied, err := s.ApplySpec(uuidA, owner, created.Metadata.Generation, desired)
+	applied, changed, err := s.ApplySpec(uuidA, owner, created.Metadata.Generation, desired)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !changed {
+		t.Fatal("changed apply reported unchanged")
 	}
 	if applied.Metadata.Generation != created.Metadata.Generation+1 || len(applied.Status.Missing) != 0 || !applied.Status.IsTrue(ConditionReady) {
 		t.Fatalf("applied = %#v", applied)
@@ -239,19 +245,22 @@ func TestApplySpecIsAtomicGenerationCheckedAndRetrySafe(t *testing.T) {
 		t.Fatalf("stored after caller mutation = %#v, %v", stored.Spec, err)
 	}
 	desired.Mounts[0].Target = workspaceMountTarget
-	retried, err := s.ApplySpec(uuidA, owner, created.Metadata.Generation, desired)
+	retried, changed, err := s.ApplySpec(uuidA, owner, created.Metadata.Generation, desired)
 	if err != nil || retried.Metadata.Generation != applied.Metadata.Generation {
 		t.Fatalf("identical stale retry = %#v, %v", retried, err)
 	}
+	if changed {
+		t.Fatal("identical stale retry reported changed")
+	}
 	desired.CPUCores = 4
-	if _, err := s.ApplySpec(uuidA, owner, created.Metadata.Generation, desired); !errors.Is(err, ErrGenerationConflict) {
+	if _, _, err := s.ApplySpec(uuidA, owner, created.Metadata.Generation, desired); !errors.Is(err, ErrGenerationConflict) {
 		t.Fatalf("stale changed ApplySpec error = %v", err)
 	}
-	if _, err := s.ApplySpec("missing", owner, applied.Metadata.Generation, desired); !errors.Is(err, ErrNotFound) {
+	if _, _, err := s.ApplySpec("missing", owner, applied.Metadata.Generation, desired); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing ApplySpec error = %v", err)
 	}
 	foreign := mustOwner(t)
-	if _, err := s.ApplySpec(uuidA, foreign, applied.Metadata.Generation, desired); !errors.Is(err, ErrNotOwner) {
+	if _, _, err := s.ApplySpec(uuidA, foreign, applied.Metadata.Generation, desired); !errors.Is(err, ErrNotOwner) {
 		t.Fatalf("foreign-owner ApplySpec error = %v", err)
 	}
 	_, err = s.Update(uuidA, MutateStatus, func(ws *Workspace) error {
@@ -262,7 +271,7 @@ func TestApplySpecIsAtomicGenerationCheckedAndRetrySafe(t *testing.T) {
 		t.Fatal(err)
 	}
 	desired.CPUCores = 8
-	if _, err := s.ApplySpec(uuidA, owner, applied.Metadata.Generation, desired); !errors.Is(err, ErrLockHeldByOther) {
+	if _, _, err := s.ApplySpec(uuidA, owner, applied.Metadata.Generation, desired); !errors.Is(err, ErrLockHeldByOther) {
 		t.Fatalf("foreign-lock ApplySpec error = %v", err)
 	}
 }
@@ -281,8 +290,109 @@ func TestApplySpecRejectsGenerationOverflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ApplySpec(created.Metadata.UUID, owner, math.MaxUint64, Spec{ImageRef: "changed"}); !errors.Is(err, ErrGenerationOverflow) {
+	if _, _, err := s.ApplySpec(created.Metadata.UUID, owner, math.MaxUint64, Spec{ImageRef: catalogChangedImage}); !errors.Is(err, ErrGenerationOverflow) {
 		t.Fatalf("ApplySpec overflow error = %v", err)
+	}
+}
+
+func TestApplySpecByNameCreatesAndConvergesAtomically(t *testing.T) {
+	s := NewStore(fixedClock(t))
+	owner := mustOwner(t)
+	desired := Spec{ImageRef: catalogTestImage, Mounts: []Mount{{Target: workspaceMountTarget}}}
+	created, wasCreated, changed, err := s.ApplySpecByName(uuidA, "project", owner, 0, desired)
+	if err != nil || !wasCreated || !changed {
+		t.Fatalf("create = %+v created=%v changed=%v error=%v", created, wasCreated, changed, err)
+	}
+	if created.Metadata.Generation != 1 || created.Spec.Mounts[0].Source != uuidA {
+		t.Fatalf("created = %+v", created)
+	}
+	retried, wasCreated, changed, err := s.ApplySpecByName(uuidB, "project", owner, 0, desired)
+	if err != nil || wasCreated || changed || retried.Metadata.UUID != uuidA {
+		t.Fatalf("retry = %+v created=%v changed=%v error=%v", retried, wasCreated, changed, err)
+	}
+	desired.CPUCores = 2
+	if _, _, _, err := s.ApplySpecByName(uuidB, "project", owner, 0, desired); !errors.Is(err, ErrGenerationConflict) {
+		t.Fatalf("changed create retry error = %v", err)
+	}
+	updated, wasCreated, changed, err := s.ApplySpecByName(uuidB, "project", owner, created.Metadata.Generation, desired)
+	if err != nil || wasCreated || !changed || updated.Metadata.UUID != uuidA || updated.Metadata.Generation != 2 {
+		t.Fatalf("update = %+v created=%v changed=%v error=%v", updated, wasCreated, changed, err)
+	}
+	if _, _, _, err := s.ApplySpecByName(uuidB, "missing", owner, 1, desired); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing update error = %v", err)
+	}
+	if _, _, _, err := s.ApplySpecByName(uuidA, "colliding", owner, 0, desired); err == nil {
+		t.Fatal("creation accepted an existing UUID")
+	}
+}
+
+func TestConcurrentApplySpecByNameCreatesExactlyOnce(t *testing.T) {
+	s := NewStore(fixedClock(t))
+	owner := mustOwner(t)
+	desired := Spec{ImageRef: catalogTestImage, Mounts: []Mount{{Target: workspaceMountTarget}}}
+	type result struct {
+		workspace Workspace
+		created   bool
+		err       error
+	}
+	results := make(chan result, 2)
+	var start sync.WaitGroup
+	start.Add(1)
+	for _, uuid := range []string{uuidA, uuidB} {
+		go func() {
+			start.Wait()
+			workspace, created, _, err := s.ApplySpecByName(uuid, "project", owner, 0, desired)
+			results <- result{workspace: workspace, created: created, err: err}
+		}()
+	}
+	start.Done()
+	first, second := <-results, <-results
+	if first.err != nil || second.err != nil || first.workspace.Metadata.UUID != second.workspace.Metadata.UUID || first.created == second.created {
+		t.Fatalf("concurrent results: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestApplySpecByNameRejectsClosedInvalidLockedAndOverflow(t *testing.T) {
+	owner := mustOwner(t)
+	foreign := mustOwner(t)
+	desired := Spec{ImageRef: catalogTestImage}
+
+	closed := NewStore(fixedClock(t))
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := closed.ApplySpecByName(uuidA, "project", owner, 0, desired); !errors.Is(err, ErrClosed) {
+		t.Fatalf("closed error = %v", err)
+	}
+
+	s := NewStore(fixedClock(t))
+	if _, _, _, err := s.ApplySpecByName("", "", owner, 0, desired); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("invalid create error = %v", err)
+	}
+	created, _, _, err := s.ApplySpecByName(uuidA, "project", owner, 0, desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Update(uuidA, MutateStatus, func(ws *Workspace) error {
+		ws.Status.Lock = Lock{OwnerFingerprint: foreign, ExpiresAt: created.Metadata.CreatedAt.Add(time.Hour)}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := s.ApplySpecByName(uuidB, "project", owner, created.Metadata.Generation, Spec{ImageRef: catalogChangedImage}); !errors.Is(err, ErrLockHeldByOther) {
+		t.Fatalf("locked update error = %v", err)
+	}
+	_, err = s.Update(uuidA, MutateMetadata, func(ws *Workspace) error {
+		ws.Status.Lock = Lock{}
+		ws.Metadata.Generation = math.MaxUint64
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := s.ApplySpecByName(uuidB, "project", owner, math.MaxUint64, Spec{ImageRef: catalogChangedImage}); !errors.Is(err, ErrGenerationOverflow) {
+		t.Fatalf("overflow error = %v", err)
 	}
 }
 

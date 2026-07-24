@@ -89,16 +89,22 @@ func TestPersistentApplySurvivesRestartAndIdenticalRetryDoesNotWrite(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	desired := Spec{ImageRef: "alpine:3", Mounts: []Mount{{Target: workspaceMountTarget, Source: "workspace-apply"}}, TargetSandboxFingerprint: owner.String()}
+	desired := Spec{ImageRef: catalogTestImage, Mounts: []Mount{{Target: workspaceMountTarget, Source: "workspace-apply"}}, TargetSandboxFingerprint: owner.String()}
 	now = now.Add(time.Minute)
-	applied, err := store.ApplySpec(created.Metadata.UUID, owner, created.Metadata.Generation, desired)
+	applied, changed, err := store.ApplySpec(created.Metadata.UUID, owner, created.Metadata.Generation, desired)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !changed {
+		t.Fatal("changed apply reported unchanged")
+	}
 	now = now.Add(time.Minute)
-	retried, err := store.ApplySpec(created.Metadata.UUID, owner, created.Metadata.Generation, desired)
+	retried, changed, err := store.ApplySpec(created.Metadata.UUID, owner, created.Metadata.Generation, desired)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if changed {
+		t.Fatal("identical retry reported changed")
 	}
 	if retried.Metadata != applied.Metadata {
 		t.Fatalf("identical retry changed metadata: before=%+v after=%+v", applied.Metadata, retried.Metadata)
@@ -292,8 +298,14 @@ func TestPersistenceFailureLeavesMemoryUnchanged(t *testing.T) {
 		t.Fatalf("seed Create: %v", err)
 	}
 	store.backend = backend
-	if _, err := store.ApplySpec(created.Metadata.UUID, created.Metadata.OwnerFingerprint, created.Metadata.Generation, Spec{ImageRef: "changed"}); err == nil {
+	if _, _, err := store.ApplySpec(created.Metadata.UUID, created.Metadata.OwnerFingerprint, created.Metadata.Generation, Spec{ImageRef: catalogChangedImage}); err == nil {
 		t.Fatal("ApplySpec succeeded through failing backend")
+	}
+	if _, _, _, err := store.ApplySpecByName("new-id", "new-name", created.Metadata.OwnerFingerprint, 0, Spec{ImageRef: catalogChangedImage}); err == nil {
+		t.Fatal("ApplySpecByName create succeeded through failing backend")
+	}
+	if _, _, _, err := store.ApplySpecByName("unused", testWorkspaceName, created.Metadata.OwnerFingerprint, created.Metadata.Generation, Spec{ImageRef: catalogChangedImage}); err == nil {
+		t.Fatal("ApplySpecByName update succeeded through failing backend")
 	}
 	got, err := store.Get(created.Metadata.UUID)
 	if err != nil || got.Spec.ImageRef != "" || got.Metadata.Generation != created.Metadata.Generation {

@@ -1257,6 +1257,30 @@ func TestApplyWorkspaceIsAtomicRetrySafeAndReadOnlyValidate(t *testing.T) {
 	}
 }
 
+func TestApplyWorkspaceCreatesByOwnedName(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	request := &workspacev1.ApplyWorkspaceRequest{
+		Handle: &workspacev1.WorkspaceHandle{Handle: &workspacev1.WorkspaceHandle_Name{Name: "created-by-apply"}},
+		Spec: &workspacev1.WorkspaceSpec{
+			ImageRef: testImageRef,
+			Mounts:   []*sandboxv1.Mount{{Target: testMountTarget}},
+		},
+	}
+	created, err := rig.client.Apply(t.Context(), connect.NewRequest(request))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := created.Msg.GetWorkspace()
+	if !created.Msg.GetCreated() || !created.Msg.GetChanged() || workspace.GetMetadata().GetGeneration() != 1 ||
+		workspace.GetSpec().GetMounts()[0].GetSource() != workspace.GetMetadata().GetUuid() {
+		t.Fatalf("created = %+v", created.Msg)
+	}
+	retried, err := rig.client.Apply(t.Context(), connect.NewRequest(request))
+	if err != nil || retried.Msg.GetCreated() || retried.Msg.GetChanged() || retried.Msg.GetWorkspace().GetMetadata().GetUuid() != workspace.GetMetadata().GetUuid() {
+		t.Fatalf("retry = %+v, %v", retried.Msg, err)
+	}
+}
+
 func TestApplyWorkspaceRejectsMalformedSpecAndForeignUUID(t *testing.T) {
 	rig := newWorkspaceCatalogRig(t)
 	foreign := mustGenerate(t, identity.RoleClient).Fingerprint()
@@ -1294,7 +1318,6 @@ func TestApplyWorkspaceRejectsMalformedSpecAndForeignUUID(t *testing.T) {
 }
 
 func TestWorkspaceSpecFromProtoValidationAndProjection(t *testing.T) {
-	const applyWorkspaceUUID = "11111111-1111-4111-8111-111111111111"
 	validTarget := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
 	invalid := []struct {
 		name string
@@ -1319,7 +1342,7 @@ func TestWorkspaceSpecFromProtoValidationAndProjection(t *testing.T) {
 	}
 	for _, tc := range invalid {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := workspaceSpecFromProto(tc.spec, applyWorkspaceUUID); err == nil {
+			if _, err := workspaceSpecFromProto(tc.spec); err == nil {
 				t.Fatal("invalid spec accepted")
 			}
 		})
@@ -1339,13 +1362,13 @@ func TestWorkspaceSpecFromProtoValidationAndProjection(t *testing.T) {
 		Mounts:                   []*sandboxv1.Mount{{Target: testMountTarget}},
 		Env:                      []*sandboxv1.EnvVar{{Name: "MODE", Value: testEnvValue}},
 		Ports:                    []*sandboxv1.PortMapping{{ContainerPort: 53, Protocol: sandboxv1.Protocol_PROTOCOL_UDP}},
-	}, applyWorkspaceUUID)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.ImageRef != testImageRef || got.TargetSandboxFingerprint != validTarget || got.GpuCount != 2 || got.GpuMinVRAM != 8<<30 ||
 		got.Isolation != int32(sandboxv1.Isolation_ISOLATION_STRICT) || got.MemoryBytes != 1<<30 || got.CPUCores != 4 ||
-		!got.NestedVirt || !got.PrivilegedFuseMounts || !got.PrivilegedBuild || got.Mounts[0].Source != applyWorkspaceUUID ||
+		!got.NestedVirt || !got.PrivilegedFuseMounts || !got.PrivilegedBuild || got.Mounts[0].Source != "" ||
 		got.Env[0].Value != testEnvValue || got.Ports[0].Protocol != int32(sandboxv1.Protocol_PROTOCOL_UDP) {
 		t.Fatalf("projected spec = %+v", got)
 	}

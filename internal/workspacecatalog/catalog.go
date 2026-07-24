@@ -494,45 +494,128 @@ func (s *Store) ApplySpec(
 	owner identity.Fingerprint,
 	expectedGeneration uint64,
 	desired Spec,
-) (Workspace, error) {
+) (Workspace, bool, error) {
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
-		return Workspace{}, ErrClosed
+		return Workspace{}, false, ErrClosed
 	}
 	prev, ok := s.all[uuid]
 	if !ok {
-		return Workspace{}, ErrNotFound
+		return Workspace{}, false, ErrNotFound
 	}
 	if prev.Metadata.OwnerFingerprint != owner {
-		return Workspace{}, ErrNotOwner
+		return Workspace{}, false, ErrNotOwner
 	}
 	if prev.Status.Lock.HeldByOther(owner, now) {
-		return Workspace{}, ErrLockHeldByOther
+		return Workspace{}, false, ErrLockHeldByOther
 	}
+	desired = materializeSpec(desired, uuid)
 	if specsEqual(prev.Spec, desired) {
-		return cloneWorkspace(prev), nil
+		return cloneWorkspace(prev), false, nil
 	}
 	if expectedGeneration == 0 || prev.Metadata.Generation != expectedGeneration {
-		return Workspace{}, ErrGenerationConflict
+		return Workspace{}, false, ErrGenerationConflict
 	}
 	if prev.Metadata.Generation == math.MaxUint64 {
-		return Workspace{}, ErrGenerationOverflow
+		return Workspace{}, false, ErrGenerationOverflow
 	}
+	next := appliedWorkspace(prev, desired, now)
+	if s.backend != nil {
+		if err := s.backend.Save(next); err != nil {
+			return Workspace{}, false, fmt.Errorf("workspacecatalog: persist apply: %w", err)
+		}
+	}
+	s.all[uuid] = next
+	return cloneWorkspace(next), true, nil
+}
+
+// ApplySpecByName creates or updates one owner-scoped alias atomically. A zero
+// expected generation means create only; retrying that create with an identical
+// declaration succeeds unchanged. uuid is used only if creation wins.
+func (s *Store) ApplySpecByName(
+	uuid string,
+	name string,
+	owner identity.Fingerprint,
+	expectedGeneration uint64,
+	desired Spec,
+) (workspace Workspace, created, changed bool, err error) {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return Workspace{}, false, false, ErrClosed
+	}
+	key := aliasKey{owner: owner, name: name}
+	if existingUUID, ok := s.byAlias[key]; ok {
+		prev := s.all[existingUUID]
+		desired = materializeSpec(desired, existingUUID)
+		if prev.Status.Lock.HeldByOther(owner, now) {
+			return Workspace{}, false, false, ErrLockHeldByOther
+		}
+		if specsEqual(prev.Spec, desired) {
+			return cloneWorkspace(prev), false, false, nil
+		}
+		if expectedGeneration == 0 || prev.Metadata.Generation != expectedGeneration {
+			return Workspace{}, false, false, ErrGenerationConflict
+		}
+		if prev.Metadata.Generation == math.MaxUint64 {
+			return Workspace{}, false, false, ErrGenerationOverflow
+		}
+		next := appliedWorkspace(prev, desired, now)
+		if s.backend != nil {
+			if err := s.backend.Save(next); err != nil {
+				return Workspace{}, false, false, fmt.Errorf("workspacecatalog: persist apply: %w", err)
+			}
+		}
+		s.all[existingUUID] = next
+		return cloneWorkspace(next), false, true, nil
+	}
+	if expectedGeneration != 0 {
+		return Workspace{}, false, false, ErrNotFound
+	}
+	if uuid == "" || name == "" {
+		return Workspace{}, false, false, ErrNotFound
+	}
+	if _, exists := s.all[uuid]; exists {
+		return Workspace{}, false, false, fmt.Errorf("workspacecatalog: uuid %q already exists", uuid)
+	}
+	desired = materializeSpec(desired, uuid)
+	ws := Workspace{Metadata: Metadata{
+		UUID: uuid, Name: name, OwnerFingerprint: owner, Generation: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}, Spec: cloneSpec(desired)}
+	ws.Status.Missing = missingFields(ws.Spec)
+	ws.Status.Conditions = recomputeConditions(nil, ws.Status.Missing, false, now)
+	if s.backend != nil {
+		if err := s.backend.Save(ws); err != nil {
+			return Workspace{}, false, false, fmt.Errorf("workspacecatalog: persist apply create: %w", err)
+		}
+	}
+	s.all[uuid] = ws
+	s.byAlias[key] = uuid
+	return cloneWorkspace(ws), true, true, nil
+}
+
+func appliedWorkspace(prev Workspace, desired Spec, now time.Time) Workspace {
 	next := cloneWorkspace(prev)
 	next.Spec = cloneSpec(desired)
 	next.Metadata.Generation++
 	next.Metadata.UpdatedAt = now
 	next.Status.Missing = missingFields(next.Spec)
 	next.Status.Conditions = recomputeConditions(next.Status.Conditions, next.Status.Missing, next.Status.IsTrue(ConditionDispatched), now)
-	if s.backend != nil {
-		if err := s.backend.Save(next); err != nil {
-			return Workspace{}, fmt.Errorf("workspacecatalog: persist apply: %w", err)
+	return next
+}
+
+func materializeSpec(in Spec, workspaceUUID string) Spec {
+	in = cloneSpec(in)
+	for i := range in.Mounts {
+		if in.Mounts[i].Source == "" {
+			in.Mounts[i].Source = workspaceUUID
 		}
 	}
-	s.all[uuid] = next
-	return cloneWorkspace(next), nil
+	return in
 }
 
 func specsEqual(a, b Spec) bool {
