@@ -120,6 +120,9 @@ Landed:
 - Real daemon/MCP lifecycle tests for workspace and AgentRun paths.
 - Adaptive SSH Node deployment skill and deterministic probe, stage, verify,
   upgrade, and rollback scripts.
+- Validated overseer workflow skill composing adaptive Node deployment with
+  retry-safe Workspace and AgentRun MCP operations, durable cursor recovery,
+  bounded monitoring, and verified teardown.
 
 Remaining:
 
