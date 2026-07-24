@@ -25,6 +25,7 @@ const (
 	testRunA          = "run-a"
 	testMutated       = "mutated"
 	testResult        = "done"
+	testExec          = "exec"
 )
 
 func testOwner(b byte) identity.Fingerprint {
@@ -45,6 +46,78 @@ func openTestStore(t *testing.T) (store *Store, control *controlstore.Store) {
 		t.Fatal(err)
 	}
 	return store, control
+}
+
+func TestCreateOrGetConvergesPersistsAndRejectsConflicts(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "control")
+	control, err := controlstore.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(control.DB(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := testOwner(1)
+	if _, err := store.GetByRequest(owner, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing GetByRequest = %v", err)
+	}
+	input := CreateInput{
+		UUID: "run-1", RequestID: "request-1", WorkspaceUUID: testWorkspaceUUID,
+		ProfileName: testProfileName, ProfileDigest: testProfileDigest,
+		ImageRef: "agent@example", ResourcesEnable: true, CPUCores: 2,
+		MemoryBytes: 1024, EgressEnable: true, Prompt: "fix it",
+		Command: []string{testProfileName, testExec}, OwnerFingerprint: owner,
+		CredentialRequired: true, CredentialProvider: CredentialProviderCodex,
+	}
+	first, created, err := store.CreateOrGet(input)
+	if err != nil || !created || first.RequestID != input.RequestID {
+		t.Fatalf("first CreateOrGet = %#v, %t, %v", first, created, err)
+	}
+	input.UUID = "run-2"
+	second, created, err := store.CreateOrGet(input)
+	if err != nil || created || second.UUID != first.UUID {
+		t.Fatalf("retry CreateOrGet = %#v, %t, %v", second, created, err)
+	}
+	if got, err := store.GetByRequest(owner, input.RequestID); err != nil || got.UUID != first.UUID {
+		t.Fatalf("GetByRequest = %#v, %v", got, err)
+	}
+	conflict := input
+	conflict.Prompt = "different"
+	if _, _, err := store.CreateOrGet(conflict); !errors.Is(err, ErrConflict) {
+		t.Fatalf("conflicting CreateOrGet = %v", err)
+	}
+	if _, _, err := store.CreateOrGet(CreateInput{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty request ID = %v", err)
+	}
+	oversize := input
+	oversize.RequestID = string(make([]byte, MaxIDBytes+1))
+	if _, _, err := store.CreateOrGet(oversize); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("oversize request ID = %v", err)
+	}
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	control, err = controlstore.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = control.Close() }()
+	reopened, err := Open(control.DB(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	persisted, created, err := reopened.CreateOrGet(input)
+	if err != nil || created || persisted.UUID != first.UUID {
+		t.Fatalf("reopened CreateOrGet = %#v, %t, %v", persisted, created, err)
+	}
+	otherOwner := input
+	otherOwner.OwnerFingerprint = testOwner(2)
+	otherOwner.UUID = "run-other"
+	if _, created, err := reopened.CreateOrGet(otherOwner); err != nil || !created {
+		t.Fatalf("owner-scoped CreateOrGet created=%t err=%v", created, err)
+	}
 }
 
 func TestRunTransitionsPersistWithEvents(t *testing.T) {
@@ -232,7 +305,7 @@ func TestCreateValidatesAndCopiesCommand(t *testing.T) {
 			}
 		})
 	}
-	command := []string{testProfileName, "exec"}
+	command := []string{testProfileName, testExec}
 	base.Command = command
 	run, err := store.Create(base)
 	if err != nil {
@@ -241,7 +314,7 @@ func TestCreateValidatesAndCopiesCommand(t *testing.T) {
 	command[0] = testMutated
 	run.Command[1] = testMutated
 	got, err := store.Get(base.OwnerFingerprint, base.UUID)
-	if err != nil || got.Command[0] != testProfileName || got.Command[1] != "exec" {
+	if err != nil || got.Command[0] != testProfileName || got.Command[1] != testExec {
 		t.Fatalf("stored command = %#v, %v", got.Command, err)
 	}
 	if _, err := store.Transition(base.OwnerFingerprint, base.UUID, TransitionInput{From: []State{StateQueued}, To: StateFailed}); err != nil {

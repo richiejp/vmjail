@@ -79,7 +79,7 @@ type Reader interface {
 	GetAgentRun(context.Context, string) (AgentRun, error)
 	AgentRunEvents(context.Context, string, uint64, uint32) (AgentEvents, error)
 	CancelAgentRun(context.Context, string) (AgentRun, error)
-	StartAgentRun(context.Context, string, agentprofile.Entry, string) (AgentRun, error)
+	StartAgentRun(context.Context, string, string, agentprofile.Entry, string) (AgentRun, error)
 }
 
 type Node struct {
@@ -268,6 +268,7 @@ type agentRunInput struct {
 }
 
 type agentStartInput struct {
+	RequestID     string `json:"request_id" jsonschema:"caller-generated canonical UUID; exact retries converge to one AgentRun"`
 	WorkspaceUUID string `json:"workspace_uuid" jsonschema:"canonical workspace UUID"`
 	ProfileName   string `json:"profile_name" jsonschema:"immutable trusted-host AgentProfile name"`
 	Prompt        string `json:"prompt" jsonschema:"coding task, at most 262144 bytes"`
@@ -465,6 +466,24 @@ func validateWorkspaceApply(input workspaceApplyInput) error {
 	return validateWorkspaceSpecBounds(input.Spec)
 }
 
+func canonicalUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, char := range value {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if char != '-' {
+				return false
+			}
+			continue
+		}
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func validateWorkspaceSpecBounds(spec WorkspaceSpec) error {
 	if len(spec.Mounts) > maxWorkspaceItems || len(spec.Env) > maxWorkspaceItems || len(spec.Ports) > maxWorkspaceItems {
 		return fmt.Errorf("workspace declaration exceeds bounded input limits")
@@ -499,11 +518,11 @@ func addAgentRunTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations, 
 		profile := profiles[i]
 		byName[profile.Profile.Name] = profile
 	}
-	startAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: false, OpenWorldHint: boolPtr(false)}
-	mcp.AddTool(server, &mcp.Tool{Name: agentStartTool, Description: "Start a durable coding-agent run from an immutable trusted-host profile.", Annotations: startAnnotations},
+	startAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: agentStartTool, Description: "Idempotently start a durable coding-agent run from an immutable trusted-host profile.", Annotations: startAnnotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input agentStartInput) (*mcp.CallToolResult, agentRunOutput, error) {
-			if input.WorkspaceUUID == "" || input.ProfileName == "" {
-				return nil, agentRunOutput{}, fmt.Errorf("workspace_uuid and profile_name are required")
+			if !canonicalUUID(input.RequestID) || input.WorkspaceUUID == "" || input.ProfileName == "" {
+				return nil, agentRunOutput{}, fmt.Errorf("canonical request_id, workspace_uuid, and profile_name are required")
 			}
 			if len(input.Prompt) > agentruncatalog.MaxPromptBytes {
 				return nil, agentRunOutput{}, fmt.Errorf("prompt exceeds %d bytes", agentruncatalog.MaxPromptBytes)
@@ -512,7 +531,7 @@ func addAgentRunTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations, 
 			if !ok {
 				return nil, agentRunOutput{}, fmt.Errorf("unknown AgentProfile %q", input.ProfileName)
 			}
-			run, err := reader.StartAgentRun(ctx, input.WorkspaceUUID, profile, input.Prompt)
+			run, err := reader.StartAgentRun(ctx, input.RequestID, input.WorkspaceUUID, profile, input.Prompt)
 			return nil, agentRunOutput{Run: run}, err
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: agentStatusTool, Description: "Get durable status for one owned AgentRun.", Annotations: readAnnotations},
@@ -636,13 +655,13 @@ type ConnectReader struct {
 	credentials *agentcredential.Catalog
 }
 
-func (r ConnectReader) StartAgentRun(ctx context.Context, workspaceUUID string, profile agentprofile.Entry, prompt string) (AgentRun, error) {
+func (r ConnectReader) StartAgentRun(ctx context.Context, requestID, workspaceUUID string, profile agentprofile.Entry, prompt string) (AgentRun, error) {
 	credentialProvider := ""
 	if profile.Profile.Credentials.Enable {
 		credentialProvider = string(profile.Profile.Provider)
 	}
 	response, err := r.agentRuns.Start(ctx, connect.NewRequest(&agentrunv1.StartAgentRunRequest{
-		WorkspaceUuid: workspaceUUID, ProfileName: profile.Profile.Name, ProfileDigest: profile.Digest,
+		RequestId: requestID, WorkspaceUuid: workspaceUUID, ProfileName: profile.Profile.Name, ProfileDigest: profile.Digest,
 		Command: slices.Clone(profile.Profile.Command), Prompt: prompt, ImageRef: profile.Profile.Image,
 		Resources:          &agentrunv1.AgentRunResources{Enable: profile.Profile.Resources.Enable, CpuCores: profile.Profile.Resources.CPUCores, MemoryBytes: profile.Profile.Resources.MemoryBytes},
 		Egress:             &agentrunv1.AgentRunEgress{Enable: profile.Profile.Egress.Enable},
@@ -652,7 +671,7 @@ func (r ConnectReader) StartAgentRun(ctx context.Context, workspaceUUID string, 
 	if err != nil {
 		return AgentRun{}, err
 	}
-	if profile.Profile.Credentials.Enable {
+	if profile.Profile.Credentials.Enable && response.Msg.GetState() == agentrunv1.AgentRunState_AGENT_RUN_STATE_AWAITING_CREDENTIAL {
 		if r.credentials == nil || r.secrets == nil {
 			return AgentRun{}, fmt.Errorf("mcpserver: credential delivery is not configured")
 		}

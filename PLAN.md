@@ -113,6 +113,9 @@ Landed:
 - Project-root-confined workspace push through a reusable client API, the CLI,
   and trusted MCP, with bounded declarations/results and explicit host paths.
 - Detached agent execution with one-shot OAuth delivery.
+- Retry-safe AgentRun creation keyed by a caller-generated request UUID. Exact
+  retries converge on the durable run, conflicting reuse is rejected, and
+  credentials are not redelivered after the run leaves its awaiting state.
 - Trusted stdio MCP facade with owner-scoped workspace and agent operations.
 - Real daemon/MCP lifecycle tests for workspace and AgentRun paths.
 - Adaptive SSH Node deployment skill and deterministic probe, stage, verify,
@@ -165,8 +168,6 @@ maintainability requirements.
 
 - What persistence boundary should follow the existing Badger-backed operator
   and AgentRun stores for the rest of the control plane?
-- What exact retry/idempotency contract should the overseer use after losing
-  contact during workspace launch or agent start?
 - How should cassette keys include image, lockfile, request set, and policy so
   stale replay cannot silently pass?
 - Which terminal transport can support future human takeover without widening

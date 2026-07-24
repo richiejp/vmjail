@@ -55,10 +55,16 @@ func (s State) Terminal() bool {
 
 type Run struct {
 	UUID                 string               `json:"uuid"`
+	RequestID            string               `json:"request_id,omitempty"`
 	OwnerFingerprint     identity.Fingerprint `json:"owner_fingerprint"`
 	WorkspaceUUID        string               `json:"workspace_uuid"`
 	ProfileName          string               `json:"profile_name"`
 	ProfileDigest        string               `json:"profile_digest"`
+	ImageRef             string               `json:"image_ref,omitempty"`
+	ResourcesEnable      bool                 `json:"resources_enable,omitempty"`
+	CPUCores             uint32               `json:"cpu_cores,omitempty"`
+	MemoryBytes          uint64               `json:"memory_bytes,omitempty"`
+	EgressEnable         bool                 `json:"egress_enable,omitempty"`
 	CredentialRequired   bool                 `json:"credential_required,omitempty"`
 	CredentialProvider   string               `json:"credential_provider,omitempty"`
 	CredentialDeliveryID string               `json:"credential_delivery_id,omitempty"`
@@ -90,10 +96,14 @@ type Event struct {
 }
 
 type CreateInput struct {
-	UUID, WorkspaceUUID, ProfileName, ProfileDigest, Prompt, CredentialProvider string
-	Command                                                                     []string
-	OwnerFingerprint                                                            identity.Fingerprint
-	CredentialRequired                                                          bool
+	UUID, RequestID, WorkspaceUUID, ProfileName, ProfileDigest, Prompt, CredentialProvider string
+	Command                                                                                []string
+	OwnerFingerprint                                                                       identity.Fingerprint
+	CredentialRequired                                                                     bool
+	ResourcesEnable, EgressEnable                                                          bool
+	CPUCores                                                                               uint32
+	MemoryBytes                                                                            uint64
+	ImageRef                                                                               string
 }
 
 type TransitionInput struct {
@@ -118,10 +128,11 @@ type persisted[T any] struct {
 }
 
 type Store struct {
-	db   *badger.DB
-	now  func() time.Time
-	mu   sync.Mutex
-	runs map[string]Run
+	db       *badger.DB
+	now      func() time.Time
+	mu       sync.Mutex
+	runs     map[string]Run
+	requests map[string]string
 }
 
 func Open(db *badger.DB, now func() time.Time) (*Store, error) {
@@ -131,7 +142,7 @@ func Open(db *badger.DB, now func() time.Time) (*Store, error) {
 	if now == nil {
 		now = time.Now
 	}
-	s := &Store{db: db, now: now, runs: map[string]Run{}}
+	s := &Store{db: db, now: now, runs: map[string]Run{}, requests: map[string]string{}}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
@@ -139,31 +150,88 @@ func Open(db *badger.DB, now func() time.Time) (*Store, error) {
 }
 
 func (s *Store) Create(in CreateInput) (Run, error) {
+	run, _, err := s.create(in, false)
+	return run, err
+}
+
+// CreateOrGet atomically converges a caller retry identified by RequestID.
+// Reusing a request ID with different immutable inputs fails with ErrConflict.
+func (s *Store) CreateOrGet(in CreateInput) (Run, bool, error) {
+	return s.create(in, true)
+}
+
+func (s *Store) create(in CreateInput, converge bool) (Run, bool, error) {
 	if in.UUID == "" || in.WorkspaceUUID == "" || in.ProfileName == "" || in.ProfileDigest == "" || in.OwnerFingerprint.IsZero() || len(in.UUID) > MaxIDBytes || len(in.WorkspaceUUID) > MaxIDBytes {
-		return Run{}, fmt.Errorf("%w: required create field is empty", ErrInvalid)
+		return Run{}, false, fmt.Errorf("%w: required create field is empty", ErrInvalid)
+	}
+	if (converge && in.RequestID == "") || len(in.RequestID) > MaxIDBytes {
+		return Run{}, false, fmt.Errorf("%w: request ID is empty or exceeds %d bytes", ErrInvalid, MaxIDBytes)
 	}
 	if len(in.Prompt) > MaxPromptBytes {
-		return Run{}, fmt.Errorf("%w: prompt exceeds %d bytes", ErrInvalid, MaxPromptBytes)
+		return Run{}, false, fmt.Errorf("%w: prompt exceeds %d bytes", ErrInvalid, MaxPromptBytes)
 	}
 	if err := validateCommand(in.Command); err != nil {
-		return Run{}, err
+		return Run{}, false, err
 	}
 	now := s.now().UTC()
 	if in.CredentialRequired != (in.CredentialProvider != "") || (in.CredentialProvider != "" && in.CredentialProvider != CredentialProviderCodex) {
-		return Run{}, fmt.Errorf("%w: credential provider must be codex exactly when credentials are required", ErrInvalid)
+		return Run{}, false, fmt.Errorf("%w: credential provider must be codex exactly when credentials are required", ErrInvalid)
 	}
-	r := Run{UUID: in.UUID, OwnerFingerprint: in.OwnerFingerprint, WorkspaceUUID: in.WorkspaceUUID, ProfileName: in.ProfileName, ProfileDigest: in.ProfileDigest, CredentialRequired: in.CredentialRequired, CredentialProvider: in.CredentialProvider, Prompt: in.Prompt, Command: slices.Clone(in.Command), State: StateQueued, CreatedAt: now, UpdatedAt: now, LastEventCursor: 1}
+	r := Run{UUID: in.UUID, RequestID: in.RequestID, OwnerFingerprint: in.OwnerFingerprint, WorkspaceUUID: in.WorkspaceUUID, ProfileName: in.ProfileName, ProfileDigest: in.ProfileDigest, ImageRef: in.ImageRef, ResourcesEnable: in.ResourcesEnable, CPUCores: in.CPUCores, MemoryBytes: in.MemoryBytes, EgressEnable: in.EgressEnable, CredentialRequired: in.CredentialRequired, CredentialProvider: in.CredentialProvider, Prompt: in.Prompt, Command: slices.Clone(in.Command), State: StateQueued, CreatedAt: now, UpdatedAt: now, LastEventCursor: 1}
 	e := Event{RunUUID: r.UUID, Cursor: 1, Timestamp: now, State: r.State, Message: "run queued"}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if converge {
+		if uuid, ok := s.requests[requestKey(in.OwnerFingerprint, in.RequestID)]; ok {
+			existing := s.runs[uuid]
+			if !sameCreate(existing, in) {
+				return Run{}, false, fmt.Errorf("%w: request ID reused with different inputs", ErrConflict)
+			}
+			return cloneRun(existing), false, nil
+		}
+	}
 	if _, ok := s.runs[r.UUID]; ok {
-		return Run{}, fmt.Errorf("%w: uuid already exists", ErrConflict)
+		return Run{}, false, fmt.Errorf("%w: uuid already exists", ErrConflict)
 	}
 	if err := s.write(r, e, true); err != nil {
-		return Run{}, err
+		return Run{}, false, err
 	}
 	s.runs[r.UUID] = r
-	return cloneRun(r), nil
+	if r.RequestID != "" {
+		s.requests[requestKey(r.OwnerFingerprint, r.RequestID)] = r.UUID
+	}
+	return cloneRun(r), true, nil
+}
+
+func (s *Store) GetByRequest(owner identity.Fingerprint, requestID string) (Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	uuid, ok := s.requests[requestKey(owner, requestID)]
+	if !ok {
+		return Run{}, ErrNotFound
+	}
+	return cloneRun(s.runs[uuid]), nil
+}
+
+func requestKey(owner identity.Fingerprint, requestID string) string {
+	return owner.String() + "\x00" + requestID
+}
+
+func sameCreate(run Run, in CreateInput) bool {
+	return run.RequestID == in.RequestID &&
+		run.OwnerFingerprint == in.OwnerFingerprint &&
+		run.WorkspaceUUID == in.WorkspaceUUID &&
+		run.ProfileName == in.ProfileName &&
+		run.ProfileDigest == in.ProfileDigest &&
+		run.ImageRef == in.ImageRef &&
+		run.ResourcesEnable == in.ResourcesEnable &&
+		run.CPUCores == in.CPUCores &&
+		run.MemoryBytes == in.MemoryBytes &&
+		run.EgressEnable == in.EgressEnable &&
+		run.Prompt == in.Prompt &&
+		slices.Equal(run.Command, in.Command) &&
+		run.CredentialRequired == in.CredentialRequired &&
+		run.CredentialProvider == in.CredentialProvider
 }
 
 func (s *Store) Get(owner identity.Fingerprint, uuid string) (Run, error) {
@@ -429,6 +497,13 @@ func (s *Store) load() error {
 			}
 			if _, exists := s.runs[r.UUID]; exists {
 				return fmt.Errorf("agentruncatalog: duplicate run %q", r.UUID)
+			}
+			if r.RequestID != "" {
+				key := requestKey(r.OwnerFingerprint, r.RequestID)
+				if _, exists := s.requests[key]; exists {
+					return fmt.Errorf("agentruncatalog: duplicate request ID")
+				}
+				s.requests[key] = r.UUID
 			}
 			s.runs[r.UUID] = r
 		}

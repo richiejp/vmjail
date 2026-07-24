@@ -30,6 +30,7 @@ const (
 	testAgentDigest    = "sha256:profile"
 	testAgentPrompt    = "fix it"
 	testAgentImage     = "example.com/agent@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	testAgentRequestID = "123e4567-e89b-42d3-a456-426614174000"
 )
 
 type fakeAgentCanceler struct {
@@ -47,6 +48,7 @@ type fakeAgentStarter struct {
 	deleteErr   error
 	get         nodejob.Snapshot
 	deleted     string
+	starts      int
 }
 
 type fakeAgentSandboxLauncher struct {
@@ -80,6 +82,7 @@ func (f *fakeAgentStarter) DeleteNodeJob(_ context.Context, _ identity.Fingerpri
 
 func (f *fakeAgentStarter) StartNodeJob(_ context.Context, fingerprint identity.Fingerprint, request nodejob.StartRequest) (nodejob.Snapshot, error) {
 	f.fingerprint, f.request = fingerprint, request
+	f.starts++
 	return f.snapshot, f.err
 }
 
@@ -108,6 +111,9 @@ func agentRunStore(t *testing.T) (runs *agentruncatalog.Store, control *controls
 
 func agentRunRequest[T any](message *T, owner identity.Fingerprint) *connect.Request[T] {
 	if start, ok := any(message).(*agentrunv1.StartAgentRunRequest); ok {
+		if start.RequestId == "" {
+			start.RequestId = testAgentRequestID
+		}
 		if start.ImageRef == "" {
 			start.ImageRef = testAgentImage
 		}
@@ -132,6 +138,19 @@ func createAgentRun(t *testing.T, store *agentruncatalog.Store, owner identity.F
 	return run
 }
 
+func TestAgentRunCanonicalUUID(t *testing.T) {
+	for value, want := range map[string]bool{
+		testAgentRequestID:                     true,
+		"short":                                false,
+		"123e4567xe89b-42d3-a456-426614174000": false,
+		"123e4567-e89b-42d3-a456-42661417400g": false,
+	} {
+		if got := canonicalUUID(value); got != want {
+			t.Errorf("canonicalUUID(%q) = %t, want %t", value, got, want)
+		}
+	}
+}
+
 func TestAgentRunHandlerStartBindsAndStartsIdempotentJob(t *testing.T) {
 	runs, _ := agentRunStore(t)
 	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
@@ -153,10 +172,11 @@ func TestAgentRunHandlerStartBindsAndStartsIdempotentJob(t *testing.T) {
 	starter := &fakeAgentStarter{snapshot: nodejob.Snapshot{ID: orchestratorTestJobID}}
 	handler := NewAgentRunHandler(runs, nil)
 	handler.SetStartDependencies(workspaces, nodes, starter)
-	response, err := handler.Start(t.Context(), agentRunRequest(&agentrunv1.StartAgentRunRequest{
+	request := &agentrunv1.StartAgentRunRequest{
 		WorkspaceUuid: workspace.Metadata.UUID, ProfileName: testAgentProfile, ProfileDigest: testAgentDigest,
 		Command: []string{testAgentProfile, "exec"}, Prompt: testAgentPrompt,
-	}, owner))
+	}
+	response, err := handler.Start(t.Context(), agentRunRequest(request, owner))
 	if err != nil || response.Msg.GetState() != agentrunv1.AgentRunState_AGENT_RUN_STATE_RUNNING {
 		t.Fatalf("Start = %#v, %v", response, err)
 	}
@@ -169,6 +189,14 @@ func TestAgentRunHandlerStartBindsAndStartsIdempotentJob(t *testing.T) {
 	stored, err := runs.Get(owner, response.Msg.GetUuid())
 	if err != nil || len(stored.Command) != 2 || stored.Command[1] != "exec" {
 		t.Fatalf("stored launch snapshot = %#v, %v", stored, err)
+	}
+	retried, err := handler.Start(t.Context(), agentRunRequest(request, owner))
+	if err != nil || retried.Msg.GetUuid() != response.Msg.GetUuid() || starter.starts != 1 {
+		t.Fatalf("retry = %#v, starts=%d, %v", retried, starter.starts, err)
+	}
+	request.Prompt = "different"
+	if _, err := handler.Start(t.Context(), agentRunRequest(request, owner)); connect.CodeOf(err) != connect.CodeAlreadyExists {
+		t.Fatalf("conflicting retry = %v", err)
 	}
 }
 
@@ -611,6 +639,11 @@ func TestAgentRunStartPreconditions(t *testing.T) {
 	owner, other := mustGenerate(t, identity.RoleOperator).Fingerprint(), mustGenerate(t, identity.RoleClient).Fingerprint()
 	handler := NewAgentRunHandler(runs, nil)
 	request := agentRunRequest(&agentrunv1.StartAgentRunRequest{WorkspaceUuid: testAgentWorkspace, ProfileName: testAgentProfile, ProfileDigest: testAgentDigest, Command: []string{testAgentProfile}}, owner)
+	request.Msg.RequestId = "not-a-uuid"
+	if _, err := handler.Start(t.Context(), request); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("invalid request ID = %v", err)
+	}
+	request.Msg.RequestId = testAgentRequestID
 	if _, err := handler.Start(t.Context(), request); connect.CodeOf(err) != connect.CodeFailedPrecondition {
 		t.Fatalf("unconfigured = %v", err)
 	}

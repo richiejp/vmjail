@@ -97,12 +97,15 @@ func (AgentRunState) EnumDescriptor() ([]byte, []int) {
 // StartAgentRunRequest is sent only by the trusted operator client after it
 // resolves a named AgentProfile. MCP callers never supply command or digest.
 type StartAgentRunRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	WorkspaceUuid string                 `protobuf:"bytes,1,opt,name=workspace_uuid,json=workspaceUuid,proto3" json:"workspace_uuid,omitempty"`
-	ProfileName   string                 `protobuf:"bytes,2,opt,name=profile_name,json=profileName,proto3" json:"profile_name,omitempty"`
-	ProfileDigest string                 `protobuf:"bytes,3,opt,name=profile_digest,json=profileDigest,proto3" json:"profile_digest,omitempty"`
-	Command       []string               `protobuf:"bytes,4,rep,name=command,proto3" json:"command,omitempty"`
-	Prompt        string                 `protobuf:"bytes,5,opt,name=prompt,proto3" json:"prompt,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Stable caller-generated key. Retrying the exact request converges to the
+	// same durable AgentRun; reusing it for different inputs fails.
+	RequestId     string   `protobuf:"bytes,11,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
+	WorkspaceUuid string   `protobuf:"bytes,1,opt,name=workspace_uuid,json=workspaceUuid,proto3" json:"workspace_uuid,omitempty"`
+	ProfileName   string   `protobuf:"bytes,2,opt,name=profile_name,json=profileName,proto3" json:"profile_name,omitempty"`
+	ProfileDigest string   `protobuf:"bytes,3,opt,name=profile_digest,json=profileDigest,proto3" json:"profile_digest,omitempty"`
+	Command       []string `protobuf:"bytes,4,rep,name=command,proto3" json:"command,omitempty"`
+	Prompt        string   `protobuf:"bytes,5,opt,name=prompt,proto3" json:"prompt,omitempty"`
 	// Frozen trusted-host launch policy. MCP callers cannot supply these fields;
 	// daft-mcp resolves them from the named immutable AgentProfile.
 	ImageRef  string             `protobuf:"bytes,6,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
@@ -144,6 +147,13 @@ func (x *StartAgentRunRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use StartAgentRunRequest.ProtoReflect.Descriptor instead.
 func (*StartAgentRunRequest) Descriptor() ([]byte, []int) {
 	return file_agentrun_v1_agentrun_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *StartAgentRunRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
 }
 
 func (x *StartAgentRunRequest) GetWorkspaceUuid() string {
@@ -892,8 +902,10 @@ var File_agentrun_v1_agentrun_proto protoreflect.FileDescriptor
 
 const file_agentrun_v1_agentrun_proto_rawDesc = "" +
 	"\n" +
-	"\x1aagentrun/v1/agentrun.proto\x12\x10daft.agentrun.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb5\x03\n" +
-	"\x14StartAgentRunRequest\x12%\n" +
+	"\x1aagentrun/v1/agentrun.proto\x12\x10daft.agentrun.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xd4\x03\n" +
+	"\x14StartAgentRunRequest\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\v \x01(\tR\trequestId\x12%\n" +
 	"\x0eworkspace_uuid\x18\x01 \x01(\tR\rworkspaceUuid\x12!\n" +
 	"\fprofile_name\x18\x02 \x01(\tR\vprofileName\x12%\n" +
 	"\x0eprofile_digest\x18\x03 \x01(\tR\rprofileDigest\x12\x18\n" +

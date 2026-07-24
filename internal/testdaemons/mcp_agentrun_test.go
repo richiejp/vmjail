@@ -99,6 +99,7 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 		t.Fatalf("workspace_push mount result = %#v", mounts[0])
 	}
 	started := callMCPTool(t, session, "agent_start", map[string]any{
+		"request_id":     "123e4567-e89b-42d3-a456-426614174000",
 		"workspace_uuid": workspaceUUID,
 		"profile_name":   "integration",
 		"prompt":         "cat /workspace/input.txt && printf 'MCP-AGENT-OK\\n'",

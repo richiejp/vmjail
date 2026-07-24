@@ -38,12 +38,14 @@ const (
 	profileNameKey   = "profile_name"
 	projectPathKey   = "project_path"
 	promptKey        = "prompt"
+	requestIDKey     = "request_id"
 	workspaceUUIDKey = "workspace_uuid"
 	nameKey          = "name"
 	specKey          = "spec"
 	mcpTestImage     = "alpine:3"
 	mcpTestProject   = "project"
 	mcpTestMount     = "/workspace"
+	mcpTestRequestID = "123e4567-e89b-42d3-a456-426614174000"
 )
 
 type fakeReader struct {
@@ -62,6 +64,7 @@ type fakeReader struct {
 	agentErr         error
 	startedProfile   agentprofile.Entry
 	startedPrompt    string
+	startedRequestID string
 	appliedWorkspace WorkspaceApply
 	applyResult      WorkspaceApplyResult
 	validatedUUID    string
@@ -72,8 +75,21 @@ type fakeReader struct {
 	pushResult       daftclient.WorkspacePushResult
 }
 
-func (f *fakeReader) StartAgentRun(_ context.Context, workspace string, profile agentprofile.Entry, prompt string) (AgentRun, error) {
-	f.requestedUUID, f.startedProfile, f.startedPrompt = workspace, profile, prompt
+func TestCanonicalUUID(t *testing.T) {
+	for value, want := range map[string]bool{
+		mcpTestRequestID:                       true,
+		"short":                                false,
+		"123e4567xe89b-42d3-a456-426614174000": false,
+		"123e4567-e89b-42d3-a456-42661417400g": false,
+	} {
+		if got := canonicalUUID(value); got != want {
+			t.Errorf("canonicalUUID(%q) = %t, want %t", value, got, want)
+		}
+	}
+}
+
+func (f *fakeReader) StartAgentRun(_ context.Context, requestID, workspace string, profile agentprofile.Entry, prompt string) (AgentRun, error) {
+	f.startedRequestID, f.requestedUUID, f.startedProfile, f.startedPrompt = requestID, workspace, profile, prompt
 	return f.agentRun, f.agentErr
 }
 
@@ -124,7 +140,7 @@ func TestAgentStartResolvesTrustedProfile(t *testing.T) {
 	entry := agentprofile.Entry{Profile: agentprofile.Profile{Name: mcpTestProfile, Provider: agentprofile.ProviderCodex, Command: []string{mcpTestProfile, "exec"}}, Digest: "sha256:profile"}
 	reader := &fakeReader{agentRun: AgentRun{UUID: testRunValue, State: "AGENT_RUN_STATE_STARTING"}}
 	session := connectClientProfiles(t, reader, []agentprofile.Entry{entry})
-	result := requireMap(t, callTool(t, session, agentStartTool, map[string]any{workspaceUUIDKey: mcpTestWorkspace, profileNameKey: mcpTestProfile, promptKey: mcpTestPrompt}).StructuredContent)
+	result := requireMap(t, callTool(t, session, agentStartTool, map[string]any{requestIDKey: mcpTestRequestID, workspaceUUIDKey: mcpTestWorkspace, profileNameKey: mcpTestProfile, promptKey: mcpTestPrompt}).StructuredContent)
 	if requireMap(t, result[testRunValue])[uuidKey] != testRunValue {
 		t.Fatalf("start result = %#v", result)
 	}
@@ -132,8 +148,9 @@ func TestAgentStartResolvesTrustedProfile(t *testing.T) {
 		t.Fatalf("resolved start = workspace=%q profile=%#v prompt=%q", reader.requestedUUID, reader.startedProfile, reader.startedPrompt)
 	}
 	for name, arguments := range map[string]map[string]any{
-		"unknown profile": {workspaceUUIDKey: mcpTestWorkspace, profileNameKey: mcpMissing, promptKey: mcpTestPrompt},
-		"oversize prompt": {workspaceUUIDKey: mcpTestWorkspace, profileNameKey: mcpTestProfile, promptKey: string(make([]byte, agentruncatalog.MaxPromptBytes+1))},
+		"unknown profile": {requestIDKey: mcpTestRequestID, workspaceUUIDKey: mcpTestWorkspace, profileNameKey: mcpMissing, promptKey: mcpTestPrompt},
+		"oversize prompt": {requestIDKey: mcpTestRequestID, workspaceUUIDKey: mcpTestWorkspace, profileNameKey: mcpTestProfile, promptKey: string(make([]byte, agentruncatalog.MaxPromptBytes+1))},
+		"invalid request": {requestIDKey: "not-a-uuid", workspaceUUIDKey: mcpTestWorkspace, profileNameKey: mcpTestProfile, promptKey: mcpTestPrompt},
 	} {
 		t.Run(name, func(t *testing.T) {
 			response, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: agentStartTool, Arguments: arguments})
@@ -268,7 +285,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 				t.Errorf("revoke annotations = %#v", tool.Annotations)
 			}
 		case agentStartTool:
-			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint || tool.Annotations.IdempotentHint {
+			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint || !tool.Annotations.IdempotentHint {
 				t.Errorf("agent start annotations = %#v", tool.Annotations)
 			}
 		default:
@@ -819,10 +836,10 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 		Resources:   agentprofile.ResourcesSection{Enable: true, CPUCores: 4, MemoryBytes: 8 << 30},
 		Egress:      agentprofile.EgressSection{Enable: true},
 	}, Digest: "sha256:profile"}
-	if _, err := reader.StartAgentRun(t.Context(), mcpTestWorkspace, profile, mcpTestPrompt); err != nil {
+	if _, err := reader.StartAgentRun(t.Context(), mcpTestRequestID, mcpTestWorkspace, profile, mcpTestPrompt); err != nil {
 		t.Fatalf("StartAgentRun = %v", err)
 	}
-	if startRequest.GetWorkspaceUuid() != mcpTestWorkspace || startRequest.GetProfileDigest() != profile.Digest || len(startRequest.GetCommand()) != 2 || startRequest.GetPrompt() != mcpTestPrompt {
+	if startRequest.GetRequestId() != mcpTestRequestID || startRequest.GetWorkspaceUuid() != mcpTestWorkspace || startRequest.GetProfileDigest() != profile.Digest || len(startRequest.GetCommand()) != 2 || startRequest.GetPrompt() != mcpTestPrompt {
 		t.Fatalf("Start request = %#v", startRequest)
 	}
 	if startRequest.GetImageRef() != profile.Profile.Image || !startRequest.GetResources().GetEnable() || startRequest.GetResources().GetCpuCores() != 4 || startRequest.GetResources().GetMemoryBytes() != 8<<30 || !startRequest.GetEgress().GetEnable() {
@@ -831,8 +848,8 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	if !startRequest.GetCredentialRequired() || startRequest.GetCredentialProvider() != "codex" {
 		t.Fatalf("Start credential marker = %#v", startRequest)
 	}
-	if secretClient.request.GetAgentRunUuid() != testRunValue || secretClient.request.GetKind() != secretdeliveryv1.SecretKind_SECRET_KIND_CODEX_AUTH_JSON {
-		t.Fatalf("secret request=%+v", secretClient.request)
+	if secretClient.request != nil {
+		t.Fatalf("credential redelivered for completed run: %+v", secretClient.request)
 	}
 }
 
@@ -902,7 +919,7 @@ func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
 	if _, err := reader.GetAgentRun(t.Context(), testRunValue); !errors.Is(err, wantErr) {
 		t.Errorf("GetAgentRun error = %v", err)
 	}
-	if _, err := reader.StartAgentRun(t.Context(), mcpTestWorkspace, agentprofile.Entry{}, "prompt"); !errors.Is(err, wantErr) {
+	if _, err := reader.StartAgentRun(t.Context(), mcpTestRequestID, mcpTestWorkspace, agentprofile.Entry{}, "prompt"); !errors.Is(err, wantErr) {
 		t.Errorf("StartAgentRun error = %v", err)
 	}
 	if _, err := reader.AgentRunEvents(t.Context(), testRunValue, 0, 1); !errors.Is(err, wantErr) {
@@ -915,21 +932,21 @@ func TestConnectReaderPropagatesRPCErrors(t *testing.T) {
 
 func TestConnectReaderCredentialDeliveryFailures(t *testing.T) {
 	profile := agentprofile.Entry{Profile: agentprofile.Profile{Provider: agentprofile.ProviderCodex, Credentials: agentprofile.CredentialsSection{Enable: true, Profile: "host-only"}}}
-	run := &agentrunv1.AgentRun{Uuid: testRunValue}
-	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run}}).StartAgentRun(t.Context(), "w", profile, ""); err == nil {
+	run := &agentrunv1.AgentRun{Uuid: testRunValue, State: agentrunv1.AgentRunState_AGENT_RUN_STATE_AWAITING_CREDENTIAL}
+	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run}}).StartAgentRun(t.Context(), mcpTestRequestID, "w", profile, ""); err == nil {
 		t.Fatal("missing credential catalog succeeded")
 	}
 	missing := profile
 	missing.Profile.Credentials.Profile = mcpMissing
-	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run}, credentials: testCredentialCatalog(t), secrets: &fakeSecretClient{}}).StartAgentRun(t.Context(), "w", missing, ""); err == nil {
+	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run}, credentials: testCredentialCatalog(t), secrets: &fakeSecretClient{}}).StartAgentRun(t.Context(), mcpTestRequestID, "w", missing, ""); err == nil {
 		t.Fatal("unknown credential succeeded")
 	}
 	want := errors.New("deliver")
-	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run}, credentials: testCredentialCatalog(t), secrets: &fakeSecretClient{err: want}}).StartAgentRun(t.Context(), "w", profile, ""); !errors.Is(err, want) {
+	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run}, credentials: testCredentialCatalog(t), secrets: &fakeSecretClient{err: want}}).StartAgentRun(t.Context(), mcpTestRequestID, "w", profile, ""); !errors.Is(err, want) {
 		t.Fatalf("delivery error=%v", err)
 	}
 	want = errors.New("refresh")
-	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run, getErr: want}, credentials: testCredentialCatalog(t), secrets: &fakeSecretClient{}}).StartAgentRun(t.Context(), "w", profile, ""); !errors.Is(err, want) {
+	if _, err := (ConnectReader{agentRuns: fakeAgentRunClient{run: run, getErr: want}, credentials: testCredentialCatalog(t), secrets: &fakeSecretClient{}}).StartAgentRun(t.Context(), mcpTestRequestID, "w", profile, ""); !errors.Is(err, want) {
 		t.Fatalf("refresh error=%v", err)
 	}
 }

@@ -18,6 +18,9 @@ service AgentRunService {
 // StartAgentRunRequest is sent only by the trusted operator client after it
 // resolves a named AgentProfile. MCP callers never supply command or digest.
 message StartAgentRunRequest {
+  // Stable caller-generated key. Retrying the exact request converges to the
+  // same durable AgentRun; reusing it for different inputs fails.
+  string request_id = 11;
   string workspace_uuid = 1;
   string profile_name = 2;
   string profile_digest = 3;

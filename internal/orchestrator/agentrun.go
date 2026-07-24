@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -124,16 +125,16 @@ func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentr
 	if err != nil {
 		return nil, err
 	}
-	if h.workspaces == nil || h.nodes == nil || h.starter == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("orchestrator: AgentRun start controller is not configured"))
+	policy, err := h.startPolicy(req.Msg)
+	if err != nil {
+		return nil, err
+	}
+	if response, found, findErr := h.findAgentRunRetry(owner, req.Msg); found || findErr != nil {
+		return response, findErr
 	}
 	workspace, err := h.workspaces.Get(req.Msg.GetWorkspaceUuid())
 	if err != nil || workspace.Metadata.OwnerFingerprint != owner {
 		return nil, connect.NewError(connect.CodeNotFound, errors.New("orchestrator: Workspace not found"))
-	}
-	policy, err := agentSandboxPolicy(req.Msg)
-	if err != nil {
-		return nil, err
 	}
 	binding := workspace.Status.CurrentSandbox
 	if binding == nil {
@@ -157,15 +158,21 @@ func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentr
 	// a process restart the lock is gone, so a genuinely stranded QUEUED record
 	// is still failed by reconciliation as designed.
 	h.bindMu.Lock()
-	run, err := h.store.Create(agentruncatalog.CreateInput{
-		UUID: mintWorkspaceUUID(), WorkspaceUUID: workspace.Metadata.UUID,
+	run, created, err := h.store.CreateOrGet(agentruncatalog.CreateInput{
+		UUID: mintWorkspaceUUID(), RequestID: req.Msg.GetRequestId(), WorkspaceUUID: workspace.Metadata.UUID,
 		ProfileName: req.Msg.GetProfileName(), ProfileDigest: req.Msg.GetProfileDigest(),
 		Prompt: req.Msg.GetPrompt(), Command: req.Msg.GetCommand(), OwnerFingerprint: owner,
+		ImageRef: policy.ImageRef, ResourcesEnable: policy.ResourcesEnable,
+		CPUCores: policy.CPUCores, MemoryBytes: policy.MemoryBytes, EgressEnable: policy.EgressEnable,
 		CredentialRequired: req.Msg.GetCredentialRequired(), CredentialProvider: req.Msg.GetCredentialProvider(),
 	})
 	if err != nil {
 		h.bindMu.Unlock()
 		return nil, agentRunError(err)
+	}
+	if !created {
+		h.bindMu.Unlock()
+		return connect.NewResponse(mapAgentRun(run)), nil
 	}
 	nextState := agentruncatalog.StateStarting
 	message := "sandbox assigned"
@@ -186,6 +193,10 @@ func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentr
 		h.markCredentialWait(run.UUID)
 		return connect.NewResponse(mapAgentRun(run)), nil
 	}
+	return h.startBoundRun(ctx, owner, run)
+}
+
+func (h *AgentRunHandler) startBoundRun(ctx context.Context, owner identity.Fingerprint, run agentruncatalog.Run) (*connect.Response[agentrunv1.AgentRun], error) {
 	command := append([]string(nil), run.Command...)
 	if run.Prompt != "" {
 		command = append(command, run.Prompt)
@@ -197,11 +208,73 @@ func (h *AgentRunHandler) Start(ctx context.Context, req *connect.Request[agentr
 		// with the same Node idempotency key.
 		return connect.NewResponse(mapAgentRun(run)), nil //nolint:nilerr // durable STARTING is the successful, retryable result
 	}
-	run, err = recordJobRunning(h.store, owner, run.UUID, job.ID, "job started")
+	run, err := recordJobRunning(h.store, owner, run.UUID, job.ID, "job started")
 	if err != nil {
 		return nil, agentRunError(err)
 	}
 	return connect.NewResponse(mapAgentRun(run)), nil
+}
+
+func (h *AgentRunHandler) startPolicy(req *agentrunv1.StartAgentRunRequest) (AgentSandboxPolicy, error) {
+	if !canonicalUUID(req.GetRequestId()) {
+		return AgentSandboxPolicy{}, connect.NewError(connect.CodeInvalidArgument, errors.New("orchestrator: request_id must be a canonical UUID"))
+	}
+	policy, err := agentSandboxPolicy(req)
+	if err != nil {
+		return AgentSandboxPolicy{}, err
+	}
+	if h.workspaces == nil || h.nodes == nil || h.starter == nil {
+		return AgentSandboxPolicy{}, connect.NewError(connect.CodeFailedPrecondition, errors.New("orchestrator: AgentRun start controller is not configured"))
+	}
+	return policy, nil
+}
+
+func (h *AgentRunHandler) findAgentRunRetry(owner identity.Fingerprint, req *agentrunv1.StartAgentRunRequest) (*connect.Response[agentrunv1.AgentRun], bool, error) {
+	existing, err := h.store.GetByRequest(owner, req.GetRequestId())
+	if errors.Is(err, agentruncatalog.ErrNotFound) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, agentRunError(err)
+	}
+	if !sameAgentStart(existing, req) {
+		return nil, true, connect.NewError(connect.CodeAlreadyExists, errors.New("orchestrator: request_id was already used for different AgentRun inputs"))
+	}
+	return connect.NewResponse(mapAgentRun(existing)), true, nil
+}
+
+func sameAgentStart(run agentruncatalog.Run, req *agentrunv1.StartAgentRunRequest) bool {
+	return run.RequestID == req.GetRequestId() &&
+		run.WorkspaceUUID == req.GetWorkspaceUuid() &&
+		run.ProfileName == req.GetProfileName() &&
+		run.ProfileDigest == req.GetProfileDigest() &&
+		run.ImageRef == req.GetImageRef() &&
+		run.ResourcesEnable == req.GetResources().GetEnable() &&
+		run.CPUCores == req.GetResources().GetCpuCores() &&
+		run.MemoryBytes == req.GetResources().GetMemoryBytes() &&
+		run.EgressEnable == req.GetEgress().GetEnable() &&
+		run.Prompt == req.GetPrompt() &&
+		slices.Equal(run.Command, req.GetCommand()) &&
+		run.CredentialRequired == req.GetCredentialRequired() &&
+		run.CredentialProvider == req.GetCredentialProvider()
+}
+
+func canonicalUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i, char := range value {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if char != '-' {
+				return false
+			}
+			continue
+		}
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func agentSandboxPolicy(req *agentrunv1.StartAgentRunRequest) (AgentSandboxPolicy, error) {
