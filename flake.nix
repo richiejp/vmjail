@@ -39,12 +39,13 @@
         crunSrc = fetchSubmodule "crun";
 
         # goSrc is the project source as Go's tooling sees it. We
-        # drop the whole third_party/ tree — none of it is reachable
+        # drop the whole third_party/, vendor/, and agent-skill trees — none is reachable
         # from our Go build, and including it would (a) drag the
         # ~1.9 GB linux + u-root checkouts into every flake eval, and
         # (b) re-introduce the stray Go file in third_party/crun's
         # libocispec/runtime-spec/schema/ that pulls in a module dep
-        # we don't want in go.sum. The kernel-config fragment and
+        # we don't want in go.sum. PLAN.md is likewise not a build input.
+        # The kernel-config fragment and
         # submodule-revs.json under third_party/ are read by other
         # derivations directly, not via goSrc. Lives in the `let`
         # rather than under `packages` because it is a source, not a
@@ -54,7 +55,10 @@
           src = ./.;
           filter = path: type:
             let name = baseNameOf path;
-            in !(type == "directory" && (name == "third_party" || name == "vendor"));
+            in !(
+              (type == "directory" && (name == "third_party" || name == "vendor" || name == ".agents"))
+              || name == "PLAN.md"
+            );
         };
 
         # The kernel depends on kconfig-verify, but that tiny build-time tool

@@ -132,6 +132,10 @@ Landed:
 - Real-Node-loss proof: terminating the registered sandboxd while its job is
   running leaves MCP/orchestrator available, reports the Node disconnected,
   and durably resolves the affected AgentRun and result as `LOST`.
+- Deterministic partial-fleet deployment proof: successful Nodes retain one
+  rollback generation, a later Node's failed post-stage validation restores
+  its old release, and rolling back only the changed subset reconverges the
+  fleet.
 
 Remaining:
 
@@ -177,7 +181,8 @@ maintainability requirements.
 - MCP and observability APIs must paginate or cap potentially unbounded output.
 - Keep Nix derivation source closures narrow. In particular, the kernel's
   `kconfig-verify` dependency includes only its command/package and module
-  metadata, so unrelated code, test, plan, or skill edits do not rebuild Linux.
+  metadata, while general Go packages exclude agent skills and this plan, so
+  unrelated plan or skill edits do not rebuild Linux or production Go images.
 
 ## Open design questions
 

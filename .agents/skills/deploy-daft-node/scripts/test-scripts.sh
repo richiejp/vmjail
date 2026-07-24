@@ -88,6 +88,32 @@ digest_v4=$(digest_file "$failing")
 expect_failure 'post-rename execution' "$scripts/stage-release.sh" "$failing" "$tmp/daft" "$digest_v4" v4
 [ "$("$tmp/daft" version)" = v1 ] || fail 'post-rename execution failure did not restore v1'
 
+# Partial fleet upgrades preserve a deterministic rollback boundary. Two Nodes
+# accept v2 while the third fails post-stage and restores v1; rolling back only
+# the changed subset returns the whole fleet to v1.
+for node in a b c; do
+    mkdir -p "$tmp/fleet-$node"
+    make_artifact "$tmp/fleet-$node/upload" v1
+    "$scripts/stage-release.sh" "$tmp/fleet-$node/upload" "$tmp/fleet-$node/daft" "$digest_v1" v1 >/dev/null
+done
+for node in a b; do
+    make_artifact "$tmp/fleet-$node/upload" v2
+    "$scripts/stage-release.sh" "$tmp/fleet-$node/upload" "$tmp/fleet-$node/daft" "$digest_v2" v2 >/dev/null
+done
+fleet_counter="$tmp/fleet-c/version-count"
+fleet_failing="$tmp/fleet-c/upload"
+printf '#!/bin/sh\n[ "$1" = version ] || exit 2\nn=0; [ ! -f %s ] || n=$(cat %s); n=$((n + 1)); printf "%%s" "$n" > %s; if [ "$n" -eq 1 ]; then echo v2; else echo corrupt; fi\n' "$fleet_counter" "$fleet_counter" "$fleet_counter" > "$fleet_failing"
+chmod 0755 "$fleet_failing"
+fleet_bad_digest=$(digest_file "$fleet_failing")
+expect_failure 'partial fleet node c' "$scripts/stage-release.sh" "$fleet_failing" "$tmp/fleet-c/daft" "$fleet_bad_digest" v2
+[ "$("$tmp/fleet-a/daft" version)" = v2 ]
+[ "$("$tmp/fleet-b/daft" version)" = v2 ]
+[ "$("$tmp/fleet-c/daft" version)" = v1 ]
+for node in a b; do
+    "$scripts/stage-release.sh" --rollback "$tmp/fleet-$node/daft"
+    [ "$("$tmp/fleet-$node/daft" version)" = v1 ]
+done
+
 # Every documented supervisor strategy must keep the daemon in the foreground
 # with the same argument contract. The overseer still owns service-file syntax.
 service="$tmp/service"
