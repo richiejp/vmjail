@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -63,27 +64,7 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 	)
 
 	profilePath := writeMCPAgentProfile(t, imageRef)
-	var stderr bytes.Buffer
-	processCtx, cancelProcess := context.WithCancel(context.Background())
-	t.Cleanup(cancelProcess)
-	command := exec.CommandContext(
-		processCtx, cluster.MCPBin, //nolint:gosec // test-owned binary and paths.
-		"--orchestrator", cluster.OrchestratorURL,
-		"--config-dir", cluster.ClientConfigDir,
-		"--project-dir", projectDir,
-		"--agent-profiles", profilePath,
-	)
-	command.Stderr = &stderr
-	client := mcp.NewClient(&mcp.Implementation{Name: "daft-integration", Version: "test"}, nil)
-	session, err := client.Connect(processCtx, &mcp.CommandTransport{Command: command}, nil)
-	if err != nil {
-		t.Fatalf("connect to daft-mcp: %v\n%s", err, stderr.String())
-	}
-	t.Cleanup(func() {
-		if err := session.Close(); err != nil {
-			t.Errorf("close MCP session: %v\n%s", err, stderr.String())
-		}
-	})
+	session, stopMCP, stderr := startMCP(t, cluster, projectDir, profilePath)
 
 	workspaceList := callMCPTool(t, session, "workspace_list", map[string]any{})
 	workspaceUUID := findWorkspaceUUID(t, workspaceList, workspaceName)
@@ -98,19 +79,33 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 	if !ok || numberField(t, firstMount, "entries") == 0 {
 		t.Fatalf("workspace_push mount result = %#v", mounts[0])
 	}
-	started := callMCPTool(t, session, "agent_start", map[string]any{
+	startArgs := map[string]any{
 		"request_id":     "123e4567-e89b-42d3-a456-426614174000",
 		"workspace_uuid": workspaceUUID,
 		"profile_name":   "integration",
-		"prompt":         "cat /workspace/input.txt && printf 'MCP-AGENT-OK\\n'",
-	})
+		"prompt":         "sleep 2; cat /workspace/input.txt && printf 'MCP-AGENT-OK\\n'",
+	}
+	started := callMCPTool(t, session, "agent_start", startArgs)
 	runUUID := stringField(t, mapField(t, started, "run"), "uuid")
 	if runUUID == "" {
 		t.Fatal("agent_start returned an empty run UUID")
 	}
 
 	deadline := time.Now().Add(90 * time.Second)
-	after := uint64(0)
+	initialEvents := callMCPTool(t, session, "agent_events", map[string]any{
+		"uuid": runUUID, "after_cursor": 0, "limit": 1,
+	})
+	after := uint64(numberField(t, initialEvents, "next_cursor"))
+	stopMCP()
+
+	// A fresh MCP process has no in-memory knowledge of the first request.
+	// Retrying the exact caller UUID must converge through durable orchestrator
+	// state, and cursor polling must resume without replaying the first page.
+	session, _, stderr = startMCP(t, cluster, projectDir, profilePath)
+	retried := callMCPTool(t, session, "agent_start", startArgs)
+	if got := stringField(t, mapField(t, retried, "run"), "uuid"); got != runUUID {
+		t.Fatalf("agent_start after MCP restart returned %q, want %q", got, runUUID)
+	}
 	var terminal bool
 	for !terminal && time.Now().Before(deadline) {
 		events := callMCPTool(t, session, "agent_events", map[string]any{
@@ -153,6 +148,37 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("terminal AgentRun did not clear Workspace Sandbox binding\n%s", stderr.String())
+}
+
+func startMCP(t *testing.T, cluster *testdaemons.Cluster, projectDir, profilePath string) (*mcp.ClientSession, func(), *bytes.Buffer) {
+	t.Helper()
+	var stderr bytes.Buffer
+	processCtx, cancelProcess := context.WithCancel(context.Background())
+	command := exec.CommandContext(
+		processCtx, cluster.MCPBin, //nolint:gosec // test-owned binary and paths.
+		"--orchestrator", cluster.OrchestratorURL,
+		"--config-dir", cluster.ClientConfigDir,
+		"--project-dir", projectDir,
+		"--agent-profiles", profilePath,
+	)
+	command.Stderr = &stderr
+	client := mcp.NewClient(&mcp.Implementation{Name: "daft-integration", Version: "test"}, nil)
+	session, err := client.Connect(processCtx, &mcp.CommandTransport{Command: command}, nil)
+	if err != nil {
+		cancelProcess()
+		t.Fatalf("connect to daft-mcp: %v\n%s", err, stderr.String())
+	}
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			if err := session.Close(); err != nil {
+				t.Errorf("close MCP session: %v\n%s", err, stderr.String())
+			}
+			cancelProcess()
+		})
+	}
+	t.Cleanup(stop)
+	return session, stop, &stderr
 }
 
 func runDaft(t *testing.T, cluster *testdaemons.Cluster, args ...string) {

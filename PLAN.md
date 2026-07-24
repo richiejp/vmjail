@@ -123,6 +123,9 @@ Landed:
 - Validated overseer workflow skill composing adaptive Node deployment with
   retry-safe Workspace and AgentRun MCP operations, durable cursor recovery,
   bounded monitoring, and verified teardown.
+- Real-VM MCP restart/resume proof: a fresh `daft-mcp` process retries the
+  caller request UUID to the same durable AgentRun and resumes event polling
+  from the previously observed cursor through result and teardown.
 
 Remaining:
 
