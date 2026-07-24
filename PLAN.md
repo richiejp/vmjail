@@ -126,6 +126,9 @@ Landed:
 - Real-VM MCP restart/resume proof: a fresh `daft-mcp` process retries the
   caller request UUID to the same durable AgentRun and resumes event polling
   from the previously observed cursor through result and teardown.
+- Real-VM cancellation proof: MCP stops an indefinitely running Node job,
+  repeated cancellation converges, durable state/result become `CANCELED`, and
+  terminal reconciliation tears down the exact Sandbox.
 
 Remaining:
 

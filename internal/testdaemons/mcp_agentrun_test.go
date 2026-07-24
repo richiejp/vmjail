@@ -136,10 +136,46 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 	if got := stringField(t, result, "result"); !strings.Contains(got, "MCP-PUSH-OK") {
 		t.Fatalf("agent_result = %q, want pushed-file sentinel; result=%#v", got, result)
 	}
+	waitWorkspaceStopped(t, session, workspaceUUID, deadline, stderr)
 
-	// Terminal reconciliation must also tear down the exact Sandbox and clear
-	// the Workspace binding. Poll through MCP so this assertion covers the
-	// public resume/status boundary rather than reaching into daemon state.
+	// Launch a second real Sandbox and prove an indefinitely running Node job
+	// can be canceled through the public MCP surface. Both cancellation and
+	// teardown retries must converge.
+	canceledRun := mapField(t, callMCPTool(t, session, "agent_start", map[string]any{
+		"request_id":     "223e4567-e89b-42d3-a456-426614174000",
+		"workspace_uuid": workspaceUUID,
+		"profile_name":   "integration",
+		"prompt":         "printf 'MCP-CANCEL-READY\\n'; sleep 300",
+	}), "run")
+	canceledUUID := stringField(t, canceledRun, "uuid")
+	waitAgentState(t, session, canceledUUID, "AGENT_RUN_STATE_RUNNING", deadline, stderr)
+	firstCancel := mapField(t, callMCPTool(t, session, "agent_cancel", map[string]any{"uuid": canceledUUID}), "run")
+	secondCancel := mapField(t, callMCPTool(t, session, "agent_cancel", map[string]any{"uuid": canceledUUID}), "run")
+	if stringField(t, firstCancel, "uuid") != canceledUUID || stringField(t, secondCancel, "uuid") != canceledUUID {
+		t.Fatalf("idempotent cancel returned wrong run: first=%#v second=%#v", firstCancel, secondCancel)
+	}
+	waitAgentState(t, session, canceledUUID, "AGENT_RUN_STATE_CANCELED", deadline, stderr)
+	canceledResult := callMCPTool(t, session, "agent_result", map[string]any{"uuid": canceledUUID})
+	if got := stringField(t, canceledResult, "state"); got != "AGENT_RUN_STATE_CANCELED" {
+		t.Fatalf("canceled agent_result state = %q; result=%#v", got, canceledResult)
+	}
+	waitWorkspaceStopped(t, session, workspaceUUID, deadline, stderr)
+}
+
+func waitAgentState(t *testing.T, session *mcp.ClientSession, uuid, want string, deadline time.Time, stderr *bytes.Buffer) {
+	t.Helper()
+	for time.Now().Before(deadline) {
+		run := mapField(t, callMCPTool(t, session, "agent_status", map[string]any{"uuid": uuid}), "run")
+		if stringField(t, run, "state") == want {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("AgentRun %s did not reach %s\n%s", uuid, want, stderr.String())
+}
+
+func waitWorkspaceStopped(t *testing.T, session *mcp.ClientSession, workspaceUUID string, deadline time.Time, stderr *bytes.Buffer) {
+	t.Helper()
 	for time.Now().Before(deadline) {
 		workspace := mapField(t, callMCPTool(t, session, "workspace_get", map[string]any{"uuid": workspaceUUID}), "workspace")
 		if _, present := workspace["current_sandbox_uuid"]; !present {
