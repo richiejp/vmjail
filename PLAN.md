@@ -160,11 +160,17 @@ Landed:
   reuses the existing authenticated PTY frame transport where possible but
   does not pretend the current detached, output-only AgentRun job is
   attachable.
+- Strict-SSH/KVM proof of the full overseer recipe: inspect and checksum the
+  static artifact, probe the host, atomically stage and retry the release,
+  establish mutual trust, register the Node, survive a daemon restart with its
+  identity intact, apply and push a Node-pinned Workspace, start and retry the
+  same AgentRun across an MCP restart, resume from its durable event cursor,
+  collect its result, and verify teardown. The test uses a temporary `nohup`
+  supervisor because it is an isolated fixture; production supervisor choice
+  remains adaptive in the deployment skill.
 
-Remaining:
-
-- Prove the full overseer recipe across a remote Node: install, trust,
-  apply/push, start, poll/result, teardown, retry, and recovery.
+No implementation work remains in this milestone. Direct interactive takeover
+is intentionally deferred under the contract below.
 
 ## Deferred direct AgentRun takeover contract
 
