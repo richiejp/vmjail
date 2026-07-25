@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -38,6 +39,10 @@ const (
 const (
 	maxWorkspaceItems = 256
 	maxWorkspaceBytes = 1 << 20
+	defaultTailBytes  = 64 << 10
+	maxTailBytes      = 256 << 10
+	defaultTailLines  = 50
+	maxTailLines      = 200
 )
 
 const (
@@ -68,6 +73,7 @@ const (
 	agentCancelTool       = "agent_cancel"
 	agentResultTool       = "agent_result"
 	observerSummaryTool   = "sandbox_observer_summary"
+	observerTailTool      = "sandbox_observer_tail"
 )
 
 type Reader interface {
@@ -87,6 +93,7 @@ type Reader interface {
 	CancelAgentRun(context.Context, string) (AgentRun, error)
 	StartAgentRun(context.Context, string, string, agentprofile.Entry, string) (AgentRun, error)
 	ObserveSummary(context.Context, string) (ObserverSummary, error)
+	ObserverTail(context.Context, string, int, int) (ObserverTail, error)
 }
 
 type Node struct {
@@ -201,6 +208,13 @@ type ObserverSummary struct {
 	Summary   *progress.Summary `json:"summary,omitempty"`
 }
 
+type ObserverTail struct {
+	Data      string `json:"data"`
+	Bytes     int    `json:"bytes"`
+	Lines     int    `json:"lines"`
+	Truncated bool   `json:"truncated"`
+}
+
 type listNodesOutput struct {
 	Nodes      []Node `json:"nodes"`
 	Truncated  bool   `json:"truncated"`
@@ -301,6 +315,12 @@ type agentEventsInput struct {
 	Limit       uint32 `json:"limit,omitempty" jsonschema:"maximum events to return, 1 to 200; default 50"`
 }
 
+type observerTailInput struct {
+	UUID     string `json:"uuid" jsonschema:"canonical Workspace UUID"`
+	MaxBytes uint32 `json:"max_bytes,omitempty" jsonschema:"maximum retained output bytes, 1 to 262144; default 65536"`
+	MaxLines uint32 `json:"max_lines,omitempty" jsonschema:"maximum retained lines, 1 to 200; default 50"`
+}
+
 type (
 	agentRunOutput struct {
 		Run AgentRun `json:"run"`
@@ -332,6 +352,7 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 	addAgentProfileListTool(server, annotations, profiles)
 	addAgentRunTools(server, annotations, reader, profiles)
 	addObserverSummaryTool(server, annotations, reader)
+	addObserverTailTool(server, annotations, reader)
 	mcp.AddTool(server, &mcp.Tool{Name: nodeListTool, Description: "List a bounded, cursor-resumable page of live daft Nodes visible to the orchestrator.", Annotations: annotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, listNodesOutput, error) {
 			nodes, next, truncated, err := readPage(ctx, reader.ListNodes, input, func(node Node) string { return node.Fingerprint })
@@ -394,6 +415,44 @@ func addObserverSummaryTool(server *mcp.Server, annotations *mcp.ToolAnnotations
 		}
 		return nil, summary, nil
 	})
+}
+
+func addObserverTailTool(server *mcp.Server, annotations *mcp.ToolAnnotations, reader Reader) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        observerTailTool,
+		Description: "Read a byte/line-capped tail snapshot of one owned Workspace's running Sandbox observer log.",
+		Annotations: annotations,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input observerTailInput) (*mcp.CallToolResult, ObserverTail, error) {
+		maxBytes, maxLines, err := observerTailLimits(input)
+		if err != nil {
+			return nil, ObserverTail{}, err
+		}
+		tail, err := reader.ObserverTail(ctx, input.UUID, maxBytes, maxLines)
+		if err != nil {
+			return nil, ObserverTail{}, fmt.Errorf("tail Sandbox observer: %w", err)
+		}
+		return nil, tail, nil
+	})
+}
+
+func observerTailLimits(input observerTailInput) (maxBytes, maxLines int, err error) {
+	if input.UUID == "" {
+		return 0, 0, fmt.Errorf("uuid is required")
+	}
+	if input.MaxBytes > maxTailBytes {
+		return 0, 0, fmt.Errorf("max_bytes exceeds %d", maxTailBytes)
+	}
+	if input.MaxLines > maxTailLines {
+		return 0, 0, fmt.Errorf("max_lines exceeds %d", maxTailLines)
+	}
+	maxBytes, maxLines = int(input.MaxBytes), int(input.MaxLines)
+	if maxBytes == 0 {
+		maxBytes = defaultTailBytes
+	}
+	if maxLines == 0 {
+		maxLines = defaultTailLines
+	}
+	return maxBytes, maxLines, nil
 }
 
 func addWorkspaceTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations, reader Reader) {
@@ -697,6 +756,7 @@ type workspaceReader interface {
 	Launch(context.Context, *connect.Request[workspacev1.LaunchRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error)
 	Stop(context.Context, *connect.Request[workspacev1.StopRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error)
 	ObserveSummary(context.Context, *connect.Request[workspacev1.ObserveSummaryRequest]) (*connect.Response[workspacev1.ObserveSummaryResponse], error)
+	ObserverTail(context.Context, *connect.Request[workspacev1.ObserverTailRequest]) (*connect.ServerStreamForClient[workspacev1.ObserverChunk], error)
 }
 
 type operatorClient interface {
@@ -832,6 +892,73 @@ func (r ConnectReader) ObserveSummary(ctx context.Context, uuid string) (Observe
 		return ObserverSummary{}, err
 	}
 	return ObserverSummary{Available: true, Summary: &summary}, nil
+}
+
+func (r ConnectReader) ObserverTail(ctx context.Context, uuid string, maxBytes, maxLines int) (ObserverTail, error) {
+	stream, err := r.workspace.ObserverTail(ctx, connect.NewRequest(&workspacev1.ObserverTailRequest{
+		Workspace: workspaceUUIDHandle(uuid),
+		Follow:    false,
+	}))
+	if err != nil {
+		return ObserverTail{}, err
+	}
+	if stream == nil {
+		return ObserverTail{}, fmt.Errorf("mcpserver: observer tail returned a nil stream")
+	}
+	defer func() { _ = stream.Close() }()
+	return drainObserverTail(stream, maxBytes, maxLines)
+}
+
+type observerTailStream interface {
+	Receive() bool
+	Msg() *workspacev1.ObserverChunk
+	Err() error
+}
+
+func drainObserverTail(stream observerTailStream, maxBytes, maxLines int) (ObserverTail, error) {
+	var retained []byte
+	truncated := false
+	for stream.Receive() {
+		retained, truncated = retainLastBytes(retained, stream.Msg().GetData(), maxBytes, truncated)
+	}
+	if err := stream.Err(); err != nil {
+		return ObserverTail{}, err
+	}
+	return finishObserverTail(retained, maxLines, truncated), nil
+}
+
+func retainLastBytes(retained, chunk []byte, maxBytes int, truncated bool) ([]byte, bool) {
+	if len(chunk) >= maxBytes {
+		return append(retained[:0], chunk[len(chunk)-maxBytes:]...), true
+	}
+	overflow := len(retained) + len(chunk) - maxBytes
+	if overflow > 0 {
+		copy(retained, retained[overflow:])
+		retained = retained[:len(retained)-overflow]
+		truncated = true
+	}
+	return append(retained, chunk...), truncated
+}
+
+func finishObserverTail(retained []byte, maxLines int, byteTruncated bool) ObserverTail {
+	text := strings.TrimRight(string(retained), "\n")
+	if byteTruncated {
+		if firstNewline := strings.IndexByte(text, '\n'); firstNewline >= 0 {
+			text = text[firstNewline+1:]
+		} else {
+			text = ""
+		}
+	}
+	if text == "" {
+		return ObserverTail{Truncated: byteTruncated}
+	}
+	lines := strings.Split(text, "\n")
+	lineTruncated := len(lines) > maxLines
+	if lineTruncated {
+		lines = lines[len(lines)-maxLines:]
+	}
+	text = strings.Join(lines, "\n")
+	return ObserverTail{Data: text, Bytes: len(text), Lines: len(lines), Truncated: byteTruncated || lineTruncated}
 }
 
 func (r ConnectReader) CancelAgentRun(ctx context.Context, uuid string) (AgentRun, error) {

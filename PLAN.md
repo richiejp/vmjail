@@ -150,14 +150,17 @@ Landed:
   output. This is the planned progress-get surface as well as the observer
   summary; a second alias would expose identical data without adding a
   capability.
+- `sandbox_observer_tail` drains the existing ownership-checked one-shot
+  observer stream into a rolling tail buffer on the trusted MCP host. Defaults
+  are 64 KiB/50 lines, hard maxima are 256 KiB/200 lines, partial leading
+  records are discarded after byte rollover, and only the bounded final
+  snapshot enters MCP output. Real-MCP/KVM coverage exercises both
+  observability tools against a live AgentRun.
 
 Remaining:
 
 - Prove the full overseer recipe across a remote Node: install, trust,
   apply/push, start, poll/result, teardown, retry, and recovery.
-- Add an ownership-safe, server-side byte/line-capped MCP observer tail.
-  Future trace/query surfaces must be cursor-paginated server-side before
-  exposure.
 - Document takeover requirements for a future terminal/web attachment path;
   direct interactive control remains deferred.
 

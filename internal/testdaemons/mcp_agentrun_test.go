@@ -150,6 +150,7 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 	canceledUUID := stringField(t, canceledRun, "uuid")
 	waitAgentState(t, session, canceledUUID, "AGENT_RUN_STATE_RUNNING", deadline, stderr)
 	waitObserverSummary(t, session, workspaceUUID, deadline, stderr)
+	waitObserverTail(t, session, workspaceUUID, deadline, stderr)
 	firstCancel := mapField(t, callMCPTool(t, session, "agent_cancel", map[string]any{"uuid": canceledUUID}), "run")
 	secondCancel := mapField(t, callMCPTool(t, session, "agent_cancel", map[string]any{"uuid": canceledUUID}), "run")
 	if stringField(t, firstCancel, "uuid") != canceledUUID || stringField(t, secondCancel, "uuid") != canceledUUID {
@@ -180,6 +181,34 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 	if got := stringField(t, lostResult, "state"); got != "AGENT_RUN_STATE_LOST" {
 		t.Fatalf("lost agent_result state = %q; result=%#v", got, lostResult)
 	}
+}
+
+func waitObserverTail(t *testing.T, session *mcp.ClientSession, workspaceUUID string, deadline time.Time, stderr *bytes.Buffer) {
+	t.Helper()
+	var last string
+	for time.Now().Before(deadline) {
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+			Name: "sandbox_observer_tail",
+			Arguments: map[string]any{
+				"uuid": workspaceUUID, "max_bytes": 4096, "max_lines": 2,
+			},
+		})
+		if err == nil && !result.IsError {
+			output, ok := result.StructuredContent.(map[string]any)
+			if ok {
+				data, _ := output["data"].(string)
+				byteCount, _ := output["bytes"].(float64)
+				lineCount, _ := output["lines"].(float64)
+				if data != "" && byteCount > 0 && byteCount <= 4096 && lineCount > 0 && lineCount <= 2 {
+					return
+				}
+			}
+		}
+		content, _ := json.Marshal(result)
+		last = string(content)
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("bounded Sandbox observer tail did not become available: %s\n%s", last, stderr.String())
 }
 
 func waitObserverSummary(t *testing.T, session *mcp.ClientSession, workspaceUUID string, deadline time.Time, stderr *bytes.Buffer) {

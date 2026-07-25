@@ -78,6 +78,32 @@ type fakeReader struct {
 	pushResult       daftclient.WorkspacePushResult
 	observerSummary  ObserverSummary
 	observerErr      error
+	observerTail     ObserverTail
+	tailUUID         string
+	tailBytes        int
+	tailLines        int
+}
+
+type fakeObserverTailStream struct {
+	chunks [][]byte
+	index  int
+	err    error
+}
+
+func (f *fakeObserverTailStream) Receive() bool {
+	if f.index >= len(f.chunks) {
+		return false
+	}
+	f.index++
+	return true
+}
+
+func (f *fakeObserverTailStream) Msg() *workspacev1.ObserverChunk {
+	return &workspacev1.ObserverChunk{Data: f.chunks[f.index-1]}
+}
+
+func (f *fakeObserverTailStream) Err() error {
+	return f.err
 }
 
 func TestCanonicalUUID(t *testing.T) {
@@ -112,6 +138,11 @@ func (f *fakeReader) CancelAgentRun(context.Context, string) (AgentRun, error) {
 
 func (f *fakeReader) ObserveSummary(context.Context, string) (ObserverSummary, error) {
 	return f.observerSummary, f.observerErr
+}
+
+func (f *fakeReader) ObserverTail(_ context.Context, uuid string, maxBytes, maxLines int) (ObserverTail, error) {
+	f.tailUUID, f.tailBytes, f.tailLines = uuid, maxBytes, maxLines
+	return f.observerTail, f.observerErr
 }
 
 func TestAgentProfileListIsSortedAndOmitsCredentialProfileName(t *testing.T) {
@@ -279,7 +310,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, observerSummaryTool, workspaceApplyTool, workspaceGetTool, workspaceLaunchTool, workspaceListTool, workspacePushTool, workspaceStatusTool, workspaceStopTool, workspaceValidateTool}
+	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, observerSummaryTool, observerTailTool, workspaceApplyTool, workspaceGetTool, workspaceLaunchTool, workspaceListTool, workspacePushTool, workspaceStatusTool, workspaceStopTool, workspaceValidateTool}
 	if len(result.Tools) != len(wantNames) {
 		t.Fatalf("got %d tools, want %d", len(result.Tools), len(wantNames))
 	}
@@ -519,6 +550,66 @@ func TestNodeMutationToolsValidateAndReturnStatus(t *testing.T) {
 	invalid, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: nodeStatusTool, Arguments: map[string]any{fingerprintKey: "bad"}})
 	if err != nil || !invalid.IsError {
 		t.Fatalf("invalid fingerprint = %#v, %v; want tool error", invalid, err)
+	}
+}
+
+func TestObserverTailAppliesDefaultsAndBounds(t *testing.T) {
+	reader := &fakeReader{observerTail: ObserverTail{Data: "sample", Bytes: 6, Lines: 1}}
+	session := connectClient(t, reader)
+	output := requireMap(t, callTool(t, session, observerTailTool, map[string]any{uuidKey: mcpTestWorkspace}).StructuredContent)
+	if output["data"] != "sample" || reader.tailUUID != mcpTestWorkspace || reader.tailBytes != defaultTailBytes || reader.tailLines != defaultTailLines {
+		t.Fatalf("observer tail = %#v; request=%q/%d/%d", output, reader.tailUUID, reader.tailBytes, reader.tailLines)
+	}
+	for name, args := range map[string]map[string]any{
+		"bytes": {uuidKey: mcpTestWorkspace, "max_bytes": maxTailBytes + 1},
+		"lines": {uuidKey: mcpTestWorkspace, "max_lines": maxTailLines + 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: observerTailTool, Arguments: args})
+			if err != nil || !result.IsError {
+				t.Fatalf("result = %#v, err = %v; want tool error", result, err)
+			}
+		})
+	}
+	result, err := connectClient(t, &fakeReader{observerErr: errors.New("offline")}).CallTool(t.Context(), &mcp.CallToolParams{
+		Name: observerTailTool, Arguments: map[string]any{uuidKey: mcpTestWorkspace},
+	})
+	if err != nil || !result.IsError {
+		t.Fatalf("read error result = %#v, err = %v; want tool error", result, err)
+	}
+}
+
+func TestObserverTailRetention(t *testing.T) {
+	var retained []byte
+	truncated := false
+	for _, chunk := range [][]byte{[]byte("one\n"), []byte("two\n"), []byte("three\n")} {
+		retained, truncated = retainLastBytes(retained, chunk, 8, truncated)
+	}
+	tail := finishObserverTail(retained, 10, truncated)
+	if tail.Data != "three" || tail.Bytes != 5 || tail.Lines != 1 || !tail.Truncated {
+		t.Fatalf("byte-capped tail = %#v", tail)
+	}
+
+	retained, truncated = retainLastBytes(nil, []byte("one\ntwo\nthree\n"), 100, false)
+	tail = finishObserverTail(retained, 2, truncated)
+	if tail.Data != "two\nthree" || tail.Bytes != 9 || tail.Lines != 2 || !tail.Truncated {
+		t.Fatalf("line-capped tail = %#v", tail)
+	}
+
+	retained, truncated = retainLastBytes(nil, []byte("long-fragment"), 4, false)
+	tail = finishObserverTail(retained, 2, truncated)
+	if tail.Data != "" || !tail.Truncated {
+		t.Fatalf("partial-line tail = %#v", tail)
+	}
+
+	stream := &fakeObserverTailStream{chunks: [][]byte{[]byte("one\n"), []byte("two\n"), []byte("three\n")}}
+	tail, err := drainObserverTail(stream, 100, 2)
+	if err != nil || tail.Data != "two\nthree" {
+		t.Fatalf("drainObserverTail = %#v, %v", tail, err)
+	}
+	wantErr := errors.New("stream failed")
+	if _, err := drainObserverTail(&fakeObserverTailStream{err: wantErr}, 100, 2); !errors.Is(err, wantErr) {
+		t.Fatalf("drainObserverTail error = %v, want %v", err, wantErr)
 	}
 }
 
@@ -866,6 +957,10 @@ func (f *fakeWorkspaceReader) ObserveSummary(_ context.Context, request *connect
 	return connect.NewResponse(&workspacev1.ObserveSummaryResponse{Summary: f.summary}), f.err
 }
 
+func (f *fakeWorkspaceReader) ObserverTail(context.Context, *connect.Request[workspacev1.ObserverTailRequest]) (*connect.ServerStreamForClient[workspacev1.ObserverChunk], error) {
+	return nil, f.err
+}
+
 func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	protoWorkspace := &workspacev1.Workspace{Metadata: &workspacev1.WorkspaceMetadata{Uuid: mcpTestWorkspace}}
 	summaryData, err := progress.Marshal(progress.Summary{TakenAtUnixMs: 42})
@@ -960,6 +1055,13 @@ func TestConnectReaderObserveSummaryEdgeCases(t *testing.T) {
 	workspaces.err = wantErr
 	if _, err := reader.ObserveSummary(t.Context(), mcpTestWorkspace); !errors.Is(err, wantErr) {
 		t.Fatalf("ObserveSummary error = %v, want %v", err, wantErr)
+	}
+	if _, err := reader.ObserverTail(t.Context(), mcpTestWorkspace, 100, 2); !errors.Is(err, wantErr) {
+		t.Fatalf("ObserverTail error = %v, want %v", err, wantErr)
+	}
+	workspaces.err = nil
+	if _, err := reader.ObserverTail(t.Context(), mcpTestWorkspace, 100, 2); err == nil {
+		t.Fatal("nil ObserverTail stream succeeded")
 	}
 }
 
