@@ -156,13 +156,65 @@ Landed:
   records are discarded after byte rollover, and only the bounded final
   snapshot enters MCP output. Real-MCP/KVM coverage exercises both
   observability tools against a live AgentRun.
+- The future direct-takeover contract is specified below. It deliberately
+  reuses the existing authenticated PTY frame transport where possible but
+  does not pretend the current detached, output-only AgentRun job is
+  attachable.
 
 Remaining:
 
 - Prove the full overseer recipe across a remote Node: install, trust,
   apply/push, start, poll/result, teardown, retry, and recovery.
-- Document takeover requirements for a future terminal/web attachment path;
-  direct interactive control remains deferred.
+
+## Deferred direct AgentRun takeover contract
+
+Direct terminal/browser takeover remains out of the current milestone. The
+existing `WorkspaceCatalogService.AttachSandbox` path already provides an
+ownership-checked, mTLS-authenticated bidirectional PTY frame stream with
+input, output, resize, and terminal exit propagation through the orchestrator
+and Node. It is not an AgentRun takeover primitive: every attach starts a new
+arbitrary process, while AgentRuns use the separate detached Job protocol,
+which is non-PTY and output-only after its Hello frame. Closing that job stream
+is cancellation, so it cannot be upgraded safely into an interactive session.
+
+A future implementation must satisfy all of the following:
+
+- Launch an explicitly takeover-capable AgentProfile under a retained PTY (or
+  equivalent terminal multiplexer) from the beginning. The durable AgentRun
+  records its terminal-session identifier; no API may claim an existing
+  output-only job can become interactive.
+- Address takeover by AgentRun UUID. The orchestrator must resolve and verify
+  the durable owner, Workspace UUID, current Sandbox UID, Node fingerprint,
+  and Node job/session identifier as one binding before opening a stream.
+  Terminal, replaced-Sandbox, wrong-Node, revoked-owner, and stale-session
+  requests fail closed.
+- Keep terminal traffic out of MCP tool results and model context. MCP may
+  expose bounded status or mint a short-lived, single-purpose attachment
+  capability, but terminal bytes use a dedicated bidirectional RPC or web
+  transport derived from the existing `AttachFrame` semantics.
+- Separate detach from cancel. Browser/terminal disconnect leaves the
+  AgentRun and retained PTY alive for a bounded reconnect window; explicit
+  cancellation continues through `agent_cancel`. Natural process exit writes
+  the same durable terminal state/result exactly once.
+- Define one input-writer lease with expiry and explicit transfer/revocation.
+  Optional additional viewers are read-only. Enforce bounded replay,
+  monotonically increasing output offsets, bounded per-client queues, and
+  slow-consumer disconnection so reconnect and fan-out cannot grow memory
+  without limit or duplicate user input.
+- Preserve resize and exit frames, propagate half-close/cancellation
+  correctly, and audit attach, detach, writer-transfer, and cancel decisions
+  without recording terminal content or OAuth credentials.
+- A browser gateway terminates an authenticated UI session at the
+  orchestrator, validates Origin/CSRF, exchanges only a short-lived scoped
+  capability, and relays WebSocket frames to the internal attach RPC. It must
+  never expose the operator certificate, AgentProfile credential catalog, or
+  injected OAuth payload to browser storage.
+
+Acceptance requires unit protocol/state-machine tests plus a real-VM test that
+starts a takeover-capable AgentRun, observes output, sends input and resize,
+disconnects and resumes from an output offset, rejects a second writer,
+survives overseer/UI reconnect, and resolves cancellation, natural exit, Node
+loss, and stale Sandbox bindings deterministically.
 
 ## Other open product work
 
