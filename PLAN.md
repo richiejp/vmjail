@@ -145,15 +145,19 @@ Landed:
   continuation. Agent events already use durable numeric cursors and are
   structurally limited to five 16 KiB messages per run; terminal results are
   capped at 1 MiB.
+- `sandbox_observer_summary` exposes the existing ownership-checked,
+  orchestrator-capped (1 MiB) guest build-progress snapshot as structured MCP
+  output. This is the planned progress-get surface as well as the observer
+  summary; a second alias would expose identical data without adding a
+  capability.
 
 Remaining:
 
 - Prove the full overseer recipe across a remote Node: install, trust,
   apply/push, start, poll/result, teardown, retry, and recovery.
-- Add ownership-safe MCP observability v1 tools for Sandbox progress, summary,
-  and a byte/line-capped observer tail. No log or observability tool is exposed
-  by the current MCP server; future trace/query surfaces must be
-  cursor-paginated server-side before exposure.
+- Add an ownership-safe, server-side byte/line-capped MCP observer tail.
+  Future trace/query surfaces must be cursor-paginated server-side before
+  exposure.
 - Document takeover requirements for a future terminal/web attachment path;
   direct interactive control remains deferred.
 

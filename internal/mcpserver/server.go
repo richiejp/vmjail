@@ -26,6 +26,7 @@ import (
 	secretdeliveryv1 "github.com/richiejp/darkaifactory/internal/genpb/secretdelivery/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/observability/progress"
 )
 
 const (
@@ -66,6 +67,7 @@ const (
 	agentEventsTool       = "agent_events"
 	agentCancelTool       = "agent_cancel"
 	agentResultTool       = "agent_result"
+	observerSummaryTool   = "sandbox_observer_summary"
 )
 
 type Reader interface {
@@ -84,6 +86,7 @@ type Reader interface {
 	AgentRunEvents(context.Context, string, uint64, uint32) (AgentEvents, error)
 	CancelAgentRun(context.Context, string) (AgentRun, error)
 	StartAgentRun(context.Context, string, string, agentprofile.Entry, string) (AgentRun, error)
+	ObserveSummary(context.Context, string) (ObserverSummary, error)
 }
 
 type Node struct {
@@ -191,6 +194,11 @@ type AgentEvents struct {
 	NextCursor      uint64       `json:"next_cursor"`
 	LastEventCursor uint64       `json:"last_event_cursor"`
 	Terminal        bool         `json:"terminal"`
+}
+
+type ObserverSummary struct {
+	Available bool              `json:"available"`
+	Summary   *progress.Summary `json:"summary,omitempty"`
 }
 
 type listNodesOutput struct {
@@ -323,6 +331,7 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 	annotations := &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: boolPtr(false)}
 	addAgentProfileListTool(server, annotations, profiles)
 	addAgentRunTools(server, annotations, reader, profiles)
+	addObserverSummaryTool(server, annotations, reader)
 	mcp.AddTool(server, &mcp.Tool{Name: nodeListTool, Description: "List a bounded, cursor-resumable page of live daft Nodes visible to the orchestrator.", Annotations: annotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, listNodesOutput, error) {
 			nodes, next, truncated, err := readPage(ctx, reader.ListNodes, input, func(node Node) string { return node.Fingerprint })
@@ -368,6 +377,23 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 		})
 	addWorkspaceTools(server, annotations, reader)
 	return server, nil
+}
+
+func addObserverSummaryTool(server *mcp.Server, annotations *mcp.ToolAnnotations, reader Reader) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        observerSummaryTool,
+		Description: "Read the current bounded build-progress summary for one owned Workspace's running Sandbox.",
+		Annotations: annotations,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, ObserverSummary, error) {
+		if input.UUID == "" {
+			return nil, ObserverSummary{}, fmt.Errorf("uuid is required")
+		}
+		summary, err := reader.ObserveSummary(ctx, input.UUID)
+		if err != nil {
+			return nil, ObserverSummary{}, fmt.Errorf("observe Sandbox summary: %w", err)
+		}
+		return nil, summary, nil
+	})
 }
 
 func addWorkspaceTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations, reader Reader) {
@@ -670,6 +696,7 @@ type workspaceReader interface {
 	Validate(context.Context, *connect.Request[workspacev1.ValidateRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error)
 	Launch(context.Context, *connect.Request[workspacev1.LaunchRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error)
 	Stop(context.Context, *connect.Request[workspacev1.StopRequest]) (*connect.Response[workspacev1.WorkspaceResponse], error)
+	ObserveSummary(context.Context, *connect.Request[workspacev1.ObserveSummaryRequest]) (*connect.Response[workspacev1.ObserveSummaryResponse], error)
 }
 
 type operatorClient interface {
@@ -787,6 +814,24 @@ func (r ConnectReader) AgentRunEvents(ctx context.Context, uuid string, after ui
 		out.Events[i] = AgentEvent{Cursor: event.GetCursor(), State: event.GetState().String(), Message: event.GetMessage()}
 	}
 	return out, nil
+}
+
+func (r ConnectReader) ObserveSummary(ctx context.Context, uuid string) (ObserverSummary, error) {
+	response, err := r.workspace.ObserveSummary(ctx, connect.NewRequest(&workspacev1.ObserveSummaryRequest{
+		Workspace: workspaceUUIDHandle(uuid),
+	}))
+	if err != nil {
+		return ObserverSummary{}, err
+	}
+	data := response.Msg.GetSummary()
+	if len(data) == 0 {
+		return ObserverSummary{Available: false}, nil
+	}
+	summary, err := progress.Parse(data)
+	if err != nil {
+		return ObserverSummary{}, err
+	}
+	return ObserverSummary{Available: true, Summary: &summary}, nil
 }
 
 func (r ConnectReader) CancelAgentRun(ctx context.Context, uuid string) (AgentRun, error) {

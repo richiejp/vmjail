@@ -149,6 +149,7 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 	}), "run")
 	canceledUUID := stringField(t, canceledRun, "uuid")
 	waitAgentState(t, session, canceledUUID, "AGENT_RUN_STATE_RUNNING", deadline, stderr)
+	waitObserverSummary(t, session, workspaceUUID, deadline, stderr)
 	firstCancel := mapField(t, callMCPTool(t, session, "agent_cancel", map[string]any{"uuid": canceledUUID}), "run")
 	secondCancel := mapField(t, callMCPTool(t, session, "agent_cancel", map[string]any{"uuid": canceledUUID}), "run")
 	if stringField(t, firstCancel, "uuid") != canceledUUID || stringField(t, secondCancel, "uuid") != canceledUUID {
@@ -179,6 +180,31 @@ func TestClusterAgentRunLifecycleOverMCP(t *testing.T) {
 	if got := stringField(t, lostResult, "state"); got != "AGENT_RUN_STATE_LOST" {
 		t.Fatalf("lost agent_result state = %q; result=%#v", got, lostResult)
 	}
+}
+
+func waitObserverSummary(t *testing.T, session *mcp.ClientSession, workspaceUUID string, deadline time.Time, stderr *bytes.Buffer) {
+	t.Helper()
+	var last string
+	for time.Now().Before(deadline) {
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{
+			Name: "sandbox_observer_summary", Arguments: map[string]any{"uuid": workspaceUUID},
+		})
+		if err == nil && !result.IsError {
+			output, ok := result.StructuredContent.(map[string]any)
+			if ok && output["available"] == true {
+				summary, ok := output["summary"].(map[string]any)
+				if ok {
+					if takenAt, ok := summary["taken_at_unix_ms"].(float64); ok && takenAt > 0 {
+						return
+					}
+				}
+			}
+		}
+		content, _ := json.Marshal(result)
+		last = string(content)
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatalf("Sandbox observer summary did not become available: %s\n%s", last, stderr.String())
 }
 
 func waitNodeDisconnected(t *testing.T, session *mcp.ClientSession, fingerprint string, deadline time.Time) {

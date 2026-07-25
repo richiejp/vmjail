@@ -23,6 +23,7 @@ import (
 	secretdeliveryv1 "github.com/richiejp/darkaifactory/internal/genpb/secretdelivery/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/observability/progress"
 )
 
 const (
@@ -75,6 +76,8 @@ type fakeReader struct {
 	pushedUUID       string
 	pushedPath       string
 	pushResult       daftclient.WorkspacePushResult
+	observerSummary  ObserverSummary
+	observerErr      error
 }
 
 func TestCanonicalUUID(t *testing.T) {
@@ -105,6 +108,10 @@ func (f *fakeReader) AgentRunEvents(context.Context, string, uint64, uint32) (Ag
 
 func (f *fakeReader) CancelAgentRun(context.Context, string) (AgentRun, error) {
 	return f.agentRun, f.agentErr
+}
+
+func (f *fakeReader) ObserveSummary(context.Context, string) (ObserverSummary, error) {
+	return f.observerSummary, f.observerErr
 }
 
 func TestAgentProfileListIsSortedAndOmitsCredentialProfileName(t *testing.T) {
@@ -272,7 +279,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, workspaceApplyTool, workspaceGetTool, workspaceLaunchTool, workspaceListTool, workspacePushTool, workspaceStatusTool, workspaceStopTool, workspaceValidateTool}
+	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, observerSummaryTool, workspaceApplyTool, workspaceGetTool, workspaceLaunchTool, workspaceListTool, workspacePushTool, workspaceStatusTool, workspaceStopTool, workspaceValidateTool}
 	if len(result.Tools) != len(wantNames) {
 		t.Fatalf("got %d tools, want %d", len(result.Tools), len(wantNames))
 	}
@@ -369,6 +376,40 @@ func TestWorkspaceReads(t *testing.T) {
 	workspace := requireMap(t, requireMap(t, getResult.StructuredContent)[mcpTestWorkspace])
 	if workspace["name"] != first {
 		t.Errorf("workspace name = %v, want %s", workspace["name"], first)
+	}
+}
+
+func TestObserverSummaryIsStructuredAndOwnershipScoped(t *testing.T) {
+	summary := progress.Summary{
+		TakenAtUnixMs: 1234,
+		Opensnoop:     &progress.Opensnoop{Total: 7, TopPaths: []progress.Counted{{Key: "/workspace/main.go", Count: 3}}},
+	}
+	session := connectClient(t, &fakeReader{observerSummary: ObserverSummary{Available: true, Summary: &summary}})
+	output := requireMap(t, callTool(t, session, observerSummaryTool, map[string]any{uuidKey: mcpTestWorkspace}).StructuredContent)
+	if output["available"] != true {
+		t.Fatalf("observer summary = %#v", output)
+	}
+	structured := requireMap(t, output["summary"])
+	if structured["taken_at_unix_ms"] != float64(1234) {
+		t.Fatalf("structured summary = %#v", structured)
+	}
+	opensnoop := requireMap(t, structured["opensnoop"])
+	if opensnoop["total"] != float64(7) {
+		t.Fatalf("opensnoop summary = %#v", opensnoop)
+	}
+
+	empty := requireMap(t, callTool(t, connectClient(t, &fakeReader{}), observerSummaryTool, map[string]any{uuidKey: mcpTestWorkspace}).StructuredContent)
+	if empty["available"] != false {
+		t.Fatalf("empty summary = %#v", empty)
+	}
+	if result, err := connectClient(t, &fakeReader{}).CallTool(t.Context(), &mcp.CallToolParams{Name: observerSummaryTool, Arguments: map[string]any{}}); err == nil || result != nil {
+		t.Fatalf("missing UUID result = %#v, err = %v; want schema error", result, err)
+	}
+	result, err := connectClient(t, &fakeReader{observerErr: errors.New("offline")}).CallTool(t.Context(), &mcp.CallToolParams{
+		Name: observerSummaryTool, Arguments: map[string]any{uuidKey: mcpTestWorkspace},
+	})
+	if err != nil || !result.IsError {
+		t.Fatalf("read error result = %#v, err = %v; want tool error", result, err)
 	}
 }
 
@@ -704,6 +745,8 @@ type fakeWorkspaceReader struct {
 	validateUUID  string
 	launchUUID    string
 	stopUUID      string
+	observeUUID   string
+	summary       []byte
 	err           error
 	mineOnly      bool
 }
@@ -818,12 +861,22 @@ func (f *fakeWorkspaceReader) Stop(_ context.Context, request *connect.Request[w
 	return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: f.workspace}), f.err
 }
 
+func (f *fakeWorkspaceReader) ObserveSummary(_ context.Context, request *connect.Request[workspacev1.ObserveSummaryRequest]) (*connect.Response[workspacev1.ObserveSummaryResponse], error) {
+	f.observeUUID = request.Msg.GetWorkspace().GetUuid()
+	return connect.NewResponse(&workspacev1.ObserveSummaryResponse{Summary: f.summary}), f.err
+}
+
 func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	protoWorkspace := &workspacev1.Workspace{Metadata: &workspacev1.WorkspaceMetadata{Uuid: mcpTestWorkspace}}
+	summaryData, err := progress.Marshal(progress.Summary{TakenAtUnixMs: 42})
+	if err != nil {
+		t.Fatal(err)
+	}
 	workspaces := &fakeWorkspaceReader{
 		listResponse:  &workspacev1.ListWorkspacesResponse{Workspaces: []*workspacev1.Workspace{protoWorkspace}},
 		workspace:     protoWorkspace,
 		applyResponse: &workspacev1.ApplyWorkspaceResponse{Workspace: protoWorkspace, Created: true, Changed: true},
+		summary:       summaryData,
 	}
 	var startRequest *agentrunv1.StartAgentRunRequest
 	secretClient := &fakeSecretClient{}
@@ -863,6 +916,9 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	if _, err := reader.CancelAgentRun(t.Context(), testRunValue); err != nil {
 		t.Fatalf("CancelAgentRun = %v", err)
 	}
+	if summary, err := reader.ObserveSummary(t.Context(), mcpTestWorkspace); err != nil || !summary.Available || summary.Summary.TakenAtUnixMs != 42 || workspaces.observeUUID != mcpTestWorkspace {
+		t.Fatalf("ObserveSummary = %#v, %v; request=%q", summary, err, workspaces.observeUUID)
+	}
 	profile := agentprofile.Entry{Profile: agentprofile.Profile{
 		Name: mcpTestProfile, Provider: agentprofile.ProviderCodex, Command: []string{mcpTestProfile, "exec"},
 		Image:       "example.com/agent@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -884,6 +940,26 @@ func TestConnectReaderMapsRPCsAndForcesOwnership(t *testing.T) {
 	}
 	if secretClient.request != nil {
 		t.Fatalf("credential redelivered for completed run: %+v", secretClient.request)
+	}
+}
+
+func TestConnectReaderObserveSummaryEdgeCases(t *testing.T) {
+	workspaces := &fakeWorkspaceReader{}
+	reader := ConnectReader{workspace: workspaces}
+	summary, err := reader.ObserveSummary(t.Context(), mcpTestWorkspace)
+	if err != nil || summary.Available || summary.Summary != nil {
+		t.Fatalf("empty ObserveSummary = %#v, %v", summary, err)
+	}
+
+	workspaces.summary = []byte("{not-json")
+	if _, err := reader.ObserveSummary(t.Context(), mcpTestWorkspace); err == nil {
+		t.Fatal("malformed ObserveSummary succeeded")
+	}
+
+	wantErr := errors.New("offline")
+	workspaces.err = wantErr
+	if _, err := reader.ObserveSummary(t.Context(), mcpTestWorkspace); !errors.Is(err, wantErr) {
+		t.Fatalf("ObserveSummary error = %v, want %v", err, wantErr)
 	}
 }
 
