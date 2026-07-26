@@ -254,6 +254,10 @@ maintainability requirements.
 - Subagents receive a compact task brief and relevant paths, not the complete
   parent transcript. Long milestones end with a concise handoff into a fresh
   session.
+- The repository-local `daft_developer` Codex agent owns the daft MCP schemas
+  and raw tool traffic, returning only bounded results to the overseer. Its MCP
+  tool set follows the server's advertised surface instead of duplicating an
+  allowlist that would drift as tools are added.
 - MCP and observability APIs must paginate or cap potentially unbounded output.
 - Keep Nix derivation source closures narrow. In particular, the kernel's
   `kconfig-verify` dependency includes only its command/package and module
