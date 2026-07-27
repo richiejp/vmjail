@@ -84,6 +84,16 @@ func TestApplyShareHappyPath(t *testing.T) {
 	}
 }
 
+func TestMountShareReadOnly(t *testing.T) {
+	f := newFakeShareDeps()
+	if err := MountShare(ShareSpec{Tag: testTag, Mountpoint: testMountpoint, ReadOnly: true}, f.toShareDeps()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.mounts) != 1 || f.mounts[0].data != "ro" {
+		t.Fatalf("mounts = %+v, want read-only option", f.mounts)
+	}
+}
+
 func TestApplyShareReportsMkdirError(t *testing.T) {
 	f := newFakeShareDeps()
 	f.mkdirErr = errors.New("mkdir bang")

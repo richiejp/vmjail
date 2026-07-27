@@ -16,6 +16,7 @@ const (
 	testDiskID          = "wsdisk"
 	testAPISocket       = "/run/daft/vm.sock"
 	testErrMustAbsolute = "must be absolute"
+	testWorkspaceMount  = "/workspace"
 )
 
 // TestBuildCloudHypervisorArgsNoShares asserts the args list is
@@ -86,7 +87,7 @@ func TestBuildCloudHypervisorArgsMultiShare(t *testing.T) {
 	cfg = cfg.withDefaults()
 	cfg.Shares = []*ShareConfig{
 		{Tag: "bundles", Mountpoint: "/bundles"},
-		{Tag: testTagWorkspace, Mountpoint: "/workspace"},
+		{Tag: testTagWorkspace, Mountpoint: testWorkspaceMount},
 	}
 	args := buildCloudHypervisorArgs(cfg,
 		[]string{"/tmp/bundles.sock", "/tmp/workspace.sock"})

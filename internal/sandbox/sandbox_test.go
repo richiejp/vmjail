@@ -511,7 +511,7 @@ func TestHelloWithMultipleSharesPassesEverySocket(t *testing.T) {
 	cfg.Virtiofsd = testFakeVirtiofsd
 	cfg.Shares = []*ShareConfig{
 		{HostDir: dir1, Tag: "bundles", Mountpoint: "/bundles"},
-		{HostDir: dir2, Tag: testTagWorkspace, Mountpoint: "/workspace"},
+		{HostDir: dir2, Tag: testTagWorkspace, Mountpoint: testWorkspaceMount},
 	}
 
 	r := &fakeRunner{output: agent.Banner + "\n"}

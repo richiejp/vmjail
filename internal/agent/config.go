@@ -208,7 +208,7 @@ func configShareSpecs(cfg *agentv1.GuestConfig) []ShareSpec {
 	}
 	specs := make([]ShareSpec, 0, len(protoShares))
 	for _, s := range protoShares {
-		specs = append(specs, ShareSpec{Tag: s.GetTag(), Mountpoint: s.GetMountpoint()})
+		specs = append(specs, ShareSpec{Tag: s.GetTag(), Mountpoint: s.GetMountpoint(), ReadOnly: s.GetReadOnly()})
 	}
 	return specs
 }

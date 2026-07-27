@@ -14,6 +14,7 @@ import (
 type ShareSpec struct {
 	Tag        string
 	Mountpoint string
+	ReadOnly   bool
 }
 
 // ShareMarkerFile is the file the agent reads from the mounted share to
@@ -47,7 +48,11 @@ func MountShare(spec ShareSpec, deps ShareDeps) error {
 	if err := deps.MkdirAll(spec.Mountpoint, 0o755); err != nil {
 		return fmt.Errorf("mkdir: %w", err)
 	}
-	if err := deps.Mount(spec.Tag, spec.Mountpoint, "virtiofs", ""); err != nil {
+	data := ""
+	if spec.ReadOnly {
+		data = "ro"
+	}
+	if err := deps.Mount(spec.Tag, spec.Mountpoint, "virtiofs", data); err != nil {
 		return fmt.Errorf("mount: %w", err)
 	}
 	return nil

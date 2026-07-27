@@ -75,6 +75,25 @@
           ];
         };
 
+        # The pinned xfsprogs static build fails in upstream's ICU/C++ link.
+        # Relocate only the three tools we use plus their small shared-library
+        # set; the resulting /bin + /lib tree is self-contained in initramfs.
+        guestXfsTools = pkgs.runCommand "daft-guest-xfs-tools" {
+          nativeBuildInputs = [ pkgs.patchelf ];
+        } ''
+          mkdir -p $out/bin $out/lib
+          for tool in mkfs.xfs xfs_repair xfs_growfs; do
+            cp ${pkgs.xfsprogs.bin}/bin/$tool $out/bin/$tool
+            chmod u+w $out/bin/$tool
+            patchelf --set-interpreter /lib/ld-linux-x86-64.so.2 \
+              --set-rpath /lib $out/bin/$tool
+          done
+          cp -L ${pkgs.glibc}/lib/*.so* $out/lib/
+          cp -L ${pkgs.util-linuxMinimal.lib}/lib/*.so* $out/lib/
+          cp -L ${pkgs.inih}/lib/*.so* $out/lib/
+          cp -L ${pkgs.liburcu}/lib/*.so* $out/lib/
+        '';
+
         # mkDaftBinary builds one of our cmd/ binaries from the repo's
         # go.mod. Shared so vendorHash stays defined once — otherwise
         # it drifts the next time go.mod changes.
@@ -220,6 +239,8 @@
           };
 
         packages = rec {
+          guest-xfs-tools = guestXfsTools;
+
           # The default output is the full local-cluster toolset, not the
           # bare CLI: `daft cluster up` spawns the daft-orchestrator and
           # daft-sandboxd daemons (resolved next to the daft binary, else
@@ -762,6 +783,8 @@
               -base=/dev/null \
               -files "${daft-agent}/bin/daft-agent:bin/daft-agent" \
               -files "${crun}/bin/crun:bin/crun" \
+              -files "${guestXfsTools}/bin:bin" \
+              -files "${guestXfsTools}/lib:lib" \
               -uinitcmd=/bin/daft-agent \
               ./cmds/core/init
 

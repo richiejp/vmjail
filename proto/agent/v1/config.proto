@@ -59,6 +59,7 @@ message GuestConfig {
     // overlay to a share by its mountpoint); carrying it on the Share
     // itself drops that indirection.
     bool overlay = 3;
+    bool read_only = 4;
   }
 
   // Guest-side ports the agent vsock-forwards to the container. Mirrors
@@ -102,6 +103,21 @@ message GuestConfig {
   // tmpfs-backed home before the container starts and enables the dedicated
   // secret listener. Empty disables all credential plumbing.
   string credential_provider = 9;
+
+  // Retained writable workspace block device. The host removes these targets
+  // from virtiofs only when this block device is attached.
+  WorkspaceDisk workspace_disk = 10;
+
+  message WorkspaceDisk {
+    string device = 1;
+    repeated Mount mounts = 2;
+
+    message Mount {
+      string target = 1;
+      string directory = 2;
+      string seed = 3;
+    }
+  }
 
   // PostStartCommand is one resolved lifecycle command: a full argv the
   // agent crun-execs in the running container.

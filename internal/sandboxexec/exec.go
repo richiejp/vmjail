@@ -776,6 +776,8 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 
 const workspaceDiskID = "workspace"
 
+const workspaceSeedRoot = "/run/daft/workspace-seed"
+
 func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *sandboxv1.SandboxSpec) error {
 	if e.workspaceDisks == nil {
 		return nil
@@ -794,7 +796,28 @@ func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *san
 	}
 	cfg.WorkspaceDisk = &sandbox.DiskConfig{Path: path, ID: workspaceDiskID}
 	cfg.APISocket = filepath.Join(e.vsockDir, uid+".api.sock")
+	configureWorkspaceMounts(cfg, spec.GetMounts())
 	return nil
+}
+
+func configureWorkspaceMounts(cfg *sandbox.Config, mounts []*sandboxv1.Mount) {
+	for i, mount := range mounts {
+		if mount == nil || mount.GetReadOnly() {
+			continue
+		}
+		seed := fmt.Sprintf("%s/%d", workspaceSeedRoot, i)
+		cfg.WorkspaceMounts = append(cfg.WorkspaceMounts, sandbox.WorkspaceMount{
+			Target: mount.GetTarget(), Directory: fmt.Sprintf("mounts/%d", i), Seed: seed,
+		})
+		for _, share := range cfg.Shares {
+			if share.Mountpoint == mount.GetTarget() {
+				share.Mountpoint = seed
+				share.ReadOnly = true
+				share.Overlay = false
+				break
+			}
+		}
+	}
 }
 
 // applyObserverLog defaults cfg.ObserverLogPath to a per-uid file

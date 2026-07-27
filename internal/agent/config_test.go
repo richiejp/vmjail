@@ -237,9 +237,9 @@ func TestConfigShareSpecs(t *testing.T) {
 		t.Errorf("configShareSpecs(empty) = %v, want nil", got)
 	}
 	specs := configShareSpecs(&agentv1.GuestConfig{
-		Shares: []*agentv1.GuestConfig_Share{{Tag: "t", Mountpoint: "/m"}},
+		Shares: []*agentv1.GuestConfig_Share{{Tag: "t", Mountpoint: "/m", ReadOnly: true}},
 	})
-	if len(specs) != 1 || specs[0].Tag != "t" || specs[0].Mountpoint != "/m" {
+	if len(specs) != 1 || specs[0].Tag != "t" || specs[0].Mountpoint != "/m" || !specs[0].ReadOnly {
 		t.Errorf("specs = %v, want one t:/m", specs)
 	}
 }

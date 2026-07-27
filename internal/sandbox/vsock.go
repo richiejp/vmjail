@@ -158,13 +158,23 @@ func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootC
 // Tier-2 observe-gadget paths, and the trace/attach/net feature toggles.
 // This is the sole channel for per-VM settings — the kernel cmdline
 // carries no daft.* tokens at all.
+const workspaceDiskGuestDevice = "/dev/vda"
+
 func buildGuestConfig(cfg Config) *agentv1.GuestConfig {
 	gc := &agentv1.GuestConfig{Bundle: cfg.Bundle, CredentialProvider: cfg.CredentialProvider}
+	if cfg.WorkspaceDisk != nil {
+		gc.WorkspaceDisk = &agentv1.GuestConfig_WorkspaceDisk{Device: workspaceDiskGuestDevice}
+		for _, mount := range cfg.WorkspaceMounts {
+			gc.WorkspaceDisk.Mounts = append(gc.WorkspaceDisk.Mounts,
+				&agentv1.GuestConfig_WorkspaceDisk_Mount{Target: mount.Target, Directory: mount.Directory, Seed: mount.Seed})
+		}
+	}
 	for _, s := range cfg.Shares {
 		gc.Shares = append(gc.Shares, &agentv1.GuestConfig_Share{
 			Tag:        s.Tag,
 			Mountpoint: s.Mountpoint,
 			Overlay:    s.Overlay,
+			ReadOnly:   s.ReadOnly,
 		})
 	}
 	for _, pf := range cfg.PortForwards {

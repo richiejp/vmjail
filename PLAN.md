@@ -246,13 +246,19 @@ Landed:
   `workspace resources --disk`, Sandbox dispatch, and trusted MCP; zero selects
   the fixed 20 GiB default. Production dispatch attaches the retained image and
   a unique VMM API socket while test-only executors remain explicitly diskless.
+- The guest kernel now includes built-in XFS, quota, and ACL support, and the
+  self-contained initramfs carries relocated `mkfs.xfs`, `xfs_repair`, and
+  `xfs_growfs` binaries with their exact libraries. Writable Workspace mounts
+  are delivered as read-only first-launch seed shares, copied into a newly
+  formatted reflink-enabled XFS filesystem, and bind-mounted into the OCI
+  container; retained XFS is recovered and reused without reseeding. OCI
+  rootfs and declared read-only mounts remain on virtiofs.
 
 Remaining:
 
-- Add guest XFS creation, recovery, mount, usage, freeze, resize, grow, and
-  teardown control paths and the required kernel/initramfs tools.
-- Replace writable workspace virtiofs materialization with manifest streaming
-  into the disk.
+- Add guest XFS usage, freeze, resize/grow, and teardown control paths.
+- Replace the transitional read-only first-launch seed share with direct
+  manifest streaming over vsock.
 - Add durable per-CAS Badger metadata, transactional manifest generations,
   exact-generation adoption/rejection, protected/recoverable provenance, and
   crash-safe weighted cleanup (85% soft, 75% target, 100 GiB hard, 180-day

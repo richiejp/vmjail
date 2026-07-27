@@ -69,6 +69,9 @@ type Config struct {
 	// WorkspaceDisk is the retained writable block device attached to this VM.
 	// OCI rootfs and read-only host shares continue to use virtiofs.
 	WorkspaceDisk *DiskConfig
+	// WorkspaceMounts are writable in-container paths backed by directories
+	// on WorkspaceDisk rather than host virtiofs trees.
+	WorkspaceMounts []WorkspaceMount
 	// Memory is the guest RAM size, e.g. "256M". Defaults to 256M when
 	// empty so simple smoke tests don't need to think about it. When
 	// Shares is non-empty the value is silently upgraded to include
@@ -204,6 +207,14 @@ type Config struct {
 	ObserveSummaryPath string
 }
 
+// WorkspaceMount maps one directory on the retained filesystem into the OCI
+// container at Target.
+type WorkspaceMount struct {
+	Target    string
+	Directory string
+	Seed      string
+}
+
 // DiskConfig identifies a retained qcow2 workspace image. ID is the stable
 // Cloud Hypervisor device identifier used by /vm.resize-disk.
 type DiskConfig struct {
@@ -269,6 +280,8 @@ type ShareConfig struct {
 	// either daft-fuse (read-only by construction) or a host dir
 	// we don't want the container mutating directly.
 	Overlay bool
+	// ReadOnly mounts the virtiofs export read-only inside the guest.
+	ReadOnly bool
 	// Translate, when non-nil, asks virtiofsd to present this share's
 	// files to the guest as owned by Translate.UID:GID — rather than
 	// identity-passing the host owner through sandboxd's userns — and

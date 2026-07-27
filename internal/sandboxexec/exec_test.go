@@ -34,6 +34,7 @@ const (
 	testVsockDir  = "/var/run/daft-sandboxd"
 	mntWorkspace  = "/workspace"
 	mntData       = "/data"
+	mntReference  = "/reference"
 	testWSUUID    = "ws-uuid"
 	hostWS        = "/host/ws"
 
@@ -673,8 +674,14 @@ func (f *fakeDiskPreparer) Prepare(workspaceID string, virtualSize uint64) (path
 func TestApplyWorkspaceDiskDefaultsAndConfiguresVMM(t *testing.T) {
 	preparer := &fakeDiskPreparer{path: "/state/workspace.qcow2"}
 	e := &Executor{workspaceDisks: preparer, vsockDir: testVsockDir}
-	cfg := sandbox.Config{}
-	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID}
+	cfg := sandbox.Config{Shares: []*sandbox.ShareConfig{
+		{Tag: "bundles", Mountpoint: "/bundles"},
+		{Tag: "rw", Mountpoint: mntWorkspace},
+		{Tag: "ro", Mountpoint: mntReference},
+	}}
+	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{
+		{Target: mntWorkspace}, {Target: mntReference, ReadOnly: true},
+	}}
 	if err := e.applyWorkspaceDisk(&cfg, testSandboxID, spec); err != nil {
 		t.Fatal(err)
 	}
@@ -686,6 +693,14 @@ func TestApplyWorkspaceDiskDefaultsAndConfiguresVMM(t *testing.T) {
 	}
 	if cfg.APISocket != filepath.Join(testVsockDir, testSandboxID+".api.sock") {
 		t.Errorf("APISocket = %q", cfg.APISocket)
+	}
+	if len(cfg.WorkspaceMounts) != 1 || cfg.WorkspaceMounts[0].Target != mntWorkspace ||
+		cfg.WorkspaceMounts[0].Directory != "mounts/0" || cfg.WorkspaceMounts[0].Seed != workspaceSeedRoot+"/0" {
+		t.Errorf("WorkspaceMounts = %#v", cfg.WorkspaceMounts)
+	}
+	if len(cfg.Shares) != 3 || cfg.Shares[1].Mountpoint != workspaceSeedRoot+"/0" || !cfg.Shares[1].ReadOnly ||
+		cfg.Shares[2].Mountpoint != mntReference {
+		t.Errorf("Shares = %#v, want bundle, read-only seed, and read-only reference", cfg.Shares)
 	}
 }
 
