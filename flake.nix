@@ -92,6 +92,11 @@
           cp -L ${pkgs.util-linuxMinimal.lib}/lib/*.so* $out/lib/
           cp -L ${pkgs.inih}/lib/*.so* $out/lib/
           cp -L ${pkgs.liburcu}/lib/*.so* $out/lib/
+          for library in $out/lib/libblkid.so* $out/lib/libuuid.so* \
+            $out/lib/libinih.so* $out/lib/liburcu*.so*; do
+            chmod u+w $library
+            patchelf --set-rpath /lib $library
+          done
         '';
 
         # mkDaftBinary builds one of our cmd/ binaries from the repo's

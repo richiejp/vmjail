@@ -42,6 +42,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspace"
 	"github.com/richiejp/darkaifactory/internal/workspacedisk"
+	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
 
 // Phase tokens reported on heartbeat. Match the PascalCase values
@@ -80,6 +81,10 @@ type MountMaterializer interface {
 	SetLiveMount(syncKey, dir string)
 	PreserveLiveMount(ctx context.Context, syncKey string) error
 	ClearLiveMount(syncKey string)
+}
+
+type liveMountRefresher interface {
+	SetLiveMountRefresher(syncKey string, refresh func(context.Context, string) error)
 }
 
 // WorkspaceDiskPreparer atomically creates or reopens the retained qcow2
@@ -196,10 +201,11 @@ type Executor struct {
 	// CID the ABI allows for a guest (0/1/2 are reserved).
 	nextCID atomic.Uint32
 
-	mu      sync.Mutex
-	live    map[string]*liveSandbox
-	running map[string]context.CancelFunc
-	deleted map[string]time.Time
+	mu       sync.Mutex
+	live     map[string]*liveSandbox
+	running  map[string]context.CancelFunc
+	preserve map[string]func(context.Context) error
+	deleted  map[string]time.Time
 }
 
 // Config bundles the Executor's dependencies. The baseline
@@ -402,6 +408,7 @@ func New(cfg Config) (*Executor, error) {
 		buildTimeout:      cfg.BuildTimeout,
 		live:              map[string]*liveSandbox{},
 		running:           map[string]context.CancelFunc{},
+		preserve:          map[string]func(context.Context) error{},
 		deleted:           map[string]time.Time{},
 	}
 	// New guarantees BuildPushTransport is non-nil whenever a build can run
@@ -516,7 +523,7 @@ func (e *Executor) HandleSandboxEvent(
 	uid := sb.GetMetadata().GetUid()
 	assert.True(uid != "", "SandboxWatchEvent without metadata.uid is an orchestrator bug")
 	if evt.GetType() == sandboxv1.EventType_EVENT_TYPE_DELETED {
-		return e.deleteSandbox(uid)
+		return e.deleteSandbox(ctx, uid)
 	}
 	if evt.GetType() != sandboxv1.EventType_EVENT_TYPE_ADDED {
 		return nil
@@ -562,6 +569,8 @@ func (e *Executor) HandleSandboxEvent(
 	defer unregisterObserver()
 	unregisterSummary := e.registerSummaryRoute(cfg, uid)
 	defer unregisterSummary()
+	e.registerWorkspaceSnapshotRoutes(cfg, spec)
+	e.setSandboxPreserver(uid, spec)
 
 	if err := e.run(ctx, e.stdout, cfg); err != nil {
 		e.markPhase(uid, phaseKilled, 0)
@@ -569,6 +578,26 @@ func (e *Executor) HandleSandboxEvent(
 	}
 	e.markPhase(uid, phaseExited, 0)
 	return nil
+}
+
+func (e *Executor) registerWorkspaceSnapshotRoutes(cfg sandbox.Config, spec *sandboxv1.SandboxSpec) {
+	refresher, ok := e.mountMaterializer.(liveMountRefresher)
+	if !ok || cfg.Vsock == nil || cfg.WorkspaceDisk == nil {
+		return
+	}
+	hostSocket := cfg.Vsock.HostSocket
+	for i, mount := range spec.GetMounts() {
+		if mount == nil || mount.GetReadOnly() || filepath.IsAbs(mount.GetSource()) {
+			continue
+		}
+		directory := fmt.Sprintf("mounts/%d", i)
+		key := workspace.SyncKey(spec.GetWorkspaceUuid(), mount.GetTarget())
+		refresher.SetLiveMountRefresher(key, func(ctx context.Context, destination string) error {
+			return workspacesnapshot.Pull(ctx, func(ctx context.Context) (net.Conn, error) {
+				return sandbox.DialGuestVsock(ctx, hostSocket, workspacesnapshot.DefaultVsockPort)
+			}, directory, destination)
+		})
+	}
 }
 
 const (
@@ -591,21 +620,32 @@ func (e *Executor) beginSandbox(uid string, cancel context.CancelFunc) bool {
 		return false
 	}
 	e.running[uid] = cancel
+	e.preserve[uid] = nil
 	return true
 }
 
 func (e *Executor) finishSandbox(uid string, cancel context.CancelFunc) {
 	e.mu.Lock()
 	delete(e.running, uid)
+	delete(e.preserve, uid)
 	e.mu.Unlock()
 	cancel()
 }
 
-func (e *Executor) deleteSandbox(uid string) error {
+func (e *Executor) deleteSandbox(ctx context.Context, uid string) error {
 	e.mu.Lock()
 	e.expireSandboxDeletes(time.Now())
 	if cancel := e.running[uid]; cancel != nil {
+		preserve := e.preserve[uid]
 		e.mu.Unlock()
+		if preserve != nil {
+			preserveCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			err := preserve(preserveCtx)
+			stop()
+			if err != nil {
+				return fmt.Errorf("sandboxexec: preserve workspace before stop: %w", err)
+			}
+		}
 		cancel()
 		return nil
 	}
@@ -620,6 +660,30 @@ func (e *Executor) deleteSandbox(uid string) error {
 	e.deleted[uid] = time.Now()
 	e.mu.Unlock()
 	return nil
+}
+
+func (e *Executor) setSandboxPreserver(uid string, spec *sandboxv1.SandboxSpec) {
+	if e.mountMaterializer == nil {
+		return
+	}
+	keys := make([]string, 0, len(spec.GetMounts()))
+	for _, mount := range spec.GetMounts() {
+		if mount != nil && !mount.GetReadOnly() && !filepath.IsAbs(mount.GetSource()) {
+			keys = append(keys, workspace.SyncKey(spec.GetWorkspaceUuid(), mount.GetTarget()))
+		}
+	}
+	e.mu.Lock()
+	if _, running := e.running[uid]; running {
+		e.preserve[uid] = func(ctx context.Context) error {
+			for _, key := range keys {
+				if err := e.mountMaterializer.PreserveLiveMount(ctx, key); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
+	}
+	e.mu.Unlock()
 }
 
 func (e *Executor) expireSandboxDeletes(now time.Time) {
@@ -802,7 +866,7 @@ func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *san
 
 func configureWorkspaceMounts(cfg *sandbox.Config, mounts []*sandboxv1.Mount) {
 	for i, mount := range mounts {
-		if mount == nil || mount.GetReadOnly() {
+		if mount == nil || mount.GetReadOnly() || filepath.IsAbs(mount.GetSource()) {
 			continue
 		}
 		seed := fmt.Sprintf("%s/%d", workspaceSeedRoot, i)

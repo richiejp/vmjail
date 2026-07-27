@@ -391,3 +391,49 @@ func TestGetChunkUnknownReturnsNotFound(t *testing.T) {
 		t.Errorf("err = %v, want NotFound", err)
 	}
 }
+
+func TestLiveMountRefresherFeedsPullAndPreservation(t *testing.T) {
+	srv, _ := mustNewServer(t)
+	key := "workspace/live"
+	dir := t.TempDir()
+	srv.SetLiveMount(key, dir)
+	refreshes := 0
+	srv.SetLiveMountRefresher(key, func(_ context.Context, destination string) error {
+		refreshes++
+		return os.WriteFile(filepath.Join(destination, "guest.txt"), []byte("xfs"), 0o600)
+	})
+	response, err := srv.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: key}))
+	if err != nil || !manifestHasPath(response.Msg.GetManifest(), "guest.txt") {
+		t.Fatalf("GetManifest = %+v, %v", response, err)
+	}
+	if err := srv.PreserveLiveMount(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	if refreshes != 2 {
+		t.Fatalf("refreshes = %d", refreshes)
+	}
+	if _, live := srv.liveDir(key); live || !manifestHasPath(srv.manifests[key], "guest.txt") {
+		t.Fatal("preserved refresh was not committed and unregistered")
+	}
+}
+
+func TestLiveMountRefresherFailureIsProtected(t *testing.T) {
+	srv, _ := mustNewServer(t)
+	key := "workspace/live-error"
+	dir := t.TempDir()
+	want := errors.New("guest unavailable")
+	srv.SetLiveMount(key, dir)
+	srv.SetLiveMountRefresher(key, func(context.Context, string) error { return want })
+	_, err := srv.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: key}))
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) || connectErr.Code() != connect.CodeUnavailable {
+		t.Fatalf("GetManifest error = %v", err)
+	}
+	if err := srv.PreserveLiveMount(t.Context(), key); !errors.Is(err, want) {
+		t.Fatalf("PreserveLiveMount = %v", err)
+	}
+	if _, live := srv.liveDir(key); !live {
+		t.Fatal("failed refresh discarded protected live registration")
+	}
+	srv.SetLiveMountRefresher("unknown", func(context.Context, string) error { return nil })
+}

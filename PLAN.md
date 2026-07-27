@@ -251,12 +251,20 @@ Landed:
   `xfs_growfs` binaries with their exact libraries. Writable Workspace mounts
   are delivered as read-only first-launch seed shares, copied into a newly
   formatted reflink-enabled XFS filesystem, and bind-mounted into the OCI
-  container; retained XFS is recovered and reused without reseeding. OCI
-  rootfs and declared read-only mounts remain on virtiofs.
+  container with the seed root's ownership and mode; retained XFS is recovered
+  and reused without reseeding. OCI rootfs, declared read-only mounts, and
+  explicit absolute host-control mounts (such as build outputs) remain on
+  virtiofs. Both local and embedded initramfs builds relocate the XFS tools and
+  their transitive libraries to guest-local `/lib` paths.
+- A bounded guest snapshot service streams an allowlisted XFS mount directory
+  over the VM's hybrid-vsock socket. Live pulls refresh the Node's host staging
+  tree before transactionally building its CAS manifest; the real-KVM
+  push/mutate/pull test proves guest writes round-trip from XFS to the client.
 
 Remaining:
 
-- Add guest XFS usage, freeze, resize/grow, and teardown control paths.
+- Add guest XFS usage, freeze, resize/grow, and stop-time teardown snapshot
+  control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
 - Add durable per-CAS Badger metadata, transactional manifest generations,

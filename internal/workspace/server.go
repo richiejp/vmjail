@@ -32,7 +32,12 @@ type Server struct {
 	// manifests. The sandbox executor registers an entry when it
 	// materialises a mount for a launch and clears it on teardown.
 	liveMu sync.RWMutex
-	live   map[string]string
+	live   map[string]liveMount
+}
+
+type liveMount struct {
+	dir     string
+	refresh func(context.Context, string) error
 }
 
 // NewServer returns an empty Server backed by store. Call Add to
@@ -44,7 +49,7 @@ func NewServer(store *cas.Store) (*Server, error) {
 	return &Server{
 		store:     store,
 		manifests: map[string]*workspacev1.Manifest{},
-		live:      map[string]string{},
+		live:      map[string]liveMount{},
 	}, nil
 }
 
@@ -56,7 +61,20 @@ func NewServer(store *cas.Store) (*Server, error) {
 // launch materialises the mount and clears it on teardown (Slice S4).
 func (s *Server) SetLiveMount(key, dir string) {
 	s.liveMu.Lock()
-	s.live[key] = dir
+	s.live[key] = liveMount{dir: dir}
+	s.liveMu.Unlock()
+}
+
+// SetLiveMountRefresher replaces the live mount's refresh operation. Disk
+// workspaces use it to stream the configured XFS directory out of the guest
+// immediately before a pull or durable stop snapshot.
+func (s *Server) SetLiveMountRefresher(key string, refresh func(context.Context, string) error) {
+	s.liveMu.Lock()
+	entry, ok := s.live[key]
+	if ok {
+		entry.refresh = refresh
+		s.live[key] = entry
+	}
 	s.liveMu.Unlock()
 }
 
@@ -65,21 +83,26 @@ func (s *Server) SetLiveMount(key, dir string) {
 // live mount exists. The registration remains intact on failure so callers can
 // retry or pull directly instead of losing the only reference to guest writes.
 func (s *Server) PreserveLiveMount(ctx context.Context, key string) error {
-	dir, ok := s.liveDir(key)
+	entry, ok := s.liveEntry(key)
 	if !ok {
 		return nil
 	}
-	m, err := BuildManifest(dir, s.store, BuildOptions{})
+	if entry.refresh != nil {
+		if err := entry.refresh(ctx, entry.dir); err != nil {
+			return fmt.Errorf("workspace: refresh live mount %q: %w", key, err)
+		}
+	}
+	m, err := BuildManifest(entry.dir, s.store, BuildOptions{})
 	if err != nil {
 		return fmt.Errorf("workspace: preserve live mount %q: %w", key, err)
 	}
-	return s.commitPreservedLiveMount(key, dir, m)
+	return s.commitPreservedLiveMount(key, entry.dir, m)
 }
 
 func (s *Server) commitPreservedLiveMount(key, dir string, m *workspacev1.Manifest) error {
 	s.mu.Lock()
 	s.liveMu.Lock()
-	if current, exists := s.live[key]; !exists || current != dir {
+	if current, exists := s.live[key]; !exists || current.dir != dir {
 		s.liveMu.Unlock()
 		s.mu.Unlock()
 		return fmt.Errorf("workspace: live mount %q changed during preservation", key)
@@ -102,10 +125,15 @@ func (s *Server) ClearLiveMount(key string) {
 
 // liveDir returns the registered live backing dir for key, if any.
 func (s *Server) liveDir(key string) (string, bool) {
+	entry, ok := s.liveEntry(key)
+	return entry.dir, ok
+}
+
+func (s *Server) liveEntry(key string) (liveMount, bool) {
 	s.liveMu.RLock()
 	defer s.liveMu.RUnlock()
-	dir, ok := s.live[key]
-	return dir, ok
+	entry, ok := s.live[key]
+	return entry, ok
 }
 
 // Add registers a manifest under name. Replacing an existing
@@ -189,7 +217,7 @@ func (s *Server) MaterializeMount(ctx context.Context, key, dest string) (applie
 // already cloned on the way in, and Connect serialises the
 // response onto the wire before the handler returns, so no caller
 // can mutate it.
-func (s *Server) GetManifest(_ context.Context, req *connect.Request[workspacev1.GetManifestRequest]) (*connect.Response[workspacev1.GetManifestResponse], error) {
+func (s *Server) GetManifest(ctx context.Context, req *connect.Request[workspacev1.GetManifestRequest]) (*connect.Response[workspacev1.GetManifestResponse], error) {
 	name := req.Msg.GetWorkspace()
 	if name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument,
@@ -200,8 +228,14 @@ func (s *Server) GetManifest(_ context.Context, req *connect.Request[workspacev1
 	// chunks into the CAS, so the client's follow-up GetChunk calls
 	// resolve. When the VM isn't running we fall through to the
 	// last-pushed snapshot.
-	if dir, ok := s.liveDir(name); ok {
-		m, err := BuildManifest(dir, s.store, BuildOptions{})
+	if entry, ok := s.liveEntry(name); ok {
+		if entry.refresh != nil {
+			if err := entry.refresh(ctx, entry.dir); err != nil {
+				return nil, connect.NewError(connect.CodeUnavailable,
+					fmt.Errorf("workspace: refresh live mount %q: %w", name, err))
+			}
+		}
+		m, err := BuildManifest(entry.dir, s.store, BuildOptions{})
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal,
 				fmt.Errorf("workspace: re-manifest live mount %q: %w", name, err))

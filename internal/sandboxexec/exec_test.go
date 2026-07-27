@@ -128,6 +128,40 @@ func TestDeletedSandboxCancelsExactRunningVM(t *testing.T) {
 	}
 }
 
+func TestDeletePreservesWorkspaceBeforeCancel(t *testing.T) {
+	mat := &fakeMaterializer{}
+	canceled := false
+	e := &Executor{
+		mountMaterializer: mat,
+		running:           map[string]context.CancelFunc{testSandboxID: func() { canceled = true }},
+		preserve:          map[string]func(context.Context) error{},
+		live:              map[string]*liveSandbox{},
+		deleted:           map[string]time.Time{},
+	}
+	e.setSandboxPreserver(testSandboxID, &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}}})
+	if err := e.deleteSandbox(t.Context(), testSandboxID); err != nil {
+		t.Fatal(err)
+	}
+	if !canceled || len(mat.preserved) != 1 || mat.preserved[0] != workspace.SyncKey(testWSUUID, mntWorkspace) {
+		t.Fatalf("canceled=%v preserved=%v", canceled, mat.preserved)
+	}
+}
+
+func TestDeleteKeepsWorkspaceRunningWhenPreserveFails(t *testing.T) {
+	want := errors.New("snapshot failed")
+	canceled := false
+	e := &Executor{
+		running:  map[string]context.CancelFunc{testSandboxID: func() { canceled = true }},
+		preserve: map[string]func(context.Context) error{testSandboxID: func(context.Context) error { return want }},
+		live:     map[string]*liveSandbox{},
+		deleted:  map[string]time.Time{},
+	}
+	err := e.deleteSandbox(t.Context(), testSandboxID)
+	if !errors.Is(err, want) || canceled {
+		t.Fatalf("delete = %v, canceled=%v", err, canceled)
+	}
+}
+
 func TestDeleteBeforeAddedPreventsBootAndIsIdempotent(t *testing.T) {
 	calls := 0
 	e, err := New(Config{Stdout: io.Discard, Runner: func(context.Context, io.Writer, sandbox.Config) error {
@@ -656,6 +690,14 @@ type fakeMaterializer struct {
 	preserved   []string
 	cleared     []string
 	preserveErr error
+	refreshers  map[string]func(context.Context, string) error
+}
+
+func (f *fakeMaterializer) SetLiveMountRefresher(key string, refresh func(context.Context, string) error) {
+	if f.refreshers == nil {
+		f.refreshers = map[string]func(context.Context, string) error{}
+	}
+	f.refreshers[key] = refresh
 }
 
 type fakeDiskPreparer struct {
@@ -704,6 +746,14 @@ func TestApplyWorkspaceDiskDefaultsAndConfiguresVMM(t *testing.T) {
 	}
 }
 
+func TestConfigureWorkspaceMountsKeepsAbsoluteHostControlMountWritable(t *testing.T) {
+	cfg := sandbox.Config{Shares: []*sandbox.ShareConfig{{Mountpoint: mntData}}}
+	configureWorkspaceMounts(&cfg, []*sandboxv1.Mount{{Target: mntData, Source: hostWS}})
+	if len(cfg.WorkspaceMounts) != 0 || cfg.Shares[0].Mountpoint != mntData || cfg.Shares[0].ReadOnly {
+		t.Fatalf("config = %#v", cfg)
+	}
+}
+
 func TestApplyWorkspaceDiskUsesExplicitSizeAndPropagatesErrors(t *testing.T) {
 	want := errors.New("disk unavailable")
 	preparer := &fakeDiskPreparer{err: want}
@@ -715,6 +765,25 @@ func TestApplyWorkspaceDiskUsesExplicitSizeAndPropagatesErrors(t *testing.T) {
 	}
 	if err := e.applyWorkspaceDisk(&sandbox.Config{}, testSandboxID, &sandboxv1.SandboxSpec{}); err == nil {
 		t.Fatal("missing workspace UUID accepted")
+	}
+}
+
+func TestRegisterWorkspaceSnapshotRoutes(t *testing.T) {
+	mat := &fakeMaterializer{}
+	e := &Executor{mountMaterializer: mat}
+	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{
+		{Target: mntWorkspace}, {Target: mntReference, ReadOnly: true}, {Target: mntData, Source: hostWS}, nil,
+	}}
+	e.registerWorkspaceSnapshotRoutes(sandbox.Config{}, spec)
+	if len(mat.refreshers) != 0 {
+		t.Fatalf("routes without disk/vsock = %v", mat.refreshers)
+	}
+	e.registerWorkspaceSnapshotRoutes(sandbox.Config{
+		Vsock: &sandbox.VsockConfig{HostSocket: "/run/daft/test.sock"}, WorkspaceDisk: &sandbox.DiskConfig{Path: "/disk"},
+	}, spec)
+	key := workspace.SyncKey(testWSUUID, mntWorkspace)
+	if len(mat.refreshers) != 1 || mat.refreshers[key] == nil {
+		t.Fatalf("refreshers = %v", mat.refreshers)
 	}
 }
 

@@ -72,6 +72,9 @@ func TestCopyWorkspaceTree(t *testing.T) {
 	if err := copyWorkspaceTree(source, destination); err != nil {
 		t.Fatal(err)
 	}
+	if info, err := os.Stat(destination); err != nil || info.Mode().Perm() != 0o750 {
+		t.Fatalf("destination root mode = %v, %v", info, err)
+	}
 	// #nosec G304 -- path is beneath the test-owned temporary directory.
 	data, err := os.ReadFile(filepath.Join(destination, "nested", "file"))
 	if err != nil || string(data) != "payload" {
@@ -193,14 +196,10 @@ func TestCopyWorkspaceTreePermissionErrors(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(blockedSource, "nested"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(blockedDestination, 0o500); err != nil {
+	if err := os.WriteFile(blockedDestination, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := copyWorkspaceTree(blockedSource, blockedDestination); err == nil {
-		t.Fatal("directory creation in read-only destination succeeded")
-	}
-	// #nosec G302 -- restore traversal so t.TempDir cleanup can remove it.
-	if err := os.Chmod(blockedDestination, 0o700); err != nil {
-		t.Fatal(err)
+		t.Fatal("directory creation beneath non-directory destination succeeded")
 	}
 }

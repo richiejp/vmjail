@@ -25,12 +25,19 @@ func defaultWorkspaceDiskDeps() workspaceDiskDeps {
 		},
 		copyTree: copyWorkspaceTree,
 		run: func(name string, args ...string) error {
-			return exec.Command(name, args...).Run() // #nosec G204 -- executable and arguments are fixed guest policy.
+			output, err := exec.Command(name, args...).CombinedOutput() // #nosec G204 -- executable and arguments are fixed guest policy.
+			if err != nil {
+				return fmt.Errorf("%w: %s", err, output)
+			}
+			return nil
 		},
 	}
 }
 
 func copyWorkspaceTree(source, destination string) error {
+	if err := copyWorkspaceRootMetadata(source, destination); err != nil {
+		return err
+	}
 	pending := []workspaceDirectoryPair{{source: source, destination: destination}}
 	for len(pending) > 0 {
 		pair := pending[len(pending)-1]
@@ -56,39 +63,11 @@ func copyWorkspaceTree(source, destination string) error {
 				}
 				pending = append(pending, workspaceDirectoryPair{source: src, destination: dst})
 			case info.Mode().IsRegular():
-				input, err := os.Open(src) // #nosec G304 -- src is beneath the host-selected seed root.
-				if err != nil {
-					return err
-				}
-				output, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm()) // #nosec G304,G306 -- destination and source mode are policy.
-				if err != nil {
-					_ = input.Close()
-					return err
-				}
-				_, copyErr := io.Copy(output, input)
-				inputCloseErr := input.Close()
-				outputCloseErr := output.Close()
-				if copyErr != nil {
-					return copyErr
-				}
-				if inputCloseErr != nil {
-					return inputCloseErr
-				}
-				if outputCloseErr != nil {
-					return outputCloseErr
-				}
-				if err := chownWorkspaceEntry(dst, info, false); err != nil {
+				if err := copyWorkspaceFile(src, dst, info); err != nil {
 					return err
 				}
 			case info.Mode()&os.ModeSymlink != 0:
-				target, err := os.Readlink(src)
-				if err != nil {
-					return err
-				}
-				if err := os.Symlink(target, dst); err != nil {
-					return err
-				}
-				if err := chownWorkspaceEntry(dst, info, true); err != nil {
+				if err := copyWorkspaceSymlink(src, dst, info); err != nil {
 					return err
 				}
 			default:
@@ -97,6 +76,56 @@ func copyWorkspaceTree(source, destination string) error {
 		}
 	}
 	return nil
+}
+
+func copyWorkspaceRootMetadata(source, destination string) error {
+	rootInfo, err := os.Lstat(source)
+	if err != nil {
+		return err
+	}
+	if err := os.Chmod(destination, rootInfo.Mode().Perm()); err != nil {
+		return err
+	}
+	if err := chownWorkspaceEntry(destination, rootInfo, false); err != nil {
+		return err
+	}
+	return nil
+}
+
+func copyWorkspaceFile(src, dst string, info os.FileInfo) error {
+	input, err := os.Open(src) // #nosec G304 -- src is beneath the host-selected seed root.
+	if err != nil {
+		return err
+	}
+	output, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm()) // #nosec G304,G306 -- destination and source mode are policy.
+	if err != nil {
+		_ = input.Close()
+		return err
+	}
+	_, copyErr := io.Copy(output, input)
+	inputCloseErr := input.Close()
+	outputCloseErr := output.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if inputCloseErr != nil {
+		return inputCloseErr
+	}
+	if outputCloseErr != nil {
+		return outputCloseErr
+	}
+	return chownWorkspaceEntry(dst, info, false)
+}
+
+func copyWorkspaceSymlink(src, dst string, info os.FileInfo) error {
+	target, err := os.Readlink(src)
+	if err != nil {
+		return err
+	}
+	if err := os.Symlink(target, dst); err != nil {
+		return err
+	}
+	return chownWorkspaceEntry(dst, info, true)
 }
 
 func chownWorkspaceEntry(path string, info os.FileInfo, symlink bool) error {
