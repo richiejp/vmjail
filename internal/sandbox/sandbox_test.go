@@ -511,7 +511,7 @@ func TestHelloWithMultipleSharesPassesEverySocket(t *testing.T) {
 	cfg.Virtiofsd = testFakeVirtiofsd
 	cfg.Shares = []*ShareConfig{
 		{HostDir: dir1, Tag: "bundles", Mountpoint: "/bundles"},
-		{HostDir: dir2, Tag: "workspace", Mountpoint: "/workspace"},
+		{HostDir: dir2, Tag: testTagWorkspace, Mountpoint: "/workspace"},
 	}
 
 	r := &fakeRunner{output: agent.Banner + "\n"}
@@ -594,7 +594,7 @@ func TestShareConfigValidate(t *testing.T) {
 		{
 			name:      "relative host dir",
 			s:         ShareConfig{HostDir: "rel", Tag: "t", Mountpoint: "/m"},
-			errSubstr: "must be absolute",
+			errSubstr: testErrMustAbsolute,
 		},
 		{
 			name:      "missing tag",
@@ -604,7 +604,7 @@ func TestShareConfigValidate(t *testing.T) {
 		{
 			name:      "relative mountpoint",
 			s:         ShareConfig{HostDir: dir, Tag: "t", Mountpoint: "rel"},
-			errSubstr: "must be absolute",
+			errSubstr: testErrMustAbsolute,
 		},
 		{
 			name:      "host dir nonexistent",

@@ -62,6 +62,13 @@ type Config struct {
 	Kernel string
 	// Initramfs is the path to the cpio archive to load as initrd.
 	Initramfs string
+	// APISocket is the absolute host path for Cloud Hypervisor's HTTP-over-
+	// Unix control socket. It is required when WorkspaceDisk is configured so
+	// freeze and live-resize operations cannot silently become unavailable.
+	APISocket string
+	// WorkspaceDisk is the retained writable block device attached to this VM.
+	// OCI rootfs and read-only host shares continue to use virtiofs.
+	WorkspaceDisk *DiskConfig
 	// Memory is the guest RAM size, e.g. "256M". Defaults to 256M when
 	// empty so simple smoke tests don't need to think about it. When
 	// Shares is non-empty the value is silently upgraded to include
@@ -197,6 +204,13 @@ type Config struct {
 	ObserveSummaryPath string
 }
 
+// DiskConfig identifies a retained qcow2 workspace image. ID is the stable
+// Cloud Hypervisor device identifier used by /vm.resize-disk.
+type DiskConfig struct {
+	Path string
+	ID   string
+}
+
 // PortForward declares one Slice C1 port-forward: traffic the
 // sandbox-host (via DialGuestVsock + the CH hybrid-vsock CONNECT
 // proxy) sends to VsockPort on the guest side gets relayed by the
@@ -292,6 +306,17 @@ func (c *Config) validate() error {
 	if c.Initramfs == "" {
 		return fmt.Errorf("sandbox: Initramfs path is required")
 	}
+	if c.APISocket != "" && !filepath.IsAbs(c.APISocket) {
+		return fmt.Errorf("sandbox: APISocket %q must be absolute", c.APISocket)
+	}
+	if c.WorkspaceDisk != nil {
+		if err := c.WorkspaceDisk.validate(); err != nil {
+			return err
+		}
+		if c.APISocket == "" {
+			return errors.New("sandbox: APISocket is required when WorkspaceDisk is configured")
+		}
+	}
 	if len(c.Shares) > 0 {
 		if c.Virtiofsd == "" {
 			return fmt.Errorf("sandbox: Virtiofsd path is required when Shares is non-empty")
@@ -320,6 +345,22 @@ func (c *Config) validate() error {
 	}
 	if c.ObserverLogPath != "" && !strings.HasPrefix(c.ObserverLogPath, "/") {
 		return fmt.Errorf("sandbox: ObserverLogPath %q must be absolute", c.ObserverLogPath)
+	}
+	return nil
+}
+
+func (d *DiskConfig) validate() error {
+	if d.Path == "" {
+		return errors.New("sandbox: WorkspaceDisk.Path is required")
+	}
+	if !filepath.IsAbs(d.Path) {
+		return fmt.Errorf("sandbox: WorkspaceDisk.Path %q must be absolute", d.Path)
+	}
+	if d.ID == "" {
+		return errors.New("sandbox: WorkspaceDisk.ID is required")
+	}
+	if strings.ContainsAny(d.ID, ",=") {
+		return fmt.Errorf("sandbox: WorkspaceDisk.ID %q contains a reserved character", d.ID)
 	}
 	return nil
 }
@@ -726,6 +767,13 @@ func buildCloudHypervisorArgs(cfg Config, shareSockets []string) []string {
 	if cfg.Vsock != nil {
 		args = append(args, "--vsock",
 			fmt.Sprintf("cid=%d,socket=%s", cfg.Vsock.GuestCID, cfg.Vsock.HostSocket))
+	}
+	if cfg.WorkspaceDisk != nil {
+		args = append(args, "--disk", fmt.Sprintf("path=%s,id=%s,image_type=qcow2",
+			cfg.WorkspaceDisk.Path, cfg.WorkspaceDisk.ID))
+	}
+	if cfg.APISocket != "" {
+		args = append(args, "--api-socket", "path="+cfg.APISocket)
 	}
 	return args
 }

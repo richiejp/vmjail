@@ -235,12 +235,16 @@ Landed:
   images without adding a host utility, preserving single-static-executable
   Node deployment. It validates sector alignment and the format layout's
   maximum addressable size and initializes all metadata refcounts.
+- Sandbox VMM configuration accepts one qcow2 workspace disk with a stable
+  device ID and requires an absolute Cloud Hypervisor API socket alongside it.
+  A bounded internal HTTP-over-Unix client implements pause, resume, and the
+  pinned `/vm.resize-disk` request used by the later freeze/live-grow path.
 
 Remaining:
 
-- Attach and retain workspace disks through the Cloud Hypervisor API socket;
-  add guest XFS creation, recovery, mount, usage, freeze, resize, grow, and
-  teardown control paths and the required kernel/initramfs tools.
+- Retain workspace disk ownership per Sandbox and add guest XFS creation,
+  recovery, mount, usage, freeze, resize, grow, and teardown control paths and
+  the required kernel/initramfs tools.
 - Replace writable workspace virtiofs materialization with manifest streaming
   into the disk, and remove legacy `mounts/*` trees on first migration without
   importing them.
