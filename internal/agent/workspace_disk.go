@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
 
 const (
@@ -23,6 +24,7 @@ type workspaceDiskDeps struct {
 	bindMount func(string, string) error
 	copyTree  func(string, string) error
 	run       func(string, ...string) error
+	usage     func(string) (workspacesnapshot.Usage, error)
 }
 
 func applyWorkspaceDisk(w io.Writer, deps workspaceDiskDeps, cfg *agentv1.GuestConfig) error {

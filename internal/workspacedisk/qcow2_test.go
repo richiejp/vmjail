@@ -37,6 +37,40 @@ func (b *writerAtBuffer) ReadAt(p []byte, off int64) (int, error) {
 
 func (*writerAtBuffer) Sync() error { return nil }
 
+type failingGrowFile struct {
+	writerAtBuffer
+	readErr     error
+	writeErrAt  int64
+	shortAt     int64
+	syncErrCall int
+	syncCalls   int
+}
+
+func (f *failingGrowFile) ReadAt(p []byte, off int64) (int, error) {
+	if f.readErr != nil {
+		return 0, f.readErr
+	}
+	return f.writerAtBuffer.ReadAt(p, off)
+}
+
+func (f *failingGrowFile) WriteAt(p []byte, off int64) (int, error) {
+	if off == f.writeErrAt {
+		return 0, errors.New("write failed")
+	}
+	if off == f.shortAt {
+		return len(p) - 1, nil
+	}
+	return f.writerAtBuffer.WriteAt(p, off)
+}
+
+func (f *failingGrowFile) Sync() error {
+	f.syncCalls++
+	if f.syncCalls == f.syncErrCall {
+		return errors.New("sync failed")
+	}
+	return nil
+}
+
 func TestCreateEmptyQCOW2(t *testing.T) {
 	var got writerAtBuffer
 	if err := CreateEmptyQCOW2(&got, defaultWorkspaceSize); err != nil {
@@ -156,5 +190,48 @@ func TestGrowQCOW2RejectsInvalidInputs(t *testing.T) {
 	corrupt.data = make([]byte, headerLength)
 	if err := GrowQCOW2(&corrupt, defaultWorkspaceSize); err == nil {
 		t.Fatal("corrupt image accepted")
+	}
+	for _, mutate := range []func([]byte){
+		func(header []byte) { binary.BigEndian.PutUint32(header[20:], clusterBits-1) },
+		func(header []byte) { binary.BigEndian.PutUint32(header[100:], headerLength-1) },
+	} {
+		var image writerAtBuffer
+		if err := CreateEmptyQCOW2(&image, defaultWorkspaceSize); err != nil {
+			t.Fatal(err)
+		}
+		mutate(image.data)
+		if err := GrowQCOW2(&image, defaultWorkspaceSize+sectorSize); err == nil {
+			t.Fatal("unsupported geometry accepted")
+		}
+	}
+}
+
+func TestGrowQCOW2IOFailures(t *testing.T) {
+	newFile := func() *failingGrowFile {
+		file := &failingGrowFile{writeErrAt: -1, shortAt: -1}
+		if err := CreateEmptyQCOW2(&file.writerAtBuffer, defaultWorkspaceSize); err != nil {
+			t.Fatal(err)
+		}
+		return file
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*failingGrowFile)
+	}{
+		{name: "read", mutate: func(f *failingGrowFile) { f.readErr = errors.New("read failed") }},
+		{name: "L1 write", mutate: func(f *failingGrowFile) { f.writeErrAt = 36 }},
+		{name: "L1 short write", mutate: func(f *failingGrowFile) { f.shortAt = 36 }},
+		{name: "L1 sync", mutate: func(f *failingGrowFile) { f.syncErrCall = 1 }},
+		{name: "size write", mutate: func(f *failingGrowFile) { f.writeErrAt = 24 }},
+		{name: "size short write", mutate: func(f *failingGrowFile) { f.shortAt = 24 }},
+		{name: "size sync", mutate: func(f *failingGrowFile) { f.syncErrCall = 2 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			file := newFile()
+			tc.mutate(file)
+			if err := GrowQCOW2(file, defaultWorkspaceSize+sectorSize); err == nil {
+				t.Fatal("I/O failure ignored")
+			}
+		})
 	}
 }

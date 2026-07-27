@@ -203,3 +203,16 @@ func TestCopyWorkspaceTreePermissionErrors(t *testing.T) {
 		t.Fatal("directory creation beneath non-directory destination succeeded")
 	}
 }
+
+func TestWorkspaceDiskUsage(t *testing.T) {
+	usage, err := workspaceDiskUsage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Total == 0 || usage.Used > usage.Total || usage.Available > usage.Total {
+		t.Fatalf("invalid filesystem usage: %#v", usage)
+	}
+	if _, err := workspaceDiskUsage(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("missing filesystem accepted")
+	}
+}

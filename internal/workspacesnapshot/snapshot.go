@@ -14,13 +14,45 @@ import (
 	"strings"
 )
 
-const DefaultVsockPort uint32 = 9200
+const DefaultVsockPort uint32 = 9300
+
+const (
+	operationUsage = "usage"
+	operationGrow  = "grow"
+)
 
 type Request struct {
+	Operation string `json:"operation,omitempty"`
 	Directory string `json:"directory"`
 }
 
-func Serve(ctx context.Context, listener net.Listener, roots map[string]string) error {
+// Usage is the guest filesystem accounting returned to the Node. Available is
+// included so callers can distinguish reserved filesystem space from data in
+// use rather than assuming Used == Total-Available on every filesystem.
+type Usage struct {
+	Total     uint64 `json:"total_bytes"`
+	Used      uint64 `json:"used_bytes"`
+	Available uint64 `json:"available_bytes"`
+}
+
+// Control provides the guest-local XFS operations exposed beside snapshots.
+// Nil functions make that operation unavailable without weakening snapshot
+// service behavior.
+type Control struct {
+	Usage func() (Usage, error)
+	Grow  func() error
+}
+
+type response struct {
+	Usage *Usage `json:"usage,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+func Serve(ctx context.Context, listener net.Listener, roots map[string]string, control ...Control) error {
+	var ctl Control
+	if len(control) > 0 {
+		ctl = control[0]
+	}
 	go func() {
 		<-ctx.Done()
 		_ = listener.Close()
@@ -36,15 +68,37 @@ func Serve(ctx context.Context, listener net.Listener, roots map[string]string) 
 		}
 		go func() {
 			defer func() { _ = conn.Close() }()
-			_ = serveOne(conn, roots)
+			_ = serveOne(conn, roots, ctl)
 		}()
 	}
 }
 
-func serveOne(conn net.Conn, roots map[string]string) error {
+func serveOne(conn net.Conn, roots map[string]string, control Control) error {
 	var request Request
 	if err := json.NewDecoder(io.LimitReader(conn, 4096)).Decode(&request); err != nil {
 		return err
+	}
+	switch request.Operation {
+	case operationUsage:
+		if control.Usage == nil {
+			return json.NewEncoder(conn).Encode(response{Error: "workspace usage unavailable"})
+		}
+		usage, err := control.Usage()
+		if err != nil {
+			return json.NewEncoder(conn).Encode(response{Error: err.Error()})
+		}
+		return json.NewEncoder(conn).Encode(response{Usage: &usage})
+	case operationGrow:
+		if control.Grow == nil {
+			return json.NewEncoder(conn).Encode(response{Error: "workspace grow unavailable"})
+		}
+		if err := control.Grow(); err != nil {
+			return json.NewEncoder(conn).Encode(response{Error: err.Error()})
+		}
+		return json.NewEncoder(conn).Encode(response{})
+	case "":
+	default:
+		return json.NewEncoder(conn).Encode(response{Error: "unknown workspace operation"})
 	}
 	root, ok := roots[request.Directory]
 	if !ok {
@@ -100,6 +154,47 @@ func serveOne(conn net.Conn, roots map[string]string) error {
 		return err
 	}
 	return tw.Close()
+}
+
+// GetUsage reads bounded filesystem accounting from the guest service.
+func GetUsage(ctx context.Context, dial func(context.Context) (net.Conn, error)) (Usage, error) {
+	var result Usage
+	err := controlRequest(ctx, dial, Request{Operation: operationUsage}, func(resp response) error {
+		if resp.Usage == nil {
+			return errors.New("workspace snapshot: usage response is empty")
+		}
+		result = *resp.Usage
+		return nil
+	})
+	return result, err
+}
+
+// Grow asks the guest to expand its mounted XFS filesystem to the block
+// device's current size.
+func Grow(ctx context.Context, dial func(context.Context) (net.Conn, error)) error {
+	return controlRequest(ctx, dial, Request{Operation: operationGrow}, nil)
+}
+
+func controlRequest(ctx context.Context, dial func(context.Context) (net.Conn, error), request Request, consume func(response) error) error {
+	conn, err := dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	if err := json.NewEncoder(conn).Encode(request); err != nil {
+		return err
+	}
+	var resp response
+	if err := json.NewDecoder(io.LimitReader(conn, 4096)).Decode(&resp); err != nil {
+		return err
+	}
+	if resp.Error != "" {
+		return errors.New(resp.Error)
+	}
+	if consume != nil {
+		return consume(resp)
+	}
+	return nil
 }
 
 func Pull(ctx context.Context, dial func(context.Context) (net.Conn, error), directory, destination string) error {

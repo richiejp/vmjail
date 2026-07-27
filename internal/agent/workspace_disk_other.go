@@ -5,6 +5,8 @@ package agent
 import (
 	"errors"
 	"os"
+
+	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
 
 func defaultWorkspaceDiskDeps() workspaceDiskDeps {
@@ -16,5 +18,6 @@ func defaultWorkspaceDiskDeps() workspaceDiskDeps {
 		bindMount: func(string, string) error { return err() },
 		copyTree:  func(string, string) error { return err() },
 		run:       func(string, ...string) error { return err() },
+		usage:     func(string) (workspacesnapshot.Usage, error) { return workspacesnapshot.Usage{}, err() },
 	}
 }

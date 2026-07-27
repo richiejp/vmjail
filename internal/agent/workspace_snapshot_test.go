@@ -31,7 +31,7 @@ func TestStartWorkspaceSnapshotListener(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	startWorkspaceSnapshotListener(ctx, &bytes.Buffer{}, &agentv1.GuestConfig{WorkspaceDisk: &agentv1.GuestConfig_WorkspaceDisk{
 		Mounts: []*agentv1.GuestConfig_WorkspaceDisk_Mount{{Directory: testWorkspaceDirectory}, nil},
-	}})
+	}}, defaultWorkspaceDiskDeps())
 	if port != workspacesnapshot.DefaultVsockPort {
 		t.Fatalf("listen port = %d", port)
 	}
@@ -47,10 +47,10 @@ func TestStartWorkspaceSnapshotListenerDisabledAndListenError(t *testing.T) {
 		return nil, errors.New("unavailable")
 	}
 	var report bytes.Buffer
-	startWorkspaceSnapshotListener(t.Context(), &report, nil)
+	startWorkspaceSnapshotListener(t.Context(), &report, nil, workspaceDiskDeps{})
 	startWorkspaceSnapshotListener(t.Context(), &report, &agentv1.GuestConfig{WorkspaceDisk: &agentv1.GuestConfig_WorkspaceDisk{
 		Mounts: []*agentv1.GuestConfig_WorkspaceDisk_Mount{{Directory: testWorkspaceDirectory}},
-	}})
+	}}, defaultWorkspaceDiskDeps())
 	if calls != 1 || !strings.Contains(report.String(), "unavailable") {
 		t.Fatalf("calls=%d report=%q", calls, report.String())
 	}
@@ -64,7 +64,7 @@ func TestWorkspaceSnapshotListenerReportsServeError(t *testing.T) {
 	report := make(snapshotReport, 1)
 	startWorkspaceSnapshotListener(t.Context(), report, &agentv1.GuestConfig{WorkspaceDisk: &agentv1.GuestConfig_WorkspaceDisk{
 		Mounts: []*agentv1.GuestConfig_WorkspaceDisk_Mount{{Directory: testWorkspaceDirectory}},
-	}})
+	}}, defaultWorkspaceDiskDeps())
 	if got := <-report; !strings.Contains(got, "accept failed") {
 		t.Fatalf("report = %q", got)
 	}

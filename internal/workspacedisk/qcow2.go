@@ -93,7 +93,8 @@ func GrowQCOW2(dst interface {
 	io.ReaderAt
 	io.WriterAt
 	Sync() error
-}, virtualSize uint64) error {
+}, virtualSize uint64,
+) error {
 	if dst == nil {
 		return errors.New("workspacedisk: nil destination")
 	}

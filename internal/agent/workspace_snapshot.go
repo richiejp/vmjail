@@ -10,7 +10,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
 
-func startWorkspaceSnapshotListener(ctx context.Context, w io.Writer, cfg *agentv1.GuestConfig) {
+func startWorkspaceSnapshotListener(ctx context.Context, w io.Writer, cfg *agentv1.GuestConfig, deps workspaceDiskDeps) {
 	disk := cfg.GetWorkspaceDisk()
 	if disk == nil || len(disk.GetMounts()) == 0 {
 		return
@@ -27,7 +27,11 @@ func startWorkspaceSnapshotListener(ctx context.Context, w io.Writer, cfg *agent
 		return
 	}
 	go func() {
-		if err := workspacesnapshot.Serve(ctx, listener, roots); err != nil && ctx.Err() == nil {
+		control := workspacesnapshot.Control{
+			Usage: func() (workspacesnapshot.Usage, error) { return deps.usage(workspaceDiskRoot) },
+			Grow:  func() error { return deps.run("/bin/xfs_growfs", workspaceDiskRoot) },
+		}
+		if err := workspacesnapshot.Serve(ctx, listener, roots, control); err != nil && ctx.Err() == nil {
 			_, _ = fmt.Fprintf(w, "workspace-snapshot: serve: %v\n", err)
 		}
 	}()

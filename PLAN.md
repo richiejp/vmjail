@@ -262,11 +262,14 @@ Landed:
   push/mutate/pull test proves guest writes round-trip from XFS to the client.
 - Retained qcow2 images can now grow in place with crash-safe header ordering;
   shrinking is rejected so a resource edit cannot discard protected data.
+- The bounded guest workspace service now reports XFS total/used/available
+  bytes and runs `xfs_growfs` on request alongside snapshot streaming. It uses
+  a dedicated vsock port, avoiding the credential-delivery listener.
 
 Remaining:
 
-- Add guest XFS usage, freeze, resize/grow, and stop-time teardown snapshot
-  control paths.
+- Add host-side usage monitoring, automatic freeze, resize orchestration, and
+  stop-time teardown snapshot control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
 - Add durable per-CAS Badger metadata, transactional manifest generations,

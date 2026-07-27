@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+
+	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
 
 type workspaceDirectoryPair struct{ source, destination string }
@@ -31,7 +33,20 @@ func defaultWorkspaceDiskDeps() workspaceDiskDeps {
 			}
 			return nil
 		},
+		usage: workspaceDiskUsage,
 	}
+}
+
+func workspaceDiskUsage(path string) (workspacesnapshot.Usage, error) {
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(path, &stat); err != nil {
+		return workspacesnapshot.Usage{}, err
+	}
+	blockSize := uint64(stat.Bsize) // #nosec G115 -- Linux statfs block size is non-negative.
+	total := stat.Blocks * blockSize
+	available := stat.Bavail * blockSize
+	free := stat.Bfree * blockSize
+	return workspacesnapshot.Usage{Total: total, Used: total - free, Available: available}, nil
 }
 
 func copyWorkspaceTree(source, destination string) error {

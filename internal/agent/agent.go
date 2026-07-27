@@ -200,7 +200,7 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	if err := applyWorkspaceDisk(w, d.workspace, cfg); err != nil {
 		return err
 	}
-	startWorkspaceSnapshotListener(ctx, w, cfg)
+	startWorkspaceSnapshotListener(ctx, w, cfg, d.workspace)
 	secretCleanup, err := startSecretListener(ctx, w, d)
 	if err != nil {
 		return err
