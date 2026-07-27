@@ -26,6 +26,8 @@ var (
 	ErrInvalidSize = errors.New("workspacedisk: invalid virtual size")
 	// ErrUnalignedSize reports a virtual size that is not sector aligned.
 	ErrUnalignedSize = errors.New("workspacedisk: virtual size is not sector aligned")
+	// ErrShrink reports an attempted resize that would discard addressable guest data.
+	ErrShrink = errors.New("workspacedisk: shrinking workspace disks is not supported")
 )
 
 // MaxVirtualSize is the largest image addressable by the one-cluster L1 table
@@ -76,6 +78,75 @@ func CreateEmptyQCOW2(dst io.WriterAt, virtualSize uint64) error {
 	}
 	if written != len(image) {
 		return fmt.Errorf("workspacedisk: write qcow2 metadata: %w", io.ErrShortWrite)
+	}
+	return nil
+}
+
+// GrowQCOW2 updates an existing image header to expose virtualSize bytes. The
+// deterministic image layout reserves a complete L1 cluster up front, so no
+// metadata relocation is needed for sizes accepted by CreateEmptyQCOW2.
+//
+// The L1 entry count is persisted before the virtual size. A crash between the
+// writes therefore leaves either the old usable size or the new one, never a
+// virtual size whose addressing metadata is too small.
+func GrowQCOW2(dst interface {
+	io.ReaderAt
+	io.WriterAt
+	Sync() error
+}, virtualSize uint64) error {
+	if dst == nil {
+		return errors.New("workspacedisk: nil destination")
+	}
+	if virtualSize == 0 || virtualSize > MaxVirtualSize {
+		return fmt.Errorf("%w: got %d, want 1..%d bytes", ErrInvalidSize, virtualSize, MaxVirtualSize)
+	}
+	if virtualSize%sectorSize != 0 {
+		return fmt.Errorf("%w: got %d bytes", ErrUnalignedSize, virtualSize)
+	}
+	var header [headerLength]byte
+	if _, err := dst.ReadAt(header[:], 0); err != nil {
+		return fmt.Errorf("workspacedisk: read qcow2 metadata: %w", err)
+	}
+	if err := validateHeader(header[:]); err != nil {
+		return err
+	}
+	current := binary.BigEndian.Uint64(header[24:])
+	if virtualSize < current {
+		return fmt.Errorf("%w: current=%d requested=%d", ErrShrink, current, virtualSize)
+	}
+	if virtualSize == current {
+		return nil
+	}
+	var encoded [8]byte
+	binary.BigEndian.PutUint32(encoded[:4], l1Entries(virtualSize))
+	if written, err := dst.WriteAt(encoded[:4], 36); err != nil || written != 4 {
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+		return fmt.Errorf("workspacedisk: write L1 size: %w", err)
+	}
+	if err := dst.Sync(); err != nil {
+		return fmt.Errorf("workspacedisk: sync L1 size: %w", err)
+	}
+	binary.BigEndian.PutUint64(encoded[:], virtualSize)
+	if written, err := dst.WriteAt(encoded[:], 24); err != nil || written != 8 {
+		if err == nil {
+			err = io.ErrShortWrite
+		}
+		return fmt.Errorf("workspacedisk: write virtual size: %w", err)
+	}
+	if err := dst.Sync(); err != nil {
+		return fmt.Errorf("workspacedisk: sync virtual size: %w", err)
+	}
+	return nil
+}
+
+func validateHeader(header []byte) error {
+	if binary.BigEndian.Uint32(header[0:]) != qcowMagic || binary.BigEndian.Uint32(header[4:]) != qcowVersion {
+		return errors.New("workspacedisk: unsupported or corrupt qcow2 header")
+	}
+	if binary.BigEndian.Uint32(header[20:]) != clusterBits || binary.BigEndian.Uint32(header[100:]) < headerLength {
+		return errors.New("workspacedisk: unsupported qcow2 geometry")
 	}
 	return nil
 }

@@ -24,6 +24,19 @@ func (b *writerAtBuffer) WriteAt(p []byte, off int64) (int, error) {
 	return copy(b.data[int(off):], p), nil
 }
 
+func (b *writerAtBuffer) ReadAt(p []byte, off int64) (int, error) {
+	if int(off) >= len(b.data) {
+		return 0, io.EOF
+	}
+	n := copy(p, b.data[int(off):])
+	if n != len(p) {
+		return n, io.EOF
+	}
+	return n, nil
+}
+
+func (*writerAtBuffer) Sync() error { return nil }
+
 func TestCreateEmptyQCOW2(t *testing.T) {
 	var got writerAtBuffer
 	if err := CreateEmptyQCOW2(&got, defaultWorkspaceSize); err != nil {
@@ -103,5 +116,45 @@ func TestCreateEmptyQCOW2RejectsNilDestination(t *testing.T) {
 func TestCreateEmptyQCOW2RejectsShortWrite(t *testing.T) {
 	if err := CreateEmptyQCOW2(shortWriter{}, defaultWorkspaceSize); !errors.Is(err, io.ErrShortWrite) {
 		t.Fatalf("error = %v, want %v", err, io.ErrShortWrite)
+	}
+}
+
+func TestGrowQCOW2(t *testing.T) {
+	var image writerAtBuffer
+	if err := CreateEmptyQCOW2(&image, defaultWorkspaceSize); err != nil {
+		t.Fatal(err)
+	}
+	const grown = 24 << 30
+	if err := GrowQCOW2(&image, grown); err != nil {
+		t.Fatal(err)
+	}
+	if got := binary.BigEndian.Uint64(image.data[24:]); got != grown {
+		t.Errorf("virtual size = %d, want %d", got, uint64(grown))
+	}
+	if got := binary.BigEndian.Uint32(image.data[36:]); got != l1Entries(grown) {
+		t.Errorf("L1 entries = %d, want %d", got, l1Entries(grown))
+	}
+	if err := GrowQCOW2(&image, grown); err != nil {
+		t.Fatalf("idempotent grow: %v", err)
+	}
+	if err := GrowQCOW2(&image, defaultWorkspaceSize); !errors.Is(err, ErrShrink) {
+		t.Fatalf("shrink error = %v, want %v", err, ErrShrink)
+	}
+}
+
+func TestGrowQCOW2RejectsInvalidInputs(t *testing.T) {
+	if err := GrowQCOW2(nil, defaultWorkspaceSize); err == nil {
+		t.Fatal("nil destination accepted")
+	}
+	for _, size := range []uint64{0, 513, MaxVirtualSize + sectorSize} {
+		var image writerAtBuffer
+		if err := GrowQCOW2(&image, size); err == nil {
+			t.Errorf("invalid size %d accepted", size)
+		}
+	}
+	var corrupt writerAtBuffer
+	corrupt.data = make([]byte, headerLength)
+	if err := GrowQCOW2(&corrupt, defaultWorkspaceSize); err == nil {
+		t.Fatal("corrupt image accepted")
 	}
 }

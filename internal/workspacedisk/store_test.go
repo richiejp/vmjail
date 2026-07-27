@@ -414,3 +414,24 @@ func TestStoreRejectsUnsafeInputs(t *testing.T) {
 		t.Fatal("syncDir accepted missing directory")
 	}
 }
+
+func TestStoreGrow(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const grown = 24 << 30
+	if err := store.Grow(testWorkspaceID, grown); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := VirtualSize(path); err != nil || got != grown {
+		t.Fatalf("VirtualSize = %d, %v; want %d", got, err, uint64(grown))
+	}
+	if err := store.Grow(testWorkspaceID, DefaultDiskBytes); !errors.Is(err, ErrShrink) {
+		t.Fatalf("shrink error = %v, want %v", err, ErrShrink)
+	}
+}

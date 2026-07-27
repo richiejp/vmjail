@@ -260,6 +260,8 @@ Landed:
   over the VM's hybrid-vsock socket. Live pulls refresh the Node's host staging
   tree before transactionally building its CAS manifest; the real-KVM
   push/mutate/pull test proves guest writes round-trip from XFS to the client.
+- Retained qcow2 images can now grow in place with crash-safe header ordering;
+  shrinking is rejected so a resource edit cannot discard protected data.
 
 Remaining:
 

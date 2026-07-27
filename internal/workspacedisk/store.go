@@ -161,17 +161,40 @@ func VirtualSize(path string) (uint64, error) {
 	if closeErr != nil {
 		return 0, fmt.Errorf("workspacedisk: close image: %w", closeErr)
 	}
-	if binary.BigEndian.Uint32(header[0:]) != qcowMagic || binary.BigEndian.Uint32(header[4:]) != qcowVersion {
-		return 0, errors.New("workspacedisk: unsupported or corrupt qcow2 header")
-	}
-	if binary.BigEndian.Uint32(header[20:]) != clusterBits || binary.BigEndian.Uint32(header[100:]) < headerLength {
-		return 0, errors.New("workspacedisk: unsupported qcow2 geometry")
+	if err := validateHeader(header[:]); err != nil {
+		return 0, err
 	}
 	size := binary.BigEndian.Uint64(header[24:])
 	if size == 0 || size%sectorSize != 0 {
 		return 0, errors.New("workspacedisk: invalid qcow2 virtual size")
 	}
 	return size, nil
+}
+
+// Grow increases a retained image's virtual allowance and durably publishes
+// the new qcow2 geometry. Shrinks are rejected because they could discard
+// protected workspace data.
+func (s *Store) Grow(workspaceID string, virtualSize uint64) error {
+	if s == nil || s.root == "" {
+		return errors.New("workspacedisk: nil store")
+	}
+	if err := validateWorkspaceID(workspaceID); err != nil {
+		return err
+	}
+	path := filepath.Join(s.root, workspaceID+diskSuffix)
+	file, err := os.OpenFile(path, os.O_RDWR, 0) // #nosec G304 -- path is beneath the validated store root.
+	if err != nil {
+		return fmt.Errorf("workspacedisk: open image for growth: %w", err)
+	}
+	growErr := GrowQCOW2(file, virtualSize)
+	closeErr := file.Close()
+	if growErr != nil {
+		return growErr
+	}
+	if closeErr != nil {
+		return fmt.Errorf("workspacedisk: close grown image: %w", closeErr)
+	}
+	return nil
 }
 
 func (s *Store) migrateLegacyMounts(legacyRoot string) error {
