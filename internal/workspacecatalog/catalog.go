@@ -204,6 +204,9 @@ type Spec struct {
 	// SandboxSpec at Launch, same as the GPU fields above.
 	MemoryBytes uint64
 	CPUCores    uint32
+	// DiskBytes is the retained XFS workspace allowance. Zero selects the
+	// Node's 20 GiB default.
+	DiskBytes uint64
 	// NestedVirt grants the workload nested-virtualisation access
 	// (/dev/kvm bind + cgroup device-allow). False ⇒ disabled.
 	// Projected onto SandboxSpec.nested_virtualization at Launch.
@@ -622,7 +625,7 @@ func specsEqual(a, b Spec) bool {
 	return a.ImageRef == b.ImageRef && a.PendingBuildID == b.PendingBuildID && a.DevcontainerPath == b.DevcontainerPath &&
 		slices.Equal(a.Mounts, b.Mounts) && slices.Equal(a.Env, b.Env) && slices.Equal(a.Ports, b.Ports) &&
 		a.TargetSandboxFingerprint == b.TargetSandboxFingerprint && a.GpuCount == b.GpuCount && a.GpuMinVRAM == b.GpuMinVRAM &&
-		a.Isolation == b.Isolation && a.MemoryBytes == b.MemoryBytes && a.CPUCores == b.CPUCores && a.NestedVirt == b.NestedVirt &&
+		a.Isolation == b.Isolation && a.MemoryBytes == b.MemoryBytes && a.CPUCores == b.CPUCores && a.DiskBytes == b.DiskBytes && a.NestedVirt == b.NestedVirt &&
 		a.PrivilegedFuseMounts == b.PrivilegedFuseMounts && a.PrivilegedBuild == b.PrivilegedBuild
 }
 

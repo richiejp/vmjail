@@ -1085,6 +1085,11 @@ func (td *vmTeardown) run() {
 
 func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets []string, cgroupDir string, collectNet func() *observability.NetSample) (io.ReadCloser, func(), error) {
 	args := buildCloudHypervisorArgs(cfg, shareSockets)
+	if cfg.APISocket != "" {
+		if err := os.Remove(cfg.APISocket); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, nil, fmt.Errorf("sandbox: remove stale API socket: %w", err)
+		}
+	}
 	// #nosec G204 — cfg.CloudHypervisor is the operator-supplied
 	// VMM path; argv elements are derived from validated Config
 	// fields (Kernel/Initramfs/Memory) plus our own emitted
@@ -1148,6 +1153,9 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 				oops.Must("wait cloud-hypervisor", waitErr)
 			}
 		})
+		if cfg.APISocket != "" {
+			oops.Skip("sandbox: remove API socket", os.Remove(cfg.APISocket), fs.ErrNotExist)
+		}
 		// The cgroup itself is removed at the orchestration layer
 		// after stopShare reaps the virtiofsd sidecars too — rmdir
 		// only succeeds when every task in the cgroup is gone.

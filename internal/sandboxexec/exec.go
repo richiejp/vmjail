@@ -41,6 +41,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandboxnet"
 	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspace"
+	"github.com/richiejp/darkaifactory/internal/workspacedisk"
 )
 
 // Phase tokens reported on heartbeat. Match the PascalCase values
@@ -79,6 +80,12 @@ type MountMaterializer interface {
 	SetLiveMount(syncKey, dir string)
 	PreserveLiveMount(ctx context.Context, syncKey string) error
 	ClearLiveMount(syncKey string)
+}
+
+// WorkspaceDiskPreparer atomically creates or reopens the retained qcow2
+// image keyed by Workspace UUID.
+type WorkspaceDiskPreparer interface {
+	Prepare(workspaceID string, virtualSize uint64) (path string, created bool, err error)
 }
 
 // Runner is the function the Executor calls to boot a VM. The
@@ -158,6 +165,7 @@ type Executor struct {
 	// unaffected.
 	mountMaterializer MountMaterializer
 	mountBackingDir   string
+	workspaceDisks    WorkspaceDiskPreparer
 	// observerDir, when non-empty, is the absolute parent directory
 	// under which each dispatch gets a per-uid host-side observer log
 	// (<observerDir>/<uid>/observer.jsonl). resolveBootConfig defaults
@@ -274,6 +282,9 @@ type Config struct {
 	// per-Sandbox mount backing trees are materialised. Required when
 	// MountMaterializer is set; ignored otherwise.
 	MountBackingDir string
+	// WorkspaceDisks enables retained qcow2 disks for dispatched Workspaces.
+	// It requires VsockDir, which also holds the per-Sandbox VMM API socket.
+	WorkspaceDisks WorkspaceDiskPreparer
 	// ObserverDir, when non-empty, is the absolute parent directory
 	// under which each dispatched VM gets a per-uid host-side observer
 	// log. `daft-sandboxd serve` sets it to the per-sandbox state dir
@@ -337,9 +348,9 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.Runner == nil {
 		cfg.Runner = sandbox.Serve
 	}
-	if cfg.Bridger != nil || cfg.AttachRegistry != nil || cfg.JobRegistry != nil || cfg.NetEnabled {
+	if cfg.Bridger != nil || cfg.AttachRegistry != nil || cfg.JobRegistry != nil || cfg.NetEnabled || cfg.WorkspaceDisks != nil {
 		if cfg.VsockDir == "" {
-			return nil, errors.New("sandboxexec: VsockDir required when Bridger, AttachRegistry, JobRegistry, or NetEnabled is set")
+			return nil, errors.New("sandboxexec: VsockDir required when Bridger, AttachRegistry, JobRegistry, NetEnabled, or WorkspaceDisks is set")
 		}
 		if !filepath.IsAbs(cfg.VsockDir) {
 			return nil, fmt.Errorf("sandboxexec: VsockDir %q must be absolute", cfg.VsockDir)
@@ -384,6 +395,7 @@ func New(cfg Config) (*Executor, error) {
 		egressProxy:       cfg.EgressProxy,
 		mountMaterializer: cfg.MountMaterializer,
 		mountBackingDir:   cfg.MountBackingDir,
+		workspaceDisks:    cfg.WorkspaceDisks,
 		observerDir:       cfg.ObserverDir,
 		buildImageRef:     cfg.BuildImageRef,
 		buildRunner:       cfg.BuildRunner,
@@ -755,7 +767,34 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 	e.applyVsockEgress(&cfg, uid, true, true, spec.GetEgressPolicy())
 	e.applyObserverLog(&cfg, uid)
 	e.applyObserveSummary(&cfg, uid)
+	if err := e.applyWorkspaceDisk(&cfg, uid, spec); err != nil {
+		unlock()
+		return sandbox.Config{}, func() {}, err
+	}
 	return cfg, unlock, nil
+}
+
+const workspaceDiskID = "workspace"
+
+func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *sandboxv1.SandboxSpec) error {
+	if e.workspaceDisks == nil {
+		return nil
+	}
+	workspaceID := spec.GetWorkspaceUuid()
+	if workspaceID == "" {
+		return errors.New("sandboxexec: retained disk requires spec.workspace_uuid")
+	}
+	size := spec.GetDiskBytes()
+	if size == 0 {
+		size = workspacedisk.DefaultDiskBytes
+	}
+	path, _, err := e.workspaceDisks.Prepare(workspaceID, size)
+	if err != nil {
+		return fmt.Errorf("sandboxexec: prepare workspace disk: %w", err)
+	}
+	cfg.WorkspaceDisk = &sandbox.DiskConfig{Path: path, ID: workspaceDiskID}
+	cfg.APISocket = filepath.Join(e.vsockDir, uid+".api.sock")
+	return nil
 }
 
 // applyObserverLog defaults cfg.ObserverLogPath to a per-uid file

@@ -777,6 +777,7 @@ func TestWorkspaceSpecProjectionRoundTripsAllFields(t *testing.T) {
 		Isolation:             isolationShared,
 		MemoryBytes:           16 << 30,
 		CPUCores:              8,
+		DiskBytes:             24 << 30,
 		NestedVirtualization:  true,
 		PrivilegedFuseMounts:  true,
 		PrivilegedBuild:       true,

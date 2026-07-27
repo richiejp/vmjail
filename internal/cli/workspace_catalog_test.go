@@ -573,10 +573,19 @@ func TestWorkspaceAcquireAndReleaseRoundTrip(t *testing.T) {
 // TestWorkspaceResourcesSetsMemoryAndCPUs drives the resources
 // subcommand end-to-end: parse the human size, call SetResources,
 // render the summary.
-func TestWorkspaceResourcesSetsMemoryAndCPUs(t *testing.T) {
+func TestWorkspaceResourcesSetsMemoryCPUsAndDisk(t *testing.T) {
 	h := newWorkspaceE2EHarness(t)
 	h.run(append([]string{createSubName}, h.commonArgs...)...)
-	h.run(append([]string{resourcesSubName, "--memory", "2G", "--cpus", "2"}, h.commonArgs...)...)
+	h.run(append([]string{resourcesSubName, "--memory", "2G", "--cpus", "2", "--disk", "24G"}, h.commonArgs...)...)
+}
+
+func TestWorkspaceResourcesRejectsBadDisk(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	_, err := h.runErr(append([]string{resourcesSubName, "--disk", "lots"}, h.commonArgs...)...)
+	if err == nil {
+		t.Error("expected error for --disk lots")
+	}
 }
 
 // TestWorkspaceResourcesRejectsBadMemory pins the client-side
@@ -699,6 +708,9 @@ func TestParseMemoryBytes(t *testing.T) {
 	}
 	if _, err := parseMemoryBytes("nope"); err == nil {
 		t.Error("parseMemoryBytes(nope): want error")
+	}
+	if _, err := parseMemoryBytes("18446744073709551615T"); err == nil {
+		t.Error("parseMemoryBytes overflow: want error")
 	}
 }
 

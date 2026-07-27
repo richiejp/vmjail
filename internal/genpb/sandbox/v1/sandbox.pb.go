@@ -458,8 +458,11 @@ type SandboxSpec struct {
 	// non-secret policy: it selects a built-in guest destination and environment
 	// mapping; neither callers nor Nodes can choose a path or variable name.
 	AgentCredential *AgentCredential `protobuf:"bytes,16,opt,name=agent_credential,json=agentCredential,proto3" json:"agent_credential,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Retained XFS workspace-disk allowance in bytes. Zero selects the Node's
+	// fixed 20 GiB default. The qcow2 virtual size is the ENOSPC boundary.
+	DiskBytes     uint64 `protobuf:"varint,17,opt,name=disk_bytes,json=diskBytes,proto3" json:"disk_bytes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SandboxSpec) Reset() {
@@ -602,6 +605,13 @@ func (x *SandboxSpec) GetAgentCredential() *AgentCredential {
 		return x.AgentCredential
 	}
 	return nil
+}
+
+func (x *SandboxSpec) GetDiskBytes() uint64 {
+	if x != nil {
+		return x.DiskBytes
+	}
+	return 0
 }
 
 type AgentCredential struct {
@@ -1463,7 +1473,7 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\tworkspace\x18\x02 \x01(\v2\x1d.daft.sandbox.v1.WorkspaceRefR\tworkspace\x129\n" +
 	"\n" +
 	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12I\n" +
-	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\x8a\a\n" +
+	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xa9\a\n" +
 	"\vSandboxSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12.\n" +
 	"\x06mounts\x18\x02 \x03(\v2\x16.daft.sandbox.v1.MountR\x06mounts\x12)\n" +
@@ -1482,7 +1492,9 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\x12K\n" +
 	"\x10privileged_build\x18\x0e \x01(\v2 .daft.sandbox.v1.PrivilegedBuildR\x0fprivilegedBuild\x12B\n" +
 	"\regress_policy\x18\x0f \x01(\v2\x1d.daft.sandbox.v1.EgressPolicyR\fegressPolicy\x12K\n" +
-	"\x10agent_credential\x18\x10 \x01(\v2 .daft.sandbox.v1.AgentCredentialR\x0fagentCredential\"-\n" +
+	"\x10agent_credential\x18\x10 \x01(\v2 .daft.sandbox.v1.AgentCredentialR\x0fagentCredential\x12\x1d\n" +
+	"\n" +
+	"disk_bytes\x18\x11 \x01(\x04R\tdiskBytes\"-\n" +
 	"\x0fAgentCredential\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\"\xcc\x01\n" +
 	"\rSandboxStatus\x12\x14\n" +

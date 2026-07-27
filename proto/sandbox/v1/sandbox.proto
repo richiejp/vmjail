@@ -113,6 +113,10 @@ message SandboxSpec {
   // non-secret policy: it selects a built-in guest destination and environment
   // mapping; neither callers nor Nodes can choose a path or variable name.
   AgentCredential agent_credential = 16;
+
+  // Retained XFS workspace-disk allowance in bytes. Zero selects the Node's
+  // fixed 20 GiB default. The qcow2 virtual size is the ENOSPC boundary.
+  uint64 disk_bytes = 17;
 }
 
 message AgentCredential {

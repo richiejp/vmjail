@@ -475,9 +475,10 @@ func newWorkspaceTargetCmd() *cobra.Command {
 // which the orchestrator records as "clear" (executor default).
 func newWorkspaceResourcesCmd() *cobra.Command {
 	var (
-		opts   workspaceClientOpts
-		memStr string
-		cpus   uint32
+		opts    workspaceClientOpts
+		memStr  string
+		diskStr string
+		cpus    uint32
 	)
 	cmd := &cobra.Command{
 		Use:           resourcesSubName,
@@ -489,6 +490,10 @@ func newWorkspaceResourcesCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			diskBytes, err := parseByteSize("disk", diskStr)
+			if err != nil {
+				return err
+			}
 			return runCatalogCmd(cmd, opts, resourcesSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.SetResources(ctx, connect.NewRequest(
@@ -496,6 +501,7 @@ func newWorkspaceResourcesCmd() *cobra.Command {
 							Handle:      h,
 							MemoryBytes: memBytes,
 							CpuCores:    cpus,
+							DiskBytes:   diskBytes,
 						},
 					))
 					if err != nil {
@@ -509,6 +515,8 @@ func newWorkspaceResourcesCmd() *cobra.Command {
 		"guest RAM, e.g. 4G / 512M (empty clears, reverts to default)")
 	cmd.Flags().Uint32Var(&cpus, "cpus", 0,
 		"guest vCPU count (0 clears, reverts to default)")
+	cmd.Flags().StringVar(&diskStr, "disk", "",
+		"retained workspace disk allowance, e.g. 20G (empty selects the 20 GiB default)")
 	bindWorkspaceClientFlags(cmd, &opts)
 	return cmd
 }
@@ -663,6 +671,10 @@ func newWorkspacePrivilegedBuildCmd() *cobra.Command {
 // to bytes. Empty string ⇒ 0 (clear). Suffixes K/M/G/T are
 // powers of 1024; a bare number is bytes.
 func parseMemoryBytes(s string) (uint64, error) {
+	return parseByteSize("memory", s)
+}
+
+func parseByteSize(kind, s string) (uint64, error) {
 	if s == "" {
 		return 0, nil
 	}
@@ -680,7 +692,10 @@ func parseMemoryBytes(s string) (uint64, error) {
 	}
 	n, err := strconv.ParseUint(num, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid memory size %q: %w", s, err)
+		return 0, fmt.Errorf("invalid %s size %q: %w", kind, s, err)
+	}
+	if n > ^uint64(0)/mult {
+		return 0, fmt.Errorf("invalid %s size %q: overflows uint64 bytes", kind, s)
 	}
 	return n * mult, nil
 }

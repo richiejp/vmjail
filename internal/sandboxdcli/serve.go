@@ -36,6 +36,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandboxsecret"
 	"github.com/richiejp/darkaifactory/internal/version"
 	"github.com/richiejp/darkaifactory/internal/workspace"
+	"github.com/richiejp/darkaifactory/internal/workspacedisk"
 )
 
 const serveCmdName = "serve"
@@ -125,9 +126,13 @@ func runServe(
 	observerRegistry := sandboxgateway.NewObserverRegistry()
 	summaryRegistry := sandboxgateway.NewSummaryRegistry()
 	mountBackingDir := filepath.Join(dir, "mounts")
+	diskStore, err := workspacedisk.OpenStore(filepath.Join(dir, "workspace-disks"), mountBackingDir)
+	if err != nil {
+		return err
+	}
 	hostedRT := hostedRegistryTransport(orchestratorURL, id, peers)
 	dispatcher, err := buildDispatcher(stdout, bridger, attachRegistry, jobRegistry,
-		observerRegistry, summaryRegistry, vsockDir, sync.server, mountBackingDir, hostedRT)
+		observerRegistry, summaryRegistry, vsockDir, sync.server, mountBackingDir, diskStore, hostedRT)
 	if err != nil {
 		return err
 	}
@@ -299,6 +304,7 @@ var buildDispatcher = func(
 	vsockDir string,
 	materializer sandboxexec.MountMaterializer,
 	mountBackingDir string,
+	workspaceDisks sandboxexec.WorkspaceDiskPreparer,
 	hostedRT http.RoundTripper,
 ) (*sandboxexec.Executor, error) {
 	// A bundled binary (Nix build) carries the artefacts embedded, so
@@ -353,6 +359,7 @@ var buildDispatcher = func(
 		EgressProxy:        egress,
 		MountMaterializer:  materializer,
 		MountBackingDir:    mountBackingDir,
+		WorkspaceDisks:     workspaceDisks,
 		ObserverDir:        observerDir,
 		BuildImageRef:      resolveBuildImageRef(hostedRT),
 		BuildPushTransport: hostedRT,

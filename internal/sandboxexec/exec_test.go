@@ -25,6 +25,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/sandboxnet"
 	"github.com/richiejp/darkaifactory/internal/workspace"
+	"github.com/richiejp/darkaifactory/internal/workspacedisk"
 )
 
 const (
@@ -654,6 +655,52 @@ type fakeMaterializer struct {
 	preserved   []string
 	cleared     []string
 	preserveErr error
+}
+
+type fakeDiskPreparer struct {
+	workspace string
+	size      uint64
+	path      string
+	err       error
+}
+
+func (f *fakeDiskPreparer) Prepare(workspaceID string, virtualSize uint64) (path string, created bool, err error) {
+	f.workspace = workspaceID
+	f.size = virtualSize
+	return f.path, true, f.err
+}
+
+func TestApplyWorkspaceDiskDefaultsAndConfiguresVMM(t *testing.T) {
+	preparer := &fakeDiskPreparer{path: "/state/workspace.qcow2"}
+	e := &Executor{workspaceDisks: preparer, vsockDir: testVsockDir}
+	cfg := sandbox.Config{}
+	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID}
+	if err := e.applyWorkspaceDisk(&cfg, testSandboxID, spec); err != nil {
+		t.Fatal(err)
+	}
+	if preparer.workspace != testWSUUID || preparer.size != workspacedisk.DefaultDiskBytes {
+		t.Errorf("Prepare = (%q, %d)", preparer.workspace, preparer.size)
+	}
+	if cfg.WorkspaceDisk == nil || cfg.WorkspaceDisk.Path != preparer.path || cfg.WorkspaceDisk.ID != workspaceDiskID {
+		t.Errorf("WorkspaceDisk = %#v", cfg.WorkspaceDisk)
+	}
+	if cfg.APISocket != filepath.Join(testVsockDir, testSandboxID+".api.sock") {
+		t.Errorf("APISocket = %q", cfg.APISocket)
+	}
+}
+
+func TestApplyWorkspaceDiskUsesExplicitSizeAndPropagatesErrors(t *testing.T) {
+	want := errors.New("disk unavailable")
+	preparer := &fakeDiskPreparer{err: want}
+	e := &Executor{workspaceDisks: preparer, vsockDir: testVsockDir}
+	err := e.applyWorkspaceDisk(&sandbox.Config{}, testSandboxID,
+		&sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, DiskBytes: 24 << 30})
+	if !errors.Is(err, want) || preparer.size != 24<<30 {
+		t.Fatalf("applyWorkspaceDisk = %v, size %d", err, preparer.size)
+	}
+	if err := e.applyWorkspaceDisk(&sandbox.Config{}, testSandboxID, &sandboxv1.SandboxSpec{}); err == nil {
+		t.Fatal("missing workspace UUID accepted")
+	}
 }
 
 func (f *fakeMaterializer) MaterializeMount(_ context.Context, key, dest string) (bool, error) {

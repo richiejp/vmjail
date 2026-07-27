@@ -57,13 +57,10 @@ func (c *Client) ResizeDisk(ctx context.Context, id string, desiredSize uint64) 
 	if desiredSize == 0 {
 		return errors.New("cloudhypervisor: zero desired disk size")
 	}
-	body, err := json.Marshal(struct {
+	body, _ := json.Marshal(struct {
 		ID          string `json:"id"`
 		DesiredSize uint64 `json:"desired_size"`
 	}{ID: id, DesiredSize: desiredSize})
-	if err != nil {
-		return fmt.Errorf("cloudhypervisor: encode resize request: %w", err)
-	}
 	return c.put(ctx, "vm.resize-disk", body)
 }
 

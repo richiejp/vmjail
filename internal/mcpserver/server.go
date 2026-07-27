@@ -139,6 +139,7 @@ type WorkspaceSpec struct {
 	Isolation             string           `json:"isolation,omitempty"`
 	MemoryBytes           uint64           `json:"memory_bytes,omitempty"`
 	CPUCores              uint32           `json:"cpu_cores,omitempty"`
+	DiskBytes             uint64           `json:"disk_bytes,omitempty"`
 	NestedVirtualization  bool             `json:"nested_virtualization,omitempty"`
 	PrivilegedFuseMounts  bool             `json:"privileged_fuse_mounts,omitempty"`
 	PrivilegedBuild       bool             `json:"privileged_build,omitempty"`
@@ -1123,7 +1124,7 @@ func checkedWorkspace(input *workspacev1.Workspace) (Workspace, error) {
 }
 
 func workspaceSpecFromProto(input *workspacev1.WorkspaceSpec) WorkspaceSpec {
-	out := WorkspaceSpec{ImageRef: input.GetImageRef(), DevcontainerPath: input.GetDevcontainerPath(), TargetNodeFingerprint: input.GetTargetSandboxFingerprint(), GPUCount: input.GetGpuRequest().GetCount(), GPUMinVRAMBytes: input.GetGpuRequest().GetMinVramBytes(), MemoryBytes: input.GetMemoryBytes(), CPUCores: input.GetCpuCores(), NestedVirtualization: input.GetNestedVirtualization().GetEnable(), PrivilegedFuseMounts: input.GetPrivilegedFuseMounts().GetEnable(), PrivilegedBuild: input.GetPrivilegedBuild().GetEnable()}
+	out := WorkspaceSpec{ImageRef: input.GetImageRef(), DevcontainerPath: input.GetDevcontainerPath(), TargetNodeFingerprint: input.GetTargetSandboxFingerprint(), GPUCount: input.GetGpuRequest().GetCount(), GPUMinVRAMBytes: input.GetGpuRequest().GetMinVramBytes(), MemoryBytes: input.GetMemoryBytes(), CPUCores: input.GetCpuCores(), DiskBytes: input.GetDiskBytes(), NestedVirtualization: input.GetNestedVirtualization().GetEnable(), PrivilegedFuseMounts: input.GetPrivilegedFuseMounts().GetEnable(), PrivilegedBuild: input.GetPrivilegedBuild().GetEnable()}
 	switch input.GetIsolation() {
 	case sandboxv1.Isolation_ISOLATION_SHARED:
 		out.Isolation = isolationShared
@@ -1143,7 +1144,7 @@ func workspaceSpecFromProto(input *workspacev1.WorkspaceSpec) WorkspaceSpec {
 }
 
 func workspaceSpecToProto(input WorkspaceSpec) *workspacev1.WorkspaceSpec {
-	out := &workspacev1.WorkspaceSpec{ImageRef: input.ImageRef, DevcontainerPath: input.DevcontainerPath, TargetSandboxFingerprint: input.TargetNodeFingerprint, GpuRequest: &sandboxv1.GpuRequest{Count: input.GPUCount, MinVramBytes: input.GPUMinVRAMBytes}, MemoryBytes: input.MemoryBytes, CpuCores: input.CPUCores, NestedVirtualization: &sandboxv1.NestedVirtualization{Enable: input.NestedVirtualization}, PrivilegedFuseMounts: &sandboxv1.PrivilegedFuseMounts{Enable: input.PrivilegedFuseMounts}, PrivilegedBuild: &sandboxv1.PrivilegedBuild{Enable: input.PrivilegedBuild}}
+	out := &workspacev1.WorkspaceSpec{ImageRef: input.ImageRef, DevcontainerPath: input.DevcontainerPath, TargetSandboxFingerprint: input.TargetNodeFingerprint, GpuRequest: &sandboxv1.GpuRequest{Count: input.GPUCount, MinVramBytes: input.GPUMinVRAMBytes}, MemoryBytes: input.MemoryBytes, CpuCores: input.CPUCores, DiskBytes: input.DiskBytes, NestedVirtualization: &sandboxv1.NestedVirtualization{Enable: input.NestedVirtualization}, PrivilegedFuseMounts: &sandboxv1.PrivilegedFuseMounts{Enable: input.PrivilegedFuseMounts}, PrivilegedBuild: &sandboxv1.PrivilegedBuild{Enable: input.PrivilegedBuild}}
 	switch input.Isolation {
 	case isolationShared:
 		out.Isolation = sandboxv1.Isolation_ISOLATION_SHARED

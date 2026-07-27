@@ -418,6 +418,8 @@ message SetResourcesRequest {
   uint64 memory_bytes = 2;
   // Guest vCPU count. Zero clears it (executor default).
   uint32 cpu_cores = 3;
+  // Retained workspace disk allowance. Zero selects the 20 GiB default.
+  uint64 disk_bytes = 4;
 }
 
 message SetNestedVirtualizationRequest {

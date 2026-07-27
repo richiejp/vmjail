@@ -1308,7 +1308,9 @@ type SetResourcesRequest struct {
 	// Guest RAM in bytes. Zero clears it (executor default).
 	MemoryBytes uint64 `protobuf:"varint,2,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
 	// Guest vCPU count. Zero clears it (executor default).
-	CpuCores      uint32 `protobuf:"varint,3,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
+	CpuCores uint32 `protobuf:"varint,3,opt,name=cpu_cores,json=cpuCores,proto3" json:"cpu_cores,omitempty"`
+	// Retained workspace disk allowance. Zero selects the 20 GiB default.
+	DiskBytes     uint64 `protobuf:"varint,4,opt,name=disk_bytes,json=diskBytes,proto3" json:"disk_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1360,6 +1362,13 @@ func (x *SetResourcesRequest) GetMemoryBytes() uint64 {
 func (x *SetResourcesRequest) GetCpuCores() uint32 {
 	if x != nil {
 		return x.CpuCores
+	}
+	return 0
+}
+
+func (x *SetResourcesRequest) GetDiskBytes() uint64 {
+	if x != nil {
+		return x.DiskBytes
 	}
 	return 0
 }
@@ -2154,11 +2163,13 @@ const file_workspace_v1_service_proto_rawDesc = "" +
 	"\x11devcontainer_path\x18\x02 \x01(\tR\x10devcontainerPath\"\x7f\n" +
 	"\x10SetTargetRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12/\n" +
-	"\x13sandbox_fingerprint\x18\x02 \x01(\tR\x12sandboxFingerprint\"\x91\x01\n" +
+	"\x13sandbox_fingerprint\x18\x02 \x01(\tR\x12sandboxFingerprint\"\xb0\x01\n" +
 	"\x13SetResourcesRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12!\n" +
 	"\fmemory_bytes\x18\x02 \x01(\x04R\vmemoryBytes\x12\x1b\n" +
-	"\tcpu_cores\x18\x03 \x01(\rR\bcpuCores\"t\n" +
+	"\tcpu_cores\x18\x03 \x01(\rR\bcpuCores\x12\x1d\n" +
+	"\n" +
+	"disk_bytes\x18\x04 \x01(\x04R\tdiskBytes\"t\n" +
 	"\x1eSetNestedVirtualizationRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12\x16\n" +
 	"\x06enable\x18\x02 \x01(\bR\x06enable\"t\n" +

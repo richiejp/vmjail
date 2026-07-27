@@ -335,10 +335,12 @@ func (h *WorkspaceCatalogHandler) SetResources(
 ) (*connect.Response[workspacev1.WorkspaceResponse], error) {
 	memBytes := req.Msg.GetMemoryBytes()
 	cpuCores := req.Msg.GetCpuCores()
+	diskBytes := req.Msg.GetDiskBytes()
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
 			w.Spec.MemoryBytes = memBytes
 			w.Spec.CPUCores = cpuCores
+			w.Spec.DiskBytes = diskBytes
 			return nil
 		})
 }
@@ -1184,6 +1186,7 @@ func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Finge
 		Ports:            portsToProto(ws.Spec.Ports),
 		MemoryBytes:      ws.Spec.MemoryBytes,
 		CpuCores:         ws.Spec.CPUCores,
+		DiskBytes:        ws.Spec.DiskBytes,
 		NestedVirtualization: &sandboxv1.NestedVirtualization{
 			Enable: ws.Spec.NestedVirt,
 		},
@@ -1227,6 +1230,7 @@ func workspaceSpecFromProto(in *workspacev1.WorkspaceSpec) (workspacecatalog.Spe
 		Isolation:                int32(in.GetIsolation()),
 		MemoryBytes:              in.GetMemoryBytes(),
 		CPUCores:                 in.GetCpuCores(),
+		DiskBytes:                in.GetDiskBytes(),
 	}
 	if gpu := in.GetGpuRequest(); gpu != nil {
 		out.GpuCount = gpu.GetCount()
@@ -1455,6 +1459,7 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 			Isolation:                sandboxv1.Isolation(ws.Spec.Isolation),
 			MemoryBytes:              ws.Spec.MemoryBytes,
 			CpuCores:                 ws.Spec.CPUCores,
+			DiskBytes:                ws.Spec.DiskBytes,
 			NestedVirtualization: &sandboxv1.NestedVirtualization{
 				Enable: ws.Spec.NestedVirt,
 			},

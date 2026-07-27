@@ -793,16 +793,17 @@ func TestSetResourcesRoundTripsAndClears(t *testing.T) {
 
 	const wantMem = uint64(4) << 30
 	const wantCPU = uint32(4)
+	const wantDisk = uint64(24) << 30
 	set, err := rig.client.SetResources(t.Context(), connect.NewRequest(
-		&workspacev1.SetResourcesRequest{Handle: handle, MemoryBytes: wantMem, CpuCores: wantCPU},
+		&workspacev1.SetResourcesRequest{Handle: handle, MemoryBytes: wantMem, CpuCores: wantCPU, DiskBytes: wantDisk},
 	))
 	if err != nil {
 		t.Fatalf("SetResources: %v", err)
 	}
 	spec := set.Msg.GetWorkspace().GetSpec()
-	if spec.GetMemoryBytes() != wantMem || spec.GetCpuCores() != wantCPU {
-		t.Errorf("got memory=%d cpus=%d, want %d/%d",
-			spec.GetMemoryBytes(), spec.GetCpuCores(), wantMem, wantCPU)
+	if spec.GetMemoryBytes() != wantMem || spec.GetCpuCores() != wantCPU || spec.GetDiskBytes() != wantDisk {
+		t.Errorf("got memory=%d cpus=%d disk=%d, want %d/%d/%d",
+			spec.GetMemoryBytes(), spec.GetCpuCores(), spec.GetDiskBytes(), wantMem, wantCPU, wantDisk)
 	}
 
 	cleared, err := rig.client.SetResources(t.Context(), connect.NewRequest(
@@ -812,9 +813,9 @@ func TestSetResourcesRoundTripsAndClears(t *testing.T) {
 		t.Fatalf("SetResources clear: %v", err)
 	}
 	cspec := cleared.Msg.GetWorkspace().GetSpec()
-	if cspec.GetMemoryBytes() != 0 || cspec.GetCpuCores() != 0 {
-		t.Errorf("after clear got memory=%d cpus=%d, want 0/0",
-			cspec.GetMemoryBytes(), cspec.GetCpuCores())
+	if cspec.GetMemoryBytes() != 0 || cspec.GetCpuCores() != 0 || cspec.GetDiskBytes() != 0 {
+		t.Errorf("after clear got memory=%d cpus=%d disk=%d, want 0/0/0",
+			cspec.GetMemoryBytes(), cspec.GetCpuCores(), cspec.GetDiskBytes())
 	}
 }
 
@@ -1374,6 +1375,7 @@ func TestWorkspaceSpecFromProtoValidationAndProjection(t *testing.T) {
 		Isolation:                sandboxv1.Isolation_ISOLATION_STRICT,
 		MemoryBytes:              1 << 30,
 		CpuCores:                 4,
+		DiskBytes:                24 << 30,
 		GpuRequest:               &sandboxv1.GpuRequest{Count: 2, MinVramBytes: 8 << 30},
 		NestedVirtualization:     &sandboxv1.NestedVirtualization{Enable: true},
 		PrivilegedFuseMounts:     &sandboxv1.PrivilegedFuseMounts{Enable: true},
@@ -1386,7 +1388,7 @@ func TestWorkspaceSpecFromProtoValidationAndProjection(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got.ImageRef != testImageRef || got.TargetSandboxFingerprint != validTarget || got.GpuCount != 2 || got.GpuMinVRAM != 8<<30 ||
-		got.Isolation != int32(sandboxv1.Isolation_ISOLATION_STRICT) || got.MemoryBytes != 1<<30 || got.CPUCores != 4 ||
+		got.Isolation != int32(sandboxv1.Isolation_ISOLATION_STRICT) || got.MemoryBytes != 1<<30 || got.CPUCores != 4 || got.DiskBytes != 24<<30 ||
 		!got.NestedVirt || !got.PrivilegedFuseMounts || !got.PrivilegedBuild || got.Mounts[0].Source != "" ||
 		got.Env[0].Value != testEnvValue || got.Ports[0].Protocol != int32(sandboxv1.Protocol_PROTOCOL_UDP) {
 		t.Fatalf("projected spec = %+v", got)

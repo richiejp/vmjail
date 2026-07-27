@@ -111,6 +111,10 @@ message WorkspaceSpec {
   // Build capability grant. Unset ⇒ disabled. Projected directly onto
   // SandboxSpec.privileged_build at Launch.
   daft.sandbox.v1.PrivilegedBuild privileged_build = 14;
+
+  // Retained XFS workspace-disk allowance in bytes. Zero selects the Node's
+  // fixed 20 GiB default. Projected directly onto SandboxSpec.disk_bytes.
+  uint64 disk_bytes = 15;
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.

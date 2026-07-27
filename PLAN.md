@@ -239,15 +239,20 @@ Landed:
   device ID and requires an absolute Cloud Hypervisor API socket alongside it.
   A bounded internal HTTP-over-Unix client implements pause, resume, and the
   pinned `/vm.resize-disk` request used by the later freeze/live-grow path.
+- A durable Node-side workspace-disk store atomically creates or converges on
+  one retained image per Workspace, refuses implicit size changes, and performs
+  a marker-backed first-start deletion of legacy `mounts/*` trees without
+  import. `disk_bytes` now flows generation-safely through Workspace apply,
+  `workspace resources --disk`, Sandbox dispatch, and trusted MCP; zero selects
+  the fixed 20 GiB default. Production dispatch attaches the retained image and
+  a unique VMM API socket while test-only executors remain explicitly diskless.
 
 Remaining:
 
-- Retain workspace disk ownership per Sandbox and add guest XFS creation,
-  recovery, mount, usage, freeze, resize, grow, and teardown control paths and
-  the required kernel/initramfs tools.
+- Add guest XFS creation, recovery, mount, usage, freeze, resize, grow, and
+  teardown control paths and the required kernel/initramfs tools.
 - Replace writable workspace virtiofs materialization with manifest streaming
-  into the disk, and remove legacy `mounts/*` trees on first migration without
-  importing them.
+  into the disk.
 - Add durable per-CAS Badger metadata, transactional manifest generations,
   exact-generation adoption/rejection, protected/recoverable provenance, and
   crash-safe weighted cleanup (85% soft, 75% target, 100 GiB hard, 180-day

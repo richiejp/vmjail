@@ -13,7 +13,17 @@ import (
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
+const testAPISocket = "/api.sock"
+
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+type failingBody struct {
+	readErr  error
+	closeErr error
+}
+
+func (b failingBody) Read([]byte) (int, error) { return 0, b.readErr }
+func (b failingBody) Close() error             { return b.closeErr }
 
 func TestClientCommands(t *testing.T) {
 	type received struct {
@@ -36,7 +46,7 @@ func TestClientCommands(t *testing.T) {
 			Body:       io.NopCloser(bytes.NewReader(nil)),
 		}, nil
 	})
-	client := &Client{socket: "/api.sock", http: &http.Client{Transport: transport}}
+	client := &Client{socket: testAPISocket, http: &http.Client{Transport: transport}}
 	ctx := context.Background()
 	if err := client.Pause(ctx); err != nil {
 		t.Fatal(err)
@@ -79,7 +89,7 @@ func TestClientRejectsInvalidInputs(t *testing.T) {
 }
 
 func TestClientBoundsErrorBody(t *testing.T) {
-	client := &Client{socket: "/api.sock", http: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	client := &Client{socket: testAPISocket, http: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusInternalServerError,
 			Status:     "500 Internal Server Error",
@@ -99,5 +109,35 @@ func TestNilClient(t *testing.T) {
 	var client *Client
 	if err := client.Pause(context.Background()); err == nil {
 		t.Fatal("nil client accepted")
+	}
+}
+
+func TestClientTransportAndResponseErrors(t *testing.T) {
+	client, err := NewClient("/definitely/missing/cloud-hypervisor.sock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Pause(context.Background()); err == nil {
+		t.Fatal("dial error ignored")
+	}
+	if err := client.Pause(nil); err == nil { //nolint:staticcheck // Exercises invalid caller context handling.
+		t.Fatal("nil context accepted")
+	}
+
+	for _, tc := range []struct {
+		name string
+		body failingBody
+	}{
+		{name: "read", body: failingBody{readErr: errors.New("read failed")}},
+		{name: "close", body: failingBody{readErr: io.EOF, closeErr: errors.New("close failed")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &Client{socket: testAPISocket, http: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusNoContent, Body: tc.body}, nil
+			})}}
+			if err := client.Resume(context.Background()); err == nil {
+				t.Fatalf("response %s error ignored", tc.name)
+			}
+		})
 	}
 }
