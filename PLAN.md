@@ -222,10 +222,43 @@ disconnects and resumes from an output offset, rejects a second writer,
 survives overseer/UI reconnect, and resolves cancellation, natural exit, Node
 loss, and stale Sandbox bindings deterministically.
 
+## Active milestone: XFS workspace disks and recoverability-aware CAS cleanup
+
+Writable workspace virtiofs shares will be replaced by one retained
+XFS-on-qcow2 disk per Sandbox. OCI rootfs and read-only shares remain on
+virtiofs. The default virtual allowance is 20 GiB; the node CAS hard limit is
+100 GiB, with cleanup beginning at 85% and targeting 75%.
+
+Landed:
+
+- A deterministic internal qcow2 v3 encoder creates empty sparse workspace
+  images without adding a host utility, preserving single-static-executable
+  Node deployment. It validates sector alignment and the format layout's
+  maximum addressable size and initializes all metadata refcounts.
+
+Remaining:
+
+- Attach and retain workspace disks through the Cloud Hypervisor API socket;
+  add guest XFS creation, recovery, mount, usage, freeze, resize, grow, and
+  teardown control paths and the required kernel/initramfs tools.
+- Replace writable workspace virtiofs materialization with manifest streaming
+  into the disk, and remove legacy `mounts/*` trees on first migration without
+  importing them.
+- Add durable per-CAS Badger metadata, transactional manifest generations,
+  exact-generation adoption/rejection, protected/recoverable provenance, and
+  crash-safe weighted cleanup (85% soft, 75% target, 100 GiB hard, 180-day
+  expiry).
+- Add workspace disk/resource, changes reject, unfreeze, delete, storage
+  status, and dry-run prune CLI/RPC/MCP surfaces with bounded results.
+- Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,
+  capacity, persistence, freeze, live-grow, and leak acceptance tests.
+
+Protected sandbox writes must never be cleanup candidates until the client
+acknowledges the exact manifest digest and generation, rejects that generation,
+or deletes the workspace. A stale acknowledgement cannot adopt newer writes.
+
 ## Other open product work
 
-- Durable control-plane and manifest persistence beyond the AgentRun/operator
-  stores.
 - Orchestrator-hosted ingress and complete per-workspace routing policy.
 - GPU discovery, scheduling, passthrough, and shared-VM lifecycle.
 - Workspace adoption and per-client mount mappings.
