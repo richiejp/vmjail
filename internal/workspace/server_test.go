@@ -182,6 +182,87 @@ func TestIndexedLiveSnapshotRequiresExactAdoption(t *testing.T) {
 	}
 }
 
+func TestExactAdoptionDeletesOnlyStoppedRetainedDisk(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "node-cas")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller := &fakeWorkspaceDiskController{}
+	server.SetWorkspaceDiskController(controller)
+	state, err := server.publishManifest(testSyncKey, &workspacev1.Manifest{Version: 1}, casindex.OriginSandbox, casindex.RecoverabilityProtected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ack := func(state manifestState) error {
+		_, ackErr := server.AcknowledgeManifest(t.Context(), connect.NewRequest(&workspacev1.AcknowledgeManifestRequest{
+			Workspace: testSyncKey, ManifestDigest: state.digest, Generation: state.generation,
+		}))
+		return ackErr
+	}
+	if err := ack(state); err != nil || controller.deleteCalls != 1 {
+		t.Fatalf("stopped adoption = %v, delete calls %d", err, controller.deleteCalls)
+	}
+	state, err = server.publishManifest(testSyncKey, &workspacev1.Manifest{Version: 1}, casindex.OriginSandbox, casindex.RecoverabilityProtected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller.status.Running = true
+	if err := ack(state); err != nil || controller.deleteCalls != 1 {
+		t.Fatalf("running adoption = %v, delete calls %d", err, controller.deleteCalls)
+	}
+}
+
+func TestExactAdoptionReportsRetainedDiskCleanupFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		statusErr error
+		deleteErr error
+	}{
+		{name: "status", statusErr: errors.New("status failed")},
+		{name: "delete", deleteErr: errors.New("delete failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "node-cas")
+			store, err := cas.Open(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			index, err := casindex.Open(root, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = index.Close() })
+			server, err := NewIndexedServer(store, index)
+			if err != nil {
+				t.Fatal(err)
+			}
+			server.SetWorkspaceDiskController(&fakeWorkspaceDiskController{
+				statusErr: tc.statusErr, deleteErr: tc.deleteErr,
+			})
+			state, err := server.publishManifest(testSyncKey, &workspacev1.Manifest{Version: 1}, casindex.OriginSandbox, casindex.RecoverabilityProtected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = server.AcknowledgeManifest(t.Context(), connect.NewRequest(&workspacev1.AcknowledgeManifestRequest{
+				Workspace: testSyncKey, ManifestDigest: state.digest, Generation: state.generation,
+			}))
+			if connect.CodeOf(err) != connect.CodeInternal {
+				t.Fatalf("acknowledgement error = %v, want internal", err)
+			}
+		})
+	}
+}
+
 func TestIndexedServerStorageControlsAndValidation(t *testing.T) {
 	store := mustOpenStore(t)
 	if _, err := NewIndexedServer(store, nil); err == nil {

@@ -345,11 +345,14 @@ Landed:
   Writable Workspace paths no longer create virtiofs shares or host seed
   trees; retained qcow2 images receive no seed endpoint and therefore cannot
   be overwritten during relaunch. The real-KVM round trip exercises this path.
+- Exact pull acknowledgment now removes a stopped retained qcow2 after the CAS
+  generation becomes recoverable. A running disk is retained because it may
+  already contain writes newer than the acknowledged manifest.
 
 Remaining:
 
-- Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,
-  capacity, persistence, freeze, live-grow, and leak acceptance tests.
+- Add deterministic rejection/deletion disk cleanup and control-path leak
+  acceptance tests; retain real-KVM coverage for disk/VMM behavior.
 
 Protected sandbox writes must never be cleanup candidates until the client
 acknowledges the exact manifest digest and generation, rejects that generation,

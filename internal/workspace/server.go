@@ -464,7 +464,7 @@ func (s *Server) PutChunk(_ context.Context, req *connect.Request[workspacev1.Pu
 // AcknowledgeManifest adopts only the exact manifest returned by GetManifest.
 // Pull calls this after local materialisation succeeds.
 func (s *Server) AcknowledgeManifest(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[workspacev1.AcknowledgeManifestRequest],
 ) (*connect.Response[workspacev1.AcknowledgeManifestResponse], error) {
 	name := req.Msg.GetWorkspace()
@@ -479,6 +479,22 @@ func (s *Server) AcknowledgeManifest(
 	if s.index != nil {
 		if err := s.index.Acknowledge(name, digest, generation); err != nil {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		}
+	}
+	// Once a stopped Sandbox manifest is exactly adopted, CAS is the durable
+	// recoverable copy and the retained qcow2 no longer protects unique work.
+	// A running disk must remain: it may already contain writes newer than the
+	// acknowledged generation.
+	workspaceID, _, isMount := strings.Cut(name, syncKeySep)
+	if controller := s.workspaceDiskController(); controller != nil && isMount {
+		status, err := controller.Status(workspaceID)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("workspace: inspect adopted disk: %w", err))
+		}
+		if !status.Running {
+			if err := controller.Delete(ctx, workspaceID); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("workspace: delete adopted disk: %w", err))
+			}
 		}
 	}
 	return connect.NewResponse(&workspacev1.AcknowledgeManifestResponse{}), nil
