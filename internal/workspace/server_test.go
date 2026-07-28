@@ -990,6 +990,73 @@ func TestMaterializeMountAppliesPushedTree(t *testing.T) {
 	}
 }
 
+func TestReadMountFileReadsOnlyExactRegularMetadata(t *testing.T) {
+	srv, store := mustNewServer(t)
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".devcontainer"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(root, ".devcontainer", "devcontainer.json"), []byte(`{"image":"oven/bun"}`))
+	m, err := BuildManifest(root, store, BuildOptions{})
+	if err != nil {
+		t.Fatalf("BuildManifest: %v", err)
+	}
+	const key = "ws\x00/workspace"
+	if err := srv.Add(key, m); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	got, found, err := srv.ReadMountFile(t.Context(), key, ".devcontainer/devcontainer.json")
+	if err != nil || !found || string(got) != `{"image":"oven/bun"}` {
+		t.Fatalf("ReadMountFile = (%q, %v, %v)", got, found, err)
+	}
+	if _, found, err := srv.ReadMountFile(t.Context(), key, ".devcontainer"); err == nil || found {
+		t.Fatalf("directory ReadMountFile = (%v, %v), want error", found, err)
+	}
+	if _, found, err := srv.ReadMountFile(t.Context(), key, "missing.json"); err != nil || found {
+		t.Fatalf("missing ReadMountFile = (%v, %v)", found, err)
+	}
+	if _, _, err := srv.ReadMountFile(t.Context(), key, "../escape"); err == nil {
+		t.Fatal("escaping metadata path succeeded")
+	}
+	if _, found, err := srv.ReadMountFile(t.Context(), "unknown", "anything"); err != nil || found {
+		t.Fatalf("unknown manifest ReadMountFile = (%v, %v)", found, err)
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := srv.ReadMountFile(canceled, key, ".devcontainer/devcontainer.json"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled ReadMountFile error = %v", err)
+	}
+	oversized := &workspacev1.Manifest{Entries: []*workspacev1.FileEntry{{
+		Path: "large.json", Kind: workspacev1.EntryKind_ENTRY_KIND_FILE, Size: maxMetadataFileBytes + 1,
+	}}}
+	if err := srv.Add("oversized", oversized); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := srv.ReadMountFile(t.Context(), "oversized", "large.json"); err == nil {
+		t.Fatal("oversized metadata read succeeded")
+	}
+	mismatch := &workspacev1.Manifest{Entries: []*workspacev1.FileEntry{{
+		Path: "mismatch.json", Kind: workspacev1.EntryKind_ENTRY_KIND_FILE, Size: 1,
+	}}}
+	if err := srv.Add("mismatch", mismatch); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := srv.ReadMountFile(t.Context(), "mismatch", "mismatch.json"); err == nil {
+		t.Fatal("metadata size mismatch succeeded")
+	}
+}
+
+func TestBoundedMetadataWriterRejectsOverflow(t *testing.T) {
+	w := &boundedMetadataWriter{}
+	w.buf.Grow(maxMetadataFileBytes)
+	if _, err := w.buf.Write(make([]byte, maxMetadataFileBytes)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("overflow")); err == nil {
+		t.Fatal("bounded metadata writer accepted overflow")
+	}
+}
+
 // TestMaterializeMountUnpushedCreatesEmptyDir: an unknown key yields
 // applied=false and a created-but-empty backing dir, so an unpushed
 // mount boots as an empty read-write tree.

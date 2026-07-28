@@ -74,6 +74,7 @@ type Assembler func(ctx context.Context, ref string, opts sandboxboot.BootOption
 // Production wires the node's workspace.Server.
 type MountMaterializer interface {
 	MaterializeMount(ctx context.Context, syncKey, dest string) (applied bool, err error)
+	ReadMountFile(ctx context.Context, syncKey, path string) (data []byte, found bool, err error)
 	StreamMount(ctx context.Context, syncKey string, destination io.Writer) (applied bool, err error)
 	SetLiveMount(syncKey, dir string)
 	PreserveLiveMount(ctx context.Context, syncKey string) error
@@ -1118,9 +1119,16 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 		// env/ports already fold in the explicit ones, so they replace
 		// (not append to) the spec values here. A build-based devcontainer
 		// also yields a build plan (nil otherwise).
-		res, derr := resolveDevcontainerOverlay(spec, mounts)
+		res, derr := e.resolveDevcontainerOverlay(ctx, uid, spec, mounts)
 		if derr != nil {
 			return sandbox.Config{}, nil, func() {}, derr
+		}
+		if res.Cleanup != nil {
+			defer func() {
+				if err := res.Cleanup(); err != nil {
+					_, _ = fmt.Fprintf(e.stdout, "daft-sandboxd: remove devcontainer build context: %v\n", err)
+				}
+			}()
 		}
 		imageRef, env, ports = res.ImageRef, res.Env, res.Ports
 		postStart = res.PostStart

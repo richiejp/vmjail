@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -64,7 +65,19 @@ type WorkspaceDiskController interface {
 const (
 	defaultPruneCandidates = 50
 	maxPruneCandidates     = 200
+	maxMetadataFileBytes   = 1 << 20
 )
+
+type boundedMetadataWriter struct {
+	buf bytes.Buffer
+}
+
+func (w *boundedMetadataWriter) Write(p []byte) (int, error) {
+	if len(p) > maxMetadataFileBytes-w.buf.Len() {
+		return 0, errors.New("workspace: metadata content exceeds maximum size")
+	}
+	return w.buf.Write(p)
+}
 
 type manifestState struct {
 	digest     string
@@ -299,6 +312,48 @@ func (s *Server) MaterializeMount(ctx context.Context, key, dest string) (applie
 		return false, err
 	}
 	return true, nil
+}
+
+// ReadMountFile reads one small regular file directly from a published
+// manifest. It is used for launch metadata (not workspace contents), so a
+// writable XFS mount need not be reconstructed into a host-side virtiofs
+// backing tree merely to inspect its devcontainer configuration.
+func (s *Server) ReadMountFile(ctx context.Context, key, path string) (data []byte, found bool, err error) {
+	if !SanitisePath(path) {
+		return nil, false, fmt.Errorf("workspace: rejected metadata path %q", path)
+	}
+	s.mu.RLock()
+	m, ok := s.manifests[key]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, false, nil
+	}
+	for _, entry := range m.GetEntries() {
+		if entry.GetPath() != path {
+			continue
+		}
+		if entry.GetKind() != workspacev1.EntryKind_ENTRY_KIND_FILE {
+			return nil, false, fmt.Errorf("workspace: metadata path %q is not a regular file", path)
+		}
+		if entry.GetSize() > maxMetadataFileBytes {
+			return nil, false, fmt.Errorf("workspace: metadata file %q is %d bytes; maximum is %d", path, entry.GetSize(), maxMetadataFileBytes)
+		}
+		// The check above bounds this conversion to 1 MiB on every target.
+		size := int(entry.GetSize()) //nolint:gosec // G115: explicitly bounded by maxMetadataFileBytes.
+		var dst boundedMetadataWriter
+		dst.buf.Grow(size)
+		if err := streamChunks(&dst, s.store, entry.GetChunks()); err != nil {
+			return nil, false, err
+		}
+		if dst.buf.Len() != size {
+			return nil, false, fmt.Errorf("workspace: metadata file %q size mismatch: manifest=%d actual=%d", path, entry.GetSize(), dst.buf.Len())
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, false, err
+		}
+		return dst.buf.Bytes(), true, nil
+	}
+	return nil, false, nil
 }
 
 // GetManifest implements the proto endpoint. Unknown workspaces

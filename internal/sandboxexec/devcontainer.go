@@ -1,6 +1,8 @@
 package sandboxexec
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/devcontainerspec"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
+	"github.com/richiejp/darkaifactory/internal/workspace"
 	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
@@ -23,6 +26,8 @@ type devcontainerResolution struct {
 	Ports     []*sandboxv1.PortMapping
 	PostStart [][]string
 	Build     *devcontainerBuildPlan
+	BuildSpec *devcontainer.BuildSpec
+	Cleanup   func() error
 }
 
 // resolveDevcontainerOverlay reads the devcontainer.json named by
@@ -57,6 +62,20 @@ func resolveDevcontainerOverlay(spec *sandboxv1.SandboxSpec, mounts []sandboxboo
 	if err != nil {
 		return devcontainerResolution{}, fmt.Errorf("sandboxexec: read devcontainer %q: %w", rel, err)
 	}
+	out, err := resolveDevcontainerData(spec, data, rel)
+	if err != nil {
+		return devcontainerResolution{}, err
+	}
+	if out.BuildSpec != nil && out.ImageRef == "" {
+		out.Build, err = resolveBuildPlan(file, root, out.BuildSpec)
+		if err != nil {
+			return devcontainerResolution{}, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
+		}
+	}
+	return out, nil
+}
+
+func resolveDevcontainerData(spec *sandboxv1.SandboxSpec, data []byte, rel string) (devcontainerResolution, error) {
 	resolved, err := devcontainer.Resolve(data, devcontainer.Substitutions{})
 	if err != nil {
 		return devcontainerResolution{}, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
@@ -71,20 +90,61 @@ func resolveDevcontainerOverlay(spec *sandboxv1.SandboxSpec, mounts []sandboxboo
 	// Only resolve a build plan when the config is build-based and the
 	// overlay didn't fill the image from an explicit override — otherwise
 	// the build would run pointlessly.
-	var build *devcontainerBuildPlan
-	if resolved.Build != nil && eff.ImageRef == "" {
-		build, err = resolveBuildPlan(file, root, resolved.Build)
-		if err != nil {
-			return devcontainerResolution{}, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
-		}
-	}
 	return devcontainerResolution{
 		ImageRef:  eff.ImageRef,
 		Env:       envStrings(eff.Env),
 		Ports:     portMappingsToProto(eff.Ports),
 		PostStart: normalizePostStart(resolved.Lifecycle.PostStart),
-		Build:     build,
+		BuildSpec: resolved.Build,
 	}, nil
+}
+
+// resolveDevcontainerOverlay reads metadata directly from CAS for writable
+// disk mounts. Image-based configurations therefore never recreate the old
+// host workspace tree. Build-based configurations still need a build context;
+// only that case is materialised into an ephemeral directory and removed as
+// soon as the build plan has been consumed.
+func (e *Executor) resolveDevcontainerOverlay(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec, mounts []sandboxboot.Mount) (devcontainerResolution, error) {
+	rel := strings.TrimPrefix(filepath.Clean("/"+filepath.FromSlash(spec.GetDevcontainerPath())), string(filepath.Separator))
+	if rel == "" || rel == "." {
+		return devcontainerResolution{}, fmt.Errorf("sandboxexec: invalid devcontainer path %q", spec.GetDevcontainerPath())
+	}
+	for i, mount := range spec.GetMounts() {
+		if e.mountMaterializer == nil || filepath.IsAbs(mount.GetSource()) || mount.GetReadOnly() {
+			continue
+		}
+		key := workspace.SyncKey(spec.GetWorkspaceUuid(), mount.GetTarget())
+		data, found, err := e.mountMaterializer.ReadMountFile(ctx, key, filepath.ToSlash(rel))
+		if err != nil {
+			return devcontainerResolution{}, fmt.Errorf("sandboxexec: read devcontainer %q: %w", spec.GetDevcontainerPath(), err)
+		}
+		if !found {
+			continue
+		}
+		resolved, err := resolveDevcontainerData(spec, data, spec.GetDevcontainerPath())
+		if err != nil || resolved.BuildSpec == nil || resolved.ImageRef != "" {
+			return resolved, err
+		}
+		root, err := os.MkdirTemp(filepath.Dir(e.mountDir(uid, i)), ".daft-devcontainer-build-*")
+		if err != nil {
+			return devcontainerResolution{}, fmt.Errorf("sandboxexec: create devcontainer build context: %w", err)
+		}
+		if _, err := e.mountMaterializer.MaterializeMount(ctx, key, root); err != nil {
+			return devcontainerResolution{}, errors.Join(
+				fmt.Errorf("sandboxexec: materialize devcontainer build context: %w", err), os.RemoveAll(root),
+			)
+		}
+		file := filepath.Join(root, rel)
+		resolved.Build, err = resolveBuildPlan(file, root, resolved.BuildSpec)
+		if err != nil {
+			return devcontainerResolution{}, errors.Join(
+				fmt.Errorf("sandboxexec: devcontainer %q: %w", spec.GetDevcontainerPath(), err), os.RemoveAll(root),
+			)
+		}
+		resolved.Cleanup = func() error { return os.RemoveAll(root) }
+		return resolved, nil
+	}
+	return resolveDevcontainerOverlay(spec, mounts)
 }
 
 // normalizePostStart flattens the resolved devcontainer postStartCommand

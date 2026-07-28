@@ -864,6 +864,29 @@ func (f *fakeMaterializer) MaterializeMount(_ context.Context, key, dest string)
 	return f.applied, nil
 }
 
+func (f *fakeMaterializer) ReadMountFile(_ context.Context, key, path string) (data []byte, found bool, err error) {
+	if f.err != nil {
+		return nil, false, f.err
+	}
+	if f.seed == nil {
+		return nil, false, nil
+	}
+	dest, err := os.MkdirTemp("", "daft-fake-mount-*")
+	if err != nil {
+		return nil, false, err
+	}
+	if err := f.seed(dest); err != nil {
+		return nil, false, errors.Join(err, os.RemoveAll(dest))
+	}
+	// #nosec G304 — this fake reads only below its newly-created temp root.
+	data, err = os.ReadFile(filepath.Join(dest, filepath.FromSlash(path)))
+	cleanupErr := os.RemoveAll(dest)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, cleanupErr
+	}
+	return data, err == nil, errors.Join(err, cleanupErr)
+}
+
 func (f *fakeMaterializer) StreamMount(_ context.Context, key string, _ io.Writer) (bool, error) {
 	f.streamed = append(f.streamed, key)
 	return f.applied, f.err
@@ -929,6 +952,89 @@ func TestHandleSandboxEventDevcontainerOverlay(t *testing.T) {
 	}
 	if !slices.Contains(gotOpts.Env, "OVERRIDE=ws") {
 		t.Errorf("env = %v, want the workspace's explicit OVERRIDE preserved", gotOpts.Env)
+	}
+}
+
+func TestDiskDevcontainerReadsMetadataWithoutMaterializingHostTree(t *testing.T) {
+	mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
+		dir := filepath.Join(dest, ".devcontainer")
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "devcontainer.json"), []byte(`{"image":"oven/bun:1.2-alpine"}`), 0o600)
+	}}
+	e := &Executor{mountMaterializer: mat, mountBackingDir: t.TempDir()}
+	spec := &sandboxv1.SandboxSpec{
+		WorkspaceUuid: testWSUUID, DevcontainerPath: devcontainerNestedPath,
+		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}},
+	}
+	res, err := e.resolveDevcontainerOverlay(t.Context(), "sandbox", spec,
+		[]sandboxboot.Mount{{Target: mntWorkspace, GuestOnly: true}})
+	if err != nil {
+		t.Fatalf("resolveDevcontainerOverlay: %v", err)
+	}
+	if res.ImageRef != "oven/bun:1.2-alpine" {
+		t.Fatalf("image = %q", res.ImageRef)
+	}
+	if len(mat.keys) != 0 {
+		t.Fatalf("MaterializeMount keys = %v, want none for image metadata", mat.keys)
+	}
+}
+
+func TestDiskDevcontainerMetadataErrorsFailClosed(t *testing.T) {
+	e := &Executor{mountMaterializer: &fakeMaterializer{err: errors.New("CAS unavailable")}, mountBackingDir: t.TempDir()}
+	spec := &sandboxv1.SandboxSpec{
+		WorkspaceUuid: testWSUUID, DevcontainerPath: devcontainerNestedPath,
+		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}},
+	}
+	if _, err := e.resolveDevcontainerOverlay(t.Context(), "sandbox", spec,
+		[]sandboxboot.Mount{{Target: mntWorkspace, GuestOnly: true}}); err == nil || !strings.Contains(err.Error(), "CAS unavailable") {
+		t.Fatalf("CAS read error = %v", err)
+	}
+	spec.DevcontainerPath = "."
+	if _, err := e.resolveDevcontainerOverlay(t.Context(), "sandbox", spec, nil); err == nil {
+		t.Fatal("invalid devcontainer path succeeded")
+	}
+}
+
+func TestDiskBuildDevcontainerCleansUpMaterializationFailures(t *testing.T) {
+	calls := 0
+	mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
+		calls++
+		if calls > 1 {
+			return errors.New("build context unavailable")
+		}
+		dir := filepath.Join(dest, ".devcontainer")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "devcontainer.json"), []byte(`{"build":{"dockerfile":"Dockerfile"}}`), 0o600)
+	}}
+	backing := t.TempDir()
+	e := &Executor{mountMaterializer: mat, mountBackingDir: backing}
+	if err := os.MkdirAll(filepath.Dir(e.mountDir("sandbox", 0)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	spec := &sandboxv1.SandboxSpec{
+		WorkspaceUuid: testWSUUID, DevcontainerPath: devcontainerNestedPath,
+		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}},
+	}
+	if _, err := e.resolveDevcontainerOverlay(t.Context(), "sandbox", spec,
+		[]sandboxboot.Mount{{Target: mntWorkspace, GuestOnly: true}}); err == nil || !strings.Contains(err.Error(), "build context unavailable") {
+		t.Fatalf("materialization error = %v", err)
+	}
+
+	mat.seed = func(dest string) error {
+		dir := filepath.Join(dest, ".devcontainer")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dir, "devcontainer.json"), []byte(`{"build":{"dockerfile":"Dockerfile"}}`), 0o600)
+	}
+	e.mountBackingDir = filepath.Join(t.TempDir(), "missing", "backing")
+	if _, err := e.resolveDevcontainerOverlay(t.Context(), "sandbox", spec,
+		[]sandboxboot.Mount{{Target: mntWorkspace, GuestOnly: true}}); err == nil || !strings.Contains(err.Error(), "create devcontainer build context") {
+		t.Fatalf("build context create error = %v", err)
 	}
 }
 
@@ -1070,6 +1176,40 @@ func TestFindDevcontainerFile(t *testing.T) {
 		if _, _, err := findDevcontainerFile(mounts, bad); err == nil {
 			t.Errorf("findDevcontainerFile(%q): want error", bad)
 		}
+	}
+}
+
+func TestResolveDevcontainerOverlayFromDirectMount(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".devcontainer")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(dir, "devcontainer.json")
+	if err := os.WriteFile(file, []byte(`{"image":"ghcr.io/acme/direct:1","containerEnv":{"A":"b"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec := &sandboxv1.SandboxSpec{DevcontainerPath: devcontainerNestedPath}
+	got, err := resolveDevcontainerOverlay(spec, []sandboxboot.Mount{{Source: root}})
+	if err != nil {
+		t.Fatalf("resolve image devcontainer: %v", err)
+	}
+	if got.ImageRef != "ghcr.io/acme/direct:1" || !slices.Contains(got.Env, "A=b") || got.Build != nil {
+		t.Fatalf("image resolution = %+v", got)
+	}
+
+	if err := os.WriteFile(file, []byte(`{"build":{"dockerfile":"Dockerfile"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = resolveDevcontainerOverlay(spec, []sandboxboot.Mount{{Source: root}})
+	if err != nil {
+		t.Fatalf("resolve build devcontainer: %v", err)
+	}
+	if got.Build == nil || got.Build.dockerfile != "Dockerfile" {
+		t.Fatalf("build resolution = %+v", got.Build)
 	}
 }
 

@@ -345,6 +345,10 @@ Landed:
   Writable Workspace paths no longer create virtiofs shares or host seed
   trees; retained qcow2 images receive no seed endpoint and therefore cannot
   be overwritten during relaunch. The real-KVM round trip exercises this path.
+- Devcontainer launch metadata for writable XFS mounts is read as one bounded
+  regular file directly from the durable manifest/CAS, so image-based projects
+  do not recreate a host workspace tree. Build-based devcontainers materialise
+  only an ephemeral build context and remove it after image assembly.
 - Exact pull acknowledgment now removes a stopped retained qcow2 after the CAS
   generation becomes recoverable. A running disk is retained because it may
   already contain writes newer than the acknowledged manifest.
