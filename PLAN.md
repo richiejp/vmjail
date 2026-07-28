@@ -320,10 +320,13 @@ Landed:
   manifest identity, and `StorageFrozen` only when the reporting Node still
   owns the Workspace's current Sandbox binding; stale or foreign reports are
   ignored.
+- Explicit stop and process-exit teardown snapshot every writable guest XFS
+  mapping into a protected durable manifest before unregistering it. The
+  real-KVM push/mutate/stop/pull acceptance path now also asserts the writable
+  mount is XFS and supports reflink cloning.
 
 Remaining:
 
-- Add stop-time teardown snapshot control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
 - Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,

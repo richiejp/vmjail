@@ -21,6 +21,7 @@ import (
 const (
 	s4PushedMarker  = "S4-PUSHED-MARKER"
 	s4MutatedMarker = "S4-MUTATED-IN-VM"
+	s4XFSSentinel   = "S4-XFS-REFLINK-OK"
 )
 
 // TestClusterWorkspacePushMutatePull is the full-stack proof of the
@@ -33,15 +34,16 @@ const (
 //	daft workspace mount . /workspace   # dir-local rw mapping
 //	daft workspace target <node>
 //	daft workspace push          # in.txt -> node CAS (S2c)
-//	daft workspace launch        # CAS -> backing dir -> virtiofs (S3)
+//	daft workspace launch        # CAS -> retained XFS disk (S3)
 //	# inside the VM: read in.txt, then write out.txt
-//	daft workspace pull          # re-manifest live backing dir (S4)
+//	daft workspace stop          # snapshot guest XFS into protected CAS
+//	daft workspace pull          # materialise the durable snapshot (S4)
 //
 // It then asserts the VM-written out.txt landed back in the local
 // workspace dir. Unlike the other testdaemons workspace tests (which
 // use `mount add --source /abs`, a direct host bind that never touches
-// the CAS), this is the only end-to-end exercise of the
-// push → materialise → mutate-in-VM → pull cycle that S3/S4 implement.
+// the CAS), this exercises push → XFS materialisation → mutate → stop-time
+// protected snapshot → pull. It also pins XFS and reflink semantics.
 func TestClusterWorkspacePushMutatePull(t *testing.T) {
 	imgPath := requireEnvPath(t, "DAFT_NIX_IMAGE",
 		"nix build .#nix-shell-image -o bin/nix-shell-image")
@@ -99,9 +101,9 @@ func TestClusterWorkspacePushMutatePull(t *testing.T) {
 	// pane would wedge the shell before the pull step. startDaftSubprocess
 	// gives it a /dev/null stdin instead. The single command:
 	//   - cat /workspace/in.txt  -> S3 proof (the pushed bytes are in the VM),
+	//   - proves the mount is XFS and supports an explicit reflink clone,
 	//   - writes out.txt          -> the mutation S4 must surface,
-	//   - sync                    -> flush the guest write through virtiofs to
-	//                                the host backing dir before pull reads it,
+	//   - sync                    -> flush the guest write before stop snapshots,
 	//   - echoes the write's exit -> S4-WROTE-0 success sentinel.
 	execLog := filepath.Join(t.TempDir(), "exec.log")
 	paneDump := func() string { return s.Capture() }
@@ -110,17 +112,21 @@ func TestClusterWorkspacePushMutatePull(t *testing.T) {
 		"workspace", "exec", wsName, "--tty=false",
 		"--orchestrator", c.OrchestratorURL,
 		"--", "/bin/dash", "-c",
-		"cat /workspace/in.txt; echo "+s4MutatedMarker+
+		"cat /workspace/in.txt; test \"$(stat -f -c %T /workspace)\" = xfs && "+
+			"cp --reflink=always /workspace/in.txt /workspace/reflink.txt && "+
+			"echo "+s4XFSSentinel+" && echo "+s4MutatedMarker+
 			" > /workspace/out.txt; rc=$?; sync; echo S4-WROTE-$rc")
 	waitForFileContains(t, execProc, execLog, s4PushedMarker, 60*time.Second, paneDump)
+	waitForFileContains(t, execProc, execLog, s4XFSSentinel, 60*time.Second, paneDump)
 	waitForFileContains(t, execProc, execLog, "S4-WROTE-0", 60*time.Second, paneDump)
 
-	// S4 proof: pull re-manifests the *live* backing dir (reflecting the
-	// VM's write) rather than the last-pushed snapshot, so out.txt comes
-	// back to the local workspace dir. Runs in the pane (still at the
-	// workspace dir from the cd above); the exec subprocess never touched
-	// it, so the shell is at a clean prompt.
+	// Stop first so pull cannot use the live guest refresher. A successful pull
+	// therefore proves the stop path committed the final XFS contents into the
+	// durable protected manifest before tearing the VM down.
 	testdaemons.RunWorkspaceSteps(t, s, "S4PULL", []testdaemons.WorkspaceStep{
+		{Label: "stop", Cmd: fmt.Sprintf(
+			"%s workspace stop --name %s %s", prefix, wsName, orch,
+		)},
 		{Label: "pull", Cmd: fmt.Sprintf(
 			"%s workspace pull --name %s %s", prefix, wsName, orch,
 		)},
