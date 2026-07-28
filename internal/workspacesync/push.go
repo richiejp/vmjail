@@ -251,6 +251,18 @@ func dialNode(
 	serveKey string,
 	node identity.Fingerprint,
 ) (workspace.PushClient, func() error, error) {
+	client, closeRelay, err := DialWorkspaceService(ctx, cfg, serveKey, node)
+	return client, closeRelay, err
+}
+
+// DialWorkspaceService opens the authenticated broker relay to one Workspace's
+// assigned Node. Callers own the returned close function.
+func DialWorkspaceService(
+	ctx context.Context,
+	cfg PushConfig,
+	serveKey string,
+	node identity.Fingerprint,
+) (workspacev1connect.WorkspaceServiceClient, func() error, error) {
 	broker, err := brokerclient.New(brokerclient.Config{
 		URL: cfg.Orchestrator, Identity: cfg.Identity, Peers: cfg.Peers,
 	})

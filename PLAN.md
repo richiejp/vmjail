@@ -299,6 +299,11 @@ Landed:
   provenance, refuses a running disk, and leaves the protected manifest current
   when disk deletion fails. Relaunch therefore seeds only the restored client
   manifest instead of recovering rejected XFS bytes.
+- The reusable authenticated client now exposes bounded Workspace disk/CAS
+  status plus exact-manifest rejection, unfreeze, and Node-first deletion over
+  the broker. This is the shared non-Cobra control path used by trusted API
+  surfaces; its target, stale-state, transport, and partial-failure behavior is
+  covered with in-process Connect peers.
 
 Remaining:
 
