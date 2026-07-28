@@ -269,6 +269,13 @@ Landed:
   allowance, and frozen state. A bounded poller pauses Cloud Hypervisor at 90%
   usage; live growth durably expands qcow2, resizes virtio-blk, grows XFS, and
   keeps an already-frozen VM paused until a separate validated unfreeze.
+- A per-CAS Badger index durably records chunk size/access/provenance,
+  exact manifest digest/generation references, recoverability, disposition,
+  and crash-recoverable deletion queue state. Legacy unindexed chunks migrate
+  protected. Exact adoption, rejection with prior-manifest restoration,
+  workspace deletion, shared-chunk protection, batched touches, revalidation
+  before unlink, and the 50/35/15 cleanup ordering are deterministic and
+  tested against the 85/75/100 GiB and 180-day policy.
 
 Remaining:
 
@@ -276,10 +283,9 @@ Remaining:
   teardown snapshot control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
-- Add durable per-CAS Badger metadata, transactional manifest generations,
-  exact-generation adoption/rejection, protected/recoverable provenance, and
-  crash-safe weighted cleanup (85% soft, 75% target, 100 GiB hard, 180-day
-  expiry).
+- Wire the durable CAS index into Node manifest/chunk publication and add the
+  five-minute cleanup worker plus synchronous hard-limit write admission and
+  `NeedsRepush` propagation.
 - Add workspace disk/resource, changes reject, unfreeze, delete, storage
   status, and dry-run prune CLI/RPC/MCP surfaces with bounded results.
 - Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,
