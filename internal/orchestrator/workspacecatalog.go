@@ -1047,6 +1047,39 @@ func (h *WorkspaceCatalogHandler) Stop(
 	return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: workspaceToProto(updated)}), nil
 }
 
+func (h *WorkspaceCatalogHandler) Delete(
+	_ context.Context,
+	req *connect.Request[workspacev1.DeleteWorkspaceRequest],
+) (*connect.Response[workspacev1.DeleteWorkspaceResponse], error) {
+	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
+	if !ok {
+		return nil, errUnauthenticated
+	}
+	ws, err := h.resolveHandle(fp, req.Msg.GetHandle())
+	if err != nil {
+		return nil, err
+	}
+	unlock := h.lockLifecycle(ws.Metadata.UUID)
+	defer unlock()
+	ws, err = h.store.Get(ws.Metadata.UUID)
+	if err != nil {
+		return nil, mapCatalogErr(err)
+	}
+	if err := guardLock(ws, fp); err != nil {
+		return nil, err
+	}
+	if req.Msg.GetExpectedGeneration() == 0 || req.Msg.GetExpectedGeneration() != ws.Metadata.Generation {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("workspace: generation changed before delete"))
+	}
+	if ws.Status.IsTrue(workspacecatalog.ConditionDispatched) || ws.Status.CurrentSandbox != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("workspace: stop the workspace before delete"))
+	}
+	if err := h.store.Delete(ws.Metadata.UUID); err != nil {
+		return nil, mapCatalogErr(err)
+	}
+	return connect.NewResponse(&workspacev1.DeleteWorkspaceResponse{}), nil
+}
+
 var errSandboxBindingChanged = errors.New("workspace: Sandbox binding changed")
 
 // StopAgentSandbox idempotently tears down one exact Workspace Sandbox. A

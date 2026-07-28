@@ -64,6 +64,75 @@ func TestStorePrepareAndReuse(t *testing.T) {
 	}
 }
 
+func TestStoreSizeAndDeleteAreDurableAndIdempotent(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size, exists, err := store.Size(testWorkspaceID); err != nil || exists || size != 0 {
+		t.Fatalf("missing Size = %d, %t, %v", size, exists, err)
+	}
+	path, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size, exists, err := store.Size(testWorkspaceID); err != nil || !exists || size != DefaultDiskBytes {
+		t.Fatalf("retained Size = %d, %t, %v", size, exists, err)
+	}
+	if err := store.Delete(testWorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("deleted image stat = %v", err)
+	}
+	if err := store.Delete(testWorkspaceID); err != nil {
+		t.Fatalf("idempotent Delete: %v", err)
+	}
+}
+
+func TestStoreSizeAndDeleteValidateAndReportDurabilityFailures(t *testing.T) {
+	var nilStore *Store
+	if err := nilStore.Delete(testWorkspaceID); err == nil {
+		t.Fatal("nil store Delete succeeded")
+	}
+	if _, _, err := nilStore.Size(testWorkspaceID); err == nil {
+		t.Fatal("nil store Size succeeded")
+	}
+	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete("../escape"); err == nil {
+		t.Fatal("invalid workspace Delete succeeded")
+	}
+	if _, _, err := store.Size("../escape"); err == nil {
+		t.Fatal("invalid workspace Size succeeded")
+	}
+	removeErr := errors.New("remove failed")
+	store.remove = func(string) error { return removeErr }
+	if err := store.Delete(testWorkspaceID); !errors.Is(err, removeErr) {
+		t.Fatalf("Delete remove error = %v", err)
+	}
+	store.remove = func(string) error { return fs.ErrNotExist }
+	syncErr := errors.New("sync failed")
+	store.syncRoot = func(string) error { return syncErr }
+	if err := store.Delete(testWorkspaceID); !errors.Is(err, syncErr) {
+		t.Fatalf("Delete sync error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(store.root, testWorkspaceID+diskSuffix), []byte("not qcow2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists, err := store.Size(testWorkspaceID); err == nil || exists {
+		t.Fatalf("invalid image Size exists=%t err=%v", exists, err)
+	}
+}
+
+func TestSyncDirReportsMissingRoot(t *testing.T) {
+	if err := syncDir(filepath.Join(t.TempDir(), "missing")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("syncDir missing root = %v", err)
+	}
+}
+
 func TestStorePrepareConcurrentConverges(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
 	if err != nil {
@@ -433,5 +502,29 @@ func TestStoreGrow(t *testing.T) {
 	}
 	if err := store.Grow(testWorkspaceID, DefaultDiskBytes); !errors.Is(err, ErrShrink) {
 		t.Fatalf("shrink error = %v, want %v", err, ErrShrink)
+	}
+}
+
+func TestStoreGrowRejectsInvalidAndMissingImages(t *testing.T) {
+	var nilStore *Store
+	if err := nilStore.Grow(testWorkspaceID, DefaultDiskBytes*2); err == nil {
+		t.Fatal("nil store Grow succeeded")
+	}
+	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Grow("../escape", DefaultDiskBytes*2); err == nil {
+		t.Fatal("invalid workspace Grow succeeded")
+	}
+	if err := store.Grow(testWorkspaceID, DefaultDiskBytes*2); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing image Grow = %v", err)
+	}
+	path := filepath.Join(store.root, testWorkspaceID+diskSuffix)
+	if err := os.WriteFile(path, []byte("not qcow2"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Grow(testWorkspaceID, DefaultDiskBytes*2); err == nil {
+		t.Fatal("invalid image Grow succeeded")
 	}
 }

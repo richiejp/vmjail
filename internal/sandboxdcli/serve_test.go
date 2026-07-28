@@ -18,7 +18,88 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxexec"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/richiejp/darkaifactory/internal/workspacedisk"
+	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
+
+type fakeWorkspaceDiskExecutor struct {
+	status      sandboxexec.WorkspaceDiskStatus
+	statusErr   error
+	unfreezeErr error
+	unfrozen    bool
+}
+
+func (f *fakeWorkspaceDiskExecutor) WorkspaceDiskStatus(string) (sandboxexec.WorkspaceDiskStatus, error) {
+	return f.status, f.statusErr
+}
+
+func (f *fakeWorkspaceDiskExecutor) UnfreezeWorkspaceDisk(context.Context, string) error {
+	f.unfrozen = true
+	return f.unfreezeErr
+}
+
+func TestNodeWorkspaceDiskControlRunningAndRetainedStates(t *testing.T) {
+	store, err := workspacedisk.OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workspaceID = "00000000-0000-4000-8000-000000000001"
+	if _, _, err := store.Prepare(workspaceID, workspacedisk.DefaultDiskBytes); err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeWorkspaceDiskExecutor{status: sandboxexec.WorkspaceDiskStatus{
+		Usage: workspacesnapshot.Usage{Used: 7, Available: 13}, Allowance: 20, Frozen: true,
+	}}
+	control := &nodeWorkspaceDiskControl{executor: executor, store: store}
+	status, err := control.Status(workspaceID)
+	if err != nil || !status.Running || status.UsedBytes != 7 || !status.Frozen {
+		t.Fatalf("running status = %#v, %v", status, err)
+	}
+	if err := control.Delete(t.Context(), workspaceID); err == nil {
+		t.Fatal("running disk deleted")
+	}
+	if err := control.Unfreeze(t.Context(), workspaceID); err != nil || !executor.unfrozen {
+		t.Fatalf("unfreeze = %v, called %t", err, executor.unfrozen)
+	}
+	executor.statusErr = sandboxexec.ErrWorkspaceDiskNotRunning
+	status, err = control.Status(workspaceID)
+	if err != nil || status.Running || status.AllowanceBytes != workspacedisk.DefaultDiskBytes {
+		t.Fatalf("retained status = %#v, %v", status, err)
+	}
+	if err := control.Delete(t.Context(), workspaceID); err != nil {
+		t.Fatal(err)
+	}
+	if size, exists, err := store.Size(workspaceID); err != nil || exists || size != 0 {
+		t.Fatalf("deleted retained size = %d, %t, %v", size, exists, err)
+	}
+}
+
+func TestNodeWorkspaceDiskControlPropagatesExecutorAndStoreErrors(t *testing.T) {
+	store, err := workspacedisk.OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const workspaceID = "00000000-0000-4000-8000-000000000001"
+	executorErr := errors.New("executor failed")
+	executor := &fakeWorkspaceDiskExecutor{statusErr: executorErr, unfreezeErr: executorErr}
+	control := &nodeWorkspaceDiskControl{executor: executor, store: store}
+	if _, err := control.Status(workspaceID); !errors.Is(err, executorErr) {
+		t.Fatalf("Status executor error = %v", err)
+	}
+	if err := control.Delete(t.Context(), workspaceID); !errors.Is(err, executorErr) {
+		t.Fatalf("Delete executor error = %v", err)
+	}
+	if err := control.Unfreeze(t.Context(), workspaceID); !errors.Is(err, executorErr) {
+		t.Fatalf("Unfreeze executor error = %v", err)
+	}
+	executor.statusErr = sandboxexec.ErrWorkspaceDiskNotRunning
+	if _, err := control.Status("../invalid"); err == nil {
+		t.Fatal("Status accepted invalid retained workspace ID")
+	}
+	if err := control.Delete(t.Context(), "../invalid"); err == nil {
+		t.Fatal("Delete accepted invalid retained workspace ID")
+	}
+}
 
 // stubBuildDispatcher swaps buildDispatcher with one that returns
 // an Executor whose runner is a no-op — exercises the same code

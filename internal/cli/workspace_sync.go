@@ -119,6 +119,128 @@ func newWorkspaceStorageCmd() *cobra.Command {
 	return cmd
 }
 
+func newWorkspaceUnfreezeCmd() *cobra.Command {
+	var opts workspaceClientOpts
+	var casDir string
+	cmd := &cobra.Command{
+		Use: unfreezeSubName, Short: "Explicitly resume a storage-frozen workspace after remediation",
+		Args: cobra.NoArgs, SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			mounts, err := dirLocalMounts()
+			if err != nil {
+				return err
+			}
+			return runNodeWorkspaceRPC(cmd, opts, casDir, unfreezeSubName, func(
+				ctx context.Context, client workspacev1connect.WorkspaceServiceClient, uuid string,
+			) error {
+				expected, err := workspaceManifestExpectations(ctx, client, uuid, mounts)
+				if err != nil {
+					return err
+				}
+				response, err := client.UnfreezeWorkspaceDisk(ctx, connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{
+					WorkspaceUuid: uuid, ExpectedManifests: expected,
+				}))
+				if err != nil {
+					return err
+				}
+				_, err = fmt.Fprintf(cmd.OutOrStdout(), "workspace %s unfrozen: used=%d available=%d allowance=%d\n",
+					uuid, response.Msg.GetUsedBytes(), response.Msg.GetAvailableBytes(), response.Msg.GetAllowanceBytes())
+				return err
+			})
+		},
+	}
+	bindWorkspaceClientFlags(cmd, &opts)
+	cmd.Flags().StringVar(&casDir, "cas-dir", "", "override the local CAS directory used while opening the broker identity")
+	return cmd
+}
+
+func newWorkspaceDeleteCmd() *cobra.Command {
+	var opts workspaceClientOpts
+	var casDir string
+	cmd := &cobra.Command{
+		Use: deleteSubName, Short: "Permanently delete a stopped workspace and its retained data",
+		Args: cobra.NoArgs, SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			mounts, err := dirLocalMounts()
+			if err != nil {
+				return err
+			}
+			return runWorkspaceDelete(cmd, opts, casDir, mounts)
+		},
+	}
+	bindWorkspaceClientFlags(cmd, &opts)
+	cmd.Flags().StringVar(&casDir, "cas-dir", "", "override the local CAS directory used while opening the broker identity")
+	return cmd
+}
+
+func runWorkspaceDelete(cmd *cobra.Command, opts workspaceClientOpts, casDir string, mounts []mountMapping) error {
+	handle, err := opts.resolveHandle()
+	if err != nil {
+		return err
+	}
+	orchestrator, err := resolveOrchestrator(opts.orchestrator, opts.configDir)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(cmd.Context(), opts.timeout)
+	defer cancel()
+	tracer, _ := tracerForCommand(ctx)
+	catalog, _, err := dialWorkspaceCatalog(opts.configDir, orchestrator, tracer)
+	if err != nil {
+		return err
+	}
+	workspaceResponse, err := catalog.Get(ctx, connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: handle}))
+	if err != nil {
+		return fmt.Errorf("daft workspace delete: get workspace: %w", err)
+	}
+	resource := workspaceResponse.Msg.GetWorkspace()
+	uuid := resource.GetMetadata().GetUuid()
+	target := resource.GetSpec().GetTargetSandboxFingerprint()
+	if target == "" {
+		return deleteWorkspaceCatalog(ctx, cmd.OutOrStdout(), catalog, handle, uuid, resource.GetMetadata().GetGeneration())
+	}
+	nodeFP, err := identity.ParseFingerprint(target)
+	if err != nil {
+		return fmt.Errorf("daft workspace delete: parse target fingerprint: %w", err)
+	}
+	clientContext, err := openClientCtx(opts.configDir, casDir, opts.orchestrator)
+	if err != nil {
+		return err
+	}
+	client, closeRelay, err := dialNodeWorkspaceService(ctx, clientContext, orchestrator, uuid, nodeFP, tracer)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = closeRelay() }()
+	expected, err := workspaceManifestExpectations(ctx, client, uuid, mounts)
+	if err != nil {
+		return err
+	}
+	if _, err := client.DeleteWorkspaceData(ctx, connect.NewRequest(&workspacev1.DeleteWorkspaceDataRequest{
+		WorkspaceUuid: uuid, ExpectedManifests: expected,
+	})); err != nil {
+		return fmt.Errorf("daft workspace delete: delete Node data: %w", err)
+	}
+	return deleteWorkspaceCatalog(ctx, cmd.OutOrStdout(), catalog, handle, uuid, resource.GetMetadata().GetGeneration())
+}
+
+func deleteWorkspaceCatalog(
+	ctx context.Context,
+	out io.Writer,
+	catalog workspacev1connect.WorkspaceCatalogServiceClient,
+	handle *workspacev1.WorkspaceHandle,
+	uuid string,
+	generation uint64,
+) error {
+	if _, err := catalog.Delete(ctx, connect.NewRequest(&workspacev1.DeleteWorkspaceRequest{
+		Handle: handle, ExpectedGeneration: generation,
+	})); err != nil {
+		return fmt.Errorf("daft workspace delete: delete catalog record: %w", err)
+	}
+	_, err := fmt.Fprintf(out, "deleted workspace %s\n", uuid)
+	return err
+}
+
 func newWorkspaceStorageStatusCmd() *cobra.Command {
 	var opts workspaceClientOpts
 	var casDir string
@@ -204,6 +326,26 @@ func rejectWorkspaceChanges(
 		_, _ = fmt.Fprintln(out, "no writable mounts recorded in ./.daft/config.json")
 	}
 	return nil
+}
+
+func workspaceManifestExpectations(
+	ctx context.Context,
+	client workspacev1connect.WorkspaceServiceClient,
+	uuid string,
+	mounts []mountMapping,
+) ([]*workspacev1.ManifestExpectation, error) {
+	expected := make([]*workspacev1.ManifestExpectation, 0, len(mounts))
+	for _, mount := range mounts {
+		key := workspace.SyncKey(uuid, mount.Remote)
+		current, err := client.GetManifest(ctx, connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: key}))
+		if err != nil {
+			return nil, fmt.Errorf("daft workspace: inspect manifest %s: %w", mount.Remote, err)
+		}
+		expected = append(expected, &workspacev1.ManifestExpectation{
+			Workspace: key, ManifestDigest: current.Msg.GetManifestDigest(), Generation: current.Msg.GetGeneration(),
+		})
+	}
+	return expected, nil
 }
 
 func writeWorkspaceStorageStatus(out io.Writer, status *workspacev1.GetStorageStatusResponse) error {

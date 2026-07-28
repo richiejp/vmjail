@@ -60,6 +60,8 @@ const (
 	changesSubName      = "changes"
 	storageSubName      = "storage"
 	pruneSubName        = "prune"
+	unfreezeSubName     = "unfreeze"
+	deleteSubName       = "delete"
 )
 
 // workspaceClientOpts is the shared flag set every catalog
@@ -243,6 +245,8 @@ func newWorkspaceCatalogSubcommands() []*cobra.Command {
 		newWorkspacePullCatalogCmd(),
 		newWorkspaceChangesCmd(),
 		newWorkspaceStorageCmd(),
+		newWorkspaceUnfreezeCmd(),
+		newWorkspaceDeleteCmd(),
 		newWorkspaceEnvCmd(),
 		newWorkspacePortCmd(),
 		newWorkspaceValidateCmd(),

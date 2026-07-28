@@ -12,6 +12,10 @@ type shortWriter struct{}
 
 func (shortWriter) WriteAt(p []byte, _ int64) (int, error) { return len(p) - 1, nil }
 
+type errorWriter struct{ err error }
+
+func (w errorWriter) WriteAt([]byte, int64) (int, error) { return 0, w.err }
+
 const defaultWorkspaceSize = 20 << 30
 
 type writerAtBuffer struct{ data []byte }
@@ -150,6 +154,13 @@ func TestCreateEmptyQCOW2RejectsNilDestination(t *testing.T) {
 func TestCreateEmptyQCOW2RejectsShortWrite(t *testing.T) {
 	if err := CreateEmptyQCOW2(shortWriter{}, defaultWorkspaceSize); !errors.Is(err, io.ErrShortWrite) {
 		t.Fatalf("error = %v, want %v", err, io.ErrShortWrite)
+	}
+}
+
+func TestCreateEmptyQCOW2ReportsWriteFailure(t *testing.T) {
+	want := errors.New("write failed")
+	if err := CreateEmptyQCOW2(errorWriter{err: want}, defaultWorkspaceSize); !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
 	}
 }
 

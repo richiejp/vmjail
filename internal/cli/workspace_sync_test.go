@@ -23,6 +23,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/orchestrator"
+	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspace"
 	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
@@ -40,6 +41,28 @@ type syncE2ERig struct {
 	nodeFP     string
 	nodeServer *workspace.Server
 	nodeIndex  *casindex.Index
+	catalog    *workspacecatalog.Store
+}
+
+type cliWorkspaceDiskController struct {
+	status        workspace.WorkspaceDiskStatus
+	unfreezeCalls int
+	deleteCalls   int
+}
+
+func (c *cliWorkspaceDiskController) Status(string) (workspace.WorkspaceDiskStatus, error) {
+	return c.status, nil
+}
+
+func (c *cliWorkspaceDiskController) Unfreeze(context.Context, string) error {
+	c.unfreezeCalls++
+	c.status.Frozen = false
+	return nil
+}
+
+func (c *cliWorkspaceDiskController) Delete(context.Context, string) error {
+	c.deleteCalls++
+	return nil
 }
 
 // newSyncE2ERig stands up the orchestrator, the broker-served node,
@@ -72,7 +95,7 @@ func newSyncE2ERig(t *testing.T) *syncE2ERig {
 		}
 	}
 
-	srv := startSyncOrchestrator(t, srvID, srvStore)
+	srv, catalog := startSyncOrchestrator(t, srvID, srvStore)
 	orchURL := "https://" + srv.Addr()
 
 	// Client approves the orchestrator so its on-disk peer store
@@ -84,16 +107,17 @@ func newSyncE2ERig(t *testing.T) *syncE2ERig {
 
 	nodeServer, nodeIndex := startSyncNode(t, orchURL, nodeID, srvID, srv)
 
-	return &syncE2ERig{orchURL: orchURL, clientDir: clientDir, nodeFP: nodeID.Fingerprint().String(), nodeServer: nodeServer, nodeIndex: nodeIndex}
+	return &syncE2ERig{orchURL: orchURL, clientDir: clientDir, nodeFP: nodeID.Fingerprint().String(), nodeServer: nodeServer, nodeIndex: nodeIndex, catalog: catalog}
 }
 
-func startSyncOrchestrator(t *testing.T, srvID *identity.Identity, srvStore *identity.PeerStore) *orchestrator.Server {
+func startSyncOrchestrator(t *testing.T, srvID *identity.Identity, srvStore *identity.PeerStore) (*orchestrator.Server, *workspacecatalog.Store) {
 	t.Helper()
+	catalog := workspacecatalog.NewStore(nil)
 	srv, err := orchestrator.New(orchestrator.Config{
 		Identity:         srvID,
 		Peers:            srvStore,
 		Addr:             loopbackAddrAny,
-		WorkspaceCatalog: workspacecatalog.NewStore(nil),
+		WorkspaceCatalog: catalog,
 	})
 	if err != nil {
 		t.Fatalf("orchestrator.New: %v", err)
@@ -111,7 +135,7 @@ func startSyncOrchestrator(t *testing.T, srvID *identity.Identity, srvStore *ide
 		defer cancel()
 		_ = srv.Shutdown(ctx)
 	})
-	return srv
+	return srv, catalog
 }
 
 // startSyncNode runs the node side: a brokerclient hosting a
@@ -297,11 +321,140 @@ func TestWorkspacePushPullRoundTrip(t *testing.T) {
 	if err != nil || !strings.Contains(rejectOut, "restored generation") {
 		t.Fatalf("changes reject = %q, %v", rejectOut, err)
 	}
+	diskController := &cliWorkspaceDiskController{status: workspace.WorkspaceDiskStatus{
+		UsedBytes: 7, AvailableBytes: 13, AllowanceBytes: 20, Frozen: true, Running: true,
+	}}
+	rig.nodeServer.SetWorkspaceDiskController(diskController)
+	unfreezeOut, _, err := runDaft(t, append([]string{workspaceCmdName, unfreezeSubName}, commonArgs...)...)
+	if err != nil || diskController.unfreezeCalls != 1 || !strings.Contains(unfreezeOut, "unfrozen") {
+		t.Fatalf("workspace unfreeze = %q, %v, calls %d", unfreezeOut, err, diskController.unfreezeCalls)
+	}
 	if err := rig.nodeIndex.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := runDaft(t, append([]string{workspaceCmdName, storageSubName, statusSubName}, commonArgs...)...); err == nil {
 		t.Fatal("storage status succeeded after node index close")
+	}
+}
+
+//nolint:funlen // One brokered lifecycle covers node, targetless, stale, malformed, unreachable, and writer-failure deletion outcomes.
+func TestWorkspaceDeleteRemovesNodeDataAndCatalog(t *testing.T) {
+	rig := newSyncE2ERig(t)
+	const wsName = "delete-e2e"
+	commonArgs := []string{orchestratorArg, rig.orchURL, configDirArg, rig.clientDir, nameFlag, wsName}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, createSubName}, commonArgs...)...); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, targetSubName, rig.nodeFP}, commonArgs...)...); err != nil {
+		t.Fatal(err)
+	}
+	project := t.TempDir()
+	t.Chdir(project)
+	if err := os.MkdirAll(filepath.Join(project, ".daft"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".daft", "config.json"), []byte(`{"mounts":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	controller := &cliWorkspaceDiskController{}
+	rig.nodeServer.SetWorkspaceDiskController(controller)
+	output, _, err := runDaft(t, append([]string{workspaceCmdName, deleteSubName}, commonArgs...)...)
+	if err != nil || controller.deleteCalls != 1 || !strings.Contains(output, "deleted workspace") {
+		t.Fatalf("workspace delete = %q, %v, calls %d", output, err, controller.deleteCalls)
+	}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, statusSubName}, commonArgs...)...); err == nil {
+		t.Fatal("deleted workspace remains in catalog")
+	}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, deleteSubName}, commonArgs...)...); err == nil || !strings.Contains(err.Error(), "get workspace") {
+		t.Fatalf("repeated workspace delete = %v", err)
+	}
+
+	const freshName = "delete-never-launched"
+	freshArgs := []string{orchestratorArg, rig.orchURL, configDirArg, rig.clientDir, nameFlag, freshName}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, createSubName}, freshArgs...)...); err != nil {
+		t.Fatal(err)
+	}
+	catalog, _, err := dialWorkspaceCatalog(rig.clientDir, rig.orchURL, trace.New("workspace-delete-test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	freshHandle := &workspacev1.WorkspaceHandle{Handle: &workspacev1.WorkspaceHandle_Name{Name: freshName}}
+	freshResource, err := catalog.Get(t.Context(), connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: freshHandle}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := deleteWorkspaceCatalog(t.Context(), io.Discard, catalog, freshHandle,
+		freshResource.Msg.GetWorkspace().GetMetadata().GetUuid(), freshResource.Msg.GetWorkspace().GetMetadata().GetGeneration()+1); err == nil {
+		t.Fatal("stale catalog delete succeeded")
+	}
+	const malformedName = "delete-malformed-target"
+	malformedArgs := []string{orchestratorArg, rig.orchURL, configDirArg, rig.clientDir, nameFlag, malformedName}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, createSubName}, malformedArgs...)...); err != nil {
+		t.Fatal(err)
+	}
+	malformedHandle := &workspacev1.WorkspaceHandle{Handle: &workspacev1.WorkspaceHandle_Name{Name: malformedName}}
+	malformedResource, err := catalog.Get(t.Context(), connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: malformedHandle}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = rig.catalog.Update(malformedResource.Msg.GetWorkspace().GetMetadata().GetUuid(), workspacecatalog.MutateSpec, func(value *workspacecatalog.Workspace) error {
+		value.Spec.TargetSandboxFingerprint = "not-a-fingerprint"
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, deleteSubName}, malformedArgs...)...); err == nil || !strings.Contains(err.Error(), "parse target fingerprint") {
+		t.Fatalf("malformed target delete = %v", err)
+	}
+	output, _, err = runDaft(t, append([]string{workspaceCmdName, deleteSubName}, freshArgs...)...)
+	if err != nil || controller.deleteCalls != 1 || !strings.Contains(output, "deleted workspace") {
+		t.Fatalf("never-launched workspace delete = %q, %v, node calls %d", output, err, controller.deleteCalls)
+	}
+
+	const unreachableName = "delete-unreachable-node"
+	unreachableArgs := []string{orchestratorArg, rig.orchURL, configDirArg, rig.clientDir, nameFlag, unreachableName, "--timeout", "500ms"}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, createSubName}, unreachableArgs...)...); err != nil {
+		t.Fatal(err)
+	}
+	unreachable, err := identity.Generate(identity.RoleSandboxHost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, targetSubName, unreachable.Fingerprint().String()}, unreachableArgs...)...); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, deleteSubName}, unreachableArgs...)...); err == nil {
+		t.Fatal("delete unexpectedly reached an unregistered node")
+	}
+
+	const writerName = "delete-writer-failure"
+	writerArgs := []string{orchestratorArg, rig.orchURL, configDirArg, rig.clientDir, nameFlag, writerName}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, createSubName}, writerArgs...)...); err != nil {
+		t.Fatal(err)
+	}
+	writerHandle := &workspacev1.WorkspaceHandle{Handle: &workspacev1.WorkspaceHandle_Name{Name: writerName}}
+	writerResource, err := catalog.Get(t.Context(), connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: writerHandle}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerWorkspace := writerResource.Msg.GetWorkspace()
+	if err := deleteWorkspaceCatalog(t.Context(), failingWriter{}, catalog, writerHandle,
+		writerWorkspace.GetMetadata().GetUuid(), writerWorkspace.GetMetadata().GetGeneration()); !errors.Is(err, errFail) {
+		t.Fatalf("catalog delete writer failure = %v", err)
+	}
+}
+
+func TestRunWorkspaceDeleteRejectsAmbiguousHandleBeforeDial(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.SetContext(t.Context())
+	err := runWorkspaceDelete(cmd, workspaceClientOpts{name: "name", uuid: "uuid"}, "", nil)
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("ambiguous delete = %v", err)
+	}
+	err = runWorkspaceDelete(cmd, workspaceClientOpts{name: "name", orchestrator: "://invalid", configDir: t.TempDir()}, "", nil)
+	if err == nil {
+		t.Fatal("delete accepted malformed orchestrator URL")
 	}
 }
 

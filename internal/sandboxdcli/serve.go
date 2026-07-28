@@ -84,6 +84,8 @@ func newServeCmd() *cobra.Command {
 // runServe is the testable core of `daft-sandboxd serve`. ctx
 // must be cancellable — runServe blocks for the lifetime of the
 // daemon and exits cleanly when ctx fires.
+//
+//nolint:funlen // Daemon construction keeps resource ownership and cleanup ordering visible in one lifecycle.
 func runServe(
 	ctx context.Context,
 	stdout io.Writer,
@@ -140,6 +142,7 @@ func runServe(
 	if err != nil {
 		return err
 	}
+	sync.server.SetWorkspaceDiskController(&nodeWorkspaceDiskControl{executor: dispatcher, store: diskStore})
 	jobManager, err := newJobManager(ctx, jobRegistry)
 	if err != nil {
 		return err
@@ -170,6 +173,47 @@ func runServe(
 	// client (the serve owner / initiator) drives push/pull. Run it
 	// concurrently with RegisterAndServe; ctx cancel stops both.
 	return runNodeServices(ctx, syncCtx, sync, client, resources, stdout, cancelSync)
+}
+
+type nodeWorkspaceDiskControl struct {
+	executor workspaceDiskExecutor
+	store    *workspacedisk.Store
+}
+
+type workspaceDiskExecutor interface {
+	WorkspaceDiskStatus(string) (sandboxexec.WorkspaceDiskStatus, error)
+	UnfreezeWorkspaceDisk(context.Context, string) error
+}
+
+func (c *nodeWorkspaceDiskControl) Status(workspaceID string) (workspace.WorkspaceDiskStatus, error) {
+	status, err := c.executor.WorkspaceDiskStatus(workspaceID)
+	if err == nil {
+		return workspace.WorkspaceDiskStatus{
+			UsedBytes: status.Usage.Used, AvailableBytes: status.Usage.Available,
+			AllowanceBytes: status.Allowance, Frozen: status.Frozen, Running: true,
+		}, nil
+	}
+	if !errors.Is(err, sandboxexec.ErrWorkspaceDiskNotRunning) {
+		return workspace.WorkspaceDiskStatus{}, err
+	}
+	size, _, sizeErr := c.store.Size(workspaceID)
+	if sizeErr != nil {
+		return workspace.WorkspaceDiskStatus{}, sizeErr
+	}
+	return workspace.WorkspaceDiskStatus{AllowanceBytes: size, Running: false}, nil
+}
+
+func (c *nodeWorkspaceDiskControl) Unfreeze(ctx context.Context, workspaceID string) error {
+	return c.executor.UnfreezeWorkspaceDisk(ctx, workspaceID)
+}
+
+func (c *nodeWorkspaceDiskControl) Delete(_ context.Context, workspaceID string) error {
+	if _, err := c.executor.WorkspaceDiskStatus(workspaceID); err == nil {
+		return errors.New("daft-sandboxd: cannot delete a running workspace disk")
+	} else if !errors.Is(err, sandboxexec.ErrWorkspaceDiskNotRunning) {
+		return err
+	}
+	return c.store.Delete(workspaceID)
 }
 
 func runNodeServices(

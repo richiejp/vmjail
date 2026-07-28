@@ -98,7 +98,7 @@ func TestWorkspaceCatalogSubcommandsRegistered(t *testing.T) {
 	wantVerbs := []string{
 		createSubName, statusSubName, listSubName, imageSubName, targetSubName,
 		mountSubName, envSubName, portSubName, validateSubName, launchSubName, stopSubName,
-		acquireSubName, releaseSubName, changesSubName, storageSubName,
+		acquireSubName, releaseSubName, changesSubName, storageSubName, unfreezeSubName, deleteSubName,
 	}
 	for _, v := range wantVerbs {
 		if !strings.Contains(stdout, v) {

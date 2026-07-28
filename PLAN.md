@@ -289,16 +289,21 @@ Landed:
   now provides `workspace changes reject` and `workspace storage status|prune`;
   a brokered end-to-end test proves rejection restores the prior adopted
   manifest and stale operations fail without weakening protection.
+- Brokered exact-manifest-set disk lifecycle controls now expose running and
+  retained disk status, explicit unfreeze, durable stopped-qcow2 deletion, CAS
+  protection release, and generation-checked catalog deletion. The CLI exposes
+  `workspace unfreeze` and `workspace delete`; tests pin stale/extra manifests,
+  pending reservations, locked/running workspaces, unreachable nodes, malformed
+  bindings, controller/index failures, and never-launched deletion.
 
 Remaining:
 
-- Add orchestration/public surfaces for the Node disk controls and stop-time
-  teardown snapshot control paths.
+- Add stop-time teardown snapshot control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
 - Finish workspace status disk fields, retained-disk rematerialisation after
-  rejection, unfreeze/delete orchestration, and matching trusted MCP tools;
-  expose node-storage inspection there with the same bounded results.
+  rejection, and matching trusted MCP tools; expose node-storage inspection
+  there with the same bounded results.
 - Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,
   capacity, persistence, freeze, live-grow, and leak acceptance tests.
 

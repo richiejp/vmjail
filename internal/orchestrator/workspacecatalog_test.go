@@ -86,6 +86,8 @@ func TestNewWorkspaceCatalogHandlerRejectsNilStore(t *testing.T) {
 
 // TestWorkspaceCatalogHandlerRejectsMissingPeerIdentity covers
 // every RPC's auth check.
+//
+//nolint:funlen // Keeping every catalog RPC in one auth table prevents newly added methods from escaping the common identity gate.
 func TestWorkspaceCatalogHandlerRejectsMissingPeerIdentity(t *testing.T) {
 	h, err := NewWorkspaceCatalogHandler(workspacecatalog.NewStore(nil), nil)
 	if err != nil {
@@ -158,6 +160,10 @@ func TestWorkspaceCatalogHandlerRejectsMissingPeerIdentity(t *testing.T) {
 		}},
 		{"Validate", func() error {
 			_, e := h.Validate(t.Context(), connect.NewRequest(&workspacev1.ValidateRequest{}))
+			return e
+		}},
+		{"Delete", func() error {
+			_, e := h.Delete(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceRequest{}))
 			return e
 		}},
 	}
@@ -2216,6 +2222,72 @@ func TestStopWithoutLaunchIsIdempotent(t *testing.T) {
 	))
 	if err != nil || response.Msg.GetWorkspace().GetStatus().GetCurrentSandbox().GetUid() != "" {
 		t.Fatalf("Stop fresh Workspace = %+v, %v", response, err)
+	}
+}
+
+func TestDeleteWorkspaceRequiresExactStoppedGeneration(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, err := rig.client.Create(t.Context(), connect.NewRequest(&workspacev1.CreateWorkspaceRequest{Name: "delete"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := created.Msg.GetWorkspace()
+	handle := uuidHandle(workspace.GetMetadata().GetUuid())
+	if _, err := rig.client.Delete(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceRequest{
+		Handle: handle, ExpectedGeneration: workspace.GetMetadata().GetGeneration() + 1,
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("stale delete = %v", err)
+	}
+	if _, err := rig.client.Delete(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceRequest{
+		Handle: handle, ExpectedGeneration: workspace.GetMetadata().GetGeneration(),
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.client.Get(t.Context(), connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: handle})); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("deleted workspace Get = %v", err)
+	}
+	if _, err := rig.client.Delete(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceRequest{
+		Handle: uuidHandle("missing"), ExpectedGeneration: 1,
+	})); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("missing delete = %v", err)
+	}
+
+	running, err := rig.client.Create(t.Context(), connect.NewRequest(&workspacev1.CreateWorkspaceRequest{Name: "delete-running"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runningWorkspace := running.Msg.GetWorkspace()
+	_, err = rig.catalog.Update(runningWorkspace.GetMetadata().GetUuid(), workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: "running"}
+		value.Status.SetCondition(workspacecatalog.ConditionDispatched, workspacecatalog.ConditionStatusTrue, "Launched", "", time.Now())
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.client.Delete(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceRequest{
+		Handle: uuidHandle(runningWorkspace.GetMetadata().GetUuid()), ExpectedGeneration: runningWorkspace.GetMetadata().GetGeneration(),
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("running delete = %v", err)
+	}
+
+	locked, err := rig.client.Create(t.Context(), connect.NewRequest(&workspacev1.CreateWorkspaceRequest{Name: "delete-locked"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockedWorkspace := locked.Msg.GetWorkspace()
+	other := mustGenerate(t, identity.RoleClient).Fingerprint()
+	_, err = rig.catalog.Update(lockedWorkspace.GetMetadata().GetUuid(), workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+		value.Status.Lock = workspacecatalog.Lock{OwnerFingerprint: other}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.client.Delete(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceRequest{
+		Handle: uuidHandle(lockedWorkspace.GetMetadata().GetUuid()), ExpectedGeneration: lockedWorkspace.GetMetadata().GetGeneration(),
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("locked delete = %v", err)
 	}
 }
 

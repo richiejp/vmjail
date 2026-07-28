@@ -157,6 +157,11 @@ service WorkspaceCatalogService {
   // mutable; a subsequent Launch boots a fresh VM.
   rpc Stop(StopRequest) returns (WorkspaceResponse) {}
 
+  // Delete permanently removes a stopped workspace catalog record. The exact
+  // generation guard prevents a stale client deleting a concurrently edited
+  // workspace after Node-side data cleanup.
+  rpc Delete(DeleteWorkspaceRequest) returns (DeleteWorkspaceResponse) {}
+
   // Acquire takes (or refreshes) the workspace's per-owner write
   // lock. While the lock is held, only the holder can mutate the
   // workspace; every other authenticated caller's mutator
@@ -489,6 +494,13 @@ message LaunchRequest {
 message StopRequest {
   WorkspaceHandle handle = 1;
 }
+
+message DeleteWorkspaceRequest {
+  WorkspaceHandle handle = 1;
+  uint64 expected_generation = 2;
+}
+
+message DeleteWorkspaceResponse {}
 
 message AcquireRequest {
   WorkspaceHandle handle = 1;

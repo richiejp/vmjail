@@ -143,6 +143,44 @@ func (s *Store) Prepare(workspaceID string, virtualSize uint64) (path string, cr
 	return path, true, nil
 }
 
+// Delete removes one retained workspace image and durably syncs the store
+// directory. It is idempotent so catalog deletion retries converge safely.
+func (s *Store) Delete(workspaceID string) error {
+	if s == nil || s.root == "" {
+		return errors.New("workspacedisk: nil store")
+	}
+	if err := validateWorkspaceID(workspaceID); err != nil {
+		return err
+	}
+	path := filepath.Join(s.root, workspaceID+diskSuffix)
+	if err := s.remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("workspacedisk: delete image: %w", err)
+	}
+	if err := s.syncRoot(s.root); err != nil {
+		return fmt.Errorf("workspacedisk: sync deleted image: %w", err)
+	}
+	return nil
+}
+
+// Size reports the retained image's virtual allowance. Missing images are a
+// normal `(0, false, nil)` result for never-launched or already-deleted workspaces.
+func (s *Store) Size(workspaceID string) (size uint64, exists bool, err error) {
+	if s == nil || s.root == "" {
+		return 0, false, errors.New("workspacedisk: nil store")
+	}
+	if err := validateWorkspaceID(workspaceID); err != nil {
+		return 0, false, err
+	}
+	size, err = VirtualSize(filepath.Join(s.root, workspaceID+diskSuffix))
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return size, true, nil
+}
+
 // VirtualSize reads and validates the stable qcow2 header fields needed to
 // safely identify a retained image. Cloud Hypervisor may relocate later
 // metadata during live growth, so this deliberately does not assume the empty

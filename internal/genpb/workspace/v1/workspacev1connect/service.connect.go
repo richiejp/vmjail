@@ -121,6 +121,9 @@ const (
 	// WorkspaceCatalogServiceStopProcedure is the fully-qualified name of the WorkspaceCatalogService's
 	// Stop RPC.
 	WorkspaceCatalogServiceStopProcedure = "/daft.workspace.v1.WorkspaceCatalogService/Stop"
+	// WorkspaceCatalogServiceDeleteProcedure is the fully-qualified name of the
+	// WorkspaceCatalogService's Delete RPC.
+	WorkspaceCatalogServiceDeleteProcedure = "/daft.workspace.v1.WorkspaceCatalogService/Delete"
 	// WorkspaceCatalogServiceAcquireProcedure is the fully-qualified name of the
 	// WorkspaceCatalogService's Acquire RPC.
 	WorkspaceCatalogServiceAcquireProcedure = "/daft.workspace.v1.WorkspaceCatalogService/Acquire"
@@ -245,6 +248,10 @@ type WorkspaceCatalogServiceClient interface {
 	// lands in a follow-up sub-slice. STOPPED workspaces stay
 	// mutable; a subsequent Launch boots a fresh VM.
 	Stop(context.Context, *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Delete permanently removes a stopped workspace catalog record. The exact
+	// generation guard prevents a stale client deleting a concurrently edited
+	// workspace after Node-side data cleanup.
+	Delete(context.Context, *connect.Request[v1.DeleteWorkspaceRequest]) (*connect.Response[v1.DeleteWorkspaceResponse], error)
 	// Acquire takes (or refreshes) the workspace's per-owner write
 	// lock. While the lock is held, only the holder can mutate the
 	// workspace; every other authenticated caller's mutator
@@ -455,6 +462,12 @@ func NewWorkspaceCatalogServiceClient(httpClient connect.HTTPClient, baseURL str
 			connect.WithSchema(workspaceCatalogServiceMethods.ByName("Stop")),
 			connect.WithClientOptions(opts...),
 		),
+		delete: connect.NewClient[v1.DeleteWorkspaceRequest, v1.DeleteWorkspaceResponse](
+			httpClient,
+			baseURL+WorkspaceCatalogServiceDeleteProcedure,
+			connect.WithSchema(workspaceCatalogServiceMethods.ByName("Delete")),
+			connect.WithClientOptions(opts...),
+		),
 		acquire: connect.NewClient[v1.AcquireRequest, v1.WorkspaceResponse](
 			httpClient,
 			baseURL+WorkspaceCatalogServiceAcquireProcedure,
@@ -516,6 +529,7 @@ type workspaceCatalogServiceClient struct {
 	validate                *connect.Client[v1.ValidateRequest, v1.WorkspaceResponse]
 	launch                  *connect.Client[v1.LaunchRequest, v1.WorkspaceResponse]
 	stop                    *connect.Client[v1.StopRequest, v1.WorkspaceResponse]
+	delete                  *connect.Client[v1.DeleteWorkspaceRequest, v1.DeleteWorkspaceResponse]
 	acquire                 *connect.Client[v1.AcquireRequest, v1.WorkspaceResponse]
 	release                 *connect.Client[v1.ReleaseRequest, v1.WorkspaceResponse]
 	forwardPort             *connect.Client[v1.ForwardFrame, v1.ForwardFrame]
@@ -622,6 +636,11 @@ func (c *workspaceCatalogServiceClient) Launch(ctx context.Context, req *connect
 // Stop calls daft.workspace.v1.WorkspaceCatalogService.Stop.
 func (c *workspaceCatalogServiceClient) Stop(ctx context.Context, req *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return c.stop.CallUnary(ctx, req)
+}
+
+// Delete calls daft.workspace.v1.WorkspaceCatalogService.Delete.
+func (c *workspaceCatalogServiceClient) Delete(ctx context.Context, req *connect.Request[v1.DeleteWorkspaceRequest]) (*connect.Response[v1.DeleteWorkspaceResponse], error) {
+	return c.delete.CallUnary(ctx, req)
 }
 
 // Acquire calls daft.workspace.v1.WorkspaceCatalogService.Acquire.
@@ -758,6 +777,10 @@ type WorkspaceCatalogServiceHandler interface {
 	// lands in a follow-up sub-slice. STOPPED workspaces stay
 	// mutable; a subsequent Launch boots a fresh VM.
 	Stop(context.Context, *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error)
+	// Delete permanently removes a stopped workspace catalog record. The exact
+	// generation guard prevents a stale client deleting a concurrently edited
+	// workspace after Node-side data cleanup.
+	Delete(context.Context, *connect.Request[v1.DeleteWorkspaceRequest]) (*connect.Response[v1.DeleteWorkspaceResponse], error)
 	// Acquire takes (or refreshes) the workspace's per-owner write
 	// lock. While the lock is held, only the holder can mutate the
 	// workspace; every other authenticated caller's mutator
@@ -964,6 +987,12 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 		connect.WithSchema(workspaceCatalogServiceMethods.ByName("Stop")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceCatalogServiceDeleteHandler := connect.NewUnaryHandler(
+		WorkspaceCatalogServiceDeleteProcedure,
+		svc.Delete,
+		connect.WithSchema(workspaceCatalogServiceMethods.ByName("Delete")),
+		connect.WithHandlerOptions(opts...),
+	)
 	workspaceCatalogServiceAcquireHandler := connect.NewUnaryHandler(
 		WorkspaceCatalogServiceAcquireProcedure,
 		svc.Acquire,
@@ -1042,6 +1071,8 @@ func NewWorkspaceCatalogServiceHandler(svc WorkspaceCatalogServiceHandler, opts 
 			workspaceCatalogServiceLaunchHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceStopProcedure:
 			workspaceCatalogServiceStopHandler.ServeHTTP(w, r)
+		case WorkspaceCatalogServiceDeleteProcedure:
+			workspaceCatalogServiceDeleteHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceAcquireProcedure:
 			workspaceCatalogServiceAcquireHandler.ServeHTTP(w, r)
 		case WorkspaceCatalogServiceReleaseProcedure:
@@ -1141,6 +1172,10 @@ func (UnimplementedWorkspaceCatalogServiceHandler) Launch(context.Context, *conn
 
 func (UnimplementedWorkspaceCatalogServiceHandler) Stop(context.Context, *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.Stop is not implemented"))
+}
+
+func (UnimplementedWorkspaceCatalogServiceHandler) Delete(context.Context, *connect.Request[v1.DeleteWorkspaceRequest]) (*connect.Response[v1.DeleteWorkspaceResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceCatalogService.Delete is not implemented"))
 }
 
 func (UnimplementedWorkspaceCatalogServiceHandler) Acquire(context.Context, *connect.Request[v1.AcquireRequest]) (*connect.Response[v1.WorkspaceResponse], error) {

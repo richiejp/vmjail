@@ -34,6 +34,7 @@ type Server struct {
 	states        map[string]manifestState
 	pending       map[string]pendingManifest
 	reservedBytes uint64
+	diskControl   WorkspaceDiskController
 
 	// live maps a sync key to the host backing dir of a *running*
 	// workspace VM (Slice S4). While an entry is present, GetManifest
@@ -43,6 +44,20 @@ type Server struct {
 	// materialises a mount for a launch and clears it on teardown.
 	liveMu sync.RWMutex
 	live   map[string]liveMount
+}
+
+type WorkspaceDiskStatus struct {
+	UsedBytes      uint64
+	AvailableBytes uint64
+	AllowanceBytes uint64
+	Frozen         bool
+	Running        bool
+}
+
+type WorkspaceDiskController interface {
+	Status(string) (WorkspaceDiskStatus, error)
+	Unfreeze(context.Context, string) error
+	Delete(context.Context, string) error
 }
 
 const (
@@ -132,6 +147,12 @@ func (s *Server) SetLiveMount(key, dir string) {
 	s.liveMu.Lock()
 	s.live[key] = liveMount{dir: dir}
 	s.liveMu.Unlock()
+}
+
+func (s *Server) SetWorkspaceDiskController(controller WorkspaceDiskController) {
+	s.mu.Lock()
+	s.diskControl = controller
+	s.mu.Unlock()
 }
 
 // SetLiveMountRefresher replaces the live mount's refresh operation. Disk
@@ -548,6 +569,127 @@ func (s *Server) PruneStorage(
 		})
 	}
 	return connect.NewResponse(response), nil
+}
+
+func (s *Server) GetWorkspaceDiskStatus(
+	_ context.Context,
+	req *connect.Request[workspacev1.GetWorkspaceDiskStatusRequest],
+) (*connect.Response[workspacev1.GetWorkspaceDiskStatusResponse], error) {
+	controller := s.workspaceDiskController()
+	if controller == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("workspace: disk controller unavailable"))
+	}
+	uuid := req.Msg.GetWorkspaceUuid()
+	if uuid == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("workspace: workspace UUID is required"))
+	}
+	status, err := controller.Status(uuid)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	return connect.NewResponse(workspaceDiskStatusResponse(uuid, status)), nil
+}
+
+func (s *Server) UnfreezeWorkspaceDisk(
+	ctx context.Context,
+	req *connect.Request[workspacev1.UnfreezeWorkspaceDiskRequest],
+) (*connect.Response[workspacev1.GetWorkspaceDiskStatusResponse], error) {
+	controller := s.workspaceDiskController()
+	if controller == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("workspace: disk controller unavailable"))
+	}
+	uuid := req.Msg.GetWorkspaceUuid()
+	if err := s.validateManifestExpectations(uuid, req.Msg.GetExpectedManifests()); err != nil {
+		return nil, err
+	}
+	if err := controller.Unfreeze(ctx, uuid); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	status, err := controller.Status(uuid)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(workspaceDiskStatusResponse(uuid, status)), nil
+}
+
+func (s *Server) DeleteWorkspaceData(
+	ctx context.Context,
+	req *connect.Request[workspacev1.DeleteWorkspaceDataRequest],
+) (*connect.Response[workspacev1.DeleteWorkspaceDataResponse], error) {
+	controller := s.workspaceDiskController()
+	if controller == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("workspace: disk controller unavailable"))
+	}
+	uuid := req.Msg.GetWorkspaceUuid()
+	if err := s.validateManifestExpectations(uuid, req.Msg.GetExpectedManifests()); err != nil {
+		return nil, err
+	}
+	if err := controller.Delete(ctx, uuid); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	for _, expected := range req.Msg.GetExpectedManifests() {
+		if err := s.index.DeleteWorkspace(expected.GetWorkspace()); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		s.mu.Lock()
+		delete(s.manifests, expected.GetWorkspace())
+		delete(s.states, expected.GetWorkspace())
+		if pending, exists := s.pending[expected.GetWorkspace()]; exists {
+			s.reservedBytes -= min(s.reservedBytes, pending.reserved)
+			delete(s.pending, expected.GetWorkspace())
+		}
+		s.mu.Unlock()
+	}
+	return connect.NewResponse(&workspacev1.DeleteWorkspaceDataResponse{}), nil
+}
+
+func (s *Server) workspaceDiskController() WorkspaceDiskController {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.diskControl
+}
+
+func workspaceDiskStatusResponse(uuid string, status WorkspaceDiskStatus) *workspacev1.GetWorkspaceDiskStatusResponse {
+	return &workspacev1.GetWorkspaceDiskStatusResponse{
+		WorkspaceUuid: uuid, UsedBytes: status.UsedBytes, AvailableBytes: status.AvailableBytes,
+		AllowanceBytes: status.AllowanceBytes, Frozen: status.Frozen, Running: status.Running,
+	}
+}
+
+func (s *Server) validateManifestExpectations(uuid string, expected []*workspacev1.ManifestExpectation) error {
+	if s.index == nil {
+		return connect.NewError(connect.CodeUnimplemented, errors.New("workspace: durable index unavailable"))
+	}
+	if uuid == "" {
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("workspace: workspace UUID is required"))
+	}
+	prefix := uuid + "\x00"
+	provided := make(map[string]manifestState, len(expected))
+	for _, item := range expected {
+		if item == nil || !strings.HasPrefix(item.GetWorkspace(), prefix) {
+			return connect.NewError(connect.CodeInvalidArgument, errors.New("workspace: manifest expectation is outside workspace"))
+		}
+		if _, duplicate := provided[item.GetWorkspace()]; duplicate {
+			return connect.NewError(connect.CodeInvalidArgument, errors.New("workspace: duplicate manifest expectation"))
+		}
+		provided[item.GetWorkspace()] = manifestState{digest: item.GetManifestDigest(), generation: item.GetGeneration()}
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	currentCount := 0
+	for key, state := range s.states {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		currentCount++
+		if provided[key] != state {
+			return connect.NewError(connect.CodeFailedPrecondition, casindex.ErrStaleManifest)
+		}
+	}
+	if currentCount != len(provided) {
+		return connect.NewError(connect.CodeFailedPrecondition, casindex.ErrStaleManifest)
+	}
+	return nil
 }
 
 func (s *Server) requireExactIndexedManifest(name, digest string, generation uint64) error {

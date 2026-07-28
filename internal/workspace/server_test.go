@@ -21,6 +21,29 @@ import (
 
 const testSyncKey = "workspace\x00/workspace"
 
+type fakeWorkspaceDiskController struct {
+	status        WorkspaceDiskStatus
+	statusErr     error
+	unfreezeErr   error
+	deleteErr     error
+	unfreezeCalls int
+	deleteCalls   int
+}
+
+func (f *fakeWorkspaceDiskController) Status(string) (WorkspaceDiskStatus, error) {
+	return f.status, f.statusErr
+}
+
+func (f *fakeWorkspaceDiskController) Unfreeze(context.Context, string) error {
+	f.unfreezeCalls++
+	return f.unfreezeErr
+}
+
+func (f *fakeWorkspaceDiskController) Delete(context.Context, string) error {
+	f.deleteCalls++
+	return f.deleteErr
+}
+
 func mustNewServer(t *testing.T) (*Server, *cas.Store) {
 	t.Helper()
 	store := mustOpenStore(t)
@@ -519,6 +542,174 @@ func TestStorageControlRPCsAreBoundedAndDryRunOnly(t *testing.T) {
 	plan, err := server.PruneStorage(t.Context(), connect.NewRequest(&workspacev1.PruneStorageRequest{DryRun: true, MaxCandidates: 1}))
 	if err != nil || !plan.Msg.GetTruncated() || len(plan.Msg.GetCandidates()) != 1 || plan.Msg.GetCandidates()[0].GetDisposition() != string(casindex.DispositionActive) {
 		t.Fatalf("dry-run plan = %#v, %v", plan, err)
+	}
+}
+
+func TestWorkspaceDiskControlRPCsValidateExactManifestSet(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cas")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const uuid = "disk-workspace"
+	states := make(map[string]manifestState)
+	for _, target := range []string{"/work", "/data"} {
+		key := SyncKey(uuid, target)
+		state, publishErr := server.publishManifest(key, &workspacev1.Manifest{Version: 1}, casindex.OriginSandbox, casindex.RecoverabilityProtected)
+		if publishErr != nil {
+			t.Fatal(publishErr)
+		}
+		states[key] = state
+	}
+	controller := &fakeWorkspaceDiskController{status: WorkspaceDiskStatus{
+		UsedBytes: 9, AvailableBytes: 11, AllowanceBytes: 20, Frozen: true, Running: true,
+	}}
+	server.SetWorkspaceDiskController(controller)
+	status, err := server.GetWorkspaceDiskStatus(t.Context(), connect.NewRequest(&workspacev1.GetWorkspaceDiskStatusRequest{WorkspaceUuid: uuid}))
+	if err != nil || status.Msg.GetUsedBytes() != 9 || !status.Msg.GetFrozen() || !status.Msg.GetRunning() {
+		t.Fatalf("disk status = %#v, %v", status, err)
+	}
+	expected := make([]*workspacev1.ManifestExpectation, 0, len(states))
+	for key, state := range states {
+		expected = append(expected, &workspacev1.ManifestExpectation{Workspace: key, ManifestDigest: state.digest, Generation: state.generation})
+	}
+	if _, err := server.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{
+		WorkspaceUuid: uuid, ExpectedManifests: expected[:1],
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition || controller.unfreezeCalls != 0 {
+		t.Fatalf("incomplete expectation unfreeze = %v, calls %d", err, controller.unfreezeCalls)
+	}
+	controller.status.Frozen = false
+	unfrozen, err := server.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{
+		WorkspaceUuid: uuid, ExpectedManifests: expected,
+	}))
+	if err != nil || unfrozen.Msg.GetFrozen() || controller.unfreezeCalls != 1 {
+		t.Fatalf("unfreeze = %#v, %v, calls %d", unfrozen, err, controller.unfreezeCalls)
+	}
+	controller.deleteErr = errors.New("still running")
+	if _, err := server.DeleteWorkspaceData(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceDataRequest{
+		WorkspaceUuid: uuid, ExpectedManifests: expected,
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("running delete = %v", err)
+	}
+	controller.deleteErr = nil
+	server.mu.Lock()
+	server.pending[expected[0].GetWorkspace()] = pendingManifest{reserved: 3}
+	server.reservedBytes = 3
+	server.mu.Unlock()
+	if _, err := server.DeleteWorkspaceData(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceDataRequest{
+		WorkspaceUuid: uuid, ExpectedManifests: expected,
+	})); err != nil || controller.deleteCalls != 2 {
+		t.Fatalf("delete = %v, calls %d", err, controller.deleteCalls)
+	}
+	if names := server.Names(); len(names) != 0 {
+		t.Fatalf("manifests remain after delete: %v", names)
+	}
+}
+
+//nolint:funlen // The shared indexed manifest fixture makes the lifecycle failure matrix race-representative and easier to audit together.
+func TestWorkspaceDiskControlRPCsRejectInvalidRequestsAndControllerFailures(t *testing.T) {
+	plain, _ := mustNewServer(t)
+	if _, err := plain.GetWorkspaceDiskStatus(t.Context(), connect.NewRequest(&workspacev1.GetWorkspaceDiskStatusRequest{})); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("status without controller = %v", err)
+	}
+	if _, err := plain.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{})); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("unfreeze without controller = %v", err)
+	}
+	if _, err := plain.DeleteWorkspaceData(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceDataRequest{})); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("delete without controller = %v", err)
+	}
+	plain.SetWorkspaceDiskController(&fakeWorkspaceDiskController{})
+	if _, err := plain.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{WorkspaceUuid: "disk"})); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("unfreeze without durable index = %v", err)
+	}
+
+	root := filepath.Join(t.TempDir(), "indexed")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controller := &fakeWorkspaceDiskController{}
+	server.SetWorkspaceDiskController(controller)
+	if _, err := server.GetWorkspaceDiskStatus(t.Context(), connect.NewRequest(&workspacev1.GetWorkspaceDiskStatusRequest{})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("empty UUID status = %v", err)
+	}
+	controller.statusErr = errors.New("status failed")
+	if _, err := server.GetWorkspaceDiskStatus(t.Context(), connect.NewRequest(&workspacev1.GetWorkspaceDiskStatusRequest{WorkspaceUuid: "disk"})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("failed status = %v", err)
+	}
+	controller.statusErr = nil
+	if _, err := server.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("empty UUID unfreeze = %v", err)
+	}
+	if _, err := server.DeleteWorkspaceData(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceDataRequest{})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("empty UUID delete = %v", err)
+	}
+
+	const uuid = "disk"
+	key := SyncKey(uuid, "/work")
+	state, err := server.publishManifest(key, &workspacev1.Manifest{Version: 1}, casindex.OriginSandbox, casindex.RecoverabilityProtected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := []*workspacev1.ManifestExpectation{{Workspace: key, ManifestDigest: state.digest, Generation: state.generation}}
+	if _, err := server.publishManifest(SyncKey("other", "/work"), &workspacev1.Manifest{Version: 1}, casindex.OriginClientUpload, casindex.RecoverabilityRecoverable); err != nil {
+		t.Fatal(err)
+	}
+	extra := append(append([]*workspacev1.ManifestExpectation{}, valid...), &workspacev1.ManifestExpectation{
+		Workspace: SyncKey(uuid, "/missing"), ManifestDigest: "missing", Generation: 1,
+	})
+	if _, err := server.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{WorkspaceUuid: uuid, ExpectedManifests: extra})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("extra expectation unfreeze = %v", err)
+	}
+	invalid := [][]*workspacev1.ManifestExpectation{
+		{nil},
+		{{Workspace: SyncKey("other", "/work")}},
+		{valid[0], valid[0]},
+		{{Workspace: key, ManifestDigest: "stale", Generation: state.generation}},
+	}
+	for _, expected := range invalid {
+		if _, callErr := server.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{WorkspaceUuid: uuid, ExpectedManifests: expected})); callErr == nil {
+			t.Fatalf("invalid expectation accepted: %#v", expected)
+		}
+	}
+	controller.unfreezeErr = errors.New("grow incomplete")
+	if _, err := server.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{WorkspaceUuid: uuid, ExpectedManifests: valid})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("controller unfreeze failure = %v", err)
+	}
+	controller.unfreezeErr = nil
+	controller.statusErr = errors.New("post-unfreeze status failed")
+	if _, err := server.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{WorkspaceUuid: uuid, ExpectedManifests: valid})); connect.CodeOf(err) != connect.CodeInternal {
+		t.Fatalf("post-unfreeze status failure = %v", err)
+	}
+	controller.statusErr = nil
+	controller.deleteErr = errors.New("disk running")
+	if _, err := server.DeleteWorkspaceData(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceDataRequest{WorkspaceUuid: uuid, ExpectedManifests: valid})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("controller delete failure = %v", err)
+	}
+	controller.deleteErr = nil
+	if err := index.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.DeleteWorkspaceData(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceDataRequest{WorkspaceUuid: uuid, ExpectedManifests: valid})); connect.CodeOf(err) != connect.CodeInternal {
+		t.Fatalf("index delete failure = %v", err)
 	}
 }
 
