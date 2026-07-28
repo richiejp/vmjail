@@ -276,6 +276,14 @@ Landed:
   workspace deletion, shared-chunk protection, batched touches, revalidation
   before unlink, and the 50/35/15 cleanup ordering are deterministic and
   tested against the 85/75/100 GiB and 180-day policy.
+- The production Node workspace service now publishes manifests and chunks
+  transactionally through that index. Incomplete client pushes remain
+  invisible, live guest snapshots are protected, successful pulls acknowledge
+  only their exact digest/generation, and current manifests restore after a
+  restart. A durable five-minute worker performs expiry and pressure cleanup;
+  synchronous hard-limit admission reserves pending bytes, reclaims eligible
+  recoverable chunks, marks affected manifests `NeedsRepush`, and refuses a
+  write when protected data prevents enough reclamation.
 
 Remaining:
 
@@ -283,9 +291,6 @@ Remaining:
   teardown snapshot control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
-- Wire the durable CAS index into Node manifest/chunk publication and add the
-  five-minute cleanup worker plus synchronous hard-limit write admission and
-  `NeedsRepush` propagation.
 - Add workspace disk/resource, changes reject, unfreeze, delete, storage
   status, and dry-run prune CLI/RPC/MCP surfaces with bounded results.
 - Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,

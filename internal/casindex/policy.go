@@ -71,7 +71,7 @@ func validatePolicy(policy Policy) error {
 }
 
 func eligible(chunk *Chunk) bool {
-	return chunk.Recoverability == RecoverabilityRecoverable && len(chunk.References) == 0
+	return chunk.Recoverability == RecoverabilityRecoverable
 }
 
 func cleanupScore(chunk *Chunk, idle time.Duration, pressure float64, expiry time.Duration) float64 {

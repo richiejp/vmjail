@@ -352,10 +352,12 @@ func (x *GetManifestRequest) GetWorkspace() string {
 }
 
 type GetManifestResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Manifest      *Manifest              `protobuf:"bytes,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Manifest       *Manifest              `protobuf:"bytes,1,opt,name=manifest,proto3" json:"manifest,omitempty"`
+	ManifestDigest string                 `protobuf:"bytes,2,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
+	Generation     uint64                 `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *GetManifestResponse) Reset() {
@@ -393,6 +395,20 @@ func (x *GetManifestResponse) GetManifest() *Manifest {
 		return x.Manifest
 	}
 	return nil
+}
+
+func (x *GetManifestResponse) GetManifestDigest() string {
+	if x != nil {
+		return x.ManifestDigest
+	}
+	return ""
+}
+
+func (x *GetManifestResponse) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
 }
 
 type GetChunkRequest struct {
@@ -544,6 +560,8 @@ type PutManifestResponse struct {
 	// hold. The client should PutChunk each of these to complete the
 	// push; an empty list means the manifest is already fully backed.
 	MissingDigests []string `protobuf:"bytes,1,rep,name=missing_digests,json=missingDigests,proto3" json:"missing_digests,omitempty"`
+	ManifestDigest string   `protobuf:"bytes,2,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
+	Generation     uint64   `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -583,6 +601,20 @@ func (x *PutManifestResponse) GetMissingDigests() []string {
 		return x.MissingDigests
 	}
 	return nil
+}
+
+func (x *PutManifestResponse) GetManifestDigest() string {
+	if x != nil {
+		return x.ManifestDigest
+	}
+	return ""
+}
+
+func (x *PutManifestResponse) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
 }
 
 type PutChunkRequest struct {
@@ -674,6 +706,102 @@ func (*PutChunkResponse) Descriptor() ([]byte, []int) {
 	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{10}
 }
 
+type AcknowledgeManifestRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Workspace      string                 `protobuf:"bytes,1,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	ManifestDigest string                 `protobuf:"bytes,2,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
+	Generation     uint64                 `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *AcknowledgeManifestRequest) Reset() {
+	*x = AcknowledgeManifestRequest{}
+	mi := &file_workspace_v1_workspace_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcknowledgeManifestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcknowledgeManifestRequest) ProtoMessage() {}
+
+func (x *AcknowledgeManifestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_workspace_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcknowledgeManifestRequest.ProtoReflect.Descriptor instead.
+func (*AcknowledgeManifestRequest) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *AcknowledgeManifestRequest) GetWorkspace() string {
+	if x != nil {
+		return x.Workspace
+	}
+	return ""
+}
+
+func (x *AcknowledgeManifestRequest) GetManifestDigest() string {
+	if x != nil {
+		return x.ManifestDigest
+	}
+	return ""
+}
+
+func (x *AcknowledgeManifestRequest) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+type AcknowledgeManifestResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AcknowledgeManifestResponse) Reset() {
+	*x = AcknowledgeManifestResponse{}
+	mi := &file_workspace_v1_workspace_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AcknowledgeManifestResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AcknowledgeManifestResponse) ProtoMessage() {}
+
+func (x *AcknowledgeManifestResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_workspace_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AcknowledgeManifestResponse.ProtoReflect.Descriptor instead.
+func (*AcknowledgeManifestResponse) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{12}
+}
+
 var File_workspace_v1_workspace_proto protoreflect.FileDescriptor
 
 const file_workspace_v1_workspace_proto_rawDesc = "" +
@@ -694,9 +822,13 @@ const file_workspace_v1_workspace_proto_rawDesc = "" +
 	"\aversion\x18\x01 \x01(\rR\aversion\x126\n" +
 	"\aentries\x18\x02 \x03(\v2\x1c.daft.workspace.v1.FileEntryR\aentries\"2\n" +
 	"\x12GetManifestRequest\x12\x1c\n" +
-	"\tworkspace\x18\x01 \x01(\tR\tworkspace\"N\n" +
+	"\tworkspace\x18\x01 \x01(\tR\tworkspace\"\x97\x01\n" +
 	"\x13GetManifestResponse\x127\n" +
-	"\bmanifest\x18\x01 \x01(\v2\x1b.daft.workspace.v1.ManifestR\bmanifest\")\n" +
+	"\bmanifest\x18\x01 \x01(\v2\x1b.daft.workspace.v1.ManifestR\bmanifest\x12'\n" +
+	"\x0fmanifest_digest\x18\x02 \x01(\tR\x0emanifestDigest\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x03 \x01(\x04R\n" +
+	"generation\")\n" +
 	"\x0fGetChunkRequest\x12\x16\n" +
 	"\x06digest\x18\x01 \x01(\tR\x06digest\"2\n" +
 	"\x10GetChunkResponse\x12\x1e\n" +
@@ -705,25 +837,37 @@ const file_workspace_v1_workspace_proto_rawDesc = "" +
 	"compressed\"k\n" +
 	"\x12PutManifestRequest\x12\x1c\n" +
 	"\tworkspace\x18\x01 \x01(\tR\tworkspace\x127\n" +
-	"\bmanifest\x18\x02 \x01(\v2\x1b.daft.workspace.v1.ManifestR\bmanifest\">\n" +
+	"\bmanifest\x18\x02 \x01(\v2\x1b.daft.workspace.v1.ManifestR\bmanifest\"\x87\x01\n" +
 	"\x13PutManifestResponse\x12'\n" +
-	"\x0fmissing_digests\x18\x01 \x03(\tR\x0emissingDigests\"I\n" +
+	"\x0fmissing_digests\x18\x01 \x03(\tR\x0emissingDigests\x12'\n" +
+	"\x0fmanifest_digest\x18\x02 \x01(\tR\x0emanifestDigest\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x03 \x01(\x04R\n" +
+	"generation\"I\n" +
 	"\x0fPutChunkRequest\x12\x16\n" +
 	"\x06digest\x18\x01 \x01(\tR\x06digest\x12\x1e\n" +
 	"\n" +
 	"compressed\x18\x02 \x01(\fR\n" +
 	"compressed\"\x12\n" +
-	"\x10PutChunkResponse*h\n" +
+	"\x10PutChunkResponse\"\x83\x01\n" +
+	"\x1aAcknowledgeManifestRequest\x12\x1c\n" +
+	"\tworkspace\x18\x01 \x01(\tR\tworkspace\x12'\n" +
+	"\x0fmanifest_digest\x18\x02 \x01(\tR\x0emanifestDigest\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x03 \x01(\x04R\n" +
+	"generation\"\x1d\n" +
+	"\x1bAcknowledgeManifestResponse*h\n" +
 	"\tEntryKind\x12\x1a\n" +
 	"\x16ENTRY_KIND_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fENTRY_KIND_FILE\x10\x01\x12\x12\n" +
 	"\x0eENTRY_KIND_DIR\x10\x02\x12\x16\n" +
-	"\x12ENTRY_KIND_SYMLINK\x10\x032\xf8\x02\n" +
+	"\x12ENTRY_KIND_SYMLINK\x10\x032\xee\x03\n" +
 	"\x10WorkspaceService\x12\\\n" +
 	"\vGetManifest\x12%.daft.workspace.v1.GetManifestRequest\x1a&.daft.workspace.v1.GetManifestResponse\x12S\n" +
 	"\bGetChunk\x12\".daft.workspace.v1.GetChunkRequest\x1a#.daft.workspace.v1.GetChunkResponse\x12\\\n" +
 	"\vPutManifest\x12%.daft.workspace.v1.PutManifestRequest\x1a&.daft.workspace.v1.PutManifestResponse\x12S\n" +
-	"\bPutChunk\x12\".daft.workspace.v1.PutChunkRequest\x1a#.daft.workspace.v1.PutChunkResponseBKZIgithub.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
+	"\bPutChunk\x12\".daft.workspace.v1.PutChunkRequest\x1a#.daft.workspace.v1.PutChunkResponse\x12t\n" +
+	"\x13AcknowledgeManifest\x12-.daft.workspace.v1.AcknowledgeManifestRequest\x1a..daft.workspace.v1.AcknowledgeManifestResponseBKZIgithub.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
 
 var (
 	file_workspace_v1_workspace_proto_rawDescOnce sync.Once
@@ -738,20 +882,22 @@ func file_workspace_v1_workspace_proto_rawDescGZIP() []byte {
 }
 
 var file_workspace_v1_workspace_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_workspace_v1_workspace_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
+var file_workspace_v1_workspace_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
 var file_workspace_v1_workspace_proto_goTypes = []any{
-	(EntryKind)(0),              // 0: daft.workspace.v1.EntryKind
-	(*ChunkRef)(nil),            // 1: daft.workspace.v1.ChunkRef
-	(*FileEntry)(nil),           // 2: daft.workspace.v1.FileEntry
-	(*Manifest)(nil),            // 3: daft.workspace.v1.Manifest
-	(*GetManifestRequest)(nil),  // 4: daft.workspace.v1.GetManifestRequest
-	(*GetManifestResponse)(nil), // 5: daft.workspace.v1.GetManifestResponse
-	(*GetChunkRequest)(nil),     // 6: daft.workspace.v1.GetChunkRequest
-	(*GetChunkResponse)(nil),    // 7: daft.workspace.v1.GetChunkResponse
-	(*PutManifestRequest)(nil),  // 8: daft.workspace.v1.PutManifestRequest
-	(*PutManifestResponse)(nil), // 9: daft.workspace.v1.PutManifestResponse
-	(*PutChunkRequest)(nil),     // 10: daft.workspace.v1.PutChunkRequest
-	(*PutChunkResponse)(nil),    // 11: daft.workspace.v1.PutChunkResponse
+	(EntryKind)(0),                      // 0: daft.workspace.v1.EntryKind
+	(*ChunkRef)(nil),                    // 1: daft.workspace.v1.ChunkRef
+	(*FileEntry)(nil),                   // 2: daft.workspace.v1.FileEntry
+	(*Manifest)(nil),                    // 3: daft.workspace.v1.Manifest
+	(*GetManifestRequest)(nil),          // 4: daft.workspace.v1.GetManifestRequest
+	(*GetManifestResponse)(nil),         // 5: daft.workspace.v1.GetManifestResponse
+	(*GetChunkRequest)(nil),             // 6: daft.workspace.v1.GetChunkRequest
+	(*GetChunkResponse)(nil),            // 7: daft.workspace.v1.GetChunkResponse
+	(*PutManifestRequest)(nil),          // 8: daft.workspace.v1.PutManifestRequest
+	(*PutManifestResponse)(nil),         // 9: daft.workspace.v1.PutManifestResponse
+	(*PutChunkRequest)(nil),             // 10: daft.workspace.v1.PutChunkRequest
+	(*PutChunkResponse)(nil),            // 11: daft.workspace.v1.PutChunkResponse
+	(*AcknowledgeManifestRequest)(nil),  // 12: daft.workspace.v1.AcknowledgeManifestRequest
+	(*AcknowledgeManifestResponse)(nil), // 13: daft.workspace.v1.AcknowledgeManifestResponse
 }
 var file_workspace_v1_workspace_proto_depIdxs = []int32{
 	0,  // 0: daft.workspace.v1.FileEntry.kind:type_name -> daft.workspace.v1.EntryKind
@@ -763,12 +909,14 @@ var file_workspace_v1_workspace_proto_depIdxs = []int32{
 	6,  // 6: daft.workspace.v1.WorkspaceService.GetChunk:input_type -> daft.workspace.v1.GetChunkRequest
 	8,  // 7: daft.workspace.v1.WorkspaceService.PutManifest:input_type -> daft.workspace.v1.PutManifestRequest
 	10, // 8: daft.workspace.v1.WorkspaceService.PutChunk:input_type -> daft.workspace.v1.PutChunkRequest
-	5,  // 9: daft.workspace.v1.WorkspaceService.GetManifest:output_type -> daft.workspace.v1.GetManifestResponse
-	7,  // 10: daft.workspace.v1.WorkspaceService.GetChunk:output_type -> daft.workspace.v1.GetChunkResponse
-	9,  // 11: daft.workspace.v1.WorkspaceService.PutManifest:output_type -> daft.workspace.v1.PutManifestResponse
-	11, // 12: daft.workspace.v1.WorkspaceService.PutChunk:output_type -> daft.workspace.v1.PutChunkResponse
-	9,  // [9:13] is the sub-list for method output_type
-	5,  // [5:9] is the sub-list for method input_type
+	12, // 9: daft.workspace.v1.WorkspaceService.AcknowledgeManifest:input_type -> daft.workspace.v1.AcknowledgeManifestRequest
+	5,  // 10: daft.workspace.v1.WorkspaceService.GetManifest:output_type -> daft.workspace.v1.GetManifestResponse
+	7,  // 11: daft.workspace.v1.WorkspaceService.GetChunk:output_type -> daft.workspace.v1.GetChunkResponse
+	9,  // 12: daft.workspace.v1.WorkspaceService.PutManifest:output_type -> daft.workspace.v1.PutManifestResponse
+	11, // 13: daft.workspace.v1.WorkspaceService.PutChunk:output_type -> daft.workspace.v1.PutChunkResponse
+	13, // 14: daft.workspace.v1.WorkspaceService.AcknowledgeManifest:output_type -> daft.workspace.v1.AcknowledgeManifestResponse
+	10, // [10:15] is the sub-list for method output_type
+	5,  // [5:10] is the sub-list for method input_type
 	5,  // [5:5] is the sub-list for extension type_name
 	5,  // [5:5] is the sub-list for extension extendee
 	0,  // [0:5] is the sub-list for field type_name
@@ -785,7 +933,7 @@ func file_workspace_v1_workspace_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_workspace_v1_workspace_proto_rawDesc), len(file_workspace_v1_workspace_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   11,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

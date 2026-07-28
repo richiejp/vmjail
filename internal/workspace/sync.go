@@ -121,5 +121,17 @@ func Pull(
 	if err != nil {
 		return trace.RecordError(ctx, fmt.Errorf("workspace: get manifest: %w", err))
 	}
-	return ApplyManifest(ctx, client, store, resp.Msg.GetManifest(), dest, opts)
+	if err := ApplyManifest(ctx, client, store, resp.Msg.GetManifest(), dest, opts); err != nil {
+		return err
+	}
+	if resp.Msg.GetManifestDigest() == "" || resp.Msg.GetGeneration() == 0 {
+		return nil // Compatibility with pre-index WorkspaceService peers.
+	}
+	_, err = client.AcknowledgeManifest(ctx, connect.NewRequest(&workspacev1.AcknowledgeManifestRequest{
+		Workspace: name, ManifestDigest: resp.Msg.GetManifestDigest(), Generation: resp.Msg.GetGeneration(),
+	}))
+	if err != nil {
+		return trace.RecordError(ctx, fmt.Errorf("workspace: acknowledge manifest: %w", err))
+	}
+	return nil
 }

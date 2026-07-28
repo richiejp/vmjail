@@ -19,6 +19,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/brokerclient"
 	"github.com/richiejp/darkaifactory/internal/bundled"
 	"github.com/richiejp/darkaifactory/internal/cas"
+	"github.com/richiejp/darkaifactory/internal/casindex"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/httpcache"
 	"github.com/richiejp/darkaifactory/internal/identity"
@@ -119,6 +120,9 @@ func runServe(
 	if err != nil {
 		return err
 	}
+	defer func() { _ = sync.close() }()
+	syncCtx, cancelSync := context.WithCancel(ctx)
+	defer cancelSync()
 
 	bridger := sandboxgateway.New()
 	attachRegistry := sandboxgateway.NewAttachRegistry()
@@ -165,9 +169,26 @@ func runServe(
 	// channel. It's a passive sandbox registration; the user-host
 	// client (the serve owner / initiator) drives push/pull. Run it
 	// concurrently with RegisterAndServe; ctx cancel stops both.
-	go sync.run(ctx, stdout)
+	return runNodeServices(ctx, syncCtx, sync, client, resources, stdout, cancelSync)
+}
 
-	return runRegisterAndServe(ctx, client, resources)
+func runNodeServices(
+	ctx, syncCtx context.Context,
+	sync *nodeSync,
+	client *nodectrlclient.Client,
+	resources nodectrl.Resources,
+	stdout io.Writer,
+	cancelSync context.CancelFunc,
+) error {
+	syncDone := make(chan struct{})
+	go func() {
+		defer close(syncDone)
+		sync.run(syncCtx, stdout)
+	}()
+	runErr := runRegisterAndServe(ctx, client, resources)
+	cancelSync()
+	<-syncDone
+	return runErr
 }
 
 func newJobManager(ctx context.Context, registry *sandboxgateway.JobRegistry) (*nodejob.Manager, error) {
@@ -214,6 +235,7 @@ type nodeSync struct {
 	// shared with the dispatch executor so launch can materialise pushed
 	// mounts straight from the same persistent CAS (Slice S3).
 	server *workspace.Server
+	index  *casindex.Index
 }
 
 // buildNodeSync opens the persistent node CAS under <dir>/cas and
@@ -231,8 +253,13 @@ var buildNodeSync = func(
 	if err != nil {
 		return nil, fmt.Errorf("daft-sandboxd serve: open sync cas: %w", err)
 	}
-	wsServer, err := workspace.NewServer(store)
+	index, err := casindex.Open(store.Root(), nil)
 	if err != nil {
+		return nil, fmt.Errorf("daft-sandboxd serve: open sync CAS index: %w", err)
+	}
+	wsServer, err := workspace.NewIndexedServer(store, index)
+	if err != nil {
+		_ = index.Close()
 		return nil, fmt.Errorf("daft-sandboxd serve: workspace server: %w", err)
 	}
 	mux := http.NewServeMux()
@@ -242,6 +269,7 @@ var buildNodeSync = func(
 		URL: orchestratorURL, Identity: id, Peers: peers,
 	})
 	if err != nil {
+		_ = index.Close()
 		return nil, fmt.Errorf("daft-sandboxd serve: broker client: %w", err)
 	}
 	return &nodeSync{
@@ -250,6 +278,7 @@ var buildNodeSync = func(
 		sandboxID: id.Fingerprint().String(),
 		casRoot:   store.Root(),
 		server:    wsServer,
+		index:     index,
 	}, nil
 }
 
@@ -258,12 +287,24 @@ var buildNodeSync = func(
 // orchestrator stream dropped) is logged; the daemon keeps running on
 // its nodectrl channel and sync resumes on the next daemon start.
 func (n *nodeSync) run(ctx context.Context, logw io.Writer) {
+	go func() {
+		if err := n.server.RunCleanup(ctx); err != nil && ctx.Err() == nil {
+			_, _ = fmt.Fprintf(logw, "daft-sandboxd serve: CAS cleanup stopped: %v\n", err)
+		}
+	}()
 	err := n.bc.ServeBrokeredAsSandbox(ctx, n.sandboxID, brokerclient.ServeOptions{
 		Handler: n.handler,
 	})
 	if err != nil && ctx.Err() == nil {
 		_, _ = fmt.Fprintf(logw, "daft-sandboxd serve: workspace sync stopped: %v\n", err)
 	}
+}
+
+func (n *nodeSync) close() error {
+	if n == nil || n.index == nil {
+		return nil
+	}
+	return n.index.Close()
 }
 
 // runRegisterAndServe is a single test seam — production swaps in

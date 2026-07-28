@@ -2,15 +2,20 @@ package workspace
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/richiejp/darkaifactory/internal/cas"
+	"github.com/richiejp/darkaifactory/internal/casindex"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 )
@@ -21,9 +26,14 @@ import (
 // each workspace it wants to expose, and hands it to mtls.Server.
 type Server struct {
 	workspacev1connect.UnimplementedWorkspaceServiceHandler
-	store     *cas.Store
-	mu        sync.RWMutex
-	manifests map[string]*workspacev1.Manifest
+	store         *cas.Store
+	index         *casindex.Index
+	cleanup       *casindex.Worker
+	mu            sync.RWMutex
+	manifests     map[string]*workspacev1.Manifest
+	states        map[string]manifestState
+	pending       map[string]pendingManifest
+	reservedBytes uint64
 
 	// live maps a sync key to the host backing dir of a *running*
 	// workspace VM (Slice S4). While an entry is present, GetManifest
@@ -35,6 +45,18 @@ type Server struct {
 	live   map[string]liveMount
 }
 
+type manifestState struct {
+	digest     string
+	generation uint64
+}
+
+type pendingManifest struct {
+	manifest *workspacev1.Manifest
+	state    manifestState
+	missing  map[string]struct{}
+	reserved uint64
+}
+
 type liveMount struct {
 	dir     string
 	refresh func(context.Context, string) error
@@ -43,14 +65,56 @@ type liveMount struct {
 // NewServer returns an empty Server backed by store. Call Add to
 // register workspaces before the server begins accepting traffic.
 func NewServer(store *cas.Store) (*Server, error) {
+	return newServer(store, nil)
+}
+
+// NewIndexedServer restores and transactionally persists manifests through
+// index. Node production uses this constructor; lightweight clients may keep
+// using NewServer without owning a Badger lifecycle.
+func NewIndexedServer(store *cas.Store, index *casindex.Index) (*Server, error) {
+	if index == nil {
+		return nil, errors.New("workspace: nil cas index")
+	}
+	server, err := newServer(store, index)
+	if err != nil {
+		return nil, err
+	}
+	server.cleanup, err = casindex.NewWorker(casindex.WorkerConfig{Index: index})
+	if err != nil {
+		return nil, err
+	}
+	return server, nil
+}
+
+func newServer(store *cas.Store, index *casindex.Index) (*Server, error) {
 	if store == nil {
 		return nil, errors.New("workspace: nil cas store")
 	}
-	return &Server{
+	server := &Server{
 		store:     store,
+		index:     index,
 		manifests: map[string]*workspacev1.Manifest{},
+		states:    map[string]manifestState{},
+		pending:   map[string]pendingManifest{},
 		live:      map[string]liveMount{},
-	}, nil
+	}
+	if index == nil {
+		return server, nil
+	}
+	currents, err := index.CurrentManifests()
+	if err != nil {
+		return nil, fmt.Errorf("workspace: restore manifests: %w", err)
+	}
+	for currentIndex := range currents {
+		current := &currents[currentIndex]
+		var manifest workspacev1.Manifest
+		if err := proto.Unmarshal(current.Payload, &manifest); err != nil {
+			return nil, fmt.Errorf("workspace: restore manifest %q: %w", current.SyncKey, err)
+		}
+		server.manifests[current.SyncKey] = &manifest
+		server.states[current.SyncKey] = manifestState{digest: current.Digest, generation: current.Generation}
+	}
+	return server, nil
 }
 
 // SetLiveMount marks dir as the live host backing directory of a
@@ -107,7 +171,11 @@ func (s *Server) commitPreservedLiveMount(key, dir string, m *workspacev1.Manife
 		s.mu.Unlock()
 		return fmt.Errorf("workspace: live mount %q changed during preservation", key)
 	}
-	s.manifests[key] = m
+	if _, err := s.publishManifestLocked(key, m, casindex.OriginSandbox, casindex.RecoverabilityProtected); err != nil {
+		s.liveMu.Unlock()
+		s.mu.Unlock()
+		return err
+	}
 	delete(s.live, key)
 	s.liveMu.Unlock()
 	s.mu.Unlock()
@@ -149,12 +217,8 @@ func (s *Server) Add(name string, m *workspacev1.Manifest) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// proto.Clone of a non-nil *Manifest always returns a
-	// *Manifest; the assertion is an invariant check, not a
-	// recoverable error.
-	clone, _ := proto.Clone(m).(*workspacev1.Manifest)
-	s.manifests[name] = clone
-	return nil
+	_, err := s.publishManifestLocked(name, m, casindex.OriginClientUpload, casindex.RecoverabilityRecoverable)
+	return err
 }
 
 // Names lists registered workspaces in undefined order. Useful for
@@ -240,16 +304,28 @@ func (s *Server) GetManifest(ctx context.Context, req *connect.Request[workspace
 			return nil, connect.NewError(connect.CodeInternal,
 				fmt.Errorf("workspace: re-manifest live mount %q: %w", name, err))
 		}
-		return connect.NewResponse(&workspacev1.GetManifestResponse{Manifest: m}), nil
+		if s.index == nil {
+			return connect.NewResponse(&workspacev1.GetManifestResponse{Manifest: m}), nil
+		}
+		state, err := s.publishManifest(name, m, casindex.OriginSandbox, casindex.RecoverabilityProtected)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		return connect.NewResponse(&workspacev1.GetManifestResponse{
+			Manifest: m, ManifestDigest: state.digest, Generation: state.generation,
+		}), nil
 	}
 	s.mu.RLock()
 	m, ok := s.manifests[name]
+	state := s.states[name]
 	s.mu.RUnlock()
 	if !ok {
 		return nil, connect.NewError(connect.CodeNotFound,
 			fmt.Errorf("workspace: unknown workspace %q", name))
 	}
-	return connect.NewResponse(&workspacev1.GetManifestResponse{Manifest: m}), nil
+	return connect.NewResponse(&workspacev1.GetManifestResponse{
+		Manifest: m, ManifestDigest: state.digest, Generation: state.generation,
+	}), nil
 }
 
 // GetChunk implements the proto endpoint. Returns the raw
@@ -266,6 +342,9 @@ func (s *Server) GetChunk(_ context.Context, req *connect.Request[workspacev1.Ge
 		}
 		return nil, mapStoreError(err)
 	}
+	if s.index != nil {
+		s.index.Touch(digest)
+	}
 	return connect.NewResponse(&workspacev1.GetChunkResponse{
 		Compressed: data,
 	}), nil
@@ -278,7 +357,7 @@ func (s *Server) GetChunk(_ context.Context, req *connect.Request[workspacev1.Ge
 // digest fails cleanly with CodeNotFound, and the alternative
 // (buffer the manifest until every chunk arrives) would force the
 // server to track partial-upload state it doesn't need.
-func (s *Server) PutManifest(_ context.Context, req *connect.Request[workspacev1.PutManifestRequest]) (*connect.Response[workspacev1.PutManifestResponse], error) {
+func (s *Server) PutManifest(ctx context.Context, req *connect.Request[workspacev1.PutManifestRequest]) (*connect.Response[workspacev1.PutManifestResponse], error) {
 	name := req.Msg.GetWorkspace()
 	m := req.Msg.GetManifest()
 	// Compute the gap before publishing: if the store can't be probed
@@ -289,11 +368,16 @@ func (s *Server) PutManifest(_ context.Context, req *connect.Request[workspacev1
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
-	if err := s.Add(name, m); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	state, err := s.stageClientManifest(ctx, name, m, missing)
+	if err != nil {
+		code := connect.CodeInvalidArgument
+		if errors.Is(err, casindex.ErrInsufficientReclaim) {
+			code = connect.CodeResourceExhausted
+		}
+		return nil, connect.NewError(code, err)
 	}
 	return connect.NewResponse(&workspacev1.PutManifestResponse{
-		MissingDigests: missing,
+		MissingDigests: missing, ManifestDigest: state.digest, Generation: state.generation,
 	}), nil
 }
 
@@ -330,10 +414,216 @@ func (s *Server) PutChunk(_ context.Context, req *connect.Request[workspacev1.Pu
 	err := s.store.PutCompressed(req.Msg.GetDigest(), req.Msg.GetCompressed())
 	switch {
 	case err == nil:
+		if commitErr := s.completePendingManifests(req.Msg.GetDigest()); commitErr != nil {
+			return nil, connect.NewError(connect.CodeInternal, commitErr)
+		}
 		return connect.NewResponse(&workspacev1.PutChunkResponse{}), nil
 	case errors.Is(err, cas.ErrInvalidDigest), errors.Is(err, cas.ErrCorrupt):
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	default:
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
+}
+
+// AcknowledgeManifest adopts only the exact manifest returned by GetManifest.
+// Pull calls this after local materialisation succeeds.
+func (s *Server) AcknowledgeManifest(
+	_ context.Context,
+	req *connect.Request[workspacev1.AcknowledgeManifestRequest],
+) (*connect.Response[workspacev1.AcknowledgeManifestResponse], error) {
+	name := req.Msg.GetWorkspace()
+	digest := req.Msg.GetManifestDigest()
+	generation := req.Msg.GetGeneration()
+	s.mu.RLock()
+	state, exists := s.states[name]
+	s.mu.RUnlock()
+	if !exists || state.digest != digest || state.generation != generation {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, casindex.ErrStaleManifest)
+	}
+	if s.index != nil {
+		if err := s.index.Acknowledge(name, digest, generation); err != nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		}
+	}
+	return connect.NewResponse(&workspacev1.AcknowledgeManifestResponse{}), nil
+}
+
+func (s *Server) stageClientManifest(ctx context.Context, name string, manifest *workspacev1.Manifest, missing []string) (manifestState, error) {
+	if name == "" || manifest == nil {
+		return manifestState{}, errors.New("workspace: manifest identity is required")
+	}
+	payload, digest, err := encodeManifest(manifest)
+	if err != nil {
+		return manifestState{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.nextManifestStateLocked(name, digest)
+	if pending, exists := s.pending[name]; exists && pending.state == state {
+		return state, nil
+	}
+	if len(missing) == 0 {
+		return s.publishPreparedManifestLocked(name, manifest, state, payload,
+			casindex.OriginClientUpload, casindex.RecoverabilityRecoverable)
+	}
+	missingSet := make(map[string]struct{}, len(missing))
+	for _, missingDigest := range missing {
+		missingSet[missingDigest] = struct{}{}
+	}
+	reserved := missingChunkBytes(manifest, missingSet)
+	if s.cleanup != nil {
+		if _, err := s.cleanup.AdmitWrite(ctx, saturatingWorkspaceBytes(s.reservedBytes, reserved)); err != nil {
+			return manifestState{}, err
+		}
+	}
+	if previous, exists := s.pending[name]; exists {
+		s.reservedBytes -= min(s.reservedBytes, previous.reserved)
+	}
+	clone, _ := proto.Clone(manifest).(*workspacev1.Manifest)
+	s.pending[name] = pendingManifest{manifest: clone, state: state, missing: missingSet, reserved: reserved}
+	s.reservedBytes = saturatingWorkspaceBytes(s.reservedBytes, reserved)
+	return state, nil
+}
+
+func (s *Server) completePendingManifests(digest string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for name, pending := range s.pending {
+		delete(pending.missing, digest)
+		if len(pending.missing) != 0 {
+			s.pending[name] = pending
+			continue
+		}
+		payload, _, err := encodeManifest(pending.manifest)
+		if err != nil {
+			return err
+		}
+		if _, err := s.publishPreparedManifestLocked(name, pending.manifest, pending.state, payload,
+			casindex.OriginClientUpload, casindex.RecoverabilityRecoverable); err != nil {
+			return err
+		}
+		delete(s.pending, name)
+	}
+	return nil
+}
+
+func (s *Server) publishManifest(name string, manifest *workspacev1.Manifest, origin casindex.Origin, recoverability casindex.Recoverability) (manifestState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.publishManifestLocked(name, manifest, origin, recoverability)
+}
+
+func (s *Server) publishManifestLocked(name string, manifest *workspacev1.Manifest, origin casindex.Origin, recoverability casindex.Recoverability) (manifestState, error) {
+	payload, digest, err := encodeManifest(manifest)
+	if err != nil {
+		return manifestState{}, err
+	}
+	state := s.nextManifestStateLocked(name, digest)
+	return s.publishPreparedManifestLocked(name, manifest, state, payload, origin, recoverability)
+}
+
+func (s *Server) publishPreparedManifestLocked(
+	name string,
+	manifest *workspacev1.Manifest,
+	state manifestState,
+	payload []byte,
+	origin casindex.Origin,
+	recoverability casindex.Recoverability,
+) (manifestState, error) {
+	if current, exists := s.states[name]; exists && current == state {
+		return current, nil
+	}
+	if s.index != nil {
+		if err := s.index.CommitManifest(casindex.CommitRequest{
+			SyncKey: name, Digest: state.digest, Generation: state.generation,
+			Chunks: manifestChunkRefs(manifest), Origin: origin, Recoverability: recoverability, Payload: payload,
+		}); err != nil {
+			return manifestState{}, err
+		}
+	}
+	clone, _ := proto.Clone(manifest).(*workspacev1.Manifest)
+	s.manifests[name] = clone
+	s.states[name] = state
+	if pending, exists := s.pending[name]; exists {
+		s.reservedBytes -= min(s.reservedBytes, pending.reserved)
+	}
+	delete(s.pending, name)
+	return state, nil
+}
+
+func (s *Server) nextManifestStateLocked(name, digest string) manifestState {
+	if current, exists := s.states[name]; exists && current.digest == digest {
+		return current
+	}
+	if pending, exists := s.pending[name]; exists && pending.state.digest == digest {
+		return pending.state
+	}
+	return manifestState{digest: digest, generation: s.states[name].generation + 1}
+}
+
+func encodeManifest(manifest *workspacev1.Manifest) (payload []byte, digest string, err error) {
+	if manifest == nil {
+		return nil, "", errors.New("workspace: nil manifest")
+	}
+	payload, err = (proto.MarshalOptions{Deterministic: true}).Marshal(manifest)
+	if err != nil {
+		return nil, "", err
+	}
+	hash := sha256.Sum256(payload)
+	return payload, hex.EncodeToString(hash[:]), nil
+}
+
+func manifestChunkRefs(manifest *workspacev1.Manifest) []casindex.ChunkRef {
+	refs := make([]casindex.ChunkRef, 0)
+	seen := map[string]struct{}{}
+	for _, entry := range manifest.GetEntries() {
+		for _, chunk := range entry.GetChunks() {
+			if _, exists := seen[chunk.GetDigest()]; exists {
+				continue
+			}
+			seen[chunk.GetDigest()] = struct{}{}
+			refs = append(refs, casindex.ChunkRef{Digest: chunk.GetDigest(), Size: chunk.GetSize()})
+		}
+	}
+	slices.SortFunc(refs, func(a, b casindex.ChunkRef) int { return strings.Compare(a.Digest, b.Digest) })
+	return refs
+}
+
+func missingChunkBytes(manifest *workspacev1.Manifest, missing map[string]struct{}) uint64 {
+	var total uint64
+	for _, ref := range manifestChunkRefs(manifest) {
+		if _, isMissing := missing[ref.Digest]; isMissing {
+			total = saturatingWorkspaceBytes(total, ref.Size)
+		}
+	}
+	return total
+}
+
+func saturatingWorkspaceBytes(a, b uint64) uint64 {
+	if ^uint64(0)-a < b {
+		return ^uint64(0)
+	}
+	return a + b
+}
+
+// RunCleanup drives the durable five-minute worker for an indexed Node.
+func (s *Server) RunCleanup(ctx context.Context) error {
+	if s.cleanup == nil {
+		return nil
+	}
+	return s.cleanup.Run(ctx)
+}
+
+func (s *Server) StorageStatus() (casindex.StorageStatus, error) {
+	if s.cleanup == nil {
+		return casindex.StorageStatus{}, errors.New("workspace: storage index unavailable")
+	}
+	return s.cleanup.Status()
+}
+
+func (s *Server) Prune(ctx context.Context, dryRun bool) (casindex.Plan, error) {
+	if s.cleanup == nil {
+		return casindex.Plan{}, errors.New("workspace: storage index unavailable")
+	}
+	return s.cleanup.Prune(ctx, casindex.PruneSoft, 0, dryRun)
 }

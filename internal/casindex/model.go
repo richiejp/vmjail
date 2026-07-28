@@ -60,6 +60,7 @@ type Manifest struct {
 	Current        bool           `json:"current"`
 	NeedsRepush    bool           `json:"needs_repush,omitempty"`
 	CreatedAt      time.Time      `json:"created_at"`
+	Payload        []byte         `json:"payload,omitempty"`
 }
 
 type ChunkRef struct {
@@ -74,6 +75,7 @@ type CommitRequest struct {
 	Chunks         []ChunkRef
 	Origin         Origin
 	Recoverability Recoverability
+	Payload        []byte
 }
 
 type Policy struct {

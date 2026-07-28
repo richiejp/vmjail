@@ -195,7 +195,7 @@ func (i *Index) CommitManifest(request CommitRequest) error {
 		manifest := Manifest{
 			SyncKey: request.SyncKey, Digest: request.Digest, Generation: request.Generation,
 			Chunks: request.Chunks, Origin: request.Origin, Recoverability: request.Recoverability,
-			Disposition: DispositionActive, Current: true, CreatedAt: i.now(),
+			Disposition: DispositionActive, Current: true, CreatedAt: i.now(), Payload: slices.Clone(request.Payload),
 		}
 		if err := i.addManifestReferences(txn, manifest); err != nil {
 			return err
@@ -311,8 +311,10 @@ func (i *Index) addManifestReferences(txn *badger.Txn, manifest Manifest) error 
 			chunk.Recoverability = RecoverabilityRecoverable
 		}
 		chunk.Disposition = DispositionActive
-		chunk.QueuedAt = time.Time{}
-		chunk.QueueScore = 0
+		if manifest.Recoverability == RecoverabilityProtected {
+			chunk.QueuedAt = time.Time{}
+			chunk.QueueScore = 0
+		}
 		chunk.References = appendUniqueReference(chunk.References, Reference{
 			SyncKey: manifest.SyncKey, Digest: manifest.Digest, Generation: manifest.Generation,
 		})
@@ -471,21 +473,35 @@ func (i *Index) QueuePlan(plan Plan) error {
 }
 
 func (i *Index) Chunks() ([]Chunk, error) {
-	var chunks []Chunk
-	err := i.db.View(func(txn *badger.Txn) error {
+	return listJSON[Chunk](i.db, chunkPrefix)
+}
+
+// CurrentManifests returns every currently published manifest in stable
+// sync-key order so a Node can restore its serving table after restart.
+func (i *Index) CurrentManifests() ([]Manifest, error) {
+	manifests, err := listJSON[Manifest](i.db, currentPrefix)
+	if err == nil {
+		slices.SortFunc(manifests, func(a, b Manifest) int { return strings.Compare(a.SyncKey, b.SyncKey) })
+	}
+	return manifests, err
+}
+
+func listJSON[T any](db *badger.DB, keyPrefix string) ([]T, error) {
+	var values []T
+	err := db.View(func(txn *badger.Txn) error {
 		iterator := txn.NewIterator(badger.DefaultIteratorOptions)
 		defer iterator.Close()
-		prefix := []byte(chunkPrefix)
+		prefix := []byte(keyPrefix)
 		for iterator.Seek(prefix); iterator.ValidForPrefix(prefix); iterator.Next() {
-			var chunk Chunk
-			if err := iterator.Item().Value(func(value []byte) error { return json.Unmarshal(value, &chunk) }); err != nil {
+			var value T
+			if err := iterator.Item().Value(func(encoded []byte) error { return json.Unmarshal(encoded, &value) }); err != nil {
 				return err
 			}
-			chunks = append(chunks, chunk)
+			values = append(values, value)
 		}
 		return nil
 	})
-	return chunks, err
+	return values, err
 }
 
 func (i *Index) Queued(limit int) ([]Chunk, error) {
@@ -525,7 +541,24 @@ func (i *Index) DeleteQueued(_ context.Context, digest string) error {
 	if err := i.store.Delete(digest); err != nil {
 		return err
 	}
-	return i.db.Update(func(txn *badger.Txn) error { return txn.Delete(chunkKey(digest)) })
+	return i.db.Update(func(txn *badger.Txn) error {
+		for _, reference := range chunk.References {
+			var manifest Manifest
+			if err := getJSON(txn, manifestKey(reference.SyncKey, reference.Generation, reference.Digest), &manifest); err != nil {
+				return err
+			}
+			manifest.NeedsRepush = true
+			if err := setJSON(txn, manifestKey(manifest.SyncKey, manifest.Generation, manifest.Digest), manifest); err != nil {
+				return err
+			}
+			if manifest.Current {
+				if err := setJSON(txn, currentKey(manifest.SyncKey), manifest); err != nil {
+					return err
+				}
+			}
+		}
+		return txn.Delete(chunkKey(digest))
+	})
 }
 
 func (i *Index) saveChunk(chunk Chunk) error {

@@ -73,6 +73,15 @@ func TestDiffAddedRemoved(t *testing.T) {
 	}
 }
 
+func TestDiffAddedBeforeExistingEntry(t *testing.T) {
+	from := manifest(file("middle", 0o644, "same"))
+	to := manifest(file("first", 0o600, "new"), file("middle", 0o644, "same"))
+	diff := workspace.DiffManifests(from, to)
+	if len(diff.Changes) != 1 || diff.Changes[0].Path != "first" || diff.Changes[0].Kind != workspace.Added {
+		t.Fatalf("changes = %#v", diff.Changes)
+	}
+}
+
 func TestDiffModified(t *testing.T) {
 	from := manifest(file("x", 0o644, "d1"))
 	to := manifest(file("x", 0o644, "d2"))

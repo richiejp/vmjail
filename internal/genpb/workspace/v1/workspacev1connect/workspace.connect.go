@@ -55,6 +55,9 @@ const (
 	// WorkspaceServicePutChunkProcedure is the fully-qualified name of the WorkspaceService's PutChunk
 	// RPC.
 	WorkspaceServicePutChunkProcedure = "/daft.workspace.v1.WorkspaceService/PutChunk"
+	// WorkspaceServiceAcknowledgeManifestProcedure is the fully-qualified name of the
+	// WorkspaceService's AcknowledgeManifest RPC.
+	WorkspaceServiceAcknowledgeManifestProcedure = "/daft.workspace.v1.WorkspaceService/AcknowledgeManifest"
 )
 
 // WorkspaceServiceClient is a client for the daft.workspace.v1.WorkspaceService service.
@@ -78,6 +81,10 @@ type WorkspaceServiceClient interface {
 	// `digest` before storing — a peer can never plant a chunk under a
 	// digest it doesn't hash to.
 	PutChunk(context.Context, *connect.Request[v1.PutChunkRequest]) (*connect.Response[v1.PutChunkResponse], error)
+	// AcknowledgeManifest is sent only after the client has successfully
+	// materialised the exact manifest. Digest + generation prevent a stale pull
+	// from adopting newer sandbox writes.
+	AcknowledgeManifest(context.Context, *connect.Request[v1.AcknowledgeManifestRequest]) (*connect.Response[v1.AcknowledgeManifestResponse], error)
 }
 
 // NewWorkspaceServiceClient constructs a client for the daft.workspace.v1.WorkspaceService service.
@@ -115,15 +122,22 @@ func NewWorkspaceServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(workspaceServiceMethods.ByName("PutChunk")),
 			connect.WithClientOptions(opts...),
 		),
+		acknowledgeManifest: connect.NewClient[v1.AcknowledgeManifestRequest, v1.AcknowledgeManifestResponse](
+			httpClient,
+			baseURL+WorkspaceServiceAcknowledgeManifestProcedure,
+			connect.WithSchema(workspaceServiceMethods.ByName("AcknowledgeManifest")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
 // workspaceServiceClient implements WorkspaceServiceClient.
 type workspaceServiceClient struct {
-	getManifest *connect.Client[v1.GetManifestRequest, v1.GetManifestResponse]
-	getChunk    *connect.Client[v1.GetChunkRequest, v1.GetChunkResponse]
-	putManifest *connect.Client[v1.PutManifestRequest, v1.PutManifestResponse]
-	putChunk    *connect.Client[v1.PutChunkRequest, v1.PutChunkResponse]
+	getManifest         *connect.Client[v1.GetManifestRequest, v1.GetManifestResponse]
+	getChunk            *connect.Client[v1.GetChunkRequest, v1.GetChunkResponse]
+	putManifest         *connect.Client[v1.PutManifestRequest, v1.PutManifestResponse]
+	putChunk            *connect.Client[v1.PutChunkRequest, v1.PutChunkResponse]
+	acknowledgeManifest *connect.Client[v1.AcknowledgeManifestRequest, v1.AcknowledgeManifestResponse]
 }
 
 // GetManifest calls daft.workspace.v1.WorkspaceService.GetManifest.
@@ -144,6 +158,11 @@ func (c *workspaceServiceClient) PutManifest(ctx context.Context, req *connect.R
 // PutChunk calls daft.workspace.v1.WorkspaceService.PutChunk.
 func (c *workspaceServiceClient) PutChunk(ctx context.Context, req *connect.Request[v1.PutChunkRequest]) (*connect.Response[v1.PutChunkResponse], error) {
 	return c.putChunk.CallUnary(ctx, req)
+}
+
+// AcknowledgeManifest calls daft.workspace.v1.WorkspaceService.AcknowledgeManifest.
+func (c *workspaceServiceClient) AcknowledgeManifest(ctx context.Context, req *connect.Request[v1.AcknowledgeManifestRequest]) (*connect.Response[v1.AcknowledgeManifestResponse], error) {
+	return c.acknowledgeManifest.CallUnary(ctx, req)
 }
 
 // WorkspaceServiceHandler is an implementation of the daft.workspace.v1.WorkspaceService service.
@@ -167,6 +186,10 @@ type WorkspaceServiceHandler interface {
 	// `digest` before storing — a peer can never plant a chunk under a
 	// digest it doesn't hash to.
 	PutChunk(context.Context, *connect.Request[v1.PutChunkRequest]) (*connect.Response[v1.PutChunkResponse], error)
+	// AcknowledgeManifest is sent only after the client has successfully
+	// materialised the exact manifest. Digest + generation prevent a stale pull
+	// from adopting newer sandbox writes.
+	AcknowledgeManifest(context.Context, *connect.Request[v1.AcknowledgeManifestRequest]) (*connect.Response[v1.AcknowledgeManifestResponse], error)
 }
 
 // NewWorkspaceServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -200,6 +223,12 @@ func NewWorkspaceServiceHandler(svc WorkspaceServiceHandler, opts ...connect.Han
 		connect.WithSchema(workspaceServiceMethods.ByName("PutChunk")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceServiceAcknowledgeManifestHandler := connect.NewUnaryHandler(
+		WorkspaceServiceAcknowledgeManifestProcedure,
+		svc.AcknowledgeManifest,
+		connect.WithSchema(workspaceServiceMethods.ByName("AcknowledgeManifest")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.workspace.v1.WorkspaceService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkspaceServiceGetManifestProcedure:
@@ -210,6 +239,8 @@ func NewWorkspaceServiceHandler(svc WorkspaceServiceHandler, opts ...connect.Han
 			workspaceServicePutManifestHandler.ServeHTTP(w, r)
 		case WorkspaceServicePutChunkProcedure:
 			workspaceServicePutChunkHandler.ServeHTTP(w, r)
+		case WorkspaceServiceAcknowledgeManifestProcedure:
+			workspaceServiceAcknowledgeManifestHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -233,4 +264,8 @@ func (UnimplementedWorkspaceServiceHandler) PutManifest(context.Context, *connec
 
 func (UnimplementedWorkspaceServiceHandler) PutChunk(context.Context, *connect.Request[v1.PutChunkRequest]) (*connect.Response[v1.PutChunkResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.PutChunk is not implemented"))
+}
+
+func (UnimplementedWorkspaceServiceHandler) AcknowledgeManifest(context.Context, *connect.Request[v1.AcknowledgeManifestRequest]) (*connect.Response[v1.AcknowledgeManifestResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.AcknowledgeManifest is not implemented"))
 }

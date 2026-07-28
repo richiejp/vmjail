@@ -14,7 +14,7 @@ func TestBuildPlanWeightedOrderingAndSoftTarget(t *testing.T) {
 		{Digest: "superseded", Size: 100, LastUse: now.Add(-50 * time.Hour), Recoverability: RecoverabilityRecoverable, Disposition: DispositionSuperseded},
 		{Digest: "rejected", Size: 100, LastUse: now.Add(-time.Hour), Recoverability: RecoverabilityRecoverable, Disposition: DispositionRejected},
 		{Digest: "protected", Size: 500, LastUse: now.Add(-200 * time.Hour), Recoverability: RecoverabilityProtected, Disposition: DispositionRejected},
-		{Digest: "referenced", Size: 500, LastUse: now.Add(-200 * time.Hour), Recoverability: RecoverabilityRecoverable, Disposition: DispositionRejected, References: []Reference{{SyncKey: "ws"}}},
+		{Digest: "referenced", Size: 500, LastUse: now.Add(-200 * time.Hour), Recoverability: RecoverabilityProtected, Disposition: DispositionRejected, References: []Reference{{SyncKey: "ws"}}},
 	}
 	plan, err := BuildPlan(chunks, 950, 0, now, policy, PruneSoft)
 	if err != nil {

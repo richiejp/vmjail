@@ -267,6 +267,7 @@ func TestCommitRebuildsMissingMetadataAndDeduplicatesRefs(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := commitRequest(1, manifestDigest("manifest"), []ChunkRef{refs[0], refs[0]}, OriginClientUpload, RecoverabilityRecoverable)
+	request.Payload = []byte("manifest payload")
 	if err := rig.index.CommitManifest(request); err != nil {
 		t.Fatal(err)
 	}
@@ -275,8 +276,12 @@ func TestCommitRebuildsMissingMetadataAndDeduplicatesRefs(t *testing.T) {
 		t.Fatalf("rebuilt chunk metadata = %#v, %v", chunk, err)
 	}
 	manifest, err := rig.index.Manifest(testSyncKey, request.Digest, request.Generation)
-	if err != nil || len(manifest.Chunks) != 1 {
+	if err != nil || len(manifest.Chunks) != 1 || !bytes.Equal(manifest.Payload, request.Payload) {
 		t.Fatalf("deduplicated manifest = %#v, %v", manifest, err)
+	}
+	currents, err := rig.index.CurrentManifests()
+	if err != nil || len(currents) != 1 || currents[0].SyncKey != testSyncKey || !bytes.Equal(currents[0].Payload, request.Payload) {
+		t.Fatalf("current manifests = %#v, %v", currents, err)
 	}
 }
 
@@ -391,7 +396,7 @@ func TestDurableQueueRevalidationDeletionAndTouchBatch(t *testing.T) {
 	}
 }
 
-func TestQueueCandidateBecomingReferencedIsProtected(t *testing.T) {
+func TestQueuedRecoverableReferenceIsDeletedAndNeedsRepush(t *testing.T) {
 	rig, refs := newIndexRig(t, "candidate")
 	chunk := refs[0]
 	legacy, _ := rig.index.Chunk(chunk.Digest)
@@ -406,11 +411,15 @@ func TestQueueCandidateBecomingReferencedIsProtected(t *testing.T) {
 	if err := rig.index.CommitManifest(commitRequest(1, manifestDigest("reference"), refs, OriginClientUpload, RecoverabilityRecoverable)); err != nil {
 		t.Fatal(err)
 	}
-	if err := rig.index.DeleteQueued(t.Context(), chunk.Digest); !errors.Is(err, ErrChunkReferenced) {
-		t.Fatalf("referenced deletion error = %v", err)
+	if err := rig.index.DeleteQueued(t.Context(), chunk.Digest); err != nil {
+		t.Fatalf("recoverable deletion error = %v", err)
 	}
-	if has, err := rig.store.Has(chunk.Digest); err != nil || !has {
-		t.Fatalf("referenced CAS chunk has=%v err=%v", has, err)
+	if has, err := rig.store.Has(chunk.Digest); err != nil || has {
+		t.Fatalf("recoverable CAS chunk has=%v err=%v", has, err)
+	}
+	manifest, err := rig.index.Manifest(testSyncKey, manifestDigest("reference"), 1)
+	if err != nil || !manifest.NeedsRepush {
+		t.Fatalf("affected manifest = %#v, %v", manifest, err)
 	}
 }
 
@@ -567,9 +576,88 @@ func TestLowLevelValidationAndPersistenceErrors(t *testing.T) {
 	if err := rig.index.db.Close(); err != nil {
 		t.Fatal(err)
 	}
+	closedDigest := manifestDigest("closed")
+	closedOps := []struct {
+		name string
+		run  func() error
+	}{
+		{"commit", func() error {
+			return rig.index.CommitManifest(commitRequest(1, closedDigest, nil, OriginClientUpload, RecoverabilityRecoverable))
+		}},
+		{"acknowledge", func() error { return rig.index.Acknowledge(testSyncKey, closedDigest, 1) }},
+		{"reject", func() error { return rig.index.Reject(testSyncKey, closedDigest, 1) }},
+		{"delete workspace", func() error { return rig.index.DeleteWorkspace(testSyncKey) }},
+		{"queue plan", func() error { return rig.index.QueuePlan(Plan{}) }},
+	}
+	for _, operation := range closedOps {
+		if err := operation.run(); err == nil {
+			t.Errorf("%s succeeded on closed index", operation.name)
+		}
+	}
+	if _, err := rig.index.Chunk(closedDigest); err == nil {
+		t.Error("chunk read succeeded on closed index")
+	}
+	if _, err := rig.index.Manifest(testSyncKey, closedDigest, 1); err == nil {
+		t.Error("manifest read succeeded on closed index")
+	}
+	if _, err := rig.index.Chunks(); err == nil {
+		t.Error("chunk listing succeeded on closed index")
+	}
+	if _, err := rig.index.CurrentManifests(); err == nil {
+		t.Error("manifest listing succeeded on closed index")
+	}
+	if _, err := rig.index.Queued(1); err == nil {
+		t.Error("queue read succeeded on closed index")
+	}
+	if err := rig.index.DeleteQueued(t.Context(), closedDigest); err == nil {
+		t.Error("queued deletion succeeded on closed index")
+	}
 	rig.index.Touch(manifestDigest("after-close"))
 	if err := rig.index.Close(); err == nil {
 		t.Fatal("closed index flush succeeded")
+	}
+}
+
+func TestSharedChunkRetainsStrongestRemainingRecoverability(t *testing.T) {
+	rig, refs := newIndexRig(t, "shared")
+	protectedA := commitRequest(1, manifestDigest("protected-a"), refs, OriginSandbox, RecoverabilityProtected)
+	protectedA.SyncKey = "protected-a"
+	protectedB := commitRequest(1, manifestDigest("protected-b"), refs, OriginSandbox, RecoverabilityProtected)
+	protectedB.SyncKey = "protected-b"
+	if err := rig.index.CommitManifest(protectedA); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.CommitManifest(protectedB); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.Acknowledge(protectedB.SyncKey, protectedB.Digest, protectedB.Generation); err != nil {
+		t.Fatal(err)
+	}
+	chunk, err := rig.index.Chunk(refs[0].Digest)
+	if err != nil || chunk.Recoverability != RecoverabilityProtected {
+		t.Fatalf("shared protected chunk = %#v, %v", chunk, err)
+	}
+	if err := rig.index.DeleteWorkspace(protectedA.SyncKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.DeleteWorkspace(protectedB.SyncKey); err != nil {
+		t.Fatal(err)
+	}
+
+	recoverableA := commitRequest(1, manifestDigest("recoverable-a"), refs, OriginClientUpload, RecoverabilityRecoverable)
+	recoverableA.SyncKey = "recoverable-a"
+	recoverableB := commitRequest(1, manifestDigest("recoverable-b"), refs, OriginClientUpload, RecoverabilityRecoverable)
+	recoverableB.SyncKey = "recoverable-b"
+	if err := rig.index.CommitManifest(recoverableA); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.CommitManifest(recoverableB); err != nil {
+		t.Fatal(err)
+	}
+	replacement := commitRequest(2, manifestDigest("replacement"), nil, OriginClientUpload, RecoverabilityRecoverable)
+	replacement.SyncKey = recoverableB.SyncKey
+	if err := rig.index.CommitManifest(replacement); err != nil {
+		t.Fatal(err)
 	}
 }
 

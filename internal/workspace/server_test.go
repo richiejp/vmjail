@@ -7,14 +7,18 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"connectrpc.com/connect"
 
 	"github.com/richiejp/darkaifactory/internal/cas"
+	"github.com/richiejp/darkaifactory/internal/casindex"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 )
+
+const testSyncKey = "workspace\x00/workspace"
 
 func mustNewServer(t *testing.T) (*Server, *cas.Store) {
 	t.Helper()
@@ -24,6 +28,331 @@ func mustNewServer(t *testing.T) (*Server, *cas.Store) {
 		t.Fatalf("NewServer: %v", err)
 	}
 	return srv, store
+}
+
+func TestIndexedServerPublishesOnlyCompleteManifestAndRestores(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "node-cas")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	source := t.TempDir()
+	mustWriteFile(t, filepath.Join(source, "data"), []byte("indexed payload"))
+	clientStore := mustOpenStore(t)
+	manifest, err := BuildManifest(source, clientStore, BuildOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	put, err := server.PutManifest(t.Context(), connect.NewRequest(&workspacev1.PutManifestRequest{
+		Workspace: testSyncKey, Manifest: manifest,
+	}))
+	if err != nil || len(put.Msg.GetMissingDigests()) == 0 || put.Msg.GetManifestDigest() == "" || put.Msg.GetGeneration() != 1 {
+		t.Fatalf("PutManifest = %#v, %v", put, err)
+	}
+	if _, err := server.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: testSyncKey})); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("partial manifest became visible: %v", err)
+	}
+	for _, digest := range put.Msg.GetMissingDigests() {
+		compressed, err := clientStore.GetCompressed(digest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := server.PutChunk(t.Context(), connect.NewRequest(&workspacev1.PutChunkRequest{Digest: digest, Compressed: compressed})); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := server.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: testSyncKey}))
+	if err != nil || got.Msg.GetManifestDigest() != put.Msg.GetManifestDigest() || got.Msg.GetGeneration() != put.Msg.GetGeneration() {
+		t.Fatalf("published manifest = %#v, %v", got, err)
+	}
+	if _, err := server.AcknowledgeManifest(t.Context(), connect.NewRequest(&workspacev1.AcknowledgeManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: put.Msg.GetManifestDigest(), Generation: put.Msg.GetGeneration() + 1,
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("stale acknowledgement = %v", err)
+	}
+	if _, err := server.AcknowledgeManifest(t.Context(), connect.NewRequest(&workspacev1.AcknowledgeManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: put.Msg.GetManifestDigest(), Generation: put.Msg.GetGeneration(),
+	})); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := index.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	restored, err := NewIndexedServer(store, reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = restored.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: testSyncKey}))
+	if err != nil || got.Msg.GetManifestDigest() != put.Msg.GetManifestDigest() || !manifestHasPath(got.Msg.GetManifest(), "data") {
+		t.Fatalf("restored manifest = %#v, %v", got, err)
+	}
+}
+
+func TestIndexedLiveSnapshotRequiresExactAdoption(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "node-cas")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := t.TempDir()
+	mustWriteFile(t, filepath.Join(live, "first"), []byte("first"))
+	server.SetLiveMount(testSyncKey, live)
+	first, err := server.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: testSyncKey}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(live, "second"), []byte("second"))
+	second, err := server.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: testSyncKey}))
+	if err != nil || second.Msg.GetGeneration() <= first.Msg.GetGeneration() {
+		t.Fatalf("new live generation = %#v, %v", second, err)
+	}
+	if _, err := server.AcknowledgeManifest(t.Context(), connect.NewRequest(&workspacev1.AcknowledgeManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: first.Msg.GetManifestDigest(), Generation: first.Msg.GetGeneration(),
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("stale live acknowledgement = %v", err)
+	}
+	client := startTestServer(t, server)
+	destination := t.TempDir()
+	if err := Pull(t.Context(), client, mustOpenStore(t), testSyncKey, destination, ApplyOptions{}); err != nil {
+		t.Fatalf("Pull with exact adoption: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destination, "second")); err != nil {
+		t.Fatalf("pulled live file: %v", err)
+	}
+	for _, ref := range manifestChunkRefs(second.Msg.GetManifest()) {
+		chunk, err := index.Chunk(ref.Digest)
+		if err != nil || chunk.Recoverability != casindex.RecoverabilityRecoverable {
+			t.Fatalf("adopted live chunk = %#v, %v", chunk, err)
+		}
+	}
+}
+
+func TestIndexedServerStorageControlsAndValidation(t *testing.T) {
+	store := mustOpenStore(t)
+	if _, err := NewIndexedServer(store, nil); err == nil {
+		t.Fatal("nil index accepted")
+	}
+	plain, err := NewServer(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plain.RunCleanup(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plain.StorageStatus(); err == nil {
+		t.Fatal("plain server returned indexed status")
+	}
+	if _, err := plain.Prune(t.Context(), true); err == nil {
+		t.Fatal("plain server pruned without an index")
+	}
+	if _, _, err := encodeManifest(nil); err == nil {
+		t.Fatal("nil manifest encoded")
+	}
+	if got := saturatingWorkspaceBytes(^uint64(0)-1, 10); got != ^uint64(0) {
+		t.Fatalf("saturating bytes = %d", got)
+	}
+
+	root := filepath.Join(t.TempDir(), "cas")
+	indexedStore, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	indexed, err := NewIndexedServer(indexedStore, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status, err := indexed.StorageStatus(); err != nil || status.Policy != casindex.DefaultPolicy() {
+		t.Fatalf("indexed status = %#v, %v", status, err)
+	}
+	if plan, err := indexed.Prune(t.Context(), true); err != nil || len(plan.Candidates) != 0 {
+		t.Fatalf("indexed dry prune = %#v, %v", plan, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := indexed.RunCleanup(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled cleanup = %v", err)
+	}
+}
+
+func TestIndexedServerRejectsCorruptRestoredPayload(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cas")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	if err := index.CommitManifest(casindex.CommitRequest{
+		SyncKey: testSyncKey, Digest: strings.Repeat("a", 64), Generation: 1,
+		Origin: casindex.OriginClientUpload, Recoverability: casindex.RecoverabilityRecoverable,
+		Payload: []byte("not protobuf"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewIndexedServer(store, index); err == nil {
+		t.Fatal("corrupt restored manifest accepted")
+	}
+}
+
+func TestIndexedServerReportsClosedIndexErrors(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cas")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := &workspacev1.Manifest{}
+	put, err := server.PutManifest(t.Context(), connect.NewRequest(&workspacev1.PutManifestRequest{
+		Workspace: testSyncKey, Manifest: manifest,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := index.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewIndexedServer(store, index); err == nil {
+		t.Fatal("server restored from closed index")
+	}
+	if _, err := server.AcknowledgeManifest(t.Context(), connect.NewRequest(&workspacev1.AcknowledgeManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: put.Msg.GetManifestDigest(), Generation: put.Msg.GetGeneration(),
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("acknowledge with closed index = %v", err)
+	}
+	if _, err := server.PutManifest(t.Context(), connect.NewRequest(&workspacev1.PutManifestRequest{
+		Workspace: "another", Manifest: manifest,
+	})); err == nil {
+		t.Fatal("manifest committed to closed index")
+	}
+	if _, err := server.StorageStatus(); err == nil {
+		t.Fatal("storage status read from closed index")
+	}
+	if _, err := server.Prune(t.Context(), true); err == nil {
+		t.Fatal("closed index dry-run prune succeeded")
+	}
+	if _, err := server.stageClientManifest(t.Context(), "pending", &workspacev1.Manifest{}, []string{strings.Repeat("c", 64)}); err == nil {
+		t.Fatal("pending manifest reserved through closed cleanup index")
+	}
+	live := t.TempDir()
+	mustWriteFile(t, filepath.Join(live, "change"), []byte("protected"))
+	server.SetLiveMount("live", live)
+	if err := server.PreserveLiveMount(t.Context(), "live"); err == nil {
+		t.Fatal("live mount preserved through closed index")
+	}
+	if _, err := server.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: "live"})); connect.CodeOf(err) != connect.CodeInternal {
+		t.Fatalf("live manifest through closed index = %v", err)
+	}
+}
+
+func TestMaterializeMountReportsBackingDirectoryErrors(t *testing.T) {
+	server, _ := mustNewServer(t)
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocked, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.MaterializeMount(t.Context(), "missing", filepath.Join(blocked, "child")); err == nil {
+		t.Fatal("missing workspace materialized below a file")
+	}
+	if err := server.Add("present", &workspacev1.Manifest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.MaterializeMount(t.Context(), "present", filepath.Join(blocked, "child")); err == nil {
+		t.Fatal("present workspace materialized below a file")
+	}
+}
+
+func TestIndexedServerPendingManifestBranches(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cas")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.stageClientManifest(t.Context(), "", nil, nil); err == nil {
+		t.Fatal("empty manifest identity accepted")
+	}
+	digestA := strings.Repeat("a", 64)
+	digestB := strings.Repeat("b", 64)
+	manifest := &workspacev1.Manifest{Entries: []*workspacev1.FileEntry{{Chunks: []*workspacev1.ChunkRef{
+		{Digest: digestA, Size: 3}, {Digest: digestA, Size: 3}, {Digest: digestB, Size: 4},
+	}}}}
+	if missing, err := server.missingDigests(manifest); err != nil || len(missing) != 2 {
+		t.Fatalf("deduplicated missing digests = %#v, %v", missing, err)
+	}
+	first, err := server.stageClientManifest(t.Context(), "pending", manifest, []string{digestA, digestB})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if same, err := server.stageClientManifest(t.Context(), "pending", manifest, []string{digestA, digestB}); err != nil || same != first {
+		t.Fatalf("restaged manifest = %#v, %v", same, err)
+	}
+	replacement := &workspacev1.Manifest{Entries: []*workspacev1.FileEntry{{Chunks: []*workspacev1.ChunkRef{{Digest: digestB, Size: 4}}}}}
+	if _, err := server.stageClientManifest(t.Context(), "pending", replacement, []string{digestB}); err != nil {
+		t.Fatal(err)
+	}
+	if err := server.completePendingManifests(digestA); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.publishManifest("stable", &workspacev1.Manifest{}, casindex.OriginClientUpload, casindex.RecoverabilityRecoverable); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.publishManifest("stable", &workspacev1.Manifest{}, casindex.OriginClientUpload, casindex.RecoverabilityRecoverable); err != nil {
+		t.Fatal(err)
+	}
+	if err := index.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.PutManifest(t.Context(), connect.NewRequest(&workspacev1.PutManifestRequest{
+		Workspace: "invalid", Manifest: &workspacev1.Manifest{Entries: []*workspacev1.FileEntry{{Chunks: []*workspacev1.ChunkRef{{Digest: "bad"}}}}},
+	})); err == nil {
+		t.Fatal("invalid manifest digest accepted")
+	}
 }
 
 // startTestServer spins up an in-memory httptest.Server hosting the

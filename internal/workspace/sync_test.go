@@ -10,8 +10,45 @@ import (
 
 	"connectrpc.com/connect"
 
+	"github.com/richiejp/darkaifactory/internal/cas"
+	"github.com/richiejp/darkaifactory/internal/casindex"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
+	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 )
+
+type rejectingAcknowledgeClient struct {
+	workspacev1connect.WorkspaceServiceClient
+}
+
+func (c rejectingAcknowledgeClient) AcknowledgeManifest(
+	context.Context,
+	*connect.Request[workspacev1.AcknowledgeManifestRequest],
+) (*connect.Response[workspacev1.AcknowledgeManifestResponse], error) {
+	return nil, connect.NewError(connect.CodeUnavailable, errors.New("ack unavailable"))
+}
+
+type rejectingPutChunkClient struct {
+	workspacev1connect.WorkspaceServiceClient
+}
+
+func (c rejectingPutChunkClient) PutChunk(
+	context.Context,
+	*connect.Request[workspacev1.PutChunkRequest],
+) (*connect.Response[workspacev1.PutChunkResponse], error) {
+	return nil, connect.NewError(connect.CodeUnavailable, errors.New("upload unavailable"))
+}
+
+type compatibilityManifestClient struct {
+	workspacev1connect.WorkspaceServiceClient
+	manifest *workspacev1.Manifest
+}
+
+func (c compatibilityManifestClient) GetManifest(
+	context.Context,
+	*connect.Request[workspacev1.GetManifestRequest],
+) (*connect.Response[workspacev1.GetManifestResponse], error) {
+	return connect.NewResponse(&workspacev1.GetManifestResponse{Manifest: c.manifest}), nil
+}
 
 func TestSyncKeyDistinguishesTargets(t *testing.T) {
 	a := SyncKey("ws", "/workspace/src")
@@ -242,5 +279,67 @@ func TestPullUnknownWorkspaceFails(t *testing.T) {
 	err := Pull(context.Background(), c, mustOpenStore(t), "missing", t.TempDir(), ApplyOptions{})
 	if err == nil {
 		t.Fatal("expected error pulling unknown workspace")
+	}
+}
+
+func TestPullReportsAcknowledgeFailureAfterMaterialization(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cas")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	mustWriteFile(t, filepath.Join(source, "data"), []byte("payload"))
+	manifest, err := BuildManifest(source, store, BuildOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.publishManifest("key", manifest, casindex.OriginSandbox, casindex.RecoverabilityProtected); err != nil {
+		t.Fatal(err)
+	}
+	client := rejectingAcknowledgeClient{WorkspaceServiceClient: startTestServer(t, server)}
+	dest := t.TempDir()
+	if err := Pull(t.Context(), client, mustOpenStore(t), "key", dest, ApplyOptions{}); err == nil || !strings.Contains(err.Error(), "acknowledge manifest") {
+		t.Fatalf("Pull acknowledgement error = %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(dest, "data")); err != nil || string(data) != "payload" { //nolint:gosec // dest is t.TempDir().
+		t.Fatalf("materialized data = %q, %v", data, err)
+	}
+}
+
+func TestSyncReportsTransferAndApplyFailures(t *testing.T) {
+	server, remoteStore := mustNewServer(t)
+	client := startTestServer(t, server)
+	source := t.TempDir()
+	mustWriteFile(t, filepath.Join(source, "data"), []byte("payload"))
+	localStore := mustOpenStore(t)
+	manifest, err := BuildManifest(source, localStore, BuildOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Push(t.Context(), rejectingPutChunkClient{WorkspaceServiceClient: client}, localStore, "upload", manifest); err == nil || !strings.Contains(err.Error(), "put chunk") {
+		t.Fatalf("Push transfer error = %v", err)
+	}
+
+	blocked := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(blocked, []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	compat := compatibilityManifestClient{WorkspaceServiceClient: client, manifest: &workspacev1.Manifest{}}
+	if err := Pull(t.Context(), compat, remoteStore, "compat", t.TempDir(), ApplyOptions{}); err != nil {
+		t.Fatalf("compatibility Pull: %v", err)
+	}
+	failingApply := compatibilityManifestClient{WorkspaceServiceClient: client, manifest: manifest}
+	if err := Pull(t.Context(), failingApply, remoteStore, "apply-error", blocked, ApplyOptions{}); err == nil {
+		t.Fatal("Pull applied into a file")
 	}
 }

@@ -93,6 +93,10 @@ service WorkspaceService {
   // `digest` before storing — a peer can never plant a chunk under a
   // digest it doesn't hash to.
   rpc PutChunk(PutChunkRequest) returns (PutChunkResponse);
+  // AcknowledgeManifest is sent only after the client has successfully
+  // materialised the exact manifest. Digest + generation prevent a stale pull
+  // from adopting newer sandbox writes.
+  rpc AcknowledgeManifest(AcknowledgeManifestRequest) returns (AcknowledgeManifestResponse);
 }
 
 message GetManifestRequest {
@@ -101,6 +105,8 @@ message GetManifestRequest {
 
 message GetManifestResponse {
   Manifest manifest = 1;
+  string manifest_digest = 2;
+  uint64 generation = 3;
 }
 
 message GetChunkRequest {
@@ -124,6 +130,8 @@ message PutManifestResponse {
   // hold. The client should PutChunk each of these to complete the
   // push; an empty list means the manifest is already fully backed.
   repeated string missing_digests = 1;
+  string manifest_digest = 2;
+  uint64 generation = 3;
 }
 
 message PutChunkRequest {
@@ -133,3 +141,11 @@ message PutChunkRequest {
 }
 
 message PutChunkResponse {}
+
+message AcknowledgeManifestRequest {
+  string workspace = 1;
+  string manifest_digest = 2;
+  uint64 generation = 3;
+}
+
+message AcknowledgeManifestResponse {}
