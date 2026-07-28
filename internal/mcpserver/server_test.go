@@ -76,6 +76,12 @@ type fakeReader struct {
 	pushedUUID       string
 	pushedPath       string
 	pushResult       daftclient.WorkspacePushResult
+	storageStatus    daftclient.WorkspaceStorageStatus
+	storageErr       error
+	rejectedUUID     string
+	rejectResult     []daftclient.ManifestTransition
+	unfrozenUUID     string
+	deletedUUID      string
 	observerSummary  ObserverSummary
 	observerErr      error
 	observerTail     ObserverTail
@@ -265,6 +271,26 @@ func (f *fakeReader) StopWorkspace(_ context.Context, uuid string) (Workspace, e
 	return f.workspace, f.getWorkErr
 }
 
+func (f *fakeReader) WorkspaceStorageStatus(_ context.Context, uuid string) (daftclient.WorkspaceStorageStatus, error) {
+	f.requestedUUID = uuid
+	return f.storageStatus, f.storageErr
+}
+
+func (f *fakeReader) RejectWorkspaceChanges(_ context.Context, uuid string) ([]daftclient.ManifestTransition, error) {
+	f.rejectedUUID = uuid
+	return append([]daftclient.ManifestTransition(nil), f.rejectResult...), f.storageErr
+}
+
+func (f *fakeReader) UnfreezeWorkspace(_ context.Context, uuid string) (daftclient.WorkspaceStorageStatus, error) {
+	f.unfrozenUUID = uuid
+	return f.storageStatus, f.storageErr
+}
+
+func (f *fakeReader) DeleteWorkspace(_ context.Context, uuid string) error {
+	f.deletedUUID = uuid
+	return f.storageErr
+}
+
 func (f *fakeReader) PushWorkspace(_ context.Context, uuid, projectPath string) (daftclient.WorkspacePushResult, error) {
 	f.pushedUUID, f.pushedPath = uuid, projectPath
 	return f.pushResult, f.getWorkErr
@@ -310,7 +336,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, observerSummaryTool, observerTailTool, workspaceApplyTool, workspaceGetTool, workspaceLaunchTool, workspaceListTool, workspacePushTool, workspaceStatusTool, workspaceStopTool, workspaceValidateTool}
+	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, observerSummaryTool, observerTailTool, workspaceApplyTool, workspaceRejectTool, workspaceDeleteTool, workspaceGetTool, workspaceLaunchTool, workspaceListTool, workspacePushTool, workspaceStatusTool, workspaceStopTool, workspaceStorageTool, workspaceUnfreezeTool, workspaceValidateTool}
 	if len(result.Tools) != len(wantNames) {
 		t.Fatalf("got %d tools, want %d", len(result.Tools), len(wantNames))
 	}
@@ -325,11 +351,11 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 			t.Errorf("tool %q is missing an inferred schema", tool.Name)
 		}
 		switch tool.Name {
-		case nodeAuthorizeTool, workspaceApplyTool, workspaceLaunchTool, workspacePushTool:
+		case nodeAuthorizeTool, workspaceApplyTool, workspaceLaunchTool, workspacePushTool, workspaceUnfreezeTool:
 			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint || !tool.Annotations.IdempotentHint {
 				t.Errorf("authorize annotations = %#v", tool.Annotations)
 			}
-		case nodeRevokeTool, agentCancelTool, workspaceStopTool:
+		case nodeRevokeTool, agentCancelTool, workspaceStopTool, workspaceRejectTool, workspaceDeleteTool:
 			if tool.Annotations.ReadOnlyHint || tool.Annotations.DestructiveHint == nil || !*tool.Annotations.DestructiveHint || !tool.Annotations.IdempotentHint {
 				t.Errorf("revoke annotations = %#v", tool.Annotations)
 			}
@@ -483,6 +509,49 @@ func TestWorkspaceLifecycleToolsApplyValidateAndProjectStatus(t *testing.T) {
 	if reader.pushedUUID != workspaceID || reader.pushedPath != projectPath ||
 		pushed["project_path"] != projectPath || requireMap(t, requireSlice(t, pushed["mounts"])[0])["entries"] != float64(2) {
 		t.Fatalf("push output=%#v reader=%#v", pushed, reader)
+	}
+}
+
+func TestWorkspaceStorageLifecycleToolsAreBoundedAndExact(t *testing.T) {
+	const workspaceID = "123e4567-e89b-12d3-a456-426614174000"
+	reader := &fakeReader{
+		storageStatus: daftclient.WorkspaceStorageStatus{
+			WorkspaceUUID: workspaceID, DiskUsedBytes: 7, DiskFreeBytes: 13, DiskBytes: 20,
+			DiskFrozen: true, DiskRunning: true, CASUsageBytes: 80, ProtectedBytes: 30,
+			HardBytes: 100, SoftBytes: 85, TargetBytes: 75,
+		},
+		rejectResult: []daftclient.ManifestTransition{{
+			Workspace: workspaceID + "\x00/work", Digest: "restored", Generation: 3, Present: true,
+		}},
+	}
+	session := connectClient(t, reader)
+	status := requireMap(t, callTool(t, session, workspaceStorageTool, map[string]any{uuidKey: workspaceID}).StructuredContent)
+	if status["disk_used_bytes"] != float64(7) || status["protected_bytes"] != float64(30) || status["hard_bytes"] != float64(100) {
+		t.Fatalf("storage status = %#v", status)
+	}
+	rejected := requireMap(t, callTool(t, session, workspaceRejectTool, map[string]any{uuidKey: workspaceID}).StructuredContent)
+	manifest := requireMap(t, requireSlice(t, rejected["manifests"])[0])
+	if reader.rejectedUUID != workspaceID || manifest["manifest_digest"] != "restored" || manifest["generation"] != float64(3) {
+		t.Fatalf("reject = %#v, uuid %q", rejected, reader.rejectedUUID)
+	}
+	reader.storageStatus.DiskFrozen = false
+	unfrozen := requireMap(t, callTool(t, session, workspaceUnfreezeTool, map[string]any{uuidKey: workspaceID}).StructuredContent)
+	if reader.unfrozenUUID != workspaceID || unfrozen["disk_frozen"] != false {
+		t.Fatalf("unfreeze = %#v, uuid %q", unfrozen, reader.unfrozenUUID)
+	}
+	deleted := requireMap(t, callTool(t, session, workspaceDeleteTool, map[string]any{uuidKey: workspaceID}).StructuredContent)
+	if reader.deletedUUID != workspaceID || deleted["deleted"] != true {
+		t.Fatalf("delete = %#v, uuid %q", deleted, reader.deletedUUID)
+	}
+	for _, tool := range []string{workspaceStorageTool, workspaceRejectTool, workspaceUnfreezeTool, workspaceDeleteTool} {
+		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: tool, Arguments: map[string]any{}})
+		if err == nil || result != nil {
+			t.Fatalf("%s empty UUID result=%#v err=%v", tool, result, err)
+		}
+		result, err = session.CallTool(t.Context(), &mcp.CallToolParams{Name: tool, Arguments: map[string]any{uuidKey: ""}})
+		if err != nil || !result.IsError {
+			t.Fatalf("%s blank UUID result=%#v err=%v", tool, result, err)
+		}
 	}
 }
 

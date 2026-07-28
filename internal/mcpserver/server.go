@@ -66,6 +66,10 @@ const (
 	workspaceStatusTool   = "workspace_status"
 	workspaceLaunchTool   = "workspace_launch"
 	workspaceStopTool     = "workspace_stop"
+	workspaceStorageTool  = "workspace_storage_status"
+	workspaceRejectTool   = "workspace_changes_reject"
+	workspaceUnfreezeTool = "workspace_unfreeze"
+	workspaceDeleteTool   = "workspace_delete"
 	agentProfileListTool  = "agent_profile_list"
 	agentStartTool        = "agent_start"
 	agentStatusTool       = "agent_status"
@@ -85,6 +89,10 @@ type Reader interface {
 	ValidateWorkspace(context.Context, string) (Workspace, error)
 	LaunchWorkspace(context.Context, string) (Workspace, error)
 	StopWorkspace(context.Context, string) (Workspace, error)
+	WorkspaceStorageStatus(context.Context, string) (daftclient.WorkspaceStorageStatus, error)
+	RejectWorkspaceChanges(context.Context, string) ([]daftclient.ManifestTransition, error)
+	UnfreezeWorkspace(context.Context, string) (daftclient.WorkspaceStorageStatus, error)
+	DeleteWorkspace(context.Context, string) error
 	GetNode(context.Context, string) (Node, error)
 	AuthorizeNode(context.Context, string, string) (Node, error)
 	RevokeNode(context.Context, string) (Node, error)
@@ -279,6 +287,41 @@ type workspacePushInput struct {
 type workspacePushOutput struct {
 	ProjectPath string                     `json:"project_path"`
 	Mounts      []workspacesyncMountOutput `json:"mounts"`
+}
+
+type workspaceStorageOutput struct {
+	WorkspaceUUID    string `json:"workspace_uuid"`
+	DiskUsedBytes    uint64 `json:"disk_used_bytes"`
+	DiskFreeBytes    uint64 `json:"disk_free_bytes"`
+	DiskBytes        uint64 `json:"disk_bytes"`
+	DiskFrozen       bool   `json:"disk_frozen"`
+	DiskRunning      bool   `json:"disk_running"`
+	CASUsageBytes    uint64 `json:"cas_usage_bytes"`
+	ProtectedBytes   uint64 `json:"protected_bytes"`
+	RecoverableBytes uint64 `json:"recoverable_bytes"`
+	QueuedBytes      uint64 `json:"queued_bytes"`
+	ChunkCount       uint64 `json:"chunk_count"`
+	QueuedCount      uint64 `json:"queued_count"`
+	HardBytes        uint64 `json:"hard_bytes"`
+	SoftBytes        uint64 `json:"soft_bytes"`
+	TargetBytes      uint64 `json:"target_bytes"`
+	ExpirySeconds    int64  `json:"expiry_seconds"`
+}
+
+type manifestTransitionOutput struct {
+	Workspace  string `json:"workspace"`
+	Digest     string `json:"manifest_digest,omitempty"`
+	Generation uint64 `json:"generation,omitempty"`
+	Present    bool   `json:"current_manifest_present"`
+}
+
+type workspaceRejectOutput struct {
+	Manifests []manifestTransitionOutput `json:"manifests"`
+}
+
+type workspaceDeleteOutput struct {
+	UUID    string `json:"uuid"`
+	Deleted bool   `json:"deleted"`
 }
 
 type workspacesyncMountOutput struct {
@@ -524,6 +567,65 @@ func addWorkspaceTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations,
 			workspace, err := reader.StopWorkspace(ctx, input.UUID)
 			return nil, getWorkspaceOutput{Workspace: workspace}, err
 		})
+	addWorkspaceStorageTools(server, readAnnotations, reader)
+}
+
+func addWorkspaceStorageTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations, reader Reader) {
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceStorageTool, Description: "Get bounded retained-disk and target-Node CAS accounting for one Workspace.", Annotations: readAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, workspaceStorageOutput, error) {
+			if input.UUID == "" {
+				return nil, workspaceStorageOutput{}, fmt.Errorf("uuid is required")
+			}
+			status, err := reader.WorkspaceStorageStatus(ctx, input.UUID)
+			return nil, workspaceStorageOutputFromClient(status), err
+		})
+	rejectAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceRejectTool, Description: "Reject exact unadopted Sandbox manifests and discard the stopped retained disk.", Annotations: rejectAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, workspaceRejectOutput, error) {
+			if input.UUID == "" {
+				return nil, workspaceRejectOutput{}, fmt.Errorf("uuid is required")
+			}
+			transitions, err := reader.RejectWorkspaceChanges(ctx, input.UUID)
+			out := make([]manifestTransitionOutput, len(transitions))
+			for index := range transitions {
+				out[index] = manifestTransitionOutput{
+					Workspace: transitions[index].Workspace, Digest: transitions[index].Digest,
+					Generation: transitions[index].Generation, Present: transitions[index].Present,
+				}
+			}
+			return nil, workspaceRejectOutput{Manifests: out}, err
+		})
+	unfreezeAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(false), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceUnfreezeTool, Description: "Explicitly unfreeze a remediated Workspace disk after exact-manifest validation.", Annotations: unfreezeAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, workspaceStorageOutput, error) {
+			if input.UUID == "" {
+				return nil, workspaceStorageOutput{}, fmt.Errorf("uuid is required")
+			}
+			status, err := reader.UnfreezeWorkspace(ctx, input.UUID)
+			return nil, workspaceStorageOutputFromClient(status), err
+		})
+	deleteAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceDeleteTool, Description: "Permanently delete a stopped Workspace's Node data and exact catalog generation.", Annotations: deleteAnnotations},
+		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, workspaceDeleteOutput, error) {
+			if input.UUID == "" {
+				return nil, workspaceDeleteOutput{}, fmt.Errorf("uuid is required")
+			}
+			err := reader.DeleteWorkspace(ctx, input.UUID)
+			return nil, workspaceDeleteOutput{UUID: input.UUID, Deleted: err == nil}, err
+		})
+}
+
+func workspaceStorageOutputFromClient(input daftclient.WorkspaceStorageStatus) workspaceStorageOutput {
+	return workspaceStorageOutput{
+		WorkspaceUUID: input.WorkspaceUUID, DiskUsedBytes: input.DiskUsedBytes,
+		DiskFreeBytes: input.DiskFreeBytes, DiskBytes: input.DiskBytes,
+		DiskFrozen: input.DiskFrozen, DiskRunning: input.DiskRunning,
+		CASUsageBytes: input.CASUsageBytes, ProtectedBytes: input.ProtectedBytes,
+		RecoverableBytes: input.RecoverableBytes, QueuedBytes: input.QueuedBytes,
+		ChunkCount: input.ChunkCount, QueuedCount: input.QueuedCount,
+		HardBytes: input.HardBytes, SoftBytes: input.SoftBytes,
+		TargetBytes: input.TargetBytes, ExpirySeconds: input.ExpirySeconds,
+	}
 }
 
 func addWorkspacePushTool(server *mcp.Server, reader Reader) {
@@ -1061,6 +1163,22 @@ func (r ConnectReader) StopWorkspace(ctx context.Context, uuid string) (Workspac
 		return Workspace{}, err
 	}
 	return checkedWorkspace(response.Msg.GetWorkspace())
+}
+
+func (r ConnectReader) WorkspaceStorageStatus(ctx context.Context, uuid string) (daftclient.WorkspaceStorageStatus, error) {
+	return r.client.WorkspaceStorageStatus(ctx, uuid)
+}
+
+func (r ConnectReader) RejectWorkspaceChanges(ctx context.Context, uuid string) ([]daftclient.ManifestTransition, error) {
+	return r.client.RejectWorkspaceChanges(ctx, uuid)
+}
+
+func (r ConnectReader) UnfreezeWorkspace(ctx context.Context, uuid string) (daftclient.WorkspaceStorageStatus, error) {
+	return r.client.UnfreezeWorkspace(ctx, uuid)
+}
+
+func (r ConnectReader) DeleteWorkspace(ctx context.Context, uuid string) error {
+	return r.client.DeleteWorkspace(ctx, uuid)
 }
 
 func (r ConnectReader) ApplyWorkspace(ctx context.Context, input WorkspaceApply) (WorkspaceApplyResult, error) {

@@ -304,14 +304,18 @@ Landed:
   the broker. This is the shared non-Cobra control path used by trusted API
   surfaces; its target, stale-state, transport, and partial-failure behavior is
   covered with in-process Connect peers.
+- Trusted MCP now exposes bounded `workspace_storage_status`, exact
+  `workspace_changes_reject`, `workspace_unfreeze`, and `workspace_delete`
+  tools with closed-world schemas and accurate read/destructive/idempotent
+  annotations. They delegate to the same authenticated client controls rather
+  than weakening generation checks or duplicating transport policy.
 
 Remaining:
 
 - Add stop-time teardown snapshot control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
-- Finish workspace status disk fields and matching trusted MCP tools; expose
-  node-storage inspection there with the same bounded results.
+- Finish workspace status disk fields and the `StorageFrozen` condition.
 - Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,
   capacity, persistence, freeze, live-grow, and leak acceptance tests.
 
