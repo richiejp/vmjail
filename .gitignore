@@ -43,3 +43,6 @@ internal/observability/ebpf/**/vmlinux.h
 
 # Claude Code session/runtime state.
 /.claude/
+
+# Integration runs may generate a checkout-specific project config here.
+/internal/testdaemons/.daft/
