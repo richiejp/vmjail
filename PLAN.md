@@ -265,11 +265,15 @@ Landed:
 - The bounded guest workspace service now reports XFS total/used/available
   bytes and runs `xfs_growfs` on request alongside snapshot streaming. It uses
   a dedicated vsock port, avoiding the credential-delivery listener.
+- Running workspace disks are tracked on the Node with coherent usage,
+  allowance, and frozen state. A bounded poller pauses Cloud Hypervisor at 90%
+  usage; live growth durably expands qcow2, resizes virtio-blk, grows XFS, and
+  keeps an already-frozen VM paused until a separate validated unfreeze.
 
 Remaining:
 
-- Add host-side usage monitoring, automatic freeze, resize orchestration, and
-  stop-time teardown snapshot control paths.
+- Add orchestration/public surfaces for the Node disk controls and stop-time
+  teardown snapshot control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
 - Add durable per-CAS Badger metadata, transactional manifest generations,

@@ -168,9 +168,14 @@ type Executor struct {
 	// host path). nil materializer keeps the pre-S3 passthrough (Source
 	// is taken as a host path) so unit tests and the smoke path are
 	// unaffected.
-	mountMaterializer MountMaterializer
-	mountBackingDir   string
-	workspaceDisks    WorkspaceDiskPreparer
+	mountMaterializer         MountMaterializer
+	mountBackingDir           string
+	workspaceDisks            WorkspaceDiskPreparer
+	workspaceDiskPollInterval time.Duration
+	newWorkspaceVMController  func(string) (workspaceVMController, error)
+	dialWorkspaceGuest        func(context.Context, string, uint32) (net.Conn, error)
+	getWorkspaceUsage         func(context.Context, func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error)
+	growWorkspaceGuest        func(context.Context, func(context.Context) (net.Conn, error)) error
 	// observerDir, when non-empty, is the absolute parent directory
 	// under which each dispatch gets a per-uid host-side observer log
 	// (<observerDir>/<uid>/observer.jsonl). resolveBootConfig defaults
@@ -201,11 +206,13 @@ type Executor struct {
 	// CID the ABI allows for a guest (0/1/2 are reserved).
 	nextCID atomic.Uint32
 
-	mu       sync.Mutex
-	live     map[string]*liveSandbox
-	running  map[string]context.CancelFunc
-	preserve map[string]func(context.Context) error
-	deleted  map[string]time.Time
+	mu                    sync.Mutex
+	live                  map[string]*liveSandbox
+	running               map[string]context.CancelFunc
+	preserve              map[string]func(context.Context) error
+	deleted               map[string]time.Time
+	diskMu                sync.RWMutex
+	workspaceDiskControls map[string]*workspaceDiskRuntime
 }
 
 // Config bundles the Executor's dependencies. The baseline
@@ -291,6 +298,9 @@ type Config struct {
 	// WorkspaceDisks enables retained qcow2 disks for dispatched Workspaces.
 	// It requires VsockDir, which also holds the per-Sandbox VMM API socket.
 	WorkspaceDisks WorkspaceDiskPreparer
+	// WorkspaceDiskPollInterval controls automatic 90%-usage checks. Zero
+	// selects ten seconds; tests may use a longer interval and poll directly.
+	WorkspaceDiskPollInterval time.Duration
 	// ObserverDir, when non-empty, is the absolute parent directory
 	// under which each dispatched VM gets a per-uid host-side observer
 	// log. `daft-sandboxd serve` sets it to the per-sandbox state dir
@@ -379,6 +389,9 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.BuildTimeout == 0 {
 		cfg.BuildTimeout = defaultBuildTimeout
 	}
+	if cfg.WorkspaceDiskPollInterval <= 0 {
+		cfg.WorkspaceDiskPollInterval = defaultWorkspaceDiskPollInterval
+	}
 	// A configured build image is only useful if the built result can be
 	// pushed back; pair them at construction so a misconfigured node fails
 	// fast here rather than after wasting a build VM boot at first dispatch.
@@ -386,30 +399,36 @@ func New(cfg Config) (*Executor, error) {
 		return nil, errors.New("sandboxexec: BuildPushTransport required when BuildImageRef is set")
 	}
 	e := &Executor{
-		base:              cfg.Base,
-		stdout:            cfg.Stdout,
-		run:               cfg.Runner,
-		assembler:         cfg.Assembler,
-		bridger:           cfg.Bridger,
-		attachRegistry:    cfg.AttachRegistry,
-		jobRegistry:       cfg.JobRegistry,
-		observerRegistry:  cfg.ObserverRegistry,
-		summaryRegistry:   cfg.SummaryRegistry,
-		observeSummary:    cfg.ObserveSummary,
-		vsockDir:          cfg.VsockDir,
-		netEnabled:        cfg.NetEnabled,
-		egressProxy:       cfg.EgressProxy,
-		mountMaterializer: cfg.MountMaterializer,
-		mountBackingDir:   cfg.MountBackingDir,
-		workspaceDisks:    cfg.WorkspaceDisks,
-		observerDir:       cfg.ObserverDir,
-		buildImageRef:     cfg.BuildImageRef,
-		buildRunner:       cfg.BuildRunner,
-		buildTimeout:      cfg.BuildTimeout,
-		live:              map[string]*liveSandbox{},
-		running:           map[string]context.CancelFunc{},
-		preserve:          map[string]func(context.Context) error{},
-		deleted:           map[string]time.Time{},
+		base:                      cfg.Base,
+		stdout:                    cfg.Stdout,
+		run:                       cfg.Runner,
+		assembler:                 cfg.Assembler,
+		bridger:                   cfg.Bridger,
+		attachRegistry:            cfg.AttachRegistry,
+		jobRegistry:               cfg.JobRegistry,
+		observerRegistry:          cfg.ObserverRegistry,
+		summaryRegistry:           cfg.SummaryRegistry,
+		observeSummary:            cfg.ObserveSummary,
+		vsockDir:                  cfg.VsockDir,
+		netEnabled:                cfg.NetEnabled,
+		egressProxy:               cfg.EgressProxy,
+		mountMaterializer:         cfg.MountMaterializer,
+		mountBackingDir:           cfg.MountBackingDir,
+		workspaceDisks:            cfg.WorkspaceDisks,
+		workspaceDiskPollInterval: cfg.WorkspaceDiskPollInterval,
+		newWorkspaceVMController:  newWorkspaceVMController,
+		dialWorkspaceGuest:        sandbox.DialGuestVsock,
+		getWorkspaceUsage:         workspacesnapshot.GetUsage,
+		growWorkspaceGuest:        workspacesnapshot.Grow,
+		observerDir:               cfg.ObserverDir,
+		buildImageRef:             cfg.BuildImageRef,
+		buildRunner:               cfg.BuildRunner,
+		buildTimeout:              cfg.BuildTimeout,
+		live:                      map[string]*liveSandbox{},
+		running:                   map[string]context.CancelFunc{},
+		preserve:                  map[string]func(context.Context) error{},
+		deleted:                   map[string]time.Time{},
+		workspaceDiskControls:     map[string]*workspaceDiskRuntime{},
 	}
 	// New guarantees BuildPushTransport is non-nil whenever a build can run
 	// (BuildImageRef set), so the closure needs no nil guard of its own.
@@ -570,6 +589,8 @@ func (e *Executor) HandleSandboxEvent(
 	unregisterSummary := e.registerSummaryRoute(cfg, uid)
 	defer unregisterSummary()
 	e.registerWorkspaceSnapshotRoutes(cfg, spec)
+	unregisterDiskControl := e.registerWorkspaceDiskControl(ctx, cfg, spec.GetWorkspaceUuid(), uid, workspaceDiskAllowance(spec))
+	defer unregisterDiskControl()
 	e.setSandboxPreserver(uid, spec)
 
 	if err := e.run(ctx, e.stdout, cfg); err != nil {
@@ -850,10 +871,7 @@ func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *san
 	if workspaceID == "" {
 		return errors.New("sandboxexec: retained disk requires spec.workspace_uuid")
 	}
-	size := spec.GetDiskBytes()
-	if size == 0 {
-		size = workspacedisk.DefaultDiskBytes
-	}
+	size := workspaceDiskAllowance(spec)
 	path, _, err := e.workspaceDisks.Prepare(workspaceID, size)
 	if err != nil {
 		return fmt.Errorf("sandboxexec: prepare workspace disk: %w", err)
@@ -862,6 +880,14 @@ func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *san
 	cfg.APISocket = filepath.Join(e.vsockDir, uid+".api.sock")
 	configureWorkspaceMounts(cfg, spec.GetMounts())
 	return nil
+}
+
+func workspaceDiskAllowance(spec *sandboxv1.SandboxSpec) uint64 {
+	size := spec.GetDiskBytes()
+	if size == 0 {
+		return workspacedisk.DefaultDiskBytes
+	}
+	return size
 }
 
 func configureWorkspaceMounts(cfg *sandbox.Config, mounts []*sandboxv1.Mount) {
