@@ -802,6 +802,534 @@ func (*AcknowledgeManifestResponse) Descriptor() ([]byte, []int) {
 	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{12}
 }
 
+type RejectManifestRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Workspace      string                 `protobuf:"bytes,1,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	ManifestDigest string                 `protobuf:"bytes,2,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
+	Generation     uint64                 `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RejectManifestRequest) Reset() {
+	*x = RejectManifestRequest{}
+	mi := &file_workspace_v1_workspace_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RejectManifestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RejectManifestRequest) ProtoMessage() {}
+
+func (x *RejectManifestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_workspace_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RejectManifestRequest.ProtoReflect.Descriptor instead.
+func (*RejectManifestRequest) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *RejectManifestRequest) GetWorkspace() string {
+	if x != nil {
+		return x.Workspace
+	}
+	return ""
+}
+
+func (x *RejectManifestRequest) GetManifestDigest() string {
+	if x != nil {
+		return x.ManifestDigest
+	}
+	return ""
+}
+
+func (x *RejectManifestRequest) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+type DeleteManifestRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Workspace      string                 `protobuf:"bytes,1,opt,name=workspace,proto3" json:"workspace,omitempty"`
+	ManifestDigest string                 `protobuf:"bytes,2,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
+	Generation     uint64                 `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *DeleteManifestRequest) Reset() {
+	*x = DeleteManifestRequest{}
+	mi := &file_workspace_v1_workspace_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteManifestRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteManifestRequest) ProtoMessage() {}
+
+func (x *DeleteManifestRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_workspace_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteManifestRequest.ProtoReflect.Descriptor instead.
+func (*DeleteManifestRequest) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *DeleteManifestRequest) GetWorkspace() string {
+	if x != nil {
+		return x.Workspace
+	}
+	return ""
+}
+
+func (x *DeleteManifestRequest) GetManifestDigest() string {
+	if x != nil {
+		return x.ManifestDigest
+	}
+	return ""
+}
+
+func (x *DeleteManifestRequest) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+type ManifestControlResponse struct {
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	ManifestDigest         string                 `protobuf:"bytes,1,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
+	Generation             uint64                 `protobuf:"varint,2,opt,name=generation,proto3" json:"generation,omitempty"`
+	CurrentManifestPresent bool                   `protobuf:"varint,3,opt,name=current_manifest_present,json=currentManifestPresent,proto3" json:"current_manifest_present,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *ManifestControlResponse) Reset() {
+	*x = ManifestControlResponse{}
+	mi := &file_workspace_v1_workspace_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ManifestControlResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ManifestControlResponse) ProtoMessage() {}
+
+func (x *ManifestControlResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_workspace_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ManifestControlResponse.ProtoReflect.Descriptor instead.
+func (*ManifestControlResponse) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ManifestControlResponse) GetManifestDigest() string {
+	if x != nil {
+		return x.ManifestDigest
+	}
+	return ""
+}
+
+func (x *ManifestControlResponse) GetGeneration() uint64 {
+	if x != nil {
+		return x.Generation
+	}
+	return 0
+}
+
+func (x *ManifestControlResponse) GetCurrentManifestPresent() bool {
+	if x != nil {
+		return x.CurrentManifestPresent
+	}
+	return false
+}
+
+type GetStorageStatusRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetStorageStatusRequest) Reset() {
+	*x = GetStorageStatusRequest{}
+	mi := &file_workspace_v1_workspace_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStorageStatusRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStorageStatusRequest) ProtoMessage() {}
+
+func (x *GetStorageStatusRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_workspace_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetStorageStatusRequest.ProtoReflect.Descriptor instead.
+func (*GetStorageStatusRequest) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{16}
+}
+
+type GetStorageStatusResponse struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	UsageBytes       uint64                 `protobuf:"varint,1,opt,name=usage_bytes,json=usageBytes,proto3" json:"usage_bytes,omitempty"`
+	ProtectedBytes   uint64                 `protobuf:"varint,2,opt,name=protected_bytes,json=protectedBytes,proto3" json:"protected_bytes,omitempty"`
+	RecoverableBytes uint64                 `protobuf:"varint,3,opt,name=recoverable_bytes,json=recoverableBytes,proto3" json:"recoverable_bytes,omitempty"`
+	QueuedBytes      uint64                 `protobuf:"varint,4,opt,name=queued_bytes,json=queuedBytes,proto3" json:"queued_bytes,omitempty"`
+	ChunkCount       uint64                 `protobuf:"varint,5,opt,name=chunk_count,json=chunkCount,proto3" json:"chunk_count,omitempty"`
+	QueuedCount      uint64                 `protobuf:"varint,6,opt,name=queued_count,json=queuedCount,proto3" json:"queued_count,omitempty"`
+	HardBytes        uint64                 `protobuf:"varint,7,opt,name=hard_bytes,json=hardBytes,proto3" json:"hard_bytes,omitempty"`
+	SoftBytes        uint64                 `protobuf:"varint,8,opt,name=soft_bytes,json=softBytes,proto3" json:"soft_bytes,omitempty"`
+	TargetBytes      uint64                 `protobuf:"varint,9,opt,name=target_bytes,json=targetBytes,proto3" json:"target_bytes,omitempty"`
+	ExpirySeconds    int64                  `protobuf:"varint,10,opt,name=expiry_seconds,json=expirySeconds,proto3" json:"expiry_seconds,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *GetStorageStatusResponse) Reset() {
+	*x = GetStorageStatusResponse{}
+	mi := &file_workspace_v1_workspace_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetStorageStatusResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetStorageStatusResponse) ProtoMessage() {}
+
+func (x *GetStorageStatusResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_workspace_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetStorageStatusResponse.ProtoReflect.Descriptor instead.
+func (*GetStorageStatusResponse) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *GetStorageStatusResponse) GetUsageBytes() uint64 {
+	if x != nil {
+		return x.UsageBytes
+	}
+	return 0
+}
+
+func (x *GetStorageStatusResponse) GetProtectedBytes() uint64 {
+	if x != nil {
+		return x.ProtectedBytes
+	}
+	return 0
+}
+
+func (x *GetStorageStatusResponse) GetRecoverableBytes() uint64 {
+	if x != nil {
+		return x.RecoverableBytes
+	}
+	return 0
+}
+
+func (x *GetStorageStatusResponse) GetQueuedBytes() uint64 {
+	if x != nil {
+		return x.QueuedBytes
+	}
+	return 0
+}
+
+func (x *GetStorageStatusResponse) GetChunkCount() uint64 {
+	if x != nil {
+		return x.ChunkCount
+	}
+	return 0
+}
+
+func (x *GetStorageStatusResponse) GetQueuedCount() uint64 {
+	if x != nil {
+		return x.QueuedCount
+	}
+	return 0
+}
+
+func (x *GetStorageStatusResponse) GetHardBytes() uint64 {
+	if x != nil {
+		return x.HardBytes
+	}
+	return 0
+}
+
+func (x *GetStorageStatusResponse) GetSoftBytes() uint64 {
+	if x != nil {
+		return x.SoftBytes
+	}
+	return 0
+}
+
+func (x *GetStorageStatusResponse) GetTargetBytes() uint64 {
+	if x != nil {
+		return x.TargetBytes
+	}
+	return 0
+}
+
+func (x *GetStorageStatusResponse) GetExpirySeconds() int64 {
+	if x != nil {
+		return x.ExpirySeconds
+	}
+	return 0
+}
+
+type PruneStorageRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DryRun        bool                   `protobuf:"varint,1,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
+	MaxCandidates uint32                 `protobuf:"varint,2,opt,name=max_candidates,json=maxCandidates,proto3" json:"max_candidates,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PruneStorageRequest) Reset() {
+	*x = PruneStorageRequest{}
+	mi := &file_workspace_v1_workspace_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneStorageRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneStorageRequest) ProtoMessage() {}
+
+func (x *PruneStorageRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_workspace_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneStorageRequest.ProtoReflect.Descriptor instead.
+func (*PruneStorageRequest) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *PruneStorageRequest) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
+func (x *PruneStorageRequest) GetMaxCandidates() uint32 {
+	if x != nil {
+		return x.MaxCandidates
+	}
+	return 0
+}
+
+type PruneCandidate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Digest        string                 `protobuf:"bytes,1,opt,name=digest,proto3" json:"digest,omitempty"`
+	Size          uint64                 `protobuf:"varint,2,opt,name=size,proto3" json:"size,omitempty"`
+	Score         float64                `protobuf:"fixed64,3,opt,name=score,proto3" json:"score,omitempty"`
+	Disposition   string                 `protobuf:"bytes,4,opt,name=disposition,proto3" json:"disposition,omitempty"`
+	LastUseUnix   int64                  `protobuf:"varint,5,opt,name=last_use_unix,json=lastUseUnix,proto3" json:"last_use_unix,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PruneCandidate) Reset() {
+	*x = PruneCandidate{}
+	mi := &file_workspace_v1_workspace_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneCandidate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneCandidate) ProtoMessage() {}
+
+func (x *PruneCandidate) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_workspace_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneCandidate.ProtoReflect.Descriptor instead.
+func (*PruneCandidate) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *PruneCandidate) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *PruneCandidate) GetSize() uint64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *PruneCandidate) GetScore() float64 {
+	if x != nil {
+		return x.Score
+	}
+	return 0
+}
+
+func (x *PruneCandidate) GetDisposition() string {
+	if x != nil {
+		return x.Disposition
+	}
+	return ""
+}
+
+func (x *PruneCandidate) GetLastUseUnix() int64 {
+	if x != nil {
+		return x.LastUseUnix
+	}
+	return 0
+}
+
+type PruneStorageResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Candidates    []*PruneCandidate      `protobuf:"bytes,1,rep,name=candidates,proto3" json:"candidates,omitempty"`
+	UsageBefore   uint64                 `protobuf:"varint,2,opt,name=usage_before,json=usageBefore,proto3" json:"usage_before,omitempty"`
+	UsageAfter    uint64                 `protobuf:"varint,3,opt,name=usage_after,json=usageAfter,proto3" json:"usage_after,omitempty"`
+	Truncated     bool                   `protobuf:"varint,4,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PruneStorageResponse) Reset() {
+	*x = PruneStorageResponse{}
+	mi := &file_workspace_v1_workspace_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneStorageResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneStorageResponse) ProtoMessage() {}
+
+func (x *PruneStorageResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_workspace_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneStorageResponse.ProtoReflect.Descriptor instead.
+func (*PruneStorageResponse) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_workspace_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *PruneStorageResponse) GetCandidates() []*PruneCandidate {
+	if x != nil {
+		return x.Candidates
+	}
+	return nil
+}
+
+func (x *PruneStorageResponse) GetUsageBefore() uint64 {
+	if x != nil {
+		return x.UsageBefore
+	}
+	return 0
+}
+
+func (x *PruneStorageResponse) GetUsageAfter() uint64 {
+	if x != nil {
+		return x.UsageAfter
+	}
+	return 0
+}
+
+func (x *PruneStorageResponse) GetTruncated() bool {
+	if x != nil {
+		return x.Truncated
+	}
+	return false
+}
+
 var File_workspace_v1_workspace_proto protoreflect.FileDescriptor
 
 const file_workspace_v1_workspace_proto_rawDesc = "" +
@@ -856,18 +1384,74 @@ const file_workspace_v1_workspace_proto_rawDesc = "" +
 	"\n" +
 	"generation\x18\x03 \x01(\x04R\n" +
 	"generation\"\x1d\n" +
-	"\x1bAcknowledgeManifestResponse*h\n" +
+	"\x1bAcknowledgeManifestResponse\"~\n" +
+	"\x15RejectManifestRequest\x12\x1c\n" +
+	"\tworkspace\x18\x01 \x01(\tR\tworkspace\x12'\n" +
+	"\x0fmanifest_digest\x18\x02 \x01(\tR\x0emanifestDigest\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x03 \x01(\x04R\n" +
+	"generation\"~\n" +
+	"\x15DeleteManifestRequest\x12\x1c\n" +
+	"\tworkspace\x18\x01 \x01(\tR\tworkspace\x12'\n" +
+	"\x0fmanifest_digest\x18\x02 \x01(\tR\x0emanifestDigest\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x03 \x01(\x04R\n" +
+	"generation\"\x9c\x01\n" +
+	"\x17ManifestControlResponse\x12'\n" +
+	"\x0fmanifest_digest\x18\x01 \x01(\tR\x0emanifestDigest\x12\x1e\n" +
+	"\n" +
+	"generation\x18\x02 \x01(\x04R\n" +
+	"generation\x128\n" +
+	"\x18current_manifest_present\x18\x03 \x01(\bR\x16currentManifestPresent\"\x19\n" +
+	"\x17GetStorageStatusRequest\"\x80\x03\n" +
+	"\x18GetStorageStatusResponse\x12\x1f\n" +
+	"\vusage_bytes\x18\x01 \x01(\x04R\n" +
+	"usageBytes\x12'\n" +
+	"\x0fprotected_bytes\x18\x02 \x01(\x04R\x0eprotectedBytes\x12+\n" +
+	"\x11recoverable_bytes\x18\x03 \x01(\x04R\x10recoverableBytes\x12!\n" +
+	"\fqueued_bytes\x18\x04 \x01(\x04R\vqueuedBytes\x12\x1f\n" +
+	"\vchunk_count\x18\x05 \x01(\x04R\n" +
+	"chunkCount\x12!\n" +
+	"\fqueued_count\x18\x06 \x01(\x04R\vqueuedCount\x12\x1d\n" +
+	"\n" +
+	"hard_bytes\x18\a \x01(\x04R\thardBytes\x12\x1d\n" +
+	"\n" +
+	"soft_bytes\x18\b \x01(\x04R\tsoftBytes\x12!\n" +
+	"\ftarget_bytes\x18\t \x01(\x04R\vtargetBytes\x12%\n" +
+	"\x0eexpiry_seconds\x18\n" +
+	" \x01(\x03R\rexpirySeconds\"U\n" +
+	"\x13PruneStorageRequest\x12\x17\n" +
+	"\adry_run\x18\x01 \x01(\bR\x06dryRun\x12%\n" +
+	"\x0emax_candidates\x18\x02 \x01(\rR\rmaxCandidates\"\x98\x01\n" +
+	"\x0ePruneCandidate\x12\x16\n" +
+	"\x06digest\x18\x01 \x01(\tR\x06digest\x12\x12\n" +
+	"\x04size\x18\x02 \x01(\x04R\x04size\x12\x14\n" +
+	"\x05score\x18\x03 \x01(\x01R\x05score\x12 \n" +
+	"\vdisposition\x18\x04 \x01(\tR\vdisposition\x12\"\n" +
+	"\rlast_use_unix\x18\x05 \x01(\x03R\vlastUseUnix\"\xbb\x01\n" +
+	"\x14PruneStorageResponse\x12A\n" +
+	"\n" +
+	"candidates\x18\x01 \x03(\v2!.daft.workspace.v1.PruneCandidateR\n" +
+	"candidates\x12!\n" +
+	"\fusage_before\x18\x02 \x01(\x04R\vusageBefore\x12\x1f\n" +
+	"\vusage_after\x18\x03 \x01(\x04R\n" +
+	"usageAfter\x12\x1c\n" +
+	"\ttruncated\x18\x04 \x01(\bR\ttruncated*h\n" +
 	"\tEntryKind\x12\x1a\n" +
 	"\x16ENTRY_KIND_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fENTRY_KIND_FILE\x10\x01\x12\x12\n" +
 	"\x0eENTRY_KIND_DIR\x10\x02\x12\x16\n" +
-	"\x12ENTRY_KIND_SYMLINK\x10\x032\xee\x03\n" +
+	"\x12ENTRY_KIND_SYMLINK\x10\x032\x8c\a\n" +
 	"\x10WorkspaceService\x12\\\n" +
 	"\vGetManifest\x12%.daft.workspace.v1.GetManifestRequest\x1a&.daft.workspace.v1.GetManifestResponse\x12S\n" +
 	"\bGetChunk\x12\".daft.workspace.v1.GetChunkRequest\x1a#.daft.workspace.v1.GetChunkResponse\x12\\\n" +
 	"\vPutManifest\x12%.daft.workspace.v1.PutManifestRequest\x1a&.daft.workspace.v1.PutManifestResponse\x12S\n" +
 	"\bPutChunk\x12\".daft.workspace.v1.PutChunkRequest\x1a#.daft.workspace.v1.PutChunkResponse\x12t\n" +
-	"\x13AcknowledgeManifest\x12-.daft.workspace.v1.AcknowledgeManifestRequest\x1a..daft.workspace.v1.AcknowledgeManifestResponseBKZIgithub.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
+	"\x13AcknowledgeManifest\x12-.daft.workspace.v1.AcknowledgeManifestRequest\x1a..daft.workspace.v1.AcknowledgeManifestResponse\x12f\n" +
+	"\x0eRejectManifest\x12(.daft.workspace.v1.RejectManifestRequest\x1a*.daft.workspace.v1.ManifestControlResponse\x12f\n" +
+	"\x0eDeleteManifest\x12(.daft.workspace.v1.DeleteManifestRequest\x1a*.daft.workspace.v1.ManifestControlResponse\x12k\n" +
+	"\x10GetStorageStatus\x12*.daft.workspace.v1.GetStorageStatusRequest\x1a+.daft.workspace.v1.GetStorageStatusResponse\x12_\n" +
+	"\fPruneStorage\x12&.daft.workspace.v1.PruneStorageRequest\x1a'.daft.workspace.v1.PruneStorageResponseBKZIgithub.com/richiejp/darkaifactory/internal/genpb/workspace/v1;workspacev1b\x06proto3"
 
 var (
 	file_workspace_v1_workspace_proto_rawDescOnce sync.Once
@@ -882,7 +1466,7 @@ func file_workspace_v1_workspace_proto_rawDescGZIP() []byte {
 }
 
 var file_workspace_v1_workspace_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_workspace_v1_workspace_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_workspace_v1_workspace_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_workspace_v1_workspace_proto_goTypes = []any{
 	(EntryKind)(0),                      // 0: daft.workspace.v1.EntryKind
 	(*ChunkRef)(nil),                    // 1: daft.workspace.v1.ChunkRef
@@ -898,6 +1482,14 @@ var file_workspace_v1_workspace_proto_goTypes = []any{
 	(*PutChunkResponse)(nil),            // 11: daft.workspace.v1.PutChunkResponse
 	(*AcknowledgeManifestRequest)(nil),  // 12: daft.workspace.v1.AcknowledgeManifestRequest
 	(*AcknowledgeManifestResponse)(nil), // 13: daft.workspace.v1.AcknowledgeManifestResponse
+	(*RejectManifestRequest)(nil),       // 14: daft.workspace.v1.RejectManifestRequest
+	(*DeleteManifestRequest)(nil),       // 15: daft.workspace.v1.DeleteManifestRequest
+	(*ManifestControlResponse)(nil),     // 16: daft.workspace.v1.ManifestControlResponse
+	(*GetStorageStatusRequest)(nil),     // 17: daft.workspace.v1.GetStorageStatusRequest
+	(*GetStorageStatusResponse)(nil),    // 18: daft.workspace.v1.GetStorageStatusResponse
+	(*PruneStorageRequest)(nil),         // 19: daft.workspace.v1.PruneStorageRequest
+	(*PruneCandidate)(nil),              // 20: daft.workspace.v1.PruneCandidate
+	(*PruneStorageResponse)(nil),        // 21: daft.workspace.v1.PruneStorageResponse
 }
 var file_workspace_v1_workspace_proto_depIdxs = []int32{
 	0,  // 0: daft.workspace.v1.FileEntry.kind:type_name -> daft.workspace.v1.EntryKind
@@ -905,21 +1497,30 @@ var file_workspace_v1_workspace_proto_depIdxs = []int32{
 	2,  // 2: daft.workspace.v1.Manifest.entries:type_name -> daft.workspace.v1.FileEntry
 	3,  // 3: daft.workspace.v1.GetManifestResponse.manifest:type_name -> daft.workspace.v1.Manifest
 	3,  // 4: daft.workspace.v1.PutManifestRequest.manifest:type_name -> daft.workspace.v1.Manifest
-	4,  // 5: daft.workspace.v1.WorkspaceService.GetManifest:input_type -> daft.workspace.v1.GetManifestRequest
-	6,  // 6: daft.workspace.v1.WorkspaceService.GetChunk:input_type -> daft.workspace.v1.GetChunkRequest
-	8,  // 7: daft.workspace.v1.WorkspaceService.PutManifest:input_type -> daft.workspace.v1.PutManifestRequest
-	10, // 8: daft.workspace.v1.WorkspaceService.PutChunk:input_type -> daft.workspace.v1.PutChunkRequest
-	12, // 9: daft.workspace.v1.WorkspaceService.AcknowledgeManifest:input_type -> daft.workspace.v1.AcknowledgeManifestRequest
-	5,  // 10: daft.workspace.v1.WorkspaceService.GetManifest:output_type -> daft.workspace.v1.GetManifestResponse
-	7,  // 11: daft.workspace.v1.WorkspaceService.GetChunk:output_type -> daft.workspace.v1.GetChunkResponse
-	9,  // 12: daft.workspace.v1.WorkspaceService.PutManifest:output_type -> daft.workspace.v1.PutManifestResponse
-	11, // 13: daft.workspace.v1.WorkspaceService.PutChunk:output_type -> daft.workspace.v1.PutChunkResponse
-	13, // 14: daft.workspace.v1.WorkspaceService.AcknowledgeManifest:output_type -> daft.workspace.v1.AcknowledgeManifestResponse
-	10, // [10:15] is the sub-list for method output_type
-	5,  // [5:10] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	20, // 5: daft.workspace.v1.PruneStorageResponse.candidates:type_name -> daft.workspace.v1.PruneCandidate
+	4,  // 6: daft.workspace.v1.WorkspaceService.GetManifest:input_type -> daft.workspace.v1.GetManifestRequest
+	6,  // 7: daft.workspace.v1.WorkspaceService.GetChunk:input_type -> daft.workspace.v1.GetChunkRequest
+	8,  // 8: daft.workspace.v1.WorkspaceService.PutManifest:input_type -> daft.workspace.v1.PutManifestRequest
+	10, // 9: daft.workspace.v1.WorkspaceService.PutChunk:input_type -> daft.workspace.v1.PutChunkRequest
+	12, // 10: daft.workspace.v1.WorkspaceService.AcknowledgeManifest:input_type -> daft.workspace.v1.AcknowledgeManifestRequest
+	14, // 11: daft.workspace.v1.WorkspaceService.RejectManifest:input_type -> daft.workspace.v1.RejectManifestRequest
+	15, // 12: daft.workspace.v1.WorkspaceService.DeleteManifest:input_type -> daft.workspace.v1.DeleteManifestRequest
+	17, // 13: daft.workspace.v1.WorkspaceService.GetStorageStatus:input_type -> daft.workspace.v1.GetStorageStatusRequest
+	19, // 14: daft.workspace.v1.WorkspaceService.PruneStorage:input_type -> daft.workspace.v1.PruneStorageRequest
+	5,  // 15: daft.workspace.v1.WorkspaceService.GetManifest:output_type -> daft.workspace.v1.GetManifestResponse
+	7,  // 16: daft.workspace.v1.WorkspaceService.GetChunk:output_type -> daft.workspace.v1.GetChunkResponse
+	9,  // 17: daft.workspace.v1.WorkspaceService.PutManifest:output_type -> daft.workspace.v1.PutManifestResponse
+	11, // 18: daft.workspace.v1.WorkspaceService.PutChunk:output_type -> daft.workspace.v1.PutChunkResponse
+	13, // 19: daft.workspace.v1.WorkspaceService.AcknowledgeManifest:output_type -> daft.workspace.v1.AcknowledgeManifestResponse
+	16, // 20: daft.workspace.v1.WorkspaceService.RejectManifest:output_type -> daft.workspace.v1.ManifestControlResponse
+	16, // 21: daft.workspace.v1.WorkspaceService.DeleteManifest:output_type -> daft.workspace.v1.ManifestControlResponse
+	18, // 22: daft.workspace.v1.WorkspaceService.GetStorageStatus:output_type -> daft.workspace.v1.GetStorageStatusResponse
+	21, // 23: daft.workspace.v1.WorkspaceService.PruneStorage:output_type -> daft.workspace.v1.PruneStorageResponse
+	15, // [15:24] is the sub-list for method output_type
+	6,  // [6:15] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_workspace_v1_workspace_proto_init() }
@@ -933,7 +1534,7 @@ func file_workspace_v1_workspace_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_workspace_v1_workspace_proto_rawDesc), len(file_workspace_v1_workspace_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   13,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

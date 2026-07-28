@@ -284,6 +284,11 @@ Landed:
   synchronous hard-limit admission reserves pending bytes, reclaims eligible
   recoverable chunks, marks affected manifests `NeedsRepush`, and refuses a
   write when protected data prevents enough reclamation.
+- The brokered Node workspace data plane exposes exact-generation manifest
+  rejection/deletion plus bounded CAS status and dry-run prune RPCs. The CLI
+  now provides `workspace changes reject` and `workspace storage status|prune`;
+  a brokered end-to-end test proves rejection restores the prior adopted
+  manifest and stale operations fail without weakening protection.
 
 Remaining:
 
@@ -291,8 +296,9 @@ Remaining:
   teardown snapshot control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
-- Add workspace disk/resource, changes reject, unfreeze, delete, storage
-  status, and dry-run prune CLI/RPC/MCP surfaces with bounded results.
+- Finish workspace status disk fields, retained-disk rematerialisation after
+  rejection, unfreeze/delete orchestration, and matching trusted MCP tools;
+  expose node-storage inspection there with the same bounded results.
 - Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,
   capacity, persistence, freeze, live-grow, and leak acceptance tests.
 

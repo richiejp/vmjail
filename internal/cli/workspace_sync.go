@@ -89,6 +89,180 @@ func newWorkspacePullCatalogCmd() *cobra.Command {
 	return cmd
 }
 
+func newWorkspaceChangesCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: changesSubName, Short: "Manage unadopted sandbox workspace changes"}
+	var opts workspaceClientOpts
+	var casDir string
+	reject := &cobra.Command{
+		Use: "reject", Short: "Reject exact unadopted sandbox manifests", Args: cobra.NoArgs, SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			mounts, err := dirLocalMounts()
+			if err != nil {
+				return err
+			}
+			return runNodeWorkspaceRPC(cmd, opts, casDir, "changes.reject", func(
+				ctx context.Context, client workspacev1connect.WorkspaceServiceClient, uuid string,
+			) error {
+				return rejectWorkspaceChanges(ctx, cmd.OutOrStdout(), client, uuid, mounts)
+			})
+		},
+	}
+	bindWorkspaceClientFlags(reject, &opts)
+	reject.Flags().StringVar(&casDir, "cas-dir", "", "override the local CAS directory used while opening the broker identity")
+	cmd.AddCommand(reject)
+	return cmd
+}
+
+func newWorkspaceStorageCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: storageSubName, Short: "Inspect the target node's workspace CAS"}
+	cmd.AddCommand(newWorkspaceStorageStatusCmd(), newWorkspaceStoragePruneCmd())
+	return cmd
+}
+
+func newWorkspaceStorageStatusCmd() *cobra.Command {
+	var opts workspaceClientOpts
+	var casDir string
+	cmd := &cobra.Command{
+		Use: "status", Short: "Show bounded target-node CAS accounting", Args: cobra.NoArgs, SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runNodeWorkspaceRPC(cmd, opts, casDir, "storage.status", func(
+				ctx context.Context, client workspacev1connect.WorkspaceServiceClient, _ string,
+			) error {
+				response, err := client.GetStorageStatus(ctx, connect.NewRequest(&workspacev1.GetStorageStatusRequest{}))
+				if err != nil {
+					return err
+				}
+				return writeWorkspaceStorageStatus(cmd.OutOrStdout(), response.Msg)
+			})
+		},
+	}
+	bindWorkspaceClientFlags(cmd, &opts)
+	cmd.Flags().StringVar(&casDir, "cas-dir", "", "override the local CAS directory used while opening the broker identity")
+	return cmd
+}
+
+func newWorkspaceStoragePruneCmd() *cobra.Command {
+	var opts workspaceClientOpts
+	var casDir string
+	var dryRun bool
+	var maxCandidates uint32
+	cmd := &cobra.Command{
+		Use: pruneSubName, Short: "Preview target-node CAS cleanup candidates", Args: cobra.NoArgs, SilenceErrors: true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if !dryRun {
+				return errors.New("daft workspace storage prune: --dry-run is required")
+			}
+			return runNodeWorkspaceRPC(cmd, opts, casDir, "storage.prune", func(
+				ctx context.Context, client workspacev1connect.WorkspaceServiceClient, _ string,
+			) error {
+				response, err := client.PruneStorage(ctx, connect.NewRequest(&workspacev1.PruneStorageRequest{DryRun: true, MaxCandidates: maxCandidates}))
+				if err != nil {
+					return err
+				}
+				return writeWorkspacePrunePlan(cmd.OutOrStdout(), response.Msg)
+			})
+		},
+	}
+	bindWorkspaceClientFlags(cmd, &opts)
+	cmd.Flags().StringVar(&casDir, "cas-dir", "", "override the local CAS directory used while opening the broker identity")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "preview candidates without deleting data (required)")
+	cmd.Flags().Uint32Var(&maxCandidates, "max-candidates", 50, "maximum candidates to return (1-200)")
+	return cmd
+}
+
+func rejectWorkspaceChanges(
+	ctx context.Context,
+	out io.Writer,
+	client workspacev1connect.WorkspaceServiceClient,
+	uuid string,
+	mounts []mountMapping,
+) error {
+	changed := 0
+	for _, mount := range mounts {
+		if mount.ReadOnly {
+			continue
+		}
+		key := workspace.SyncKey(uuid, mount.Remote)
+		current, err := client.GetManifest(ctx, connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: key}))
+		if err != nil {
+			return fmt.Errorf("daft workspace changes reject: inspect %s: %w", mount.Remote, err)
+		}
+		response, err := client.RejectManifest(ctx, connect.NewRequest(&workspacev1.RejectManifestRequest{
+			Workspace: key, ManifestDigest: current.Msg.GetManifestDigest(), Generation: current.Msg.GetGeneration(),
+		}))
+		if err != nil {
+			return fmt.Errorf("daft workspace changes reject: %s: %w", mount.Remote, err)
+		}
+		changed++
+		if response.Msg.GetCurrentManifestPresent() {
+			_, _ = fmt.Fprintf(out, "rejected %s; restored generation %d (%s)\n", mount.Remote, response.Msg.GetGeneration(), response.Msg.GetManifestDigest())
+		} else {
+			_, _ = fmt.Fprintf(out, "rejected %s; no prior client manifest\n", mount.Remote)
+		}
+	}
+	if changed == 0 {
+		_, _ = fmt.Fprintln(out, "no writable mounts recorded in ./.daft/config.json")
+	}
+	return nil
+}
+
+func writeWorkspaceStorageStatus(out io.Writer, status *workspacev1.GetStorageStatusResponse) error {
+	_, err := fmt.Fprintf(out, "usage=%d protected=%d recoverable=%d queued=%d chunks=%d hard=%d soft=%d target=%d expiry_seconds=%d\n",
+		status.GetUsageBytes(), status.GetProtectedBytes(), status.GetRecoverableBytes(), status.GetQueuedBytes(), status.GetChunkCount(),
+		status.GetHardBytes(), status.GetSoftBytes(), status.GetTargetBytes(), status.GetExpirySeconds())
+	return err
+}
+
+func writeWorkspacePrunePlan(out io.Writer, response *workspacev1.PruneStorageResponse) error {
+	for _, candidate := range response.GetCandidates() {
+		_, _ = fmt.Fprintf(out, "%s size=%d score=%.6f disposition=%s last_use=%d\n",
+			candidate.GetDigest(), candidate.GetSize(), candidate.GetScore(), candidate.GetDisposition(), candidate.GetLastUseUnix())
+	}
+	_, err := fmt.Fprintf(out, "usage_before=%d usage_after=%d candidates=%d truncated=%t\n",
+		response.GetUsageBefore(), response.GetUsageAfter(), len(response.GetCandidates()), response.GetTruncated())
+	return err
+}
+
+func runNodeWorkspaceRPC(
+	cmd *cobra.Command,
+	opts workspaceClientOpts,
+	casDir, verb string,
+	run func(context.Context, workspacev1connect.WorkspaceServiceClient, string) error,
+) error {
+	handle, err := opts.resolveHandle()
+	if err != nil {
+		return err
+	}
+	orchestrator, err := resolveOrchestrator(opts.orchestrator, opts.configDir)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(cmd.Context(), opts.timeout)
+	defer cancel()
+	tracer, _ := tracerForCommand(ctx)
+	catalog, _, err := dialWorkspaceCatalog(opts.configDir, orchestrator, tracer)
+	if err != nil {
+		return err
+	}
+	uuid, nodeFP, err := resolveSyncTarget(ctx, catalog, handle)
+	if err != nil {
+		return err
+	}
+	clientContext, err := openClientCtx(opts.configDir, casDir, opts.orchestrator)
+	if err != nil {
+		return err
+	}
+	client, closeRelay, err := dialNodeWorkspaceService(ctx, clientContext, orchestrator, uuid, nodeFP, tracer)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = closeRelay() }()
+	if err := run(ctx, client, uuid); err != nil {
+		return fmt.Errorf("daft workspace %s: %w", verb, err)
+	}
+	return nil
+}
+
 // runWorkspaceSync drives push or pull for every dir-local mount of
 // the cwd's workspace. It resolves the workspace's target node from
 // the orchestrator, opens a broker relay to that node's CAS-backed

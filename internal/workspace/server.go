@@ -45,6 +45,11 @@ type Server struct {
 	live   map[string]liveMount
 }
 
+const (
+	defaultPruneCandidates = 50
+	maxPruneCandidates     = 200
+)
+
 type manifestState struct {
 	digest     string
 	generation uint64
@@ -446,6 +451,142 @@ func (s *Server) AcknowledgeManifest(
 		}
 	}
 	return connect.NewResponse(&workspacev1.AcknowledgeManifestResponse{}), nil
+}
+
+func (s *Server) RejectManifest(
+	_ context.Context,
+	req *connect.Request[workspacev1.RejectManifestRequest],
+) (*connect.Response[workspacev1.ManifestControlResponse], error) {
+	name := req.Msg.GetWorkspace()
+	digest := req.Msg.GetManifestDigest()
+	generation := req.Msg.GetGeneration()
+	if err := s.requireExactIndexedManifest(name, digest, generation); err != nil {
+		return nil, err
+	}
+	indexed, err := s.index.Manifest(name, digest, generation)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	if indexed.Origin != casindex.OriginSandbox || indexed.Recoverability != casindex.RecoverabilityProtected {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("workspace: manifest has no unadopted sandbox changes"))
+	}
+	if err := s.index.Reject(name, digest, generation); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	state, present, err := s.reloadCurrentManifest(name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&workspacev1.ManifestControlResponse{
+		ManifestDigest: state.digest, Generation: state.generation, CurrentManifestPresent: present,
+	}), nil
+}
+
+func (s *Server) DeleteManifest(
+	_ context.Context,
+	req *connect.Request[workspacev1.DeleteManifestRequest],
+) (*connect.Response[workspacev1.ManifestControlResponse], error) {
+	name := req.Msg.GetWorkspace()
+	if err := s.requireExactIndexedManifest(name, req.Msg.GetManifestDigest(), req.Msg.GetGeneration()); err != nil {
+		return nil, err
+	}
+	if err := s.index.DeleteWorkspace(name); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	s.mu.Lock()
+	delete(s.manifests, name)
+	delete(s.states, name)
+	if pending, exists := s.pending[name]; exists {
+		s.reservedBytes -= min(s.reservedBytes, pending.reserved)
+		delete(s.pending, name)
+	}
+	s.mu.Unlock()
+	return connect.NewResponse(&workspacev1.ManifestControlResponse{}), nil
+}
+
+func (s *Server) GetStorageStatus(
+	_ context.Context,
+	_ *connect.Request[workspacev1.GetStorageStatusRequest],
+) (*connect.Response[workspacev1.GetStorageStatusResponse], error) {
+	status, err := s.StorageStatus()
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, err)
+	}
+	return connect.NewResponse(&workspacev1.GetStorageStatusResponse{
+		UsageBytes: status.UsageBytes, ProtectedBytes: status.ProtectedBytes,
+		RecoverableBytes: status.RecoverableBytes, QueuedBytes: status.QueuedBytes,
+		ChunkCount: uint64(status.ChunkCount), QueuedCount: uint64(status.QueuedCount), //nolint:gosec // counts originate from non-negative slice lengths.
+		HardBytes: status.Policy.HardBytes, SoftBytes: status.Policy.SoftBytes,
+		TargetBytes: status.Policy.TargetBytes, ExpirySeconds: int64(status.Policy.Expiry.Seconds()),
+	}), nil
+}
+
+func (s *Server) PruneStorage(
+	ctx context.Context,
+	req *connect.Request[workspacev1.PruneStorageRequest],
+) (*connect.Response[workspacev1.PruneStorageResponse], error) {
+	if !req.Msg.GetDryRun() {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("workspace: public prune is dry-run only"))
+	}
+	limit := int(req.Msg.GetMaxCandidates())
+	if limit == 0 {
+		limit = defaultPruneCandidates
+	}
+	if limit > maxPruneCandidates {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("workspace: max_candidates exceeds %d", maxPruneCandidates))
+	}
+	plan, err := s.Prune(ctx, true)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, err)
+	}
+	response := &workspacev1.PruneStorageResponse{UsageBefore: plan.UsageBefore, UsageAfter: plan.UsageAfter}
+	response.Truncated = len(plan.Candidates) > limit
+	for _, candidate := range plan.Candidates[:min(len(plan.Candidates), limit)] {
+		response.Candidates = append(response.Candidates, &workspacev1.PruneCandidate{
+			Digest: candidate.Digest, Size: candidate.Size, Score: candidate.Score,
+			Disposition: string(candidate.Disposition), LastUseUnix: candidate.LastUse.Unix(),
+		})
+	}
+	return connect.NewResponse(response), nil
+}
+
+func (s *Server) requireExactIndexedManifest(name, digest string, generation uint64) error {
+	if s.index == nil {
+		return connect.NewError(connect.CodeUnimplemented, errors.New("workspace: durable index unavailable"))
+	}
+	s.mu.RLock()
+	state, exists := s.states[name]
+	s.mu.RUnlock()
+	if name == "" || digest == "" || generation == 0 || !exists || state.digest != digest || state.generation != generation {
+		return connect.NewError(connect.CodeFailedPrecondition, casindex.ErrStaleManifest)
+	}
+	return nil
+}
+
+func (s *Server) reloadCurrentManifest(name string) (manifestState, bool, error) {
+	current, err := s.index.CurrentManifests()
+	if err != nil {
+		return manifestState{}, false, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.manifests, name)
+	delete(s.states, name)
+	for index := range current {
+		indexed := &current[index]
+		if indexed.SyncKey != name {
+			continue
+		}
+		manifest := &workspacev1.Manifest{}
+		if err := proto.Unmarshal(indexed.Payload, manifest); err != nil {
+			return manifestState{}, false, fmt.Errorf("workspace: decode restored manifest %q: %w", name, err)
+		}
+		state := manifestState{digest: indexed.Digest, generation: indexed.Generation}
+		s.manifests[name] = manifest
+		s.states[name] = state
+		return state, true, nil
+	}
+	return manifestState{}, false, nil
 }
 
 func (s *Server) stageClientManifest(ctx context.Context, name string, manifest *workspacev1.Manifest, missing []string) (manifestState, error) {

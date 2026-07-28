@@ -98,12 +98,36 @@ func TestWorkspaceCatalogSubcommandsRegistered(t *testing.T) {
 	wantVerbs := []string{
 		createSubName, statusSubName, listSubName, imageSubName, targetSubName,
 		mountSubName, envSubName, portSubName, validateSubName, launchSubName, stopSubName,
-		acquireSubName, releaseSubName,
+		acquireSubName, releaseSubName, changesSubName, storageSubName,
 	}
 	for _, v := range wantVerbs {
 		if !strings.Contains(stdout, v) {
 			t.Errorf("workspace --help missing %q\nfull help:\n%s", v, stdout)
 		}
+	}
+}
+
+func TestWorkspaceStoragePruneRequiresDryRun(t *testing.T) {
+	_, _, err := runCmd(t, "workspace", storageSubName, pruneSubName)
+	if err == nil || !strings.Contains(err.Error(), "--dry-run is required") {
+		t.Fatalf("workspace storage prune error = %v", err)
+	}
+}
+
+func TestWorkspaceControlCommandsRejectLocalConfigurationErrors(t *testing.T) {
+	if _, _, err := runCmd(t, "workspace", storageSubName, statusSubName, nameFlag, "x", "--uuid", "y"); err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("conflicting control handle = %v", err)
+	}
+	project := t.TempDir()
+	t.Chdir(project)
+	if err := os.MkdirAll(filepath.Join(project, ".daft"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".daft", "config.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runCmd(t, "workspace", changesSubName, "reject"); err == nil {
+		t.Fatal("changes reject accepted corrupt project configuration")
 	}
 }
 

@@ -97,6 +97,16 @@ service WorkspaceService {
   // materialised the exact manifest. Digest + generation prevent a stale pull
   // from adopting newer sandbox writes.
   rpc AcknowledgeManifest(AcknowledgeManifestRequest) returns (AcknowledgeManifestResponse);
+  // RejectManifest discards one exact unadopted generation and restores the
+  // newest prior client-recoverable generation, if present.
+  rpc RejectManifest(RejectManifestRequest) returns (ManifestControlResponse);
+  // DeleteManifest releases protection for one exact current generation.
+  rpc DeleteManifest(DeleteManifestRequest) returns (ManifestControlResponse);
+  // GetStorageStatus returns bounded aggregate CAS accounting and policy.
+  rpc GetStorageStatus(GetStorageStatusRequest) returns (GetStorageStatusResponse);
+  // PruneStorage plans cleanup. Public callers are intentionally dry-run only;
+  // the node's durable worker owns destructive cleanup.
+  rpc PruneStorage(PruneStorageRequest) returns (PruneStorageResponse);
 }
 
 message GetManifestRequest {
@@ -149,3 +159,56 @@ message AcknowledgeManifestRequest {
 }
 
 message AcknowledgeManifestResponse {}
+
+message RejectManifestRequest {
+  string workspace = 1;
+  string manifest_digest = 2;
+  uint64 generation = 3;
+}
+
+message DeleteManifestRequest {
+  string workspace = 1;
+  string manifest_digest = 2;
+  uint64 generation = 3;
+}
+
+message ManifestControlResponse {
+  string manifest_digest = 1;
+  uint64 generation = 2;
+  bool current_manifest_present = 3;
+}
+
+message GetStorageStatusRequest {}
+
+message GetStorageStatusResponse {
+  uint64 usage_bytes = 1;
+  uint64 protected_bytes = 2;
+  uint64 recoverable_bytes = 3;
+  uint64 queued_bytes = 4;
+  uint64 chunk_count = 5;
+  uint64 queued_count = 6;
+  uint64 hard_bytes = 7;
+  uint64 soft_bytes = 8;
+  uint64 target_bytes = 9;
+  int64 expiry_seconds = 10;
+}
+
+message PruneStorageRequest {
+  bool dry_run = 1;
+  uint32 max_candidates = 2;
+}
+
+message PruneCandidate {
+  string digest = 1;
+  uint64 size = 2;
+  double score = 3;
+  string disposition = 4;
+  int64 last_use_unix = 5;
+}
+
+message PruneStorageResponse {
+  repeated PruneCandidate candidates = 1;
+  uint64 usage_before = 2;
+  uint64 usage_after = 3;
+  bool truncated = 4;
+}

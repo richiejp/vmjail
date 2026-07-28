@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -266,8 +267,24 @@ func TestIndexedServerReportsClosedIndexErrors(t *testing.T) {
 	if _, err := server.StorageStatus(); err == nil {
 		t.Fatal("storage status read from closed index")
 	}
+	if _, err := server.GetStorageStatus(t.Context(), connect.NewRequest(&workspacev1.GetStorageStatusRequest{})); connect.CodeOf(err) != connect.CodeUnavailable {
+		t.Fatalf("storage status RPC on closed index = %v", err)
+	}
 	if _, err := server.Prune(t.Context(), true); err == nil {
 		t.Fatal("closed index dry-run prune succeeded")
+	}
+	if _, err := server.PruneStorage(t.Context(), connect.NewRequest(&workspacev1.PruneStorageRequest{DryRun: true})); connect.CodeOf(err) != connect.CodeUnavailable {
+		t.Fatalf("storage prune RPC on closed index = %v", err)
+	}
+	if _, err := server.RejectManifest(t.Context(), connect.NewRequest(&workspacev1.RejectManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: put.Msg.GetManifestDigest(), Generation: put.Msg.GetGeneration(),
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("manifest rejection on closed index = %v", err)
+	}
+	if _, err := server.DeleteManifest(t.Context(), connect.NewRequest(&workspacev1.DeleteManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: put.Msg.GetManifestDigest(), Generation: put.Msg.GetGeneration(),
+	})); connect.CodeOf(err) != connect.CodeInternal {
+		t.Fatalf("manifest deletion on closed index = %v", err)
 	}
 	if _, err := server.stageClientManifest(t.Context(), "pending", &workspacev1.Manifest{}, []string{strings.Repeat("c", 64)}); err == nil {
 		t.Fatal("pending manifest reserved through closed cleanup index")
@@ -352,6 +369,156 @@ func TestIndexedServerPendingManifestBranches(t *testing.T) {
 		Workspace: "invalid", Manifest: &workspacev1.Manifest{Entries: []*workspacev1.FileEntry{{Chunks: []*workspacev1.ChunkRef{{Digest: "bad"}}}}},
 	})); err == nil {
 		t.Fatal("invalid manifest digest accepted")
+	}
+}
+
+func TestManifestControlRPCsAreExactAndRestorePriorClientState(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cas")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientManifest := &workspacev1.Manifest{Version: 1}
+	clientState, err := server.publishManifest(testSyncKey, clientManifest, casindex.OriginClientUpload, casindex.RecoverabilityRecoverable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandboxManifest := &workspacev1.Manifest{Version: 2}
+	sandboxState, err := server.publishManifest(testSyncKey, sandboxManifest, casindex.OriginSandbox, casindex.RecoverabilityProtected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.RejectManifest(t.Context(), connect.NewRequest(&workspacev1.RejectManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: clientState.digest, Generation: clientState.generation,
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("stale rejection = %v", err)
+	}
+	rejected, err := server.RejectManifest(t.Context(), connect.NewRequest(&workspacev1.RejectManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: sandboxState.digest, Generation: sandboxState.generation,
+	}))
+	if err != nil || !rejected.Msg.GetCurrentManifestPresent() || rejected.Msg.GetManifestDigest() != clientState.digest || rejected.Msg.GetGeneration() != clientState.generation {
+		t.Fatalf("rejection response = %#v, %v", rejected, err)
+	}
+	got, err := server.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: testSyncKey}))
+	if err != nil || got.Msg.GetManifest().GetVersion() != clientManifest.GetVersion() {
+		t.Fatalf("restored manifest = %#v, %v", got, err)
+	}
+	if _, err := server.RejectManifest(t.Context(), connect.NewRequest(&workspacev1.RejectManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: clientState.digest, Generation: clientState.generation,
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("client manifest rejection = %v", err)
+	}
+	if _, err := server.DeleteManifest(t.Context(), connect.NewRequest(&workspacev1.DeleteManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: sandboxState.digest, Generation: sandboxState.generation,
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("stale deletion = %v", err)
+	}
+	if _, err := server.stageClientManifest(t.Context(), testSyncKey, &workspacev1.Manifest{Version: 3}, []string{strings.Repeat("c", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := server.DeleteManifest(t.Context(), connect.NewRequest(&workspacev1.DeleteManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: clientState.digest, Generation: clientState.generation,
+	}))
+	if err != nil || deleted.Msg.GetCurrentManifestPresent() {
+		t.Fatalf("deletion response = %#v, %v", deleted, err)
+	}
+	if _, err := server.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: testSyncKey})); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("deleted manifest remains visible: %v", err)
+	}
+	plain, _ := NewServer(store)
+	if _, err := plain.DeleteManifest(t.Context(), connect.NewRequest(&workspacev1.DeleteManifestRequest{})); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("plain manifest deletion = %v", err)
+	}
+}
+
+func TestRejectManifestWithoutPriorGenerationClearsCurrent(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cas")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.publishManifest("aaa", &workspacev1.Manifest{Version: 1}, casindex.OriginClientUpload, casindex.RecoverabilityRecoverable); err != nil {
+		t.Fatal(err)
+	}
+	state, err := server.publishManifest("only", &workspacev1.Manifest{Version: 1}, casindex.OriginSandbox, casindex.RecoverabilityProtected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := server.RejectManifest(t.Context(), connect.NewRequest(&workspacev1.RejectManifestRequest{
+		Workspace: "only", ManifestDigest: state.digest, Generation: state.generation,
+	}))
+	if err != nil || response.Msg.GetCurrentManifestPresent() {
+		t.Fatalf("reject without prior = %#v, %v", response, err)
+	}
+}
+
+func TestStorageControlRPCsAreBoundedAndDryRunOnly(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "cas")
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	mustWriteFile(t, filepath.Join(source, "candidate-a"), []byte("candidate-a"))
+	mustWriteFile(t, filepath.Join(source, "candidate-b"), []byte("candidate-b"))
+	manifest, err := BuildManifest(source, store, BuildOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.publishManifest("recoverable", manifest, casindex.OriginClientUpload, casindex.RecoverabilityRecoverable); err != nil {
+		t.Fatal(err)
+	}
+	server.cleanup, err = casindex.NewWorker(casindex.WorkerConfig{
+		Index: index, Policy: casindex.Policy{HardBytes: 40, SoftBytes: 8, TargetBytes: 1, Expiry: time.Hour},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err := server.GetStorageStatus(t.Context(), connect.NewRequest(&workspacev1.GetStorageStatusRequest{}))
+	if err != nil || status.Msg.GetHardBytes() != 40 || status.Msg.GetUsageBytes() == 0 || status.Msg.GetExpirySeconds() <= 0 {
+		t.Fatalf("storage status = %#v, %v", status, err)
+	}
+	if _, err := server.PruneStorage(t.Context(), connect.NewRequest(&workspacev1.PruneStorageRequest{})); connect.CodeOf(err) != connect.CodePermissionDenied {
+		t.Fatalf("destructive public prune = %v", err)
+	}
+	if _, err := server.PruneStorage(t.Context(), connect.NewRequest(&workspacev1.PruneStorageRequest{
+		DryRun: true, MaxCandidates: maxPruneCandidates + 1,
+	})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("unbounded prune = %v", err)
+	}
+	if plan, err := server.PruneStorage(t.Context(), connect.NewRequest(&workspacev1.PruneStorageRequest{DryRun: true})); err != nil || len(plan.Msg.GetCandidates()) != 2 {
+		t.Fatalf("default bounded plan = %#v, %v", plan, err)
+	}
+	plan, err := server.PruneStorage(t.Context(), connect.NewRequest(&workspacev1.PruneStorageRequest{DryRun: true, MaxCandidates: 1}))
+	if err != nil || !plan.Msg.GetTruncated() || len(plan.Msg.GetCandidates()) != 1 || plan.Msg.GetCandidates()[0].GetDisposition() != string(casindex.DispositionActive) {
+		t.Fatalf("dry-run plan = %#v, %v", plan, err)
 	}
 }
 

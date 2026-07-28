@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/brokerclient"
 	"github.com/richiejp/darkaifactory/internal/cas"
+	"github.com/richiejp/darkaifactory/internal/casindex"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
@@ -33,9 +35,11 @@ const workRemote = "/work"
 // workspace catalog + broker matcher, a node hosting a CAS-backed
 // WorkspaceService over the broker, and an on-disk client identity.
 type syncE2ERig struct {
-	orchURL   string
-	clientDir string
-	nodeFP    string
+	orchURL    string
+	clientDir  string
+	nodeFP     string
+	nodeServer *workspace.Server
+	nodeIndex  *casindex.Index
 }
 
 // newSyncE2ERig stands up the orchestrator, the broker-served node,
@@ -78,9 +82,9 @@ func newSyncE2ERig(t *testing.T) *syncE2ERig {
 		t.Fatalf("client approve orchestrator: %v", err)
 	}
 
-	startSyncNode(t, orchURL, nodeID, srvID, srv)
+	nodeServer, nodeIndex := startSyncNode(t, orchURL, nodeID, srvID, srv)
 
-	return &syncE2ERig{orchURL: orchURL, clientDir: clientDir, nodeFP: nodeID.Fingerprint().String()}
+	return &syncE2ERig{orchURL: orchURL, clientDir: clientDir, nodeFP: nodeID.Fingerprint().String(), nodeServer: nodeServer, nodeIndex: nodeIndex}
 }
 
 func startSyncOrchestrator(t *testing.T, srvID *identity.Identity, srvStore *identity.PeerStore) *orchestrator.Server {
@@ -115,7 +119,7 @@ func startSyncOrchestrator(t *testing.T, srvID *identity.Identity, srvStore *ide
 // under the node's own fingerprint. Blocks until the sandbox
 // registration lands in the matcher so the client's RequestAttach
 // won't race it.
-func startSyncNode(t *testing.T, orchURL string, nodeID, srvID *identity.Identity, srv *orchestrator.Server) {
+func startSyncNode(t *testing.T, orchURL string, nodeID, srvID *identity.Identity, srv *orchestrator.Server) (*workspace.Server, *casindex.Index) {
 	t.Helper()
 	nodePeers, err := identity.OpenPeerStore(filepath.Join(t.TempDir(), "node-peers.json"))
 	if err != nil {
@@ -124,11 +128,17 @@ func startSyncNode(t *testing.T, orchURL string, nodeID, srvID *identity.Identit
 	if err := nodePeers.Add(identity.Peer{Fingerprint: srvID.Fingerprint()}); err != nil {
 		t.Fatalf("node approve srv: %v", err)
 	}
-	store, err := cas.Open(filepath.Join(t.TempDir(), "node-cas"))
+	root := filepath.Join(t.TempDir(), "node-cas")
+	store, err := cas.Open(root)
 	if err != nil {
 		t.Fatalf("cas.Open node: %v", err)
 	}
-	wsServer, err := workspace.NewServer(store)
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatalf("casindex.Open node: %v", err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	wsServer, err := workspace.NewIndexedServer(store, index)
 	if err != nil {
 		t.Fatalf("workspace.NewServer: %v", err)
 	}
@@ -159,11 +169,12 @@ func startSyncNode(t *testing.T, orchURL string, nodeID, srvID *identity.Identit
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, sandboxes := srv.Matcher().Counts(); sandboxes >= 1 {
-			return
+			return wsServer, index
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("node sandbox registration never landed in the matcher")
+	return nil, nil
 }
 
 // syncCmd builds a throwaway cobra command carrying ctx + an output
@@ -182,6 +193,8 @@ func syncCmd(ctx context.Context) (*cobra.Command, *bytes.Buffer) {
 // pulled back into a fresh local dir (with a fresh client CAS, so the
 // pull genuinely fetches chunks from the node). A read-only mount is
 // skipped on pull.
+//
+//nolint:funlen // One brokered lifecycle keeps the exact pushed/adopted generations needed by reject assertions.
 func TestWorkspacePushPullRoundTrip(t *testing.T) {
 	rig := newSyncE2ERig(t)
 	const wsName = "sync-rt"
@@ -247,6 +260,48 @@ func TestWorkspacePushPullRoundTrip(t *testing.T) {
 	}
 	if string(got) != fileBody {
 		t.Errorf("pulled body = %q, want %q", got, fileBody)
+	}
+
+	statusOut, _, err := runDaft(t, append([]string{workspaceCmdName, storageSubName, statusSubName}, commonArgs...)...)
+	if err != nil || !strings.Contains(statusOut, "hard=") || !strings.Contains(statusOut, "protected=") {
+		t.Fatalf("storage status = %q, %v", statusOut, err)
+	}
+	pruneOut, _, err := runDaft(t, append([]string{workspaceCmdName, storageSubName, pruneSubName, "--dry-run"}, commonArgs...)...)
+	if err != nil || !strings.Contains(pruneOut, "usage_before=") {
+		t.Fatalf("storage prune = %q, %v", pruneOut, err)
+	}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, storageSubName, pruneSubName, "--dry-run", "--max-candidates", "201"}, commonArgs...)...); err == nil {
+		t.Fatal("unbounded storage prune succeeded")
+	}
+
+	var writableKey string
+	for _, key := range rig.nodeServer.Names() {
+		if strings.HasSuffix(key, "\x00"+workRemote) {
+			writableKey = key
+			break
+		}
+	}
+	if writableKey == "" {
+		t.Fatal("writable sync key not published")
+	}
+	live := t.TempDir()
+	if err := os.WriteFile(filepath.Join(live, "sandbox.txt"), []byte("unadopted"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.nodeServer.SetLiveMount(writableKey, live)
+	if _, err := rig.nodeServer.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: writableKey})); err != nil {
+		t.Fatal(err)
+	}
+	rig.nodeServer.ClearLiveMount(writableKey)
+	rejectOut, _, err := runDaft(t, append([]string{workspaceCmdName, changesSubName, "reject"}, commonArgs...)...)
+	if err != nil || !strings.Contains(rejectOut, "restored generation") {
+		t.Fatalf("changes reject = %q, %v", rejectOut, err)
+	}
+	if err := rig.nodeIndex.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, storageSubName, statusSubName}, commonArgs...)...); err == nil {
+		t.Fatal("storage status succeeded after node index close")
 	}
 }
 
@@ -345,6 +400,35 @@ type erroringWorkspaceService struct {
 	workspacev1connect.UnimplementedWorkspaceServiceHandler
 }
 
+type controlWorkspaceService struct {
+	workspacev1connect.UnimplementedWorkspaceServiceHandler
+	rejectErr error
+	present   bool
+}
+
+func (s controlWorkspaceService) GetManifest(context.Context, *connect.Request[workspacev1.GetManifestRequest]) (*connect.Response[workspacev1.GetManifestResponse], error) {
+	return connect.NewResponse(&workspacev1.GetManifestResponse{ManifestDigest: strings.Repeat("a", 64), Generation: 2}), nil
+}
+
+func (s controlWorkspaceService) RejectManifest(context.Context, *connect.Request[workspacev1.RejectManifestRequest]) (*connect.Response[workspacev1.ManifestControlResponse], error) {
+	if s.rejectErr != nil {
+		return nil, s.rejectErr
+	}
+	return connect.NewResponse(&workspacev1.ManifestControlResponse{
+		CurrentManifestPresent: s.present, ManifestDigest: strings.Repeat("b", 64), Generation: 1,
+	}), nil
+}
+
+func workspaceClientForHandler(t *testing.T, handler workspacev1connect.WorkspaceServiceHandler) workspacev1connect.WorkspaceServiceClient {
+	t.Helper()
+	mux := http.NewServeMux()
+	path, connectHandler := workspacev1connect.NewWorkspaceServiceHandler(handler)
+	mux.Handle(path, connectHandler)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	return workspacev1connect.NewWorkspaceServiceClient(server.Client(), server.URL)
+}
+
 func (erroringWorkspaceService) PutManifest(context.Context, *connect.Request[workspacev1.PutManifestRequest]) (*connect.Response[workspacev1.PutManifestResponse], error) {
 	return nil, connect.NewError(connect.CodeInternal, errors.New("boom"))
 }
@@ -354,13 +438,38 @@ func (erroringWorkspaceService) GetManifest(context.Context, *connect.Request[wo
 }
 
 func erroringWorkspaceClient(t *testing.T) workspacev1connect.WorkspaceServiceClient {
-	t.Helper()
-	mux := http.NewServeMux()
-	path, h := workspacev1connect.NewWorkspaceServiceHandler(erroringWorkspaceService{})
-	mux.Handle(path, h)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return workspacev1connect.NewWorkspaceServiceClient(srv.Client(), srv.URL)
+	return workspaceClientForHandler(t, erroringWorkspaceService{})
+}
+
+func TestRejectWorkspaceChangesBranchesAndStorageFormatting(t *testing.T) {
+	var output bytes.Buffer
+	if err := rejectWorkspaceChanges(t.Context(), &output, nil, "uuid", []mountMapping{{ReadOnly: true}}); err != nil || !strings.Contains(output.String(), "no writable mounts") {
+		t.Fatalf("read-only rejection = %q, %v", output.String(), err)
+	}
+	if err := rejectWorkspaceChanges(t.Context(), io.Discard, erroringWorkspaceClient(t), "uuid", []mountMapping{{Remote: workRemote}}); err == nil || !strings.Contains(err.Error(), "inspect") {
+		t.Fatalf("inspection error = %v", err)
+	}
+	rejectErr := connect.NewError(connect.CodeUnavailable, errors.New("reject failed"))
+	client := workspaceClientForHandler(t, controlWorkspaceService{rejectErr: rejectErr})
+	if err := rejectWorkspaceChanges(t.Context(), io.Discard, client, "uuid", []mountMapping{{Remote: workRemote}}); err == nil || !strings.Contains(err.Error(), "reject failed") {
+		t.Fatalf("rejection error = %v", err)
+	}
+	output.Reset()
+	client = workspaceClientForHandler(t, controlWorkspaceService{})
+	if err := rejectWorkspaceChanges(t.Context(), &output, client, "uuid", []mountMapping{{Remote: workRemote}}); err != nil || !strings.Contains(output.String(), "no prior client manifest") {
+		t.Fatalf("no-prior rejection = %q, %v", output.String(), err)
+	}
+	output.Reset()
+	if err := writeWorkspaceStorageStatus(&output, &workspacev1.GetStorageStatusResponse{UsageBytes: 7, HardBytes: 10}); err != nil || !strings.Contains(output.String(), "usage=7") {
+		t.Fatalf("status output = %q, %v", output.String(), err)
+	}
+	output.Reset()
+	if err := writeWorkspacePrunePlan(&output, &workspacev1.PruneStorageResponse{
+		Candidates:  []*workspacev1.PruneCandidate{{Digest: "digest", Size: 3, Score: 0.5, Disposition: "rejected", LastUseUnix: 4}},
+		UsageBefore: 10, UsageAfter: 7, Truncated: true,
+	}); err != nil || !strings.Contains(output.String(), "digest size=3") || !strings.Contains(output.String(), "truncated=true") {
+		t.Fatalf("prune output = %q, %v", output.String(), err)
+	}
 }
 
 // TestSyncMountsPushAndPullRPCErrors covers the RPC-error returns of

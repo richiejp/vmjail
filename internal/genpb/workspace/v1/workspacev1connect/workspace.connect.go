@@ -58,6 +58,18 @@ const (
 	// WorkspaceServiceAcknowledgeManifestProcedure is the fully-qualified name of the
 	// WorkspaceService's AcknowledgeManifest RPC.
 	WorkspaceServiceAcknowledgeManifestProcedure = "/daft.workspace.v1.WorkspaceService/AcknowledgeManifest"
+	// WorkspaceServiceRejectManifestProcedure is the fully-qualified name of the WorkspaceService's
+	// RejectManifest RPC.
+	WorkspaceServiceRejectManifestProcedure = "/daft.workspace.v1.WorkspaceService/RejectManifest"
+	// WorkspaceServiceDeleteManifestProcedure is the fully-qualified name of the WorkspaceService's
+	// DeleteManifest RPC.
+	WorkspaceServiceDeleteManifestProcedure = "/daft.workspace.v1.WorkspaceService/DeleteManifest"
+	// WorkspaceServiceGetStorageStatusProcedure is the fully-qualified name of the WorkspaceService's
+	// GetStorageStatus RPC.
+	WorkspaceServiceGetStorageStatusProcedure = "/daft.workspace.v1.WorkspaceService/GetStorageStatus"
+	// WorkspaceServicePruneStorageProcedure is the fully-qualified name of the WorkspaceService's
+	// PruneStorage RPC.
+	WorkspaceServicePruneStorageProcedure = "/daft.workspace.v1.WorkspaceService/PruneStorage"
 )
 
 // WorkspaceServiceClient is a client for the daft.workspace.v1.WorkspaceService service.
@@ -85,6 +97,16 @@ type WorkspaceServiceClient interface {
 	// materialised the exact manifest. Digest + generation prevent a stale pull
 	// from adopting newer sandbox writes.
 	AcknowledgeManifest(context.Context, *connect.Request[v1.AcknowledgeManifestRequest]) (*connect.Response[v1.AcknowledgeManifestResponse], error)
+	// RejectManifest discards one exact unadopted generation and restores the
+	// newest prior client-recoverable generation, if present.
+	RejectManifest(context.Context, *connect.Request[v1.RejectManifestRequest]) (*connect.Response[v1.ManifestControlResponse], error)
+	// DeleteManifest releases protection for one exact current generation.
+	DeleteManifest(context.Context, *connect.Request[v1.DeleteManifestRequest]) (*connect.Response[v1.ManifestControlResponse], error)
+	// GetStorageStatus returns bounded aggregate CAS accounting and policy.
+	GetStorageStatus(context.Context, *connect.Request[v1.GetStorageStatusRequest]) (*connect.Response[v1.GetStorageStatusResponse], error)
+	// PruneStorage plans cleanup. Public callers are intentionally dry-run only;
+	// the node's durable worker owns destructive cleanup.
+	PruneStorage(context.Context, *connect.Request[v1.PruneStorageRequest]) (*connect.Response[v1.PruneStorageResponse], error)
 }
 
 // NewWorkspaceServiceClient constructs a client for the daft.workspace.v1.WorkspaceService service.
@@ -128,6 +150,30 @@ func NewWorkspaceServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(workspaceServiceMethods.ByName("AcknowledgeManifest")),
 			connect.WithClientOptions(opts...),
 		),
+		rejectManifest: connect.NewClient[v1.RejectManifestRequest, v1.ManifestControlResponse](
+			httpClient,
+			baseURL+WorkspaceServiceRejectManifestProcedure,
+			connect.WithSchema(workspaceServiceMethods.ByName("RejectManifest")),
+			connect.WithClientOptions(opts...),
+		),
+		deleteManifest: connect.NewClient[v1.DeleteManifestRequest, v1.ManifestControlResponse](
+			httpClient,
+			baseURL+WorkspaceServiceDeleteManifestProcedure,
+			connect.WithSchema(workspaceServiceMethods.ByName("DeleteManifest")),
+			connect.WithClientOptions(opts...),
+		),
+		getStorageStatus: connect.NewClient[v1.GetStorageStatusRequest, v1.GetStorageStatusResponse](
+			httpClient,
+			baseURL+WorkspaceServiceGetStorageStatusProcedure,
+			connect.WithSchema(workspaceServiceMethods.ByName("GetStorageStatus")),
+			connect.WithClientOptions(opts...),
+		),
+		pruneStorage: connect.NewClient[v1.PruneStorageRequest, v1.PruneStorageResponse](
+			httpClient,
+			baseURL+WorkspaceServicePruneStorageProcedure,
+			connect.WithSchema(workspaceServiceMethods.ByName("PruneStorage")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -138,6 +184,10 @@ type workspaceServiceClient struct {
 	putManifest         *connect.Client[v1.PutManifestRequest, v1.PutManifestResponse]
 	putChunk            *connect.Client[v1.PutChunkRequest, v1.PutChunkResponse]
 	acknowledgeManifest *connect.Client[v1.AcknowledgeManifestRequest, v1.AcknowledgeManifestResponse]
+	rejectManifest      *connect.Client[v1.RejectManifestRequest, v1.ManifestControlResponse]
+	deleteManifest      *connect.Client[v1.DeleteManifestRequest, v1.ManifestControlResponse]
+	getStorageStatus    *connect.Client[v1.GetStorageStatusRequest, v1.GetStorageStatusResponse]
+	pruneStorage        *connect.Client[v1.PruneStorageRequest, v1.PruneStorageResponse]
 }
 
 // GetManifest calls daft.workspace.v1.WorkspaceService.GetManifest.
@@ -165,6 +215,26 @@ func (c *workspaceServiceClient) AcknowledgeManifest(ctx context.Context, req *c
 	return c.acknowledgeManifest.CallUnary(ctx, req)
 }
 
+// RejectManifest calls daft.workspace.v1.WorkspaceService.RejectManifest.
+func (c *workspaceServiceClient) RejectManifest(ctx context.Context, req *connect.Request[v1.RejectManifestRequest]) (*connect.Response[v1.ManifestControlResponse], error) {
+	return c.rejectManifest.CallUnary(ctx, req)
+}
+
+// DeleteManifest calls daft.workspace.v1.WorkspaceService.DeleteManifest.
+func (c *workspaceServiceClient) DeleteManifest(ctx context.Context, req *connect.Request[v1.DeleteManifestRequest]) (*connect.Response[v1.ManifestControlResponse], error) {
+	return c.deleteManifest.CallUnary(ctx, req)
+}
+
+// GetStorageStatus calls daft.workspace.v1.WorkspaceService.GetStorageStatus.
+func (c *workspaceServiceClient) GetStorageStatus(ctx context.Context, req *connect.Request[v1.GetStorageStatusRequest]) (*connect.Response[v1.GetStorageStatusResponse], error) {
+	return c.getStorageStatus.CallUnary(ctx, req)
+}
+
+// PruneStorage calls daft.workspace.v1.WorkspaceService.PruneStorage.
+func (c *workspaceServiceClient) PruneStorage(ctx context.Context, req *connect.Request[v1.PruneStorageRequest]) (*connect.Response[v1.PruneStorageResponse], error) {
+	return c.pruneStorage.CallUnary(ctx, req)
+}
+
 // WorkspaceServiceHandler is an implementation of the daft.workspace.v1.WorkspaceService service.
 type WorkspaceServiceHandler interface {
 	// GetManifest returns the manifest for a workspace by name. The
@@ -190,6 +260,16 @@ type WorkspaceServiceHandler interface {
 	// materialised the exact manifest. Digest + generation prevent a stale pull
 	// from adopting newer sandbox writes.
 	AcknowledgeManifest(context.Context, *connect.Request[v1.AcknowledgeManifestRequest]) (*connect.Response[v1.AcknowledgeManifestResponse], error)
+	// RejectManifest discards one exact unadopted generation and restores the
+	// newest prior client-recoverable generation, if present.
+	RejectManifest(context.Context, *connect.Request[v1.RejectManifestRequest]) (*connect.Response[v1.ManifestControlResponse], error)
+	// DeleteManifest releases protection for one exact current generation.
+	DeleteManifest(context.Context, *connect.Request[v1.DeleteManifestRequest]) (*connect.Response[v1.ManifestControlResponse], error)
+	// GetStorageStatus returns bounded aggregate CAS accounting and policy.
+	GetStorageStatus(context.Context, *connect.Request[v1.GetStorageStatusRequest]) (*connect.Response[v1.GetStorageStatusResponse], error)
+	// PruneStorage plans cleanup. Public callers are intentionally dry-run only;
+	// the node's durable worker owns destructive cleanup.
+	PruneStorage(context.Context, *connect.Request[v1.PruneStorageRequest]) (*connect.Response[v1.PruneStorageResponse], error)
 }
 
 // NewWorkspaceServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -229,6 +309,30 @@ func NewWorkspaceServiceHandler(svc WorkspaceServiceHandler, opts ...connect.Han
 		connect.WithSchema(workspaceServiceMethods.ByName("AcknowledgeManifest")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceServiceRejectManifestHandler := connect.NewUnaryHandler(
+		WorkspaceServiceRejectManifestProcedure,
+		svc.RejectManifest,
+		connect.WithSchema(workspaceServiceMethods.ByName("RejectManifest")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workspaceServiceDeleteManifestHandler := connect.NewUnaryHandler(
+		WorkspaceServiceDeleteManifestProcedure,
+		svc.DeleteManifest,
+		connect.WithSchema(workspaceServiceMethods.ByName("DeleteManifest")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workspaceServiceGetStorageStatusHandler := connect.NewUnaryHandler(
+		WorkspaceServiceGetStorageStatusProcedure,
+		svc.GetStorageStatus,
+		connect.WithSchema(workspaceServiceMethods.ByName("GetStorageStatus")),
+		connect.WithHandlerOptions(opts...),
+	)
+	workspaceServicePruneStorageHandler := connect.NewUnaryHandler(
+		WorkspaceServicePruneStorageProcedure,
+		svc.PruneStorage,
+		connect.WithSchema(workspaceServiceMethods.ByName("PruneStorage")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/daft.workspace.v1.WorkspaceService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case WorkspaceServiceGetManifestProcedure:
@@ -241,6 +345,14 @@ func NewWorkspaceServiceHandler(svc WorkspaceServiceHandler, opts ...connect.Han
 			workspaceServicePutChunkHandler.ServeHTTP(w, r)
 		case WorkspaceServiceAcknowledgeManifestProcedure:
 			workspaceServiceAcknowledgeManifestHandler.ServeHTTP(w, r)
+		case WorkspaceServiceRejectManifestProcedure:
+			workspaceServiceRejectManifestHandler.ServeHTTP(w, r)
+		case WorkspaceServiceDeleteManifestProcedure:
+			workspaceServiceDeleteManifestHandler.ServeHTTP(w, r)
+		case WorkspaceServiceGetStorageStatusProcedure:
+			workspaceServiceGetStorageStatusHandler.ServeHTTP(w, r)
+		case WorkspaceServicePruneStorageProcedure:
+			workspaceServicePruneStorageHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -268,4 +380,20 @@ func (UnimplementedWorkspaceServiceHandler) PutChunk(context.Context, *connect.R
 
 func (UnimplementedWorkspaceServiceHandler) AcknowledgeManifest(context.Context, *connect.Request[v1.AcknowledgeManifestRequest]) (*connect.Response[v1.AcknowledgeManifestResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.AcknowledgeManifest is not implemented"))
+}
+
+func (UnimplementedWorkspaceServiceHandler) RejectManifest(context.Context, *connect.Request[v1.RejectManifestRequest]) (*connect.Response[v1.ManifestControlResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.RejectManifest is not implemented"))
+}
+
+func (UnimplementedWorkspaceServiceHandler) DeleteManifest(context.Context, *connect.Request[v1.DeleteManifestRequest]) (*connect.Response[v1.ManifestControlResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.DeleteManifest is not implemented"))
+}
+
+func (UnimplementedWorkspaceServiceHandler) GetStorageStatus(context.Context, *connect.Request[v1.GetStorageStatusRequest]) (*connect.Response[v1.GetStorageStatusResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.GetStorageStatus is not implemented"))
+}
+
+func (UnimplementedWorkspaceServiceHandler) PruneStorage(context.Context, *connect.Request[v1.PruneStorageRequest]) (*connect.Response[v1.PruneStorageResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.PruneStorage is not implemented"))
 }

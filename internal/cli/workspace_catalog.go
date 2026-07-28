@@ -57,6 +57,9 @@ const (
 	nestedSubName       = "nested"
 	fuseSubName         = "privileged-fuse"
 	buildSubName        = "privileged-build"
+	changesSubName      = "changes"
+	storageSubName      = "storage"
+	pruneSubName        = "prune"
 )
 
 // workspaceClientOpts is the shared flag set every catalog
@@ -238,6 +241,8 @@ func newWorkspaceCatalogSubcommands() []*cobra.Command {
 		newWorkspaceMountCmd(),
 		newWorkspacePushCmd(),
 		newWorkspacePullCatalogCmd(),
+		newWorkspaceChangesCmd(),
+		newWorkspaceStorageCmd(),
 		newWorkspaceEnvCmd(),
 		newWorkspacePortCmd(),
 		newWorkspaceValidateCmd(),
