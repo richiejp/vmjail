@@ -317,14 +317,15 @@ func TestWorkspacePushPullRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	rig.nodeServer.ClearLiveMount(writableKey)
-	rejectOut, _, err := runDaft(t, append([]string{workspaceCmdName, changesSubName, "reject"}, commonArgs...)...)
-	if err != nil || !strings.Contains(rejectOut, "restored generation") {
-		t.Fatalf("changes reject = %q, %v", rejectOut, err)
-	}
 	diskController := &cliWorkspaceDiskController{status: workspace.WorkspaceDiskStatus{
-		UsedBytes: 7, AvailableBytes: 13, AllowanceBytes: 20, Frozen: true, Running: true,
+		UsedBytes: 7, AvailableBytes: 13, AllowanceBytes: 20, Frozen: true,
 	}}
 	rig.nodeServer.SetWorkspaceDiskController(diskController)
+	rejectOut, _, err := runDaft(t, append([]string{workspaceCmdName, changesSubName, "reject"}, commonArgs...)...)
+	if err != nil || diskController.deleteCalls != 1 || !strings.Contains(rejectOut, "restored generation") {
+		t.Fatalf("changes reject = %q, %v, disk deletes %d", rejectOut, err, diskController.deleteCalls)
+	}
+	diskController.status.Running = true
 	unfreezeOut, _, err := runDaft(t, append([]string{workspaceCmdName, unfreezeSubName}, commonArgs...)...)
 	if err != nil || diskController.unfreezeCalls != 1 || !strings.Contains(unfreezeOut, "unfrozen") {
 		t.Fatalf("workspace unfreeze = %q, %v, calls %d", unfreezeOut, err, diskController.unfreezeCalls)

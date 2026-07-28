@@ -420,15 +420,23 @@ func TestManifestControlRPCsAreExactAndRestorePriorClientState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	controller := &fakeWorkspaceDiskController{deleteErr: errors.New("workspace is running")}
+	server.SetWorkspaceDiskController(controller)
 	if _, err := server.RejectManifest(t.Context(), connect.NewRequest(&workspacev1.RejectManifestRequest{
 		Workspace: testSyncKey, ManifestDigest: clientState.digest, Generation: clientState.generation,
 	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
 		t.Fatalf("stale rejection = %v", err)
 	}
+	if _, err := server.RejectManifest(t.Context(), connect.NewRequest(&workspacev1.RejectManifestRequest{
+		Workspace: testSyncKey, ManifestDigest: sandboxState.digest, Generation: sandboxState.generation,
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition || controller.deleteCalls != 1 {
+		t.Fatalf("running-disk rejection = %v, delete calls %d", err, controller.deleteCalls)
+	}
+	controller.deleteErr = nil
 	rejected, err := server.RejectManifest(t.Context(), connect.NewRequest(&workspacev1.RejectManifestRequest{
 		Workspace: testSyncKey, ManifestDigest: sandboxState.digest, Generation: sandboxState.generation,
 	}))
-	if err != nil || !rejected.Msg.GetCurrentManifestPresent() || rejected.Msg.GetManifestDigest() != clientState.digest || rejected.Msg.GetGeneration() != clientState.generation {
+	if err != nil || controller.deleteCalls != 2 || !rejected.Msg.GetCurrentManifestPresent() || rejected.Msg.GetManifestDigest() != clientState.digest || rejected.Msg.GetGeneration() != clientState.generation {
 		t.Fatalf("rejection response = %#v, %v", rejected, err)
 	}
 	got, err := server.GetManifest(t.Context(), connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: testSyncKey}))
@@ -485,6 +493,13 @@ func TestRejectManifestWithoutPriorGenerationClearsCurrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	server.SetWorkspaceDiskController(&fakeWorkspaceDiskController{})
+	if _, err := server.RejectManifest(t.Context(), connect.NewRequest(&workspacev1.RejectManifestRequest{
+		Workspace: "only", ManifestDigest: state.digest, Generation: state.generation,
+	})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("invalid sync-key rejection = %v", err)
+	}
+	server.SetWorkspaceDiskController(nil)
 	response, err := server.RejectManifest(t.Context(), connect.NewRequest(&workspacev1.RejectManifestRequest{
 		Workspace: "only", ManifestDigest: state.digest, Generation: state.generation,
 	}))

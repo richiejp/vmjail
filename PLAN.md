@@ -295,15 +295,18 @@ Landed:
   `workspace unfreeze` and `workspace delete`; tests pin stale/extra manifests,
   pending reservations, locked/running workspaces, unreachable nodes, malformed
   bindings, controller/index failures, and never-launched deletion.
+- Exact rejection now removes the stopped retained qcow2 before restoring CAS
+  provenance, refuses a running disk, and leaves the protected manifest current
+  when disk deletion fails. Relaunch therefore seeds only the restored client
+  manifest instead of recovering rejected XFS bytes.
 
 Remaining:
 
 - Add stop-time teardown snapshot control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
-- Finish workspace status disk fields, retained-disk rematerialisation after
-  rejection, and matching trusted MCP tools; expose node-storage inspection
-  there with the same bounded results.
+- Finish workspace status disk fields and matching trusted MCP tools; expose
+  node-storage inspection there with the same bounded results.
 - Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,
   capacity, persistence, freeze, live-grow, and leak acceptance tests.
 

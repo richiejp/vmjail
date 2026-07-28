@@ -475,7 +475,7 @@ func (s *Server) AcknowledgeManifest(
 }
 
 func (s *Server) RejectManifest(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[workspacev1.RejectManifestRequest],
 ) (*connect.Response[workspacev1.ManifestControlResponse], error) {
 	name := req.Msg.GetWorkspace()
@@ -490,6 +490,18 @@ func (s *Server) RejectManifest(
 	}
 	if indexed.Origin != casindex.OriginSandbox || indexed.Recoverability != casindex.RecoverabilityProtected {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("workspace: manifest has no unadopted sandbox changes"))
+	}
+	if controller := s.workspaceDiskController(); controller != nil {
+		uuid, _, ok := strings.Cut(name, "\x00")
+		if !ok || uuid == "" {
+			return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("workspace: invalid workspace sync key"))
+		}
+		// Rejection is destructive by definition: remove the stopped disk before
+		// changing CAS provenance so rejected XFS bytes cannot reappear on the
+		// next launch. A running disk is refused by the production controller.
+		if err := controller.Delete(ctx, uuid); err != nil {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		}
 	}
 	if err := s.index.Reject(name, digest, generation); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
