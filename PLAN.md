@@ -355,11 +355,22 @@ Landed:
 - The real-KVM stop/pull acceptance path asserts the stopped qcow2 exists until
   exact adoption, then verifies both the image and per-Sandbox snapshot staging
   tree disappear without leaking retained protection.
+- A live compatibility run against the sibling `localaisrl.com` web app used a
+  fresh 512 MiB allowance on the local Node: `/workspace` mounted from
+  `/dev/vda` as quota-enabled XFS, reflink cloning succeeded, all nine Bun unit
+  tests and the production build passed, and an orchestrator port forward
+  returned the rendered site with HTTP 200. Stop made the exact snapshot
+  protected; generation-checked deletion then removed the catalog binding,
+  qcow2, staging tree, VMM/API socket, cgroup, and reservation without touching
+  tracked app files. The app's optional Chromium GPU budget requires browser
+  packages and `/dev/shm` that its minimal Alpine devcontainer does not declare;
+  that image prerequisite is independent of workspace-disk semantics.
 
 Remaining:
 
-- Add deterministic rejection/deletion disk cleanup and control-path leak
-  acceptance tests; retain real-KVM coverage for disk/VMM behavior.
+- None for this milestone. Deterministic manifest-control and retained-store
+  tests cover rejection/deletion cleanup and failure ordering; real-KVM and the
+  live app run cover disk/VMM behavior and teardown leaks.
 
 Protected sandbox writes must never be cleanup candidates until the client
 acknowledges the exact manifest digest and generation, rejects that generation,
