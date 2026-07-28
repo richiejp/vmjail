@@ -335,7 +335,11 @@ Landed:
   mount is XFS and supports reflink cloning.
 - The real-KVM XFS round trip now grows a running 512 MiB disk to 1 GiB through
   `workspace resources --disk`, verifies the mounted filesystem expanded, then
-  stops and relaunches to prove the retained disk preserves guest mutations.
+  stops and relaunches to prove the retained disk preserves guest mutations. It
+  also verifies the XFS/qcow2 allowance returns `ENOSPC`, observes the Node
+  freeze the resulting greater-than-90%-full disk, grows the frozen disk to 2
+  GiB, verifies it remains paused, and explicitly unfreezes it before resuming
+  guest work.
 - First-launch workspace contents now stream directly from durable manifests
   and CAS chunks into guest XFS over bounded per-VM vsock archive endpoints.
   Writable Workspace paths no longer create virtiofs shares or host seed

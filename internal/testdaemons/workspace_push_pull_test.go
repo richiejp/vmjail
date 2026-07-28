@@ -164,9 +164,51 @@ func TestClusterWorkspacePushMutatePull(t *testing.T) {
 		"--", "/bin/dash", "-c", "cat /workspace/out.txt")
 	waitForFileContains(t, reuseProc, reuseLog, s4MutatedMarker, 60*time.Second, paneDump)
 
+	// Cross 90% of the configured allowance and let the Node's periodic usage
+	// monitor pause the VM. Storage inspection remains available while paused.
+	fillLog := filepath.Join(t.TempDir(), "fill.log")
+	fillProc := startDaftSubprocess(t, fillLog,
+		c.DaftBin, "--config-dir", c.ClientConfigDir,
+		"workspace", "exec", wsName, "--tty=false", "--orchestrator", c.OrchestratorURL,
+		"--", "/bin/dash", "-c",
+		"dd if=/dev/zero of=/workspace/fill.bin bs=1M count=940; rc=$?; sync; "+
+			"test $(stat -c %s /workspace/fill.bin) -gt 900000000; size_rc=$?; "+
+			"rm /workspace/fill.bin; sync; dd if=/dev/zero of=/workspace/fill.bin bs=1M count=875; "+
+			"refill_rc=$?; sync; echo S4-FILL-$rc-$size_rc-$refill_rc")
+	// The qcow2/XFS allowance is the final boundary: the oversized write must
+	// hit ENOSPC. Recreating a clean 875 MiB filler leaves deterministic XFS
+	// metadata headroom while keeping measured usage above the 90% threshold.
+	waitForFileContains(t, fillProc, fillLog, "S4-FILL-1-0-0", 60*time.Second, paneDump)
+	testdaemons.RunWorkspaceSteps(t, s, "S4FREEZE", []testdaemons.WorkspaceStep{{
+		Label: "wait-frozen", Cmd: fmt.Sprintf(
+			"frozen=; for i in $(seq 1 30); do out=$(%s workspace storage status --name %s %s); echo \"$out\"; echo \"$out\" | grep -q 'storage_frozen=true' && frozen=yes && break; sleep 1; done; test \"$frozen\" = yes",
+			prefix, wsName, orch,
+		),
+	}}, 45*time.Second)
+
+	// A frozen resize must grow qcow2, the VMM block device, and guest XFS,
+	// then re-pause. Only the explicit public unfreeze operation resumes work.
+	testdaemons.RunWorkspaceSteps(t, s, "S4UNFREEZE", []testdaemons.WorkspaceStep{
+		{Label: "grow-frozen", Cmd: fmt.Sprintf(
+			"%s workspace resources --disk 2G --name %s %s", prefix, wsName, orch,
+		)},
+		{Label: "still-frozen", Cmd: fmt.Sprintf(
+			"%s workspace storage status --name %s %s | grep -q 'storage_frozen=true'", prefix, wsName, orch,
+		)},
+		{Label: "unfreeze", Cmd: fmt.Sprintf(
+			"%s workspace unfreeze --name %s %s", prefix, wsName, orch,
+		)},
+	}, 60*time.Second)
+	testdaemons.RunWorkspaceSteps(t, s, "S4RESUMED", []testdaemons.WorkspaceStep{{
+		Label: "status-after-unfreeze", Cmd: fmt.Sprintf(
+			"%s workspace storage status --name %s %s | grep -q 'storage_frozen=false'",
+			prefix, wsName, orch,
+		),
+	}}, 30*time.Second)
+
 	// Stop first so pull cannot use the live guest refresher. A successful pull
-	// therefore proves the stop path committed the final XFS contents into the
-	// durable protected manifest before tearing the VM down.
+	// therefore proves explicit unfreeze resumed guest services and the stop
+	// path committed final XFS contents into the durable protected manifest.
 	testdaemons.RunWorkspaceSteps(t, s, "S4PULL", []testdaemons.WorkspaceStep{
 		{Label: "stop", Cmd: fmt.Sprintf(
 			"%s workspace stop --name %s %s", prefix, wsName, orch,

@@ -1067,6 +1067,48 @@ func TestPreserveLiveMountMakesFinalWritesDurable(t *testing.T) {
 	}
 }
 
+func TestGetManifestWaitsForConcurrentPreservation(t *testing.T) {
+	srv, _ := mustNewServer(t)
+	const key = "concurrent\x00/workspace"
+	live := t.TempDir()
+	mustWriteFile(t, filepath.Join(live, "final.txt"), []byte("final"))
+	srv.SetLiveMount(key, live)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv.SetLiveMountRefresher(key, func(context.Context, string) error {
+		close(started)
+		<-release
+		return nil
+	})
+	preserved := make(chan error, 1)
+	go func() { preserved <- srv.PreserveLiveMount(t.Context(), key) }()
+	<-started
+	manifest := make(chan *workspacev1.GetManifestResponse, 1)
+	manifestErr := make(chan error, 1)
+	go func() {
+		resp, err := srv.GetManifest(t.Context(), connect.NewRequest(
+			&workspacev1.GetManifestRequest{Workspace: key},
+		))
+		if err != nil {
+			manifestErr <- err
+			return
+		}
+		manifest <- resp.Msg
+	}()
+	close(release)
+	if err := <-preserved; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-manifestErr:
+		t.Fatal(err)
+	case got := <-manifest:
+		if !manifestHasPath(got.GetManifest(), "final.txt") {
+			t.Fatalf("manifest = %v, want final.txt", got.GetManifest())
+		}
+	}
+}
+
 func TestPreserveLiveMountFailureKeepsOnlyCopyReachable(t *testing.T) {
 	srv, _ := mustNewServer(t)
 	const key = "failed"

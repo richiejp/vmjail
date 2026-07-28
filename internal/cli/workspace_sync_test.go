@@ -328,6 +328,11 @@ func TestWorkspacePushPullRoundTrip(t *testing.T) {
 		t.Fatalf("changes reject = %q, %v, disk deletes %d", rejectOut, err, diskController.deleteCalls)
 	}
 	diskController.status.Running = true
+	rig.nodeServer.SetLiveMount(writableKey, live)
+	rig.nodeServer.SetLiveMountRefresher(writableKey, func(context.Context, string) error {
+		return errors.New("paused guest must not be refreshed")
+	})
+	defer rig.nodeServer.ClearLiveMount(writableKey)
 	unfreezeOut, _, err := runDaft(t, append([]string{workspaceCmdName, unfreezeSubName}, commonArgs...)...)
 	if err != nil || diskController.unfreezeCalls != 1 || !strings.Contains(unfreezeOut, "unfrozen") {
 		t.Fatalf("workspace unfreeze = %q, %v, calls %d", unfreezeOut, err, diskController.unfreezeCalls)
@@ -337,6 +342,9 @@ func TestWorkspacePushPullRoundTrip(t *testing.T) {
 	}
 	if _, _, err := runDaft(t, append([]string{workspaceCmdName, storageSubName, statusSubName}, commonArgs...)...); err == nil {
 		t.Fatal("storage status succeeded after node index close")
+	}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, unfreezeSubName}, commonArgs...)...); err == nil {
+		t.Fatal("unfreeze succeeded after durable manifest index close")
 	}
 }
 

@@ -806,6 +806,44 @@ func TestRegisterWorkspaceSnapshotRoutes(t *testing.T) {
 	if len(mat.refreshers) != 1 || mat.refreshers[key] == nil {
 		t.Fatalf("refreshers = %v", mat.refreshers)
 	}
+	blocked := filepath.Join(t.TempDir(), "blocked")
+	if err := os.WriteFile(blocked, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := mat.refreshers[key](t.Context(), filepath.Join(blocked, "mount")); err == nil {
+		t.Fatal("snapshot refresh accepted destination below a regular file")
+	}
+}
+
+func TestResetWorkspaceSnapshotDestinationRemovesStaleSeed(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "mount")
+	stale := filepath.Join(destination, "in.txt")
+	if err := os.MkdirAll(destination, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := resetWorkspaceSnapshotDestination(destination); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale seed stat error = %v, want not exist", err)
+	}
+	if info, err := os.Stat(destination); err != nil || !info.IsDir() {
+		t.Fatalf("destination stat = (%v, %v), want directory", info, err)
+	}
+}
+
+func TestResetWorkspaceSnapshotDestinationReportsCreateError(t *testing.T) {
+	parent := t.TempDir()
+	if err := os.Chmod(parent, 0o500); err != nil { //nolint:gosec // G302: test needs a searchable but non-writable directory.
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) }) //nolint:gosec // G302: restore test temp dir for cleanup.
+	if err := resetWorkspaceSnapshotDestination(filepath.Join(parent, "mount")); err == nil {
+		t.Fatal("reset below read-only parent succeeded")
+	}
 }
 
 func (f *fakeMaterializer) MaterializeMount(_ context.Context, key, dest string) (bool, error) {

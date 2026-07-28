@@ -81,6 +81,7 @@ type pendingManifest struct {
 type liveMount struct {
 	dir     string
 	refresh func(context.Context, string) error
+	guard   *sync.Mutex
 }
 
 // NewServer returns an empty Server backed by store. Call Add to
@@ -146,7 +147,7 @@ func newServer(store *cas.Store, index *casindex.Index) (*Server, error) {
 // launch materialises the mount and clears it on teardown (Slice S4).
 func (s *Server) SetLiveMount(key, dir string) {
 	s.liveMu.Lock()
-	s.live[key] = liveMount{dir: dir}
+	s.live[key] = liveMount{dir: dir, guard: &sync.Mutex{}}
 	s.liveMu.Unlock()
 }
 
@@ -178,6 +179,8 @@ func (s *Server) PreserveLiveMount(ctx context.Context, key string) error {
 	if !ok {
 		return nil
 	}
+	entry.guard.Lock()
+	defer entry.guard.Unlock()
 	if entry.refresh != nil {
 		if err := entry.refresh(ctx, entry.dir); err != nil {
 			return fmt.Errorf("workspace: refresh live mount %q: %w", key, err)
@@ -319,27 +322,34 @@ func (s *Server) GetManifest(ctx context.Context, req *connect.Request[workspace
 	// resolve. When the VM isn't running we fall through to the
 	// last-pushed snapshot.
 	if entry, ok := s.liveEntry(name); ok {
-		if entry.refresh != nil {
-			if err := entry.refresh(ctx, entry.dir); err != nil {
-				return nil, connect.NewError(connect.CodeUnavailable,
-					fmt.Errorf("workspace: refresh live mount %q: %w", name, err))
+		entry.guard.Lock()
+		current, stillLive := s.liveEntry(name)
+		if !stillLive || current.guard != entry.guard {
+			entry.guard.Unlock()
+		} else {
+			defer entry.guard.Unlock()
+			if entry.refresh != nil {
+				if err := entry.refresh(ctx, entry.dir); err != nil {
+					return nil, connect.NewError(connect.CodeUnavailable,
+						fmt.Errorf("workspace: refresh live mount %q: %w", name, err))
+				}
 			}
+			m, err := BuildManifest(entry.dir, s.store, BuildOptions{})
+			if err != nil {
+				return nil, connect.NewError(connect.CodeInternal,
+					fmt.Errorf("workspace: re-manifest live mount %q: %w", name, err))
+			}
+			if s.index == nil {
+				return connect.NewResponse(&workspacev1.GetManifestResponse{Manifest: m}), nil
+			}
+			state, err := s.publishManifest(name, m, casindex.OriginSandbox, casindex.RecoverabilityProtected)
+			if err != nil {
+				return nil, connect.NewError(connect.CodeInternal, err)
+			}
+			return connect.NewResponse(&workspacev1.GetManifestResponse{
+				Manifest: m, ManifestDigest: state.digest, Generation: state.generation,
+			}), nil
 		}
-		m, err := BuildManifest(entry.dir, s.store, BuildOptions{})
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal,
-				fmt.Errorf("workspace: re-manifest live mount %q: %w", name, err))
-		}
-		if s.index == nil {
-			return connect.NewResponse(&workspacev1.GetManifestResponse{Manifest: m}), nil
-		}
-		state, err := s.publishManifest(name, m, casindex.OriginSandbox, casindex.RecoverabilityProtected)
-		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
-		}
-		return connect.NewResponse(&workspacev1.GetManifestResponse{
-			Manifest: m, ManifestDigest: state.digest, Generation: state.generation,
-		}), nil
 	}
 	s.mu.RLock()
 	m, ok := s.manifests[name]

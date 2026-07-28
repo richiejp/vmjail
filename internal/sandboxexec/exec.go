@@ -611,11 +611,29 @@ func (e *Executor) registerWorkspaceSnapshotRoutes(cfg sandbox.Config, spec *san
 		directory := fmt.Sprintf("mounts/%d", i)
 		key := workspace.SyncKey(spec.GetWorkspaceUuid(), mount.GetTarget())
 		refresher.SetLiveMountRefresher(key, func(ctx context.Context, destination string) error {
+			// Pull extracts a complete snapshot and intentionally refuses to
+			// overwrite entries. The staging tree may still contain the launch
+			// seed or a failed prior attempt, so reset it before every refresh.
+			// The retained qcow2 remains authoritative until PreserveLiveMount
+			// commits the fully verified replacement manifest.
+			if err := resetWorkspaceSnapshotDestination(destination); err != nil {
+				return err
+			}
 			return workspacesnapshot.Pull(ctx, func(ctx context.Context) (net.Conn, error) {
 				return sandbox.DialGuestVsock(ctx, hostSocket, workspacesnapshot.DefaultVsockPort)
 			}, directory, destination)
 		})
 	}
+}
+
+func resetWorkspaceSnapshotDestination(destination string) error {
+	if err := os.RemoveAll(destination); err != nil {
+		return fmt.Errorf("sandboxexec: reset workspace snapshot destination: %w", err)
+	}
+	if err := os.MkdirAll(destination, 0o750); err != nil {
+		return fmt.Errorf("sandboxexec: create workspace snapshot destination: %w", err)
+	}
+	return nil
 }
 
 const (

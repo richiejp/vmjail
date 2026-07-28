@@ -126,14 +126,10 @@ func newWorkspaceUnfreezeCmd() *cobra.Command {
 		Use: unfreezeSubName, Short: "Explicitly resume a storage-frozen workspace after remediation",
 		Args: cobra.NoArgs, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			mounts, err := dirLocalMounts()
-			if err != nil {
-				return err
-			}
 			return runNodeWorkspaceRPC(cmd, opts, casDir, unfreezeSubName, func(
 				ctx context.Context, client workspacev1connect.WorkspaceServiceClient, uuid string,
 			) error {
-				expected, err := workspaceManifestExpectations(ctx, client, uuid, mounts)
+				expected, err := workspaceDiskManifestExpectations(ctx, client, uuid)
 				if err != nil {
 					return err
 				}
@@ -350,6 +346,20 @@ func workspaceManifestExpectations(
 		})
 	}
 	return expected, nil
+}
+
+func workspaceDiskManifestExpectations(
+	ctx context.Context,
+	client workspacev1connect.WorkspaceServiceClient,
+	uuid string,
+) ([]*workspacev1.ManifestExpectation, error) {
+	status, err := client.GetWorkspaceDiskStatus(ctx, connect.NewRequest(&workspacev1.GetWorkspaceDiskStatusRequest{
+		WorkspaceUuid: uuid,
+	}))
+	if err != nil {
+		return nil, fmt.Errorf("daft workspace: inspect disk manifests: %w", err)
+	}
+	return status.Msg.GetCurrentManifests(), nil
 }
 
 func writeWorkspaceStorageStatus(out io.Writer, disk *workspacev1.GetWorkspaceDiskStatusResponse, status *workspacev1.GetStorageStatusResponse) error {

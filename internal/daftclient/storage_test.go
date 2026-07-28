@@ -251,6 +251,20 @@ func TestWorkspaceStorageControlsUseBoundedExactNodeOperations(t *testing.T) {
 	}
 }
 
+func TestFrozenDiskControlsDoNotRefreshPausedGuestManifest(t *testing.T) {
+	rig := newStorageClientRig(t)
+	uuid := rig.catalog.resource.GetMetadata().GetUuid()
+	// GetManifest may require a live guest snapshot and therefore cannot
+	// complete while Cloud Hypervisor has paused a storage-frozen VM.
+	rig.node.manifestErr = connect.NewError(connect.CodeDeadlineExceeded, errors.New("guest paused"))
+	if _, err := rig.client.ResizeWorkspaceDisk(t.Context(), uuid, 40); err != nil {
+		t.Fatalf("ResizeWorkspaceDisk refreshed paused guest: %v", err)
+	}
+	if _, err := rig.client.UnfreezeWorkspace(t.Context(), uuid); err != nil {
+		t.Fatalf("UnfreezeWorkspace refreshed paused guest: %v", err)
+	}
+}
+
 func TestDeleteWorkspaceWithoutTargetSkipsNode(t *testing.T) {
 	rig := newStorageClientRig(t)
 	rig.catalog.resource.Spec.TargetSandboxFingerprint = ""
@@ -299,6 +313,12 @@ func TestWorkspaceStorageControlsPropagateNodeAndCatalogFailures(t *testing.T) {
 	if _, err := rig.client.WorkspaceStorageStatus(t.Context(), uuid); connect.CodeOf(err) != connect.CodeUnavailable {
 		t.Fatalf("disk status error = %v", err)
 	}
+	if _, err := rig.client.ResizeWorkspaceDisk(t.Context(), uuid, 40); connect.CodeOf(err) != connect.CodeUnavailable {
+		t.Fatalf("resize disk status error = %v", err)
+	}
+	if _, err := rig.client.UnfreezeWorkspace(t.Context(), uuid); connect.CodeOf(err) != connect.CodeUnavailable {
+		t.Fatalf("unfreeze disk status error = %v", err)
+	}
 	rig.node.diskErr = nil
 	rig.node.storageErr = want
 	if _, err := rig.client.WorkspaceStorageStatus(t.Context(), uuid); connect.CodeOf(err) != connect.CodeUnavailable {
@@ -306,14 +326,8 @@ func TestWorkspaceStorageControlsPropagateNodeAndCatalogFailures(t *testing.T) {
 	}
 	rig.node.storageErr = nil
 	rig.node.manifestErr = want
-	if _, err := rig.client.ResizeWorkspaceDisk(t.Context(), uuid, 40); connect.CodeOf(err) != connect.CodeUnavailable {
-		t.Fatalf("resize manifest inspection error = %v", err)
-	}
 	if _, err := rig.client.RejectWorkspaceChanges(t.Context(), uuid); connect.CodeOf(err) != connect.CodeUnavailable {
 		t.Fatalf("manifest inspection error = %v", err)
-	}
-	if _, err := rig.client.UnfreezeWorkspace(t.Context(), uuid); connect.CodeOf(err) != connect.CodeUnavailable {
-		t.Fatalf("unfreeze inspection error = %v", err)
 	}
 	if err := rig.client.DeleteWorkspace(t.Context(), uuid); connect.CodeOf(err) != connect.CodeUnavailable {
 		t.Fatalf("delete inspection error = %v", err)

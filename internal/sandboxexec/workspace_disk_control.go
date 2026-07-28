@@ -261,23 +261,37 @@ func (e *Executor) ResizeWorkspaceDisk(ctx context.Context, workspaceID string, 
 	if err := grower.Grow(workspaceID, desiredSize); err != nil {
 		return fmt.Errorf("sandboxexec: grow qcow2: %w", err)
 	}
-	if err := runtime.controller.ResizeDisk(ctx, workspaceDiskID, desiredSize); err != nil {
-		return fmt.Errorf("sandboxexec: resize VMM disk: %w", err)
-	}
+	_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s qcow2=%d\n", workspaceID, desiredSize)
 	wasFrozen := runtime.frozen
 	if wasFrozen {
 		if err := runtime.controller.Resume(ctx); err != nil {
 			return fmt.Errorf("sandboxexec: resume VM for XFS grow: %w", err)
 		}
+		_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s resumed\n", workspaceID)
 	}
-	growErr := e.growWorkspaceGuest(ctx, e.workspaceDialer(runtime.hostSocket))
-	if wasFrozen {
-		if pauseErr := runtime.controller.Pause(ctx); pauseErr != nil {
-			return errors.Join(growErr, fmt.Errorf("sandboxexec: re-freeze VM after XFS grow: %w", pauseErr))
+	resizeErr := runtime.controller.ResizeDisk(ctx, workspaceDiskID, desiredSize)
+	if resizeErr != nil {
+		resizeErr = fmt.Errorf("sandboxexec: resize VMM disk: %w", resizeErr)
+	} else {
+		_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s vmm=%d\n", workspaceID, desiredSize)
+	}
+	var growErr error
+	if resizeErr == nil {
+		growErr = e.growWorkspaceGuest(ctx, e.workspaceDialer(runtime.hostSocket))
+		if growErr != nil {
+			growErr = fmt.Errorf("sandboxexec: grow guest XFS: %w", growErr)
+		} else {
+			_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s xfs=%d\n", workspaceID, desiredSize)
 		}
 	}
-	if growErr != nil {
-		return fmt.Errorf("sandboxexec: grow guest XFS: %w", growErr)
+	if wasFrozen {
+		if pauseErr := runtime.controller.Pause(ctx); pauseErr != nil {
+			return errors.Join(resizeErr, growErr, fmt.Errorf("sandboxexec: re-freeze VM after XFS grow: %w", pauseErr))
+		}
+		_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s re-frozen\n", workspaceID)
+	}
+	if err := errors.Join(resizeErr, growErr); err != nil {
+		return err
 	}
 	runtime.allowance = desiredSize
 	runtime.resizeDone = true

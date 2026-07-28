@@ -253,7 +253,7 @@ func TestFrozenWorkspaceResizeRequiresExplicitUnfreeze(t *testing.T) {
 	if err := e.ResizeWorkspaceDisk(t.Context(), testWSUUID, testGrownAllowance); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(sequence, []string{testQCOWGrowStep, "vmm", "resume", "xfs", "pause"}) {
+	if !slices.Equal(sequence, []string{testQCOWGrowStep, "resume", "vmm", "xfs", "pause"}) {
 		t.Fatalf("frozen resize sequence = %v", sequence)
 	}
 	if !runtime.frozen {
@@ -334,6 +334,7 @@ func TestWorkspaceDiskResizeFailures(t *testing.T) {
 	}{
 		{name: "qcow2", mutate: func(store *fakeWorkspaceGrowStore, _ *fakeWorkspaceVM, _ *Executor) { store.err = want }},
 		{name: "VMM", mutate: func(_ *fakeWorkspaceGrowStore, vm *fakeWorkspaceVM, _ *Executor) { vm.resizeErr = want }},
+		{name: "VMM frozen", frozen: true, mutate: func(_ *fakeWorkspaceGrowStore, vm *fakeWorkspaceVM, _ *Executor) { vm.resizeErr = want }},
 		{name: "resume", frozen: true, mutate: func(_ *fakeWorkspaceGrowStore, vm *fakeWorkspaceVM, _ *Executor) { vm.resumeErr = want }},
 		{name: "XFS", mutate: func(_ *fakeWorkspaceGrowStore, _ *fakeWorkspaceVM, e *Executor) {
 			e.growWorkspaceGuest = func(context.Context, func(context.Context) (net.Conn, error)) error { return want }

@@ -130,7 +130,7 @@ func (c *Client) UnfreezeWorkspace(ctx context.Context, uuid string) (WorkspaceS
 		return WorkspaceStorageStatus{}, err
 	}
 	defer func() { _ = closeRelay() }()
-	expected, err := currentManifestExpectations(ctx, client, resource)
+	expected, err := currentDiskManifestExpectations(ctx, client, resource.GetMetadata().GetUuid())
 	if err != nil {
 		return WorkspaceStorageStatus{}, err
 	}
@@ -167,7 +167,7 @@ func (c *Client) ResizeWorkspaceDisk(ctx context.Context, uuid string, diskBytes
 		return WorkspaceStorageStatus{}, err
 	}
 	defer func() { _ = closeRelay() }()
-	expected, err := currentManifestExpectations(ctx, client, resource)
+	expected, err := currentDiskManifestExpectations(ctx, client, resource.GetMetadata().GetUuid())
 	if err != nil {
 		return WorkspaceStorageStatus{}, err
 	}
@@ -300,6 +300,24 @@ func currentManifestExpectations(
 		})
 	}
 	return expected, nil
+}
+
+// currentDiskManifestExpectations reads the Node's durable manifest index
+// without refreshing a live guest. A storage-frozen VM cannot answer the
+// vsock snapshot request used by GetManifest, but resize and unfreeze must
+// remain available while it is paused.
+func currentDiskManifestExpectations(
+	ctx context.Context,
+	client workspacev1connect.WorkspaceServiceClient,
+	uuid string,
+) ([]*workspacev1.ManifestExpectation, error) {
+	status, err := client.GetWorkspaceDiskStatus(ctx, connect.NewRequest(&workspacev1.GetWorkspaceDiskStatusRequest{
+		WorkspaceUuid: uuid,
+	}))
+	if err != nil {
+		return nil, fmt.Errorf("daft: inspect workspace disk manifests: %w", err)
+	}
+	return status.Msg.GetCurrentManifests(), nil
 }
 
 func workspaceUUIDHandle(uuid string) *workspacev1.WorkspaceHandle {
