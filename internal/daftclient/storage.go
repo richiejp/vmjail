@@ -155,6 +155,47 @@ func (c *Client) UnfreezeWorkspace(ctx context.Context, uuid string) (WorkspaceS
 	return result, nil
 }
 
+// ResizeWorkspaceDisk grows the exact currently observed retained disk. The
+// Node handles running qcow2/virtio-blk/XFS growth and stopped qcow2 growth.
+func (c *Client) ResizeWorkspaceDisk(ctx context.Context, uuid string, diskBytes uint64) (WorkspaceStorageStatus, error) {
+	resource, node, err := c.workspaceTarget(ctx, uuid)
+	if err != nil {
+		return WorkspaceStorageStatus{}, err
+	}
+	client, closeRelay, err := c.dialWorkspaceNode(ctx, resource.GetMetadata().GetUuid(), node)
+	if err != nil {
+		return WorkspaceStorageStatus{}, err
+	}
+	defer func() { _ = closeRelay() }()
+	expected, err := currentManifestExpectations(ctx, client, resource)
+	if err != nil {
+		return WorkspaceStorageStatus{}, err
+	}
+	response, err := client.ResizeWorkspaceDisk(ctx, connect.NewRequest(&workspacev1.ResizeWorkspaceDiskRequest{
+		WorkspaceUuid: resource.GetMetadata().GetUuid(), DiskBytes: diskBytes, ExpectedManifests: expected,
+	}))
+	if err != nil {
+		return WorkspaceStorageStatus{}, fmt.Errorf("daft: resize workspace disk: %w", err)
+	}
+	return workspaceDiskStatus(response.Msg), nil
+}
+
+func workspaceDiskStatus(response *workspacev1.GetWorkspaceDiskStatusResponse) WorkspaceStorageStatus {
+	result := WorkspaceStorageStatus{
+		WorkspaceUUID: response.GetWorkspaceUuid(), DiskUsedBytes: response.GetUsedBytes(),
+		DiskFreeBytes: response.GetAvailableBytes(), DiskBytes: response.GetAllowanceBytes(),
+		DiskFrozen: response.GetFrozen(), DiskRunning: response.GetRunning(),
+		WorkspaceProtectedBytes: response.GetProtectedBytes(),
+	}
+	for _, manifest := range response.GetCurrentManifests() {
+		result.Manifests = append(result.Manifests, ManifestTransition{
+			Workspace: manifest.GetWorkspace(), Digest: manifest.GetManifestDigest(),
+			Generation: manifest.GetGeneration(), Present: true,
+		})
+	}
+	return result
+}
+
 // DeleteWorkspace durably removes Node data before deleting the exact catalog
 // generation. Never-targeted Workspaces have no Node data to contact.
 func (c *Client) DeleteWorkspace(ctx context.Context, uuid string) error {

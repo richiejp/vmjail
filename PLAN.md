@@ -274,6 +274,10 @@ Landed:
   and live growth that cannot fit. Under host pressure, the bounded disk
   monitor freezes actively growing sandboxes by recent growth rate, breaking
   ties largest-first, while leaving idle sandboxes available.
+- `workspace resources --disk` now grows an existing retained disk through an
+  authenticated exact-manifest Node RPC before committing the catalog change.
+  Running disks execute the qcow2, virtio-blk, and guest `xfs_growfs` sequence;
+  stopped disks grow durably in place, and every shrink is rejected.
 - A per-CAS Badger index durably records chunk size/access/provenance,
   exact manifest digest/generation references, recoverability, disposition,
   and crash-recoverable deletion queue state. Legacy unindexed chunks migrate

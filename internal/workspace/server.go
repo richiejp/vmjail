@@ -56,6 +56,7 @@ type WorkspaceDiskStatus struct {
 
 type WorkspaceDiskController interface {
 	Status(string) (WorkspaceDiskStatus, error)
+	Resize(context.Context, string, uint64) error
 	Unfreeze(context.Context, string) error
 	Delete(context.Context, string) error
 }
@@ -618,6 +619,35 @@ func (s *Server) UnfreezeWorkspaceDisk(
 		return nil, err
 	}
 	if err := controller.Unfreeze(ctx, uuid); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	status, err := controller.Status(uuid)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	response, err := s.workspaceDiskStatusResponse(uuid, status)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(response), nil
+}
+
+func (s *Server) ResizeWorkspaceDisk(
+	ctx context.Context,
+	req *connect.Request[workspacev1.ResizeWorkspaceDiskRequest],
+) (*connect.Response[workspacev1.GetWorkspaceDiskStatusResponse], error) {
+	controller := s.workspaceDiskController()
+	if controller == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("workspace: disk controller unavailable"))
+	}
+	uuid := req.Msg.GetWorkspaceUuid()
+	if req.Msg.GetDiskBytes() == 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("workspace: disk allowance is required"))
+	}
+	if err := s.validateManifestExpectations(uuid, req.Msg.GetExpectedManifests()); err != nil {
+		return nil, err
+	}
+	if err := controller.Resize(ctx, uuid, req.Msg.GetDiskBytes()); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
 	status, err := controller.Status(uuid)

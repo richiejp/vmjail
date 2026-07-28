@@ -131,6 +131,43 @@ func TestWorkspaceControlCommandsRejectLocalConfigurationErrors(t *testing.T) {
 	}
 }
 
+func TestResolveImageArg(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		clear bool
+		want  string
+		fail  bool
+	}{
+		{name: "set", args: []string{"registry.example/image:tag"}, want: "registry.example/image:tag"},
+		{name: "clear", clear: true},
+		{name: "missing", fail: true},
+		{name: "clear with ref", args: []string{imageSubName}, clear: true, fail: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveImageArg(tc.args, tc.clear)
+			if (err != nil) != tc.fail {
+				t.Fatalf("resolveImageArg() error = %v, want failure %v", err, tc.fail)
+			}
+			if got != tc.want {
+				t.Errorf("resolveImageArg() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorkspaceImageRejectsMissingOrConflictingValue(t *testing.T) {
+	for _, args := range [][]string{
+		{workspaceCmdName, imageSubName},
+		{workspaceCmdName, imageSubName, "--clear", imageSubName},
+	} {
+		if _, _, err := runCmd(t, args...); err == nil {
+			t.Fatalf("daft %v succeeded, want argument error", args)
+		}
+	}
+}
+
 // TestWorkspaceRPCErrorsBubbleUp drives several catalog commands
 // against a workspace name that doesn't exist. The orchestrator
 // returns NotFound and the CLI must surface a non-nil error from
@@ -251,7 +288,10 @@ const testE2EWorkspaceName = "e2e"
 const testE2EMountTarget = "/workspace"
 
 // testMountRemote is the in-VM target used by the mount-mapping tests.
-const testMountRemote = "/workspace/src"
+const (
+	testMountRemote = "/workspace/src"
+	testDiskFlag    = "--disk"
+)
 
 // workspaceE2EHarness threads the in-process orchestrator + caller
 // identity through the multi-step E2E test below.
@@ -261,6 +301,7 @@ type workspaceE2EHarness struct {
 	orchURL    string
 	commonArgs []string
 	fake       *catalogFakeDispatcher
+	store      *workspacecatalog.Store
 	sandboxFP  string
 }
 
@@ -279,7 +320,8 @@ func newWorkspaceE2EHarness(t *testing.T) *workspaceE2EHarness {
 		t.Fatalf("approve client: %v", err)
 	}
 	fake := &catalogFakeDispatcher{}
-	addr, srvID := runOrchestratorWithCatalog(t, srvStore, workspacecatalog.NewStore(nil), fake)
+	catalogStore := workspacecatalog.NewStore(nil)
+	addr, srvID := runOrchestratorWithCatalog(t, srvStore, catalogStore, fake)
 	if _, _, err := runDaft(t, authCmdName, configDirArg, clientDir, "approve",
 		srvID.Fingerprint().String(), "--role", "orchestrator"); err != nil {
 		t.Fatalf("approve orchestrator: %v", err)
@@ -290,6 +332,7 @@ func newWorkspaceE2EHarness(t *testing.T) *workspaceE2EHarness {
 		clientDir: clientDir,
 		orchURL:   orchURL,
 		fake:      fake,
+		store:     catalogStore,
 		sandboxFP: mustGenerate(t).Fingerprint().String(),
 		commonArgs: []string{
 			orchestratorArg, orchURL,
@@ -600,15 +643,53 @@ func TestWorkspaceAcquireAndReleaseRoundTrip(t *testing.T) {
 func TestWorkspaceResourcesSetsMemoryCPUsAndDisk(t *testing.T) {
 	h := newWorkspaceE2EHarness(t)
 	h.run(append([]string{createSubName}, h.commonArgs...)...)
-	h.run(append([]string{resourcesSubName, "--memory", "2G", "--cpus", "2", "--disk", "24G"}, h.commonArgs...)...)
+	h.run(append([]string{resourcesSubName, "--memory", "2G", "--cpus", "2", testDiskFlag, "24G"}, h.commonArgs...)...)
 }
 
 func TestWorkspaceResourcesRejectsBadDisk(t *testing.T) {
 	h := newWorkspaceE2EHarness(t)
 	h.run(append([]string{createSubName}, h.commonArgs...)...)
-	_, err := h.runErr(append([]string{resourcesSubName, "--disk", "lots"}, h.commonArgs...)...)
+	_, err := h.runErr(append([]string{resourcesSubName, testDiskFlag, "lots"}, h.commonArgs...)...)
 	if err == nil {
 		t.Error("expected error for --disk lots")
+	}
+}
+
+func TestWorkspaceResourcesGrowsExistingDiskBeforeCatalogUpdate(t *testing.T) {
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	workspace := h.store.List(nil)[0]
+	_, err := h.store.Update(workspace.Metadata.UUID, workspacecatalog.MutateStatus, func(item *workspacecatalog.Workspace) error {
+		item.Status.DiskAllowanceBytes = 20 << 30
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := resizeCatalogWorkspaceDisk
+	t.Cleanup(func() { resizeCatalogWorkspaceDisk = original })
+	var resized uint64
+	resizeCatalogWorkspaceDisk = func(context.Context, workspaceClientOpts, string, uint64) error {
+		resized = 24 << 30
+		return nil
+	}
+	h.run(append([]string{resourcesSubName, testDiskFlag, "24G"}, h.commonArgs...)...)
+	if resized != 24<<30 {
+		t.Fatalf("resized = %d", resized)
+	}
+	resizeFailure := errors.New("resize failed")
+	resizeCatalogWorkspaceDisk = func(context.Context, workspaceClientOpts, string, uint64) error { return resizeFailure }
+	if _, err := h.runErr(append([]string{resourcesSubName, testDiskFlag, "25G"}, h.commonArgs...)...); !errors.Is(err, resizeFailure) {
+		t.Fatalf("resize failure = %v", err)
+	}
+	if _, err := h.runErr(append([]string{resourcesSubName, testDiskFlag, "10G"}, h.commonArgs...)...); err == nil {
+		t.Fatal("disk shrink succeeded")
+	}
+}
+
+func TestResizeCatalogWorkspaceDiskRejectsMissingClientConfiguration(t *testing.T) {
+	if err := resizeCatalogWorkspaceDisk(t.Context(), workspaceClientOpts{}, "workspace", 24<<30); err == nil {
+		t.Fatal("resize opened without orchestrator configuration")
 	}
 }
 

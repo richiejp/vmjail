@@ -18,15 +18,30 @@ import (
 	"golang.org/x/net/http2"
 	"google.golang.org/protobuf/types/known/durationpb"
 
+	"github.com/richiejp/darkaifactory/internal/daftclient"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/trace"
 	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
+	"github.com/richiejp/darkaifactory/internal/workspacedisk"
 )
 
 const orchestratorFlag = "orchestrator"
+
+//nolint:gochecknoglobals // Narrow transport seam lets CLI tests cover live-resize ordering without a second broker daemon.
+var resizeCatalogWorkspaceDisk = func(ctx context.Context, opts workspaceClientOpts, uuid string, desired uint64) error {
+	client, err := daftclient.Open(daftclient.Config{
+		Orchestrator: opts.orchestrator, ConfigDir: opts.configDir,
+	})
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	_, err = client.ResizeWorkspaceDisk(ctx, uuid, desired)
+	return err
+}
 
 // rpcAddrAttrKey / workspaceAttrKey are span attribute keys.
 // workspaceAttrKey is intentionally distinct from workspaceCmdName
@@ -505,6 +520,23 @@ func newWorkspaceResourcesCmd() *cobra.Command {
 			}
 			return runCatalogCmd(cmd, opts, resourcesSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
+					current, err := c.Get(ctx, connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: h}))
+					if err != nil {
+						return err
+					}
+					statusAllowance := current.Msg.GetWorkspace().GetStatus().GetDiskAllowanceBytes()
+					desiredAllowance := diskBytes
+					if desiredAllowance == 0 {
+						desiredAllowance = workspacedisk.DefaultDiskBytes
+					}
+					if statusAllowance > 0 && desiredAllowance < statusAllowance {
+						return fmt.Errorf("workspace disk cannot shrink: current=%d requested=%d", statusAllowance, desiredAllowance)
+					}
+					if statusAllowance > 0 && desiredAllowance > statusAllowance {
+						if err := resizeCatalogWorkspaceDisk(ctx, opts, current.Msg.GetWorkspace().GetMetadata().GetUuid(), desiredAllowance); err != nil {
+							return err
+						}
+					}
 					resp, err := c.SetResources(ctx, connect.NewRequest(
 						&workspacev1.SetResourcesRequest{
 							Handle:      h,

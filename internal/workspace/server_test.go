@@ -26,7 +26,9 @@ type fakeWorkspaceDiskController struct {
 	statusErr     error
 	unfreezeErr   error
 	deleteErr     error
+	resizeErr     error
 	unfreezeCalls int
+	resizeCalls   int
 	deleteCalls   int
 }
 
@@ -37,6 +39,11 @@ func (f *fakeWorkspaceDiskController) Status(string) (WorkspaceDiskStatus, error
 func (f *fakeWorkspaceDiskController) Unfreeze(context.Context, string) error {
 	f.unfreezeCalls++
 	return f.unfreezeErr
+}
+
+func (f *fakeWorkspaceDiskController) Resize(context.Context, string, uint64) error {
+	f.resizeCalls++
+	return f.resizeErr
 }
 
 func (f *fakeWorkspaceDiskController) Delete(context.Context, string) error {
@@ -560,6 +567,7 @@ func TestStorageControlRPCsAreBoundedAndDryRunOnly(t *testing.T) {
 	}
 }
 
+//nolint:funlen // One indexed fixture proves status, resize, unfreeze, and deletion share exact expectations.
 func TestWorkspaceDiskControlRPCsValidateExactManifestSet(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "cas")
 	store, err := cas.Open(root)
@@ -597,6 +605,37 @@ func TestWorkspaceDiskControlRPCsValidateExactManifestSet(t *testing.T) {
 	for key, state := range states {
 		expected = append(expected, &workspacev1.ManifestExpectation{Workspace: key, ManifestDigest: state.digest, Generation: state.generation})
 	}
+	controller.status.AllowanceBytes = 40
+	resized, err := server.ResizeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.ResizeWorkspaceDiskRequest{
+		WorkspaceUuid: uuid, DiskBytes: 40, ExpectedManifests: expected,
+	}))
+	if err != nil || resized.Msg.GetAllowanceBytes() != 40 || controller.resizeCalls != 1 {
+		t.Fatalf("resize = %#v, %v, calls %d", resized, err, controller.resizeCalls)
+	}
+	if _, err := server.ResizeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.ResizeWorkspaceDiskRequest{
+		WorkspaceUuid: uuid,
+	})); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Fatalf("zero resize = %v", err)
+	}
+	if _, err := server.ResizeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.ResizeWorkspaceDiskRequest{
+		WorkspaceUuid: uuid, DiskBytes: 50, ExpectedManifests: expected[:1],
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition || controller.resizeCalls != 1 {
+		t.Fatalf("stale resize = %v, calls %d", err, controller.resizeCalls)
+	}
+	controller.resizeErr = errors.New("resize failed")
+	if _, err := server.ResizeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.ResizeWorkspaceDiskRequest{
+		WorkspaceUuid: uuid, DiskBytes: 50, ExpectedManifests: expected,
+	})); connect.CodeOf(err) != connect.CodeFailedPrecondition || controller.resizeCalls != 2 {
+		t.Fatalf("failed resize = %v, calls %d", err, controller.resizeCalls)
+	}
+	controller.resizeErr = nil
+	controller.statusErr = errors.New("status after resize failed")
+	if _, err := server.ResizeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.ResizeWorkspaceDiskRequest{
+		WorkspaceUuid: uuid, DiskBytes: 50, ExpectedManifests: expected,
+	})); connect.CodeOf(err) != connect.CodeInternal || controller.resizeCalls != 3 {
+		t.Fatalf("resize status failure = %v, calls %d", err, controller.resizeCalls)
+	}
+	controller.statusErr = nil
 	if _, err := server.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{
 		WorkspaceUuid: uuid, ExpectedManifests: expected[:1],
 	})); connect.CodeOf(err) != connect.CodeFailedPrecondition || controller.unfreezeCalls != 0 {
@@ -632,6 +671,7 @@ func TestWorkspaceDiskControlRPCsValidateExactManifestSet(t *testing.T) {
 
 //nolint:funlen // The shared indexed manifest fixture makes the lifecycle failure matrix race-representative and easier to audit together.
 func TestWorkspaceDiskControlRPCsRejectInvalidRequestsAndControllerFailures(t *testing.T) {
+	const uuid = "disk"
 	plain, _ := mustNewServer(t)
 	if _, err := plain.GetWorkspaceDiskStatus(t.Context(), connect.NewRequest(&workspacev1.GetWorkspaceDiskStatusRequest{})); connect.CodeOf(err) != connect.CodeUnimplemented {
 		t.Fatalf("status without controller = %v", err)
@@ -639,12 +679,18 @@ func TestWorkspaceDiskControlRPCsRejectInvalidRequestsAndControllerFailures(t *t
 	if _, err := plain.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{})); connect.CodeOf(err) != connect.CodeUnimplemented {
 		t.Fatalf("unfreeze without controller = %v", err)
 	}
+	if _, err := plain.ResizeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.ResizeWorkspaceDiskRequest{})); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("resize without controller = %v", err)
+	}
 	if _, err := plain.DeleteWorkspaceData(t.Context(), connect.NewRequest(&workspacev1.DeleteWorkspaceDataRequest{})); connect.CodeOf(err) != connect.CodeUnimplemented {
 		t.Fatalf("delete without controller = %v", err)
 	}
 	plain.SetWorkspaceDiskController(&fakeWorkspaceDiskController{})
-	if _, err := plain.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{WorkspaceUuid: "disk"})); connect.CodeOf(err) != connect.CodeUnimplemented {
+	if _, err := plain.UnfreezeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.UnfreezeWorkspaceDiskRequest{WorkspaceUuid: uuid})); connect.CodeOf(err) != connect.CodeUnimplemented {
 		t.Fatalf("unfreeze without durable index = %v", err)
+	}
+	if _, err := plain.ResizeWorkspaceDisk(t.Context(), connect.NewRequest(&workspacev1.ResizeWorkspaceDiskRequest{WorkspaceUuid: uuid, DiskBytes: 1})); connect.CodeOf(err) != connect.CodeUnimplemented {
+		t.Fatalf("resize without durable index = %v", err)
 	}
 
 	root := filepath.Join(t.TempDir(), "indexed")
@@ -678,7 +724,6 @@ func TestWorkspaceDiskControlRPCsRejectInvalidRequestsAndControllerFailures(t *t
 		t.Fatalf("empty UUID delete = %v", err)
 	}
 
-	const uuid = "disk"
 	key := SyncKey(uuid, "/work")
 	state, err := server.publishManifest(key, &workspacev1.Manifest{Version: 1}, casindex.OriginSandbox, casindex.RecoverabilityProtected)
 	if err != nil {

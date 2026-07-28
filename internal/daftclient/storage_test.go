@@ -54,6 +54,8 @@ type storageNodeHandler struct {
 	manifests     map[string]*workspacev1.GetManifestResponse
 	rejectCalls   int
 	unfreezeCalls int
+	resizeCalls   int
+	resizeErr     error
 	deleteCalls   int
 	manifestErr   error
 	rejectErr     error
@@ -61,6 +63,25 @@ type storageNodeHandler struct {
 	storageErr    error
 	unfreezeErr   error
 	deleteErr     error
+}
+
+const testSandboxManifestDigest = "sandbox"
+
+func (h *storageNodeHandler) ResizeWorkspaceDisk(
+	_ context.Context,
+	req *connect.Request[workspacev1.ResizeWorkspaceDiskRequest],
+) (*connect.Response[workspacev1.GetWorkspaceDiskStatusResponse], error) {
+	if h.resizeErr != nil {
+		return nil, h.resizeErr
+	}
+	h.resizeCalls++
+	if len(req.Msg.GetExpectedManifests()) != 1 {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, errors.New("expectations"))
+	}
+	return connect.NewResponse(&workspacev1.GetWorkspaceDiskStatusResponse{
+		WorkspaceUuid: req.Msg.GetWorkspaceUuid(), AllowanceBytes: req.Msg.GetDiskBytes(), Running: true,
+		CurrentManifests: []*workspacev1.ManifestExpectation{{Workspace: "workspace\x00/work", ManifestDigest: testSandboxManifestDigest, Generation: 2}},
+	}), nil
 }
 
 func (h *storageNodeHandler) GetManifest(
@@ -221,6 +242,10 @@ func TestWorkspaceStorageControlsUseBoundedExactNodeOperations(t *testing.T) {
 	if err != nil || unfrozen.DiskFrozen || !unfrozen.DiskRunning || rig.node.unfreezeCalls != 1 {
 		t.Fatalf("UnfreezeWorkspace = %#v, %v, calls %d", unfrozen, err, rig.node.unfreezeCalls)
 	}
+	resized, err := rig.client.ResizeWorkspaceDisk(t.Context(), uuid, 40)
+	if err != nil || resized.DiskBytes != 40 || !resized.DiskRunning || len(resized.Manifests) != 1 || rig.node.resizeCalls != 1 {
+		t.Fatalf("ResizeWorkspaceDisk = %#v, %v, calls %d", resized, err, rig.node.resizeCalls)
+	}
 	if err := rig.client.DeleteWorkspace(t.Context(), uuid); err != nil || rig.node.deleteCalls != 1 || rig.catalog.deleteCalls != 1 {
 		t.Fatalf("DeleteWorkspace = %v, node %d, catalog %d", err, rig.node.deleteCalls, rig.catalog.deleteCalls)
 	}
@@ -242,13 +267,22 @@ func TestWorkspaceStorageControlsValidateClientAndTarget(t *testing.T) {
 	if _, err := nilClient.WorkspaceStorageStatus(t.Context(), "workspace"); err == nil {
 		t.Fatal("nil client status succeeded")
 	}
+	if _, err := nilClient.ResizeWorkspaceDisk(t.Context(), "workspace", 40); err == nil {
+		t.Fatal("nil client resize succeeded")
+	}
 	rig := newStorageClientRig(t)
 	if _, err := rig.client.WorkspaceStorageStatus(t.Context(), ""); err == nil {
 		t.Fatal("empty UUID status succeeded")
 	}
+	if _, err := rig.client.ResizeWorkspaceDisk(t.Context(), "", 40); err == nil {
+		t.Fatal("empty UUID resize succeeded")
+	}
 	rig.catalog.resource.Spec.TargetSandboxFingerprint = "invalid"
 	if _, err := rig.client.WorkspaceStorageStatus(t.Context(), rig.catalog.resource.GetMetadata().GetUuid()); err == nil {
 		t.Fatal("invalid target status succeeded")
+	}
+	if _, err := rig.client.ResizeWorkspaceDisk(t.Context(), rig.catalog.resource.GetMetadata().GetUuid(), 40); err == nil {
+		t.Fatal("invalid target resize succeeded")
 	}
 }
 
@@ -256,6 +290,11 @@ func TestWorkspaceStorageControlsPropagateNodeAndCatalogFailures(t *testing.T) {
 	rig := newStorageClientRig(t)
 	uuid := rig.catalog.resource.GetMetadata().GetUuid()
 	want := connect.NewError(connect.CodeUnavailable, errors.New("unavailable"))
+	rig.node.resizeErr = want
+	if _, err := rig.client.ResizeWorkspaceDisk(t.Context(), uuid, 40); connect.CodeOf(err) != connect.CodeUnavailable {
+		t.Fatalf("resize error = %v", err)
+	}
+	rig.node.resizeErr = nil
 	rig.node.diskErr = want
 	if _, err := rig.client.WorkspaceStorageStatus(t.Context(), uuid); connect.CodeOf(err) != connect.CodeUnavailable {
 		t.Fatalf("disk status error = %v", err)
@@ -267,6 +306,9 @@ func TestWorkspaceStorageControlsPropagateNodeAndCatalogFailures(t *testing.T) {
 	}
 	rig.node.storageErr = nil
 	rig.node.manifestErr = want
+	if _, err := rig.client.ResizeWorkspaceDisk(t.Context(), uuid, 40); connect.CodeOf(err) != connect.CodeUnavailable {
+		t.Fatalf("resize manifest inspection error = %v", err)
+	}
 	if _, err := rig.client.RejectWorkspaceChanges(t.Context(), uuid); connect.CodeOf(err) != connect.CodeUnavailable {
 		t.Fatalf("manifest inspection error = %v", err)
 	}

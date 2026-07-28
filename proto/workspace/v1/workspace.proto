@@ -108,6 +108,7 @@ service WorkspaceService {
   // the node's durable worker owns destructive cleanup.
   rpc PruneStorage(PruneStorageRequest) returns (PruneStorageResponse);
   rpc GetWorkspaceDiskStatus(GetWorkspaceDiskStatusRequest) returns (GetWorkspaceDiskStatusResponse);
+  rpc ResizeWorkspaceDisk(ResizeWorkspaceDiskRequest) returns (GetWorkspaceDiskStatusResponse);
   rpc UnfreezeWorkspaceDisk(UnfreezeWorkspaceDiskRequest) returns (GetWorkspaceDiskStatusResponse);
   rpc DeleteWorkspaceData(DeleteWorkspaceDataRequest) returns (DeleteWorkspaceDataResponse);
 }
@@ -240,6 +241,12 @@ message GetWorkspaceDiskStatusResponse {
 message UnfreezeWorkspaceDiskRequest {
   string workspace_uuid = 1;
   repeated ManifestExpectation expected_manifests = 2;
+}
+
+message ResizeWorkspaceDiskRequest {
+  string workspace_uuid = 1;
+  uint64 disk_bytes = 2;
+  repeated ManifestExpectation expected_manifests = 3;
 }
 
 message DeleteWorkspaceDataRequest {

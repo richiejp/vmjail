@@ -73,6 +73,9 @@ const (
 	// WorkspaceServiceGetWorkspaceDiskStatusProcedure is the fully-qualified name of the
 	// WorkspaceService's GetWorkspaceDiskStatus RPC.
 	WorkspaceServiceGetWorkspaceDiskStatusProcedure = "/daft.workspace.v1.WorkspaceService/GetWorkspaceDiskStatus"
+	// WorkspaceServiceResizeWorkspaceDiskProcedure is the fully-qualified name of the
+	// WorkspaceService's ResizeWorkspaceDisk RPC.
+	WorkspaceServiceResizeWorkspaceDiskProcedure = "/daft.workspace.v1.WorkspaceService/ResizeWorkspaceDisk"
 	// WorkspaceServiceUnfreezeWorkspaceDiskProcedure is the fully-qualified name of the
 	// WorkspaceService's UnfreezeWorkspaceDisk RPC.
 	WorkspaceServiceUnfreezeWorkspaceDiskProcedure = "/daft.workspace.v1.WorkspaceService/UnfreezeWorkspaceDisk"
@@ -117,6 +120,7 @@ type WorkspaceServiceClient interface {
 	// the node's durable worker owns destructive cleanup.
 	PruneStorage(context.Context, *connect.Request[v1.PruneStorageRequest]) (*connect.Response[v1.PruneStorageResponse], error)
 	GetWorkspaceDiskStatus(context.Context, *connect.Request[v1.GetWorkspaceDiskStatusRequest]) (*connect.Response[v1.GetWorkspaceDiskStatusResponse], error)
+	ResizeWorkspaceDisk(context.Context, *connect.Request[v1.ResizeWorkspaceDiskRequest]) (*connect.Response[v1.GetWorkspaceDiskStatusResponse], error)
 	UnfreezeWorkspaceDisk(context.Context, *connect.Request[v1.UnfreezeWorkspaceDiskRequest]) (*connect.Response[v1.GetWorkspaceDiskStatusResponse], error)
 	DeleteWorkspaceData(context.Context, *connect.Request[v1.DeleteWorkspaceDataRequest]) (*connect.Response[v1.DeleteWorkspaceDataResponse], error)
 }
@@ -192,6 +196,12 @@ func NewWorkspaceServiceClient(httpClient connect.HTTPClient, baseURL string, op
 			connect.WithSchema(workspaceServiceMethods.ByName("GetWorkspaceDiskStatus")),
 			connect.WithClientOptions(opts...),
 		),
+		resizeWorkspaceDisk: connect.NewClient[v1.ResizeWorkspaceDiskRequest, v1.GetWorkspaceDiskStatusResponse](
+			httpClient,
+			baseURL+WorkspaceServiceResizeWorkspaceDiskProcedure,
+			connect.WithSchema(workspaceServiceMethods.ByName("ResizeWorkspaceDisk")),
+			connect.WithClientOptions(opts...),
+		),
 		unfreezeWorkspaceDisk: connect.NewClient[v1.UnfreezeWorkspaceDiskRequest, v1.GetWorkspaceDiskStatusResponse](
 			httpClient,
 			baseURL+WorkspaceServiceUnfreezeWorkspaceDiskProcedure,
@@ -219,6 +229,7 @@ type workspaceServiceClient struct {
 	getStorageStatus       *connect.Client[v1.GetStorageStatusRequest, v1.GetStorageStatusResponse]
 	pruneStorage           *connect.Client[v1.PruneStorageRequest, v1.PruneStorageResponse]
 	getWorkspaceDiskStatus *connect.Client[v1.GetWorkspaceDiskStatusRequest, v1.GetWorkspaceDiskStatusResponse]
+	resizeWorkspaceDisk    *connect.Client[v1.ResizeWorkspaceDiskRequest, v1.GetWorkspaceDiskStatusResponse]
 	unfreezeWorkspaceDisk  *connect.Client[v1.UnfreezeWorkspaceDiskRequest, v1.GetWorkspaceDiskStatusResponse]
 	deleteWorkspaceData    *connect.Client[v1.DeleteWorkspaceDataRequest, v1.DeleteWorkspaceDataResponse]
 }
@@ -273,6 +284,11 @@ func (c *workspaceServiceClient) GetWorkspaceDiskStatus(ctx context.Context, req
 	return c.getWorkspaceDiskStatus.CallUnary(ctx, req)
 }
 
+// ResizeWorkspaceDisk calls daft.workspace.v1.WorkspaceService.ResizeWorkspaceDisk.
+func (c *workspaceServiceClient) ResizeWorkspaceDisk(ctx context.Context, req *connect.Request[v1.ResizeWorkspaceDiskRequest]) (*connect.Response[v1.GetWorkspaceDiskStatusResponse], error) {
+	return c.resizeWorkspaceDisk.CallUnary(ctx, req)
+}
+
 // UnfreezeWorkspaceDisk calls daft.workspace.v1.WorkspaceService.UnfreezeWorkspaceDisk.
 func (c *workspaceServiceClient) UnfreezeWorkspaceDisk(ctx context.Context, req *connect.Request[v1.UnfreezeWorkspaceDiskRequest]) (*connect.Response[v1.GetWorkspaceDiskStatusResponse], error) {
 	return c.unfreezeWorkspaceDisk.CallUnary(ctx, req)
@@ -319,6 +335,7 @@ type WorkspaceServiceHandler interface {
 	// the node's durable worker owns destructive cleanup.
 	PruneStorage(context.Context, *connect.Request[v1.PruneStorageRequest]) (*connect.Response[v1.PruneStorageResponse], error)
 	GetWorkspaceDiskStatus(context.Context, *connect.Request[v1.GetWorkspaceDiskStatusRequest]) (*connect.Response[v1.GetWorkspaceDiskStatusResponse], error)
+	ResizeWorkspaceDisk(context.Context, *connect.Request[v1.ResizeWorkspaceDiskRequest]) (*connect.Response[v1.GetWorkspaceDiskStatusResponse], error)
 	UnfreezeWorkspaceDisk(context.Context, *connect.Request[v1.UnfreezeWorkspaceDiskRequest]) (*connect.Response[v1.GetWorkspaceDiskStatusResponse], error)
 	DeleteWorkspaceData(context.Context, *connect.Request[v1.DeleteWorkspaceDataRequest]) (*connect.Response[v1.DeleteWorkspaceDataResponse], error)
 }
@@ -390,6 +407,12 @@ func NewWorkspaceServiceHandler(svc WorkspaceServiceHandler, opts ...connect.Han
 		connect.WithSchema(workspaceServiceMethods.ByName("GetWorkspaceDiskStatus")),
 		connect.WithHandlerOptions(opts...),
 	)
+	workspaceServiceResizeWorkspaceDiskHandler := connect.NewUnaryHandler(
+		WorkspaceServiceResizeWorkspaceDiskProcedure,
+		svc.ResizeWorkspaceDisk,
+		connect.WithSchema(workspaceServiceMethods.ByName("ResizeWorkspaceDisk")),
+		connect.WithHandlerOptions(opts...),
+	)
 	workspaceServiceUnfreezeWorkspaceDiskHandler := connect.NewUnaryHandler(
 		WorkspaceServiceUnfreezeWorkspaceDiskProcedure,
 		svc.UnfreezeWorkspaceDisk,
@@ -424,6 +447,8 @@ func NewWorkspaceServiceHandler(svc WorkspaceServiceHandler, opts ...connect.Han
 			workspaceServicePruneStorageHandler.ServeHTTP(w, r)
 		case WorkspaceServiceGetWorkspaceDiskStatusProcedure:
 			workspaceServiceGetWorkspaceDiskStatusHandler.ServeHTTP(w, r)
+		case WorkspaceServiceResizeWorkspaceDiskProcedure:
+			workspaceServiceResizeWorkspaceDiskHandler.ServeHTTP(w, r)
 		case WorkspaceServiceUnfreezeWorkspaceDiskProcedure:
 			workspaceServiceUnfreezeWorkspaceDiskHandler.ServeHTTP(w, r)
 		case WorkspaceServiceDeleteWorkspaceDataProcedure:
@@ -475,6 +500,10 @@ func (UnimplementedWorkspaceServiceHandler) PruneStorage(context.Context, *conne
 
 func (UnimplementedWorkspaceServiceHandler) GetWorkspaceDiskStatus(context.Context, *connect.Request[v1.GetWorkspaceDiskStatusRequest]) (*connect.Response[v1.GetWorkspaceDiskStatusResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.GetWorkspaceDiskStatus is not implemented"))
+}
+
+func (UnimplementedWorkspaceServiceHandler) ResizeWorkspaceDisk(context.Context, *connect.Request[v1.ResizeWorkspaceDiskRequest]) (*connect.Response[v1.GetWorkspaceDiskStatusResponse], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.workspace.v1.WorkspaceService.ResizeWorkspaceDisk is not implemented"))
 }
 
 func (UnimplementedWorkspaceServiceHandler) UnfreezeWorkspaceDisk(context.Context, *connect.Request[v1.UnfreezeWorkspaceDiskRequest]) (*connect.Response[v1.GetWorkspaceDiskStatusResponse], error) {

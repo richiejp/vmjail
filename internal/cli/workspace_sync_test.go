@@ -60,6 +60,8 @@ func (c *cliWorkspaceDiskController) Unfreeze(context.Context, string) error {
 	return nil
 }
 
+func (c *cliWorkspaceDiskController) Resize(context.Context, string, uint64) error { return nil }
+
 func (c *cliWorkspaceDiskController) Delete(context.Context, string) error {
 	c.deleteCalls++
 	return nil

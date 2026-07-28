@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -32,6 +33,7 @@ type fakeWorkspaceDiskExecutor struct {
 	statusErr   error
 	unfreezeErr error
 	unfrozen    bool
+	resized     uint64
 }
 
 func (f *fakeWorkspaceDiskExecutor) WorkspaceDiskStatuses() []sandboxexec.WorkspaceDiskStatus {
@@ -47,6 +49,11 @@ func (f *fakeWorkspaceDiskExecutor) UnfreezeWorkspaceDisk(context.Context, strin
 	return f.unfreezeErr
 }
 
+func (f *fakeWorkspaceDiskExecutor) ResizeWorkspaceDisk(_ context.Context, _ string, desired uint64) error {
+	f.resized = desired
+	return nil
+}
+
 func TestNodeWorkspaceDiskControlRunningAndRetainedStates(t *testing.T) {
 	store, err := workspacedisk.OpenStore(filepath.Join(t.TempDir(), "disks"), "")
 	if err != nil {
@@ -60,6 +67,9 @@ func TestNodeWorkspaceDiskControlRunningAndRetainedStates(t *testing.T) {
 		Usage: workspacesnapshot.Usage{Used: 7, Available: 13}, Allowance: 20, Frozen: true,
 	}}
 	control := &nodeWorkspaceDiskControl{executor: executor, store: store}
+	if err := control.Resize(t.Context(), workspaceID, 40); err != nil || executor.resized != 40 {
+		t.Fatalf("running resize = %v, desired %d", err, executor.resized)
+	}
 	status, err := control.Status(workspaceID)
 	if err != nil || !status.Running || status.UsedBytes != 7 || !status.Frozen {
 		t.Fatalf("running status = %#v, %v", status, err)
@@ -71,8 +81,15 @@ func TestNodeWorkspaceDiskControlRunningAndRetainedStates(t *testing.T) {
 		t.Fatalf("unfreeze = %v, called %t", err, executor.unfrozen)
 	}
 	executor.statusErr = sandboxexec.ErrWorkspaceDiskNotRunning
+	const grown = 24 << 30
+	if err := control.Resize(t.Context(), workspaceID, grown); err != nil {
+		t.Fatalf("stopped resize = %v", err)
+	}
+	if err := control.Resize(t.Context(), workspaceID, grown); err == nil {
+		t.Fatal("stopped disk accepted non-growth resize")
+	}
 	status, err = control.Status(workspaceID)
-	if err != nil || status.Running || status.AllowanceBytes != workspacedisk.DefaultDiskBytes {
+	if err != nil || status.Running || status.AllowanceBytes != grown {
 		t.Fatalf("retained status = %#v, %v", status, err)
 	}
 	if err := control.Delete(t.Context(), workspaceID); err != nil {
@@ -101,7 +118,16 @@ func TestNodeWorkspaceDiskControlPropagatesExecutorAndStoreErrors(t *testing.T) 
 	if err := control.Unfreeze(t.Context(), workspaceID); !errors.Is(err, executorErr) {
 		t.Fatalf("Unfreeze executor error = %v", err)
 	}
+	if err := control.Resize(t.Context(), workspaceID, 24<<30); !errors.Is(err, executorErr) {
+		t.Fatalf("Resize executor error = %v", err)
+	}
 	executor.statusErr = sandboxexec.ErrWorkspaceDiskNotRunning
+	if err := control.Resize(t.Context(), workspaceID, 24<<30); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Resize missing error = %v", err)
+	}
+	if err := control.Resize(t.Context(), "../invalid", 24<<30); err == nil {
+		t.Fatal("Resize accepted invalid workspace ID")
+	}
 	if _, err := control.Status("../invalid"); err == nil {
 		t.Fatal("Status accepted invalid retained workspace ID")
 	}

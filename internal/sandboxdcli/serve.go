@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -187,6 +188,7 @@ type nodeWorkspaceDiskControl struct {
 
 type workspaceDiskExecutor interface {
 	WorkspaceDiskStatus(string) (sandboxexec.WorkspaceDiskStatus, error)
+	ResizeWorkspaceDisk(context.Context, string, uint64) error
 	UnfreezeWorkspaceDisk(context.Context, string) error
 }
 
@@ -210,6 +212,25 @@ func (c *nodeWorkspaceDiskControl) Status(workspaceID string) (workspace.Workspa
 
 func (c *nodeWorkspaceDiskControl) Unfreeze(ctx context.Context, workspaceID string) error {
 	return c.executor.UnfreezeWorkspaceDisk(ctx, workspaceID)
+}
+
+func (c *nodeWorkspaceDiskControl) Resize(ctx context.Context, workspaceID string, desired uint64) error {
+	if _, err := c.executor.WorkspaceDiskStatus(workspaceID); err == nil {
+		return c.executor.ResizeWorkspaceDisk(ctx, workspaceID, desired)
+	} else if !errors.Is(err, sandboxexec.ErrWorkspaceDiskNotRunning) {
+		return err
+	}
+	current, exists, err := c.store.Size(workspaceID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fs.ErrNotExist
+	}
+	if desired <= current {
+		return fmt.Errorf("workspace disk resize must increase allowance: current=%d requested=%d", current, desired)
+	}
+	return c.store.Grow(workspaceID, desired)
 }
 
 func (c *nodeWorkspaceDiskControl) Delete(_ context.Context, workspaceID string) error {
