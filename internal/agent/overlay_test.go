@@ -122,7 +122,7 @@ func TestApplySharesFromConfigReportsOverlayMountError(t *testing.T) {
 	f.mountErr = errors.New("overlay mount bang")
 	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{
 		Shares: []*agentv1.GuestConfig_Share{
-			{Tag: "workspace", Mountpoint: "/workspace", Overlay: true},
+			{Tag: "workspace", Mountpoint: overlayMergedTest, Overlay: true},
 		},
 	}}
 	deps := runDeps{

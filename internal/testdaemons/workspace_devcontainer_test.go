@@ -61,6 +61,7 @@ func TestClusterWorkspaceDevcontainerBoots(t *testing.T) {
 	dcJSON := fmt.Sprintf(`{
   "name": "d101-e2e",
   "image": %q,
+  "overrideCommand": false,
   "containerEnv": { "DC_MARKER": %q }
 }`, ref, dcMarker)
 	if err := os.WriteFile(filepath.Join(dcDir, "devcontainer.json"), []byte(dcJSON), 0o600); err != nil {

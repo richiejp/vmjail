@@ -72,6 +72,10 @@ type BootOptions struct {
 	// static build image instead of baking a per-build image. See
 	// imagestore.BundleOptions.Args.
 	Args []string
+	// Cwd, when non-empty, overrides the image working directory. A
+	// devcontainer uses workspaceFolder so lifecycle and attached commands
+	// start where its tooling expects the project.
+	Cwd string
 	// Env is merged over the image's Env (keyed by NAME) in the
 	// container's OCI process env. Carries the workspace's own env
 	// plus, under Phase J, the injected egress-proxy variables.
@@ -185,6 +189,7 @@ func BuildBundleConfig(
 	bundle, err := store.Bundle(ctx, img.Digest, imagestore.BundleOptions{
 		ExtraMounts:          extraMounts,
 		Args:                 opts.Args,
+		Cwd:                  opts.Cwd,
 		Env:                  env,
 		Nested:               opts.Nested,
 		PrivilegedFuseMounts: opts.PrivilegedFuseMounts,

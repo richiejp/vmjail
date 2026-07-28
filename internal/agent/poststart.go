@@ -126,6 +126,7 @@ func runOnePostStart(ctx context.Context, w io.Writer, d runDeps, cp containerPr
 		Command: argv,
 		Env:     cp.Env,
 		User:    cp.User,
+		Cwd:     cp.Cwd,
 	})
 	if err != nil {
 		writeReport(w, PostStartReportPrefix, "start: "+err.Error())

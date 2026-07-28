@@ -117,6 +117,18 @@ Landed:
   retries converge on the durable run, conflicting reuse is rejected, and
   credentials are not redelivered after the run leaves its awaiting state.
 - Trusted stdio MCP facade with owner-scoped workspace and agent operations.
+- Devcontainer reliability fixes: overseer workflows push workspace content
+  before launch, OCI hard links resolve from the layer archive root, and the
+  documented `workspace image --clear` operation is implemented. Image-based
+  devcontainers also honor the default `overrideCommand` keepalive (with an
+  explicit false opt-out), so lifecycle hooks run even when an image's own
+  default command exits immediately. Their `workspaceFolder` becomes the OCI
+  and exec working directory, including post-start and detached commands.
+  Entrypoint-dependent integration fixtures opt out explicitly, keeping the
+  default semantics covered without conflating them with image-command tests.
+- The integration gate keeps its concurrency lock in the parent but closes the
+  descriptor in test subprocesses, preventing leaked tmux servers from holding
+  the repository lock after a timed-out test run.
 - Real daemon/MCP lifecycle tests for workspace and AgentRun paths.
 - Adaptive SSH Node deployment skill and deterministic probe, stage, verify,
   upgrade, and rollback scripts.

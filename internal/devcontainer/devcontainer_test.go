@@ -101,6 +101,23 @@ func TestResolvePyTorchCPU(t *testing.T) {
 	}
 }
 
+func TestResolveOverrideCommand(t *testing.T) {
+	defaulted, err := Resolve([]byte(`{"image":"example.invalid/dev:1"}`), Substitutions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !defaulted.OverrideCommand {
+		t.Fatal("overrideCommand should default to true for an image devcontainer")
+	}
+	disabled, err := Resolve([]byte(`{"image":"example.invalid/dev:1","overrideCommand":false}`), Substitutions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if disabled.OverrideCommand {
+		t.Fatal("explicit overrideCommand=false was not preserved")
+	}
+}
+
 func TestResolveImageBasedAndSubstitution(t *testing.T) {
 	cfg := `{
   "name": "img",

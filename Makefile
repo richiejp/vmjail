@@ -395,7 +395,7 @@ integration: integration-build
 			rc=0; \
 			echo "[e2e] sandbox pkg — in-process host shares the delegated scope: per-VM accounting, limits off"; \
 			sandbox_log=$$(mktemp /tmp/daft-integration-sandbox.XXXXXX.log); \
-			if $$delegate go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/sandbox/ >$$sandbox_log 2>&1; then \
+			if $$delegate go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/sandbox/ 9>&- >$$sandbox_log 2>&1; then \
 				tail -2 $$sandbox_log; rm -f $$sandbox_log; \
 			else \
 				echo "[e2e] sandbox failure; full log retained at $$sandbox_log"; \
@@ -404,7 +404,7 @@ integration: integration-build
 			fi; \
 			echo "[e2e] testdaemons pkg — daft-sandboxd self-wraps into a private scope: per-VM limits enforced (fail-closed)"; \
 			daemon_log=$$(mktemp /tmp/daft-integration-testdaemons.XXXXXX.log); \
-			if go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/testdaemons/ >$$daemon_log 2>&1; then \
+			if go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/testdaemons/ 9>&- >$$daemon_log 2>&1; then \
 				tail -2 $$daemon_log; rm -f $$daemon_log; \
 			else \
 				echo "[e2e] testdaemons failure; full log retained at $$daemon_log"; \

@@ -919,7 +919,7 @@ func TestHandleSandboxEventDevcontainerOverlay(t *testing.T) {
 			return err
 		}
 		return os.WriteFile(filepath.Join(dir, "devcontainer.json"),
-			[]byte(`{"image":"ghcr.io/acme/dev:1","containerEnv":{"FOO":"bar"}}`), 0o644)
+			[]byte(`{"image":"ghcr.io/acme/dev:1","workspaceFolder":"/workspace","containerEnv":{"FOO":"bar"}}`), 0o644)
 	}}
 	var gotRef string
 	var gotOpts sandboxboot.BootOptions
@@ -952,6 +952,9 @@ func TestHandleSandboxEventDevcontainerOverlay(t *testing.T) {
 	}
 	if !slices.Contains(gotOpts.Env, "OVERRIDE=ws") {
 		t.Errorf("env = %v, want the workspace's explicit OVERRIDE preserved", gotOpts.Env)
+	}
+	if gotOpts.Cwd != mntWorkspace {
+		t.Errorf("cwd = %q, want the devcontainer workspaceFolder", gotOpts.Cwd)
 	}
 }
 

@@ -316,7 +316,11 @@ func writeTarEntry(tr *tar.Reader, hdr *tar.Header, target, root string) error {
 			os.Remove(target), fs.ErrNotExist)
 		return os.Symlink(hdr.Linkname, target)
 	case tar.TypeLink:
-		linkSource, err := safeJoin(filepath.Dir(target), hdr.Linkname)
+		// OCI layer hard-link names are rooted at the archive root, not
+		// relative to the link entry's directory. Resolving against target's
+		// parent turns e.g. usr/bin/perl5.36.0 -> usr/bin/perl into the bogus
+		// usr/bin/usr/bin/perl path used by some Debian-derived images.
+		linkSource, err := safeJoin(root, hdr.Linkname)
 		if err != nil {
 			return err
 		}

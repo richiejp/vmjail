@@ -43,9 +43,11 @@ and `target_node_fingerprint`. Treat `created: false, changed: false` as a
 successful retry. Record the returned UUID and generation.
 
 Call `workspace_validate`; resolve every reported missing field. Call
-`workspace_launch`, then `workspace_push` with the Workspace UUID and the
-absolute project path. An exact retry of apply, launch, or push is safe. Verify
-the push result names the expected project path and nonempty mount entries.
+`workspace_push` with the Workspace UUID and absolute project path, then call
+`workspace_launch`. This order is required for a devcontainer because launch
+resolves its configuration from the pushed workspace content. An exact retry
+of apply, push, or launch is safe. Verify the push result names the expected
+project path and nonempty mount entries before launching.
 
 ## 3. Start exactly one AgentRun
 

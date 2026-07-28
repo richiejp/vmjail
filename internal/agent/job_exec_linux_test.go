@@ -92,10 +92,10 @@ func TestDefaultJobCmdCarriesExecutionContext(t *testing.T) {
 		t.Fatal("default job executor is nil")
 	}
 	cmd := defaultJobCmd(t.Context(), JobExecRequest{
-		Command: []string{"agent", testRunCommand}, Env: []string{testEnvAssignment}, User: testExecUser,
+		Command: []string{"agent", testRunCommand}, Env: []string{testEnvAssignment}, User: testExecUser, Cwd: overlayMergedTest,
 	})
 	joined := strings.Join(cmd.Args, " ")
-	for _, want := range []string{"crun exec", "--env " + testEnvAssignment, "--user " + testExecUser, ContainerID, "agent run"} {
+	for _, want := range []string{"crun exec", "--env " + testEnvAssignment, "--user " + testExecUser, "--cwd " + overlayMergedTest, ContainerID, "agent run"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("args %q missing %q", joined, want)
 		}

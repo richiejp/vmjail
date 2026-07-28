@@ -331,6 +331,11 @@ func TestDefaultAttachCmdBuildsCrunArgs(t *testing.T) {
 			req:  AttachExecRequest{Command: []string{"id"}},
 			want: []string{ContainerRuntime, crunExecSubcommand, ContainerID, "id"},
 		},
+		{
+			name: "cwd-forwarded-before-container-id",
+			req:  AttachExecRequest{Command: []string{"pwd"}, Cwd: overlayMergedTest},
+			want: []string{ContainerRuntime, crunExecSubcommand, "--cwd", overlayMergedTest, ContainerID, "pwd"},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

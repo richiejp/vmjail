@@ -31,6 +31,7 @@ type JobExecRequest struct {
 	Command []string
 	Env     []string
 	User    string
+	Cwd     string
 }
 
 type JobProcess interface {
@@ -112,7 +113,7 @@ func handleJob(ctx context.Context, w io.Writer, conn net.Conn, executor ExecJob
 	jobCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	process, err := executor.Start(jobCtx, JobExecRequest{
-		Command: hello.GetCommand(), Env: container.Env, User: container.User,
+		Command: hello.GetCommand(), Env: container.Env, User: container.User, Cwd: container.Cwd,
 	})
 	if err != nil {
 		writeReport(w, jobReportPrefix, "exec start: "+err.Error())

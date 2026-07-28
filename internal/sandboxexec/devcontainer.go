@@ -22,6 +22,8 @@ import (
 // (non-nil only for a build-based config the workspace didn't override).
 type devcontainerResolution struct {
 	ImageRef  string
+	Args      []string
+	Cwd       string
 	Env       []string
 	Ports     []*sandboxv1.PortMapping
 	PostStart [][]string
@@ -92,6 +94,8 @@ func resolveDevcontainerData(spec *sandboxv1.SandboxSpec, data []byte, rel strin
 	// the build would run pointlessly.
 	return devcontainerResolution{
 		ImageRef:  eff.ImageRef,
+		Args:      devcontainerArgs(resolved.OverrideCommand),
+		Cwd:       resolved.Workspace.Folder,
 		Env:       envStrings(eff.Env),
 		Ports:     portMappingsToProto(eff.Ports),
 		PostStart: normalizePostStart(resolved.Lifecycle.PostStart),
@@ -147,6 +151,18 @@ func (e *Executor) resolveDevcontainerOverlay(ctx context.Context, uid string, s
 	return resolveDevcontainerOverlay(spec, mounts)
 }
 
+const (
+	devcontainerShell          = "/bin/sh"
+	devcontainerKeepaliveShell = "trap 'exit 0' TERM INT; while :; do sleep 3600; done"
+)
+
+func devcontainerArgs(overrideCommand bool) []string {
+	if !overrideCommand {
+		return nil
+	}
+	return []string{devcontainerShell, "-c", devcontainerKeepaliveShell}
+}
+
 // normalizePostStart flattens the resolved devcontainer postStartCommand
 // hooks into argv lists the agent can crun-exec directly: a shell-form
 // entry becomes ["/bin/sh","-c",<shell>]; an argv-form entry passes
@@ -160,7 +176,7 @@ func normalizePostStart(entries []devcontainer.CommandEntry) [][]string {
 		case len(e.Argv) > 0:
 			out = append(out, e.Argv)
 		case e.Shell != "":
-			out = append(out, []string{"/bin/sh", "-c", e.Shell})
+			out = append(out, []string{devcontainerShell, "-c", e.Shell})
 		}
 	}
 	return out

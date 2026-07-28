@@ -86,7 +86,7 @@ func TestClusterWorkspaceDevcontainerBuildRunTLS(t *testing.T) {
 		t.Fatalf("mkdir .devcontainer: %v", err)
 	}
 	writeFile(t, filepath.Join(dcDir, "devcontainer.json"),
-		`{"name":"d101-runtls","build":{"dockerfile":"Dockerfile"}}`)
+		`{"name":"d101-runtls","build":{"dockerfile":"Dockerfile"},"overrideCommand":false}`)
 	// Exec-form RUN/ENTRYPOINT: the nix base ships /bin/dash, not /bin/sh. The
 	// RUN does a verified (no --insecure) HTTPS GET through the proxy and
 	// records the result; a cert failure makes daft-http-fetch exit 1, so the

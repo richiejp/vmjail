@@ -43,9 +43,10 @@ type Config struct {
 	Context           string        `json:"context"`    // legacy companion to DockerFile
 	DockerComposeFile StringOrSlice `json:"dockerComposeFile"`
 
-	ContainerEnv  map[string]string `json:"containerEnv"`
-	RemoteUser    string            `json:"remoteUser"`
-	ContainerUser string            `json:"containerUser"`
+	ContainerEnv    map[string]string `json:"containerEnv"`
+	RemoteUser      string            `json:"remoteUser"`
+	ContainerUser   string            `json:"containerUser"`
+	OverrideCommand *bool             `json:"overrideCommand"`
 
 	WorkspaceFolder string  `json:"workspaceFolder"`
 	WorkspaceMount  string  `json:"workspaceMount"`

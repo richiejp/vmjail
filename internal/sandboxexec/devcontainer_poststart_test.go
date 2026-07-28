@@ -36,3 +36,18 @@ func TestNormalizePostStartEmpty(t *testing.T) {
 		t.Errorf("all-blank hooks → %v, want nil", got)
 	}
 }
+
+func TestDevcontainerArgs(t *testing.T) {
+	if got := devcontainerArgs(false); got != nil {
+		t.Fatalf("overrideCommand=false args = %v, want nil", got)
+	}
+	got := devcontainerArgs(true)
+	want := []string{devcontainerShell, "-c", devcontainerKeepaliveShell}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("overrideCommand=true args = %v, want %v", got, want)
+	}
+	got[0] = "mutated"
+	if devcontainerArgs(true)[0] == "mutated" {
+		t.Fatal("devcontainerArgs returned mutable package storage")
+	}
+}

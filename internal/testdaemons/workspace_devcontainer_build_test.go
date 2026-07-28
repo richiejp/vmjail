@@ -66,7 +66,7 @@ func TestClusterWorkspaceDevcontainerBuild(t *testing.T) {
 		t.Fatalf("mkdir .devcontainer: %v", err)
 	}
 	writeFile(t, filepath.Join(dcDir, "devcontainer.json"),
-		`{"name":"d101-build","build":{"dockerfile":"Dockerfile"}}`)
+		`{"name":"d101-build","build":{"dockerfile":"Dockerfile"},"overrideCommand":false}`)
 	// Exec-form RUN/ENTRYPOINT: the nix base ships /bin/dash, not /bin/sh.
 	writeFile(t, filepath.Join(dcDir, "Dockerfile"), fmt.Sprintf(
 		"FROM %s\n"+

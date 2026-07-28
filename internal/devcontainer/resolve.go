@@ -45,6 +45,11 @@ type Spec struct {
 	RemoteUser    string
 	ContainerUser string
 
+	// OverrideCommand keeps a devcontainer alive independently of the
+	// image's default command. The Dev Container image/Dockerfile default is
+	// true; an explicit false preserves the image entrypoint and command.
+	OverrideCommand bool
+
 	// Workspace is where the project source mounts. Folder is the
 	// in-container path tools open; Mount, when set, is the host→guest
 	// bind parsed from workspaceMount.
@@ -151,14 +156,15 @@ func (c *Config) Resolve(sub Substitutions) (*Spec, error) {
 	exp := func(s string) string { return sub.expand(s, c.ContainerEnv) }
 
 	spec := &Spec{
-		Name:          c.Name,
-		Image:         exp(c.Image),
-		RemoteUser:    c.RemoteUser,
-		ContainerUser: c.ContainerUser,
-		Env:           resolveEnv(c.ContainerEnv, exp),
-		ForwardPorts:  resolvePorts(c.ForwardPorts),
-		Features:      resolveFeatures(c.Features),
-		Lifecycle:     resolveLifecycle(c, exp),
+		Name:            c.Name,
+		Image:           exp(c.Image),
+		RemoteUser:      c.RemoteUser,
+		ContainerUser:   c.ContainerUser,
+		OverrideCommand: c.OverrideCommand == nil || *c.OverrideCommand,
+		Env:             resolveEnv(c.ContainerEnv, exp),
+		ForwardPorts:    resolvePorts(c.ForwardPorts),
+		Features:        resolveFeatures(c.Features),
+		Lifecycle:       resolveLifecycle(c, exp),
 	}
 	spec.Build = resolveBuild(c, exp)
 	if err := resolveWorkspace(c, exp, spec); err != nil {

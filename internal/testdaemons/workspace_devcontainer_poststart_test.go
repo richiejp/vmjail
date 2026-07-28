@@ -67,7 +67,7 @@ func TestClusterWorkspaceDevcontainerPostStart(t *testing.T) {
 	// entrypoint stays alive (sleep infinity) so the container reaches
 	// crun "running" and the agent's post-start step fires.
 	writeFile(t, filepath.Join(dcDir, "devcontainer.json"), fmt.Sprintf(
-		`{"name":"d101-poststart","build":{"dockerfile":"Dockerfile"},`+
+		`{"name":"d101-poststart","build":{"dockerfile":"Dockerfile"},"overrideCommand":false,`+
 			`"postStartCommand":["/bin/dash","-c","echo %s"]}`,
 		postStartSentinel,
 	))

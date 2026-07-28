@@ -97,6 +97,8 @@ type AttachExecRequest struct {
 	// (root) — so a root container is unchanged, while a non-root image
 	// gets exec'd as its declared user instead of silently as root.
 	User string
+	// Cwd is the container process working directory from config.json.
+	Cwd string
 }
 
 // containerProcess is the per-container exec context read once from the
@@ -106,6 +108,7 @@ type AttachExecRequest struct {
 type containerProcess struct {
 	Env  []string
 	User string
+	Cwd  string
 }
 
 // attachDeps factors the side-effect surfaces of the attach
@@ -164,6 +167,7 @@ func readContainerProcess(w io.Writer, bundle string) containerProcess {
 	var spec struct {
 		Process struct {
 			Env  []string `json:"env"`
+			Cwd  string   `json:"cwd"`
 			User struct {
 				UID int `json:"uid"`
 				GID int `json:"gid"`
@@ -178,7 +182,7 @@ func readContainerProcess(w io.Writer, bundle string) containerProcess {
 	if spec.Process.User.UID != 0 || spec.Process.User.GID != 0 {
 		user = fmt.Sprintf("%d:%d", spec.Process.User.UID, spec.Process.User.GID)
 	}
-	return containerProcess{Env: spec.Process.Env, User: user}
+	return containerProcess{Env: spec.Process.Env, User: user, Cwd: spec.Process.Cwd}
 }
 
 // runAttachListener vsock-listens on port and serves each accepted

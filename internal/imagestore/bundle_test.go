@@ -1457,6 +1457,34 @@ func TestWriteTarEntrySymlinkOverwritesExistingTarget(t *testing.T) {
 	}
 }
 
+func TestWriteTarEntryHardlinkResolvesFromArchiveRoot(t *testing.T) {
+	dst := t.TempDir()
+	dir := filepath.Join(dst, "usr", "bin")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(dir, "perl")
+	if err := os.WriteFile(source, []byte("perl"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "perl5.36.0")
+	hdr := &tar.Header{Typeflag: tar.TypeLink, Linkname: "usr/bin/perl"}
+	if err := writeTarEntry(nil, hdr, target, dst); err != nil {
+		t.Fatalf("hardlink: %v", err)
+	}
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetInfo, err := os.Stat(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(sourceInfo, targetInfo) {
+		t.Fatal("hardlink target does not reference the archive-root source")
+	}
+}
+
 // TestWriteTarEntryRegularMkdirPathExercised covers the
 // MkdirAll-of-parent branch of TypeReg by writing a deeply-nested
 // path whose parent directories don't exist yet.

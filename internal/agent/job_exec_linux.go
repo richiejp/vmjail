@@ -28,6 +28,9 @@ func defaultJobCmd(ctx context.Context, req JobExecRequest) *exec.Cmd {
 	if req.User != "" {
 		argv = append(argv, "--user", req.User)
 	}
+	if req.Cwd != "" {
+		argv = append(argv, "--cwd", req.Cwd)
+	}
 	argv = append(argv, ContainerID)
 	argv = append(argv, req.Command...)
 	// #nosec G204 — command and inherited container execution context are

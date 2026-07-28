@@ -1113,6 +1113,8 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 	env := envFromSpec(spec.GetEnv())
 	ports := spec.GetPorts()
 	var postStart [][]string
+	var args []string
+	var cwd string
 	if hasDevcontainer {
 		// Read the devcontainer from the just-materialised content and
 		// overlay the explicit spec on top (explicit wins). The effective
@@ -1130,7 +1132,7 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 				}
 			}()
 		}
-		imageRef, env, ports = res.ImageRef, res.Env, res.Ports
+		imageRef, args, cwd, env, ports = res.ImageRef, res.Args, res.Cwd, res.Env, res.Ports
 		postStart = res.PostStart
 		// A build-based devcontainer with no explicit image override
 		// (overlay leaves imageRef empty) is built in an ephemeral
@@ -1146,6 +1148,8 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 	}
 	opts := sandboxboot.BootOptions{
 		Mounts:               mounts,
+		Args:                 args,
+		Cwd:                  cwd,
 		Env:                  env,
 		Nested:               spec.GetNestedVirtualization().GetEnable(),
 		PrivilegedFuseMounts: spec.GetPrivilegedFuseMounts().GetEnable(),

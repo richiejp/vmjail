@@ -367,15 +367,16 @@ func newWorkspaceListCmd() *cobra.Command {
 //nolint:dupl // catalog subcommands are structurally parallel by design — runCatalogCmd factors the body.
 func newWorkspaceImageCmd() *cobra.Command {
 	var opts workspaceClientOpts
+	var clearRef bool
 	cmd := &cobra.Command{
-		Use:           imageSubName + " <ref>",
+		Use:           imageSubName + " [ref]",
 		Short:         "Set the workspace's OCI image reference (or clear it with --clear)",
 		Args:          cobra.MaximumNArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			var ref string
-			if len(args) > 0 {
-				ref = args[0]
+			ref, err := resolveImageArg(args, clearRef)
+			if err != nil {
+				return err
 			}
 			return runCatalogCmd(cmd, opts, imageSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
@@ -389,8 +390,22 @@ func newWorkspaceImageCmd() *cobra.Command {
 				})
 		},
 	}
+	cmd.Flags().BoolVar(&clearRef, "clear", false, "unset the workspace's OCI image reference")
 	bindWorkspaceClientFlags(cmd, &opts)
 	return cmd
+}
+
+func resolveImageArg(args []string, clearRef bool) (string, error) {
+	if clearRef {
+		if len(args) != 0 {
+			return "", errors.New("daft workspace image: --clear takes no image reference")
+		}
+		return "", nil
+	}
+	if len(args) != 1 {
+		return "", errors.New("daft workspace image: pass an image reference or --clear")
+	}
+	return args[0], nil
 }
 
 //nolint:dupl // catalog subcommands are structurally parallel by design — runCatalogCmd factors the body.
