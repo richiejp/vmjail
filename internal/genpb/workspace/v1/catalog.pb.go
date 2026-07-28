@@ -432,9 +432,16 @@ type WorkspaceStatus struct {
 	// Write-lock state. Empty owner_fingerprint ⇒ unlocked.
 	// Mutations and Launch require holding the lock when set.
 	// Phase F3 lands the explicit Acquire / Release RPCs.
-	Lock          *Lock `protobuf:"bytes,5,opt,name=lock,proto3" json:"lock,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Lock *Lock `protobuf:"bytes,5,opt,name=lock,proto3" json:"lock,omitempty"`
+	// Latest Node-observed retained-disk and protected-manifest summary. These
+	// fields are zero while the Node has not reported storage state.
+	DiskUsedBytes      uint64 `protobuf:"varint,6,opt,name=disk_used_bytes,json=diskUsedBytes,proto3" json:"disk_used_bytes,omitempty"`
+	DiskAllowanceBytes uint64 `protobuf:"varint,7,opt,name=disk_allowance_bytes,json=diskAllowanceBytes,proto3" json:"disk_allowance_bytes,omitempty"`
+	ProtectedBytes     uint64 `protobuf:"varint,8,opt,name=protected_bytes,json=protectedBytes,proto3" json:"protected_bytes,omitempty"`
+	ManifestDigest     string `protobuf:"bytes,9,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
+	ManifestGeneration uint64 `protobuf:"varint,10,opt,name=manifest_generation,json=manifestGeneration,proto3" json:"manifest_generation,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *WorkspaceStatus) Reset() {
@@ -500,6 +507,41 @@ func (x *WorkspaceStatus) GetLock() *Lock {
 		return x.Lock
 	}
 	return nil
+}
+
+func (x *WorkspaceStatus) GetDiskUsedBytes() uint64 {
+	if x != nil {
+		return x.DiskUsedBytes
+	}
+	return 0
+}
+
+func (x *WorkspaceStatus) GetDiskAllowanceBytes() uint64 {
+	if x != nil {
+		return x.DiskAllowanceBytes
+	}
+	return 0
+}
+
+func (x *WorkspaceStatus) GetProtectedBytes() uint64 {
+	if x != nil {
+		return x.ProtectedBytes
+	}
+	return 0
+}
+
+func (x *WorkspaceStatus) GetManifestDigest() string {
+	if x != nil {
+		return x.ManifestDigest
+	}
+	return ""
+}
+
+func (x *WorkspaceStatus) GetManifestGeneration() uint64 {
+	if x != nil {
+		return x.ManifestGeneration
+	}
+	return 0
 }
 
 // Lock is the workspace's optional write-lock. Empty
@@ -594,7 +636,7 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\x12K\n" +
 	"\x10privileged_build\x18\x0e \x01(\v2 .daft.sandbox.v1.PrivilegedBuildR\x0fprivilegedBuild\x12\x1d\n" +
 	"\n" +
-	"disk_bytes\x18\x0f \x01(\x04R\tdiskBytes\"\x8b\x02\n" +
+	"disk_bytes\x18\x0f \x01(\x04R\tdiskBytes\"\xe8\x03\n" +
 	"\x0fWorkspaceStatus\x12/\n" +
 	"\x13observed_generation\x18\x01 \x01(\x04R\x12observedGeneration\x12:\n" +
 	"\n" +
@@ -602,7 +644,13 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"conditions\x12D\n" +
 	"\x0fcurrent_sandbox\x18\x03 \x01(\v2\x1b.daft.sandbox.v1.SandboxRefR\x0ecurrentSandbox\x12\x18\n" +
 	"\amissing\x18\x04 \x03(\tR\amissing\x12+\n" +
-	"\x04lock\x18\x05 \x01(\v2\x17.daft.workspace.v1.LockR\x04lock\"n\n" +
+	"\x04lock\x18\x05 \x01(\v2\x17.daft.workspace.v1.LockR\x04lock\x12&\n" +
+	"\x0fdisk_used_bytes\x18\x06 \x01(\x04R\rdiskUsedBytes\x120\n" +
+	"\x14disk_allowance_bytes\x18\a \x01(\x04R\x12diskAllowanceBytes\x12'\n" +
+	"\x0fprotected_bytes\x18\b \x01(\x04R\x0eprotectedBytes\x12'\n" +
+	"\x0fmanifest_digest\x18\t \x01(\tR\x0emanifestDigest\x12/\n" +
+	"\x13manifest_generation\x18\n" +
+	" \x01(\x04R\x12manifestGeneration\"n\n" +
 	"\x04Lock\x12+\n" +
 	"\x11owner_fingerprint\x18\x01 \x01(\tR\x10ownerFingerprint\x129\n" +
 	"\n" +

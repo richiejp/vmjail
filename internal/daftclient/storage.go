@@ -17,22 +17,24 @@ import (
 // WorkspaceStorageStatus combines one Workspace disk with bounded Node CAS
 // accounting. It intentionally contains no chunk list.
 type WorkspaceStorageStatus struct {
-	WorkspaceUUID    string
-	DiskUsedBytes    uint64
-	DiskFreeBytes    uint64
-	DiskBytes        uint64
-	DiskFrozen       bool
-	DiskRunning      bool
-	CASUsageBytes    uint64
-	ProtectedBytes   uint64
-	RecoverableBytes uint64
-	QueuedBytes      uint64
-	ChunkCount       uint64
-	QueuedCount      uint64
-	HardBytes        uint64
-	SoftBytes        uint64
-	TargetBytes      uint64
-	ExpirySeconds    int64
+	WorkspaceUUID           string
+	DiskUsedBytes           uint64
+	DiskFreeBytes           uint64
+	DiskBytes               uint64
+	DiskFrozen              bool
+	DiskRunning             bool
+	WorkspaceProtectedBytes uint64
+	Manifests               []ManifestTransition
+	CASUsageBytes           uint64
+	ProtectedBytes          uint64
+	RecoverableBytes        uint64
+	QueuedBytes             uint64
+	ChunkCount              uint64
+	QueuedCount             uint64
+	HardBytes               uint64
+	SoftBytes               uint64
+	TargetBytes             uint64
+	ExpirySeconds           int64
 }
 
 // ManifestTransition reports the exact manifest restored by rejection.
@@ -64,16 +66,24 @@ func (c *Client) WorkspaceStorageStatus(ctx context.Context, uuid string) (Works
 	if err != nil {
 		return WorkspaceStorageStatus{}, fmt.Errorf("daft: node storage status: %w", err)
 	}
-	return WorkspaceStorageStatus{
+	result := WorkspaceStorageStatus{
 		WorkspaceUUID: resource.GetMetadata().GetUuid(),
 		DiskUsedBytes: disk.Msg.GetUsedBytes(), DiskFreeBytes: disk.Msg.GetAvailableBytes(),
 		DiskBytes: disk.Msg.GetAllowanceBytes(), DiskFrozen: disk.Msg.GetFrozen(), DiskRunning: disk.Msg.GetRunning(),
-		CASUsageBytes: storage.Msg.GetUsageBytes(), ProtectedBytes: storage.Msg.GetProtectedBytes(),
+		WorkspaceProtectedBytes: disk.Msg.GetProtectedBytes(),
+		CASUsageBytes:           storage.Msg.GetUsageBytes(), ProtectedBytes: storage.Msg.GetProtectedBytes(),
 		RecoverableBytes: storage.Msg.GetRecoverableBytes(), QueuedBytes: storage.Msg.GetQueuedBytes(),
 		ChunkCount: storage.Msg.GetChunkCount(), QueuedCount: storage.Msg.GetQueuedCount(),
 		HardBytes: storage.Msg.GetHardBytes(), SoftBytes: storage.Msg.GetSoftBytes(),
 		TargetBytes: storage.Msg.GetTargetBytes(), ExpirySeconds: storage.Msg.GetExpirySeconds(),
-	}, nil
+	}
+	for _, manifest := range disk.Msg.GetCurrentManifests() {
+		result.Manifests = append(result.Manifests, ManifestTransition{
+			Workspace: manifest.GetWorkspace(), Digest: manifest.GetManifestDigest(),
+			Generation: manifest.GetGeneration(), Present: true,
+		})
+	}
+	return result, nil
 }
 
 // RejectWorkspaceChanges deletes the stopped retained disk and rejects each
@@ -130,11 +140,19 @@ func (c *Client) UnfreezeWorkspace(ctx context.Context, uuid string) (WorkspaceS
 	if err != nil {
 		return WorkspaceStorageStatus{}, fmt.Errorf("daft: unfreeze workspace: %w", err)
 	}
-	return WorkspaceStorageStatus{
+	result := WorkspaceStorageStatus{
 		WorkspaceUUID: resource.GetMetadata().GetUuid(), DiskUsedBytes: response.Msg.GetUsedBytes(),
 		DiskFreeBytes: response.Msg.GetAvailableBytes(), DiskBytes: response.Msg.GetAllowanceBytes(),
 		DiskFrozen: response.Msg.GetFrozen(), DiskRunning: response.Msg.GetRunning(),
-	}, nil
+		WorkspaceProtectedBytes: response.Msg.GetProtectedBytes(),
+	}
+	for _, manifest := range response.Msg.GetCurrentManifests() {
+		result.Manifests = append(result.Manifests, ManifestTransition{
+			Workspace: manifest.GetWorkspace(), Digest: manifest.GetManifestDigest(),
+			Generation: manifest.GetGeneration(), Present: true,
+		})
+	}
+	return result, nil
 }
 
 // DeleteWorkspace durably removes Node data before deleting the exact catalog

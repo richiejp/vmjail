@@ -1435,15 +1435,17 @@ func (x *GetWorkspaceDiskStatusRequest) GetWorkspaceUuid() string {
 }
 
 type GetWorkspaceDiskStatusResponse struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	WorkspaceUuid  string                 `protobuf:"bytes,1,opt,name=workspace_uuid,json=workspaceUuid,proto3" json:"workspace_uuid,omitempty"`
-	UsedBytes      uint64                 `protobuf:"varint,2,opt,name=used_bytes,json=usedBytes,proto3" json:"used_bytes,omitempty"`
-	AvailableBytes uint64                 `protobuf:"varint,3,opt,name=available_bytes,json=availableBytes,proto3" json:"available_bytes,omitempty"`
-	AllowanceBytes uint64                 `protobuf:"varint,4,opt,name=allowance_bytes,json=allowanceBytes,proto3" json:"allowance_bytes,omitempty"`
-	Frozen         bool                   `protobuf:"varint,5,opt,name=frozen,proto3" json:"frozen,omitempty"`
-	Running        bool                   `protobuf:"varint,6,opt,name=running,proto3" json:"running,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	WorkspaceUuid    string                 `protobuf:"bytes,1,opt,name=workspace_uuid,json=workspaceUuid,proto3" json:"workspace_uuid,omitempty"`
+	UsedBytes        uint64                 `protobuf:"varint,2,opt,name=used_bytes,json=usedBytes,proto3" json:"used_bytes,omitempty"`
+	AvailableBytes   uint64                 `protobuf:"varint,3,opt,name=available_bytes,json=availableBytes,proto3" json:"available_bytes,omitempty"`
+	AllowanceBytes   uint64                 `protobuf:"varint,4,opt,name=allowance_bytes,json=allowanceBytes,proto3" json:"allowance_bytes,omitempty"`
+	Frozen           bool                   `protobuf:"varint,5,opt,name=frozen,proto3" json:"frozen,omitempty"`
+	Running          bool                   `protobuf:"varint,6,opt,name=running,proto3" json:"running,omitempty"`
+	ProtectedBytes   uint64                 `protobuf:"varint,7,opt,name=protected_bytes,json=protectedBytes,proto3" json:"protected_bytes,omitempty"`
+	CurrentManifests []*ManifestExpectation `protobuf:"bytes,8,rep,name=current_manifests,json=currentManifests,proto3" json:"current_manifests,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *GetWorkspaceDiskStatusResponse) Reset() {
@@ -1516,6 +1518,20 @@ func (x *GetWorkspaceDiskStatusResponse) GetRunning() bool {
 		return x.Running
 	}
 	return false
+}
+
+func (x *GetWorkspaceDiskStatusResponse) GetProtectedBytes() uint64 {
+	if x != nil {
+		return x.ProtectedBytes
+	}
+	return 0
+}
+
+func (x *GetWorkspaceDiskStatusResponse) GetCurrentManifests() []*ManifestExpectation {
+	if x != nil {
+		return x.CurrentManifests
+	}
+	return nil
 }
 
 type UnfreezeWorkspaceDiskRequest struct {
@@ -1772,7 +1788,7 @@ const file_workspace_v1_workspace_proto_rawDesc = "" +
 	"generation\x18\x03 \x01(\x04R\n" +
 	"generation\"F\n" +
 	"\x1dGetWorkspaceDiskStatusRequest\x12%\n" +
-	"\x0eworkspace_uuid\x18\x01 \x01(\tR\rworkspaceUuid\"\xea\x01\n" +
+	"\x0eworkspace_uuid\x18\x01 \x01(\tR\rworkspaceUuid\"\xe8\x02\n" +
 	"\x1eGetWorkspaceDiskStatusResponse\x12%\n" +
 	"\x0eworkspace_uuid\x18\x01 \x01(\tR\rworkspaceUuid\x12\x1d\n" +
 	"\n" +
@@ -1780,7 +1796,9 @@ const file_workspace_v1_workspace_proto_rawDesc = "" +
 	"\x0favailable_bytes\x18\x03 \x01(\x04R\x0eavailableBytes\x12'\n" +
 	"\x0fallowance_bytes\x18\x04 \x01(\x04R\x0eallowanceBytes\x12\x16\n" +
 	"\x06frozen\x18\x05 \x01(\bR\x06frozen\x12\x18\n" +
-	"\arunning\x18\x06 \x01(\bR\arunning\"\x9c\x01\n" +
+	"\arunning\x18\x06 \x01(\bR\arunning\x12'\n" +
+	"\x0fprotected_bytes\x18\a \x01(\x04R\x0eprotectedBytes\x12S\n" +
+	"\x11current_manifests\x18\b \x03(\v2&.daft.workspace.v1.ManifestExpectationR\x10currentManifests\"\x9c\x01\n" +
 	"\x1cUnfreezeWorkspaceDiskRequest\x12%\n" +
 	"\x0eworkspace_uuid\x18\x01 \x01(\tR\rworkspaceUuid\x12U\n" +
 	"\x12expected_manifests\x18\x02 \x03(\v2&.daft.workspace.v1.ManifestExpectationR\x11expectedManifests\"\x9a\x01\n" +
@@ -1858,37 +1876,38 @@ var file_workspace_v1_workspace_proto_depIdxs = []int32{
 	3,  // 3: daft.workspace.v1.GetManifestResponse.manifest:type_name -> daft.workspace.v1.Manifest
 	3,  // 4: daft.workspace.v1.PutManifestRequest.manifest:type_name -> daft.workspace.v1.Manifest
 	20, // 5: daft.workspace.v1.PruneStorageResponse.candidates:type_name -> daft.workspace.v1.PruneCandidate
-	22, // 6: daft.workspace.v1.UnfreezeWorkspaceDiskRequest.expected_manifests:type_name -> daft.workspace.v1.ManifestExpectation
-	22, // 7: daft.workspace.v1.DeleteWorkspaceDataRequest.expected_manifests:type_name -> daft.workspace.v1.ManifestExpectation
-	4,  // 8: daft.workspace.v1.WorkspaceService.GetManifest:input_type -> daft.workspace.v1.GetManifestRequest
-	6,  // 9: daft.workspace.v1.WorkspaceService.GetChunk:input_type -> daft.workspace.v1.GetChunkRequest
-	8,  // 10: daft.workspace.v1.WorkspaceService.PutManifest:input_type -> daft.workspace.v1.PutManifestRequest
-	10, // 11: daft.workspace.v1.WorkspaceService.PutChunk:input_type -> daft.workspace.v1.PutChunkRequest
-	12, // 12: daft.workspace.v1.WorkspaceService.AcknowledgeManifest:input_type -> daft.workspace.v1.AcknowledgeManifestRequest
-	14, // 13: daft.workspace.v1.WorkspaceService.RejectManifest:input_type -> daft.workspace.v1.RejectManifestRequest
-	15, // 14: daft.workspace.v1.WorkspaceService.DeleteManifest:input_type -> daft.workspace.v1.DeleteManifestRequest
-	17, // 15: daft.workspace.v1.WorkspaceService.GetStorageStatus:input_type -> daft.workspace.v1.GetStorageStatusRequest
-	19, // 16: daft.workspace.v1.WorkspaceService.PruneStorage:input_type -> daft.workspace.v1.PruneStorageRequest
-	23, // 17: daft.workspace.v1.WorkspaceService.GetWorkspaceDiskStatus:input_type -> daft.workspace.v1.GetWorkspaceDiskStatusRequest
-	25, // 18: daft.workspace.v1.WorkspaceService.UnfreezeWorkspaceDisk:input_type -> daft.workspace.v1.UnfreezeWorkspaceDiskRequest
-	26, // 19: daft.workspace.v1.WorkspaceService.DeleteWorkspaceData:input_type -> daft.workspace.v1.DeleteWorkspaceDataRequest
-	5,  // 20: daft.workspace.v1.WorkspaceService.GetManifest:output_type -> daft.workspace.v1.GetManifestResponse
-	7,  // 21: daft.workspace.v1.WorkspaceService.GetChunk:output_type -> daft.workspace.v1.GetChunkResponse
-	9,  // 22: daft.workspace.v1.WorkspaceService.PutManifest:output_type -> daft.workspace.v1.PutManifestResponse
-	11, // 23: daft.workspace.v1.WorkspaceService.PutChunk:output_type -> daft.workspace.v1.PutChunkResponse
-	13, // 24: daft.workspace.v1.WorkspaceService.AcknowledgeManifest:output_type -> daft.workspace.v1.AcknowledgeManifestResponse
-	16, // 25: daft.workspace.v1.WorkspaceService.RejectManifest:output_type -> daft.workspace.v1.ManifestControlResponse
-	16, // 26: daft.workspace.v1.WorkspaceService.DeleteManifest:output_type -> daft.workspace.v1.ManifestControlResponse
-	18, // 27: daft.workspace.v1.WorkspaceService.GetStorageStatus:output_type -> daft.workspace.v1.GetStorageStatusResponse
-	21, // 28: daft.workspace.v1.WorkspaceService.PruneStorage:output_type -> daft.workspace.v1.PruneStorageResponse
-	24, // 29: daft.workspace.v1.WorkspaceService.GetWorkspaceDiskStatus:output_type -> daft.workspace.v1.GetWorkspaceDiskStatusResponse
-	24, // 30: daft.workspace.v1.WorkspaceService.UnfreezeWorkspaceDisk:output_type -> daft.workspace.v1.GetWorkspaceDiskStatusResponse
-	27, // 31: daft.workspace.v1.WorkspaceService.DeleteWorkspaceData:output_type -> daft.workspace.v1.DeleteWorkspaceDataResponse
-	20, // [20:32] is the sub-list for method output_type
-	8,  // [8:20] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	22, // 6: daft.workspace.v1.GetWorkspaceDiskStatusResponse.current_manifests:type_name -> daft.workspace.v1.ManifestExpectation
+	22, // 7: daft.workspace.v1.UnfreezeWorkspaceDiskRequest.expected_manifests:type_name -> daft.workspace.v1.ManifestExpectation
+	22, // 8: daft.workspace.v1.DeleteWorkspaceDataRequest.expected_manifests:type_name -> daft.workspace.v1.ManifestExpectation
+	4,  // 9: daft.workspace.v1.WorkspaceService.GetManifest:input_type -> daft.workspace.v1.GetManifestRequest
+	6,  // 10: daft.workspace.v1.WorkspaceService.GetChunk:input_type -> daft.workspace.v1.GetChunkRequest
+	8,  // 11: daft.workspace.v1.WorkspaceService.PutManifest:input_type -> daft.workspace.v1.PutManifestRequest
+	10, // 12: daft.workspace.v1.WorkspaceService.PutChunk:input_type -> daft.workspace.v1.PutChunkRequest
+	12, // 13: daft.workspace.v1.WorkspaceService.AcknowledgeManifest:input_type -> daft.workspace.v1.AcknowledgeManifestRequest
+	14, // 14: daft.workspace.v1.WorkspaceService.RejectManifest:input_type -> daft.workspace.v1.RejectManifestRequest
+	15, // 15: daft.workspace.v1.WorkspaceService.DeleteManifest:input_type -> daft.workspace.v1.DeleteManifestRequest
+	17, // 16: daft.workspace.v1.WorkspaceService.GetStorageStatus:input_type -> daft.workspace.v1.GetStorageStatusRequest
+	19, // 17: daft.workspace.v1.WorkspaceService.PruneStorage:input_type -> daft.workspace.v1.PruneStorageRequest
+	23, // 18: daft.workspace.v1.WorkspaceService.GetWorkspaceDiskStatus:input_type -> daft.workspace.v1.GetWorkspaceDiskStatusRequest
+	25, // 19: daft.workspace.v1.WorkspaceService.UnfreezeWorkspaceDisk:input_type -> daft.workspace.v1.UnfreezeWorkspaceDiskRequest
+	26, // 20: daft.workspace.v1.WorkspaceService.DeleteWorkspaceData:input_type -> daft.workspace.v1.DeleteWorkspaceDataRequest
+	5,  // 21: daft.workspace.v1.WorkspaceService.GetManifest:output_type -> daft.workspace.v1.GetManifestResponse
+	7,  // 22: daft.workspace.v1.WorkspaceService.GetChunk:output_type -> daft.workspace.v1.GetChunkResponse
+	9,  // 23: daft.workspace.v1.WorkspaceService.PutManifest:output_type -> daft.workspace.v1.PutManifestResponse
+	11, // 24: daft.workspace.v1.WorkspaceService.PutChunk:output_type -> daft.workspace.v1.PutChunkResponse
+	13, // 25: daft.workspace.v1.WorkspaceService.AcknowledgeManifest:output_type -> daft.workspace.v1.AcknowledgeManifestResponse
+	16, // 26: daft.workspace.v1.WorkspaceService.RejectManifest:output_type -> daft.workspace.v1.ManifestControlResponse
+	16, // 27: daft.workspace.v1.WorkspaceService.DeleteManifest:output_type -> daft.workspace.v1.ManifestControlResponse
+	18, // 28: daft.workspace.v1.WorkspaceService.GetStorageStatus:output_type -> daft.workspace.v1.GetStorageStatusResponse
+	21, // 29: daft.workspace.v1.WorkspaceService.PruneStorage:output_type -> daft.workspace.v1.PruneStorageResponse
+	24, // 30: daft.workspace.v1.WorkspaceService.GetWorkspaceDiskStatus:output_type -> daft.workspace.v1.GetWorkspaceDiskStatusResponse
+	24, // 31: daft.workspace.v1.WorkspaceService.UnfreezeWorkspaceDisk:output_type -> daft.workspace.v1.GetWorkspaceDiskStatusResponse
+	27, // 32: daft.workspace.v1.WorkspaceService.DeleteWorkspaceData:output_type -> daft.workspace.v1.DeleteWorkspaceDataResponse
+	21, // [21:33] is the sub-list for method output_type
+	9,  // [9:21] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_workspace_v1_workspace_proto_init() }

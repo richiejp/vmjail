@@ -248,13 +248,17 @@ func newWorkspaceStorageStatusCmd() *cobra.Command {
 		Use: "status", Short: "Show bounded target-node CAS accounting", Args: cobra.NoArgs, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runNodeWorkspaceRPC(cmd, opts, casDir, "storage.status", func(
-				ctx context.Context, client workspacev1connect.WorkspaceServiceClient, _ string,
+				ctx context.Context, client workspacev1connect.WorkspaceServiceClient, uuid string,
 			) error {
+				disk, err := client.GetWorkspaceDiskStatus(ctx, connect.NewRequest(&workspacev1.GetWorkspaceDiskStatusRequest{WorkspaceUuid: uuid}))
+				if err != nil {
+					return err
+				}
 				response, err := client.GetStorageStatus(ctx, connect.NewRequest(&workspacev1.GetStorageStatusRequest{}))
 				if err != nil {
 					return err
 				}
-				return writeWorkspaceStorageStatus(cmd.OutOrStdout(), response.Msg)
+				return writeWorkspaceStorageStatus(cmd.OutOrStdout(), disk.Msg, response.Msg)
 			})
 		},
 	}
@@ -348,7 +352,9 @@ func workspaceManifestExpectations(
 	return expected, nil
 }
 
-func writeWorkspaceStorageStatus(out io.Writer, status *workspacev1.GetStorageStatusResponse) error {
+func writeWorkspaceStorageStatus(out io.Writer, disk *workspacev1.GetWorkspaceDiskStatusResponse, status *workspacev1.GetStorageStatusResponse) error {
+	_, _ = fmt.Fprintf(out, "disk_used=%d disk_available=%d disk_allowance=%d storage_frozen=%t running=%t workspace_protected=%d manifests=%d\n",
+		disk.GetUsedBytes(), disk.GetAvailableBytes(), disk.GetAllowanceBytes(), disk.GetFrozen(), disk.GetRunning(), disk.GetProtectedBytes(), len(disk.GetCurrentManifests()))
 	_, err := fmt.Fprintf(out, "usage=%d protected=%d recoverable=%d queued=%d chunks=%d hard=%d soft=%d target=%d expiry_seconds=%d\n",
 		status.GetUsageBytes(), status.GetProtectedBytes(), status.GetRecoverableBytes(), status.GetQueuedBytes(), status.GetChunkCount(),
 		status.GetHardBytes(), status.GetSoftBytes(), status.GetTargetBytes(), status.GetExpirySeconds())

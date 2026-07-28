@@ -155,6 +155,14 @@ message WorkspaceStatus {
   // Mutations and Launch require holding the lock when set.
   // Phase F3 lands the explicit Acquire / Release RPCs.
   Lock lock = 5;
+
+  // Latest Node-observed retained-disk and protected-manifest summary. These
+  // fields are zero while the Node has not reported storage state.
+  uint64 disk_used_bytes = 6;
+  uint64 disk_allowance_bytes = 7;
+  uint64 protected_bytes = 8;
+  string manifest_digest = 9;
+  uint64 manifest_generation = 10;
 }
 
 // Lock is the workspace's optional write-lock. Empty

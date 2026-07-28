@@ -486,6 +486,39 @@ func (i *Index) CurrentManifests() ([]Manifest, error) {
 	return manifests, err
 }
 
+// WorkspaceStatus returns stable current manifests and unique protected bytes
+// for sync keys owned by one Workspace UUID.
+func (i *Index) WorkspaceStatus(workspaceID string) (WorkspaceStatus, error) {
+	if workspaceID == "" {
+		return WorkspaceStatus{}, errors.New("casindex: empty workspace ID")
+	}
+	current, err := i.CurrentManifests()
+	if err != nil {
+		return WorkspaceStatus{}, err
+	}
+	prefix := workspaceID + "\x00"
+	seen := make(map[string]struct{})
+	status := WorkspaceStatus{}
+	for index := range current {
+		manifest := current[index]
+		if !strings.HasPrefix(manifest.SyncKey, prefix) {
+			continue
+		}
+		status.Manifests = append(status.Manifests, manifest)
+		if manifest.Recoverability != RecoverabilityProtected {
+			continue
+		}
+		for _, chunk := range manifest.Chunks {
+			if _, exists := seen[chunk.Digest]; exists {
+				continue
+			}
+			seen[chunk.Digest] = struct{}{}
+			status.ProtectedBytes += chunk.Size
+		}
+	}
+	return status, nil
+}
+
 func listJSON[T any](db *badger.DB, keyPrefix string) ([]T, error) {
 	var values []T
 	err := db.View(func(txn *badger.Txn) error {

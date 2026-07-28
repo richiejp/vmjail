@@ -518,7 +518,8 @@ func TestWorkspaceStorageLifecycleToolsAreBoundedAndExact(t *testing.T) {
 		storageStatus: daftclient.WorkspaceStorageStatus{
 			WorkspaceUUID: workspaceID, DiskUsedBytes: 7, DiskFreeBytes: 13, DiskBytes: 20,
 			DiskFrozen: true, DiskRunning: true, CASUsageBytes: 80, ProtectedBytes: 30,
-			HardBytes: 100, SoftBytes: 85, TargetBytes: 75,
+			WorkspaceProtectedBytes: 11, HardBytes: 100, SoftBytes: 85, TargetBytes: 75,
+			Manifests: []daftclient.ManifestTransition{{Workspace: workspaceID + "\x00/work", Digest: "current", Generation: 4, Present: true}},
 		},
 		rejectResult: []daftclient.ManifestTransition{{
 			Workspace: workspaceID + "\x00/work", Digest: "restored", Generation: 3, Present: true,
@@ -526,7 +527,7 @@ func TestWorkspaceStorageLifecycleToolsAreBoundedAndExact(t *testing.T) {
 	}
 	session := connectClient(t, reader)
 	status := requireMap(t, callTool(t, session, workspaceStorageTool, map[string]any{uuidKey: workspaceID}).StructuredContent)
-	if status["disk_used_bytes"] != float64(7) || status["protected_bytes"] != float64(30) || status["hard_bytes"] != float64(100) {
+	if status["disk_used_bytes"] != float64(7) || status["workspace_protected_bytes"] != float64(11) || status["protected_bytes"] != float64(30) || status["hard_bytes"] != float64(100) || len(requireSlice(t, status["manifests"])) != 1 {
 		t.Fatalf("storage status = %#v", status)
 	}
 	rejected := requireMap(t, callTool(t, session, workspaceRejectTool, map[string]any{uuidKey: workspaceID}).StructuredContent)

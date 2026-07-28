@@ -233,6 +233,8 @@ message GetWorkspaceDiskStatusResponse {
   uint64 allowance_bytes = 4;
   bool frozen = 5;
   bool running = 6;
+  uint64 protected_bytes = 7;
+  repeated ManifestExpectation current_manifests = 8;
 }
 
 message UnfreezeWorkspaceDiskRequest {

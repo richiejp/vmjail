@@ -39,6 +39,7 @@ const (
 	ConditionDispatched    = "Dispatched"
 	ConditionReconciled    = "Reconciled"
 	ConditionImageResolved = "ImageResolved"
+	ConditionStorageFrozen = "StorageFrozen"
 )
 
 // conditionStatusUnspecifiedStr is the rendered form for
@@ -230,6 +231,11 @@ type Status struct {
 	CurrentSandbox     *SandboxRef
 	Missing            []string
 	Lock               Lock
+	DiskUsedBytes      uint64
+	DiskAllowanceBytes uint64
+	ProtectedBytes     uint64
+	ManifestDigest     string
+	ManifestGeneration uint64
 }
 
 // Condition returns the entry with matching type, or the zero

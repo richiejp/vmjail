@@ -100,6 +100,9 @@ func (h *storageNodeHandler) GetWorkspaceDiskStatus(
 	}
 	return connect.NewResponse(&workspacev1.GetWorkspaceDiskStatusResponse{
 		UsedBytes: 7, AvailableBytes: 13, AllowanceBytes: 20, Frozen: true, Running: true,
+		ProtectedBytes: 11, CurrentManifests: []*workspacev1.ManifestExpectation{{
+			Workspace: "workspace\x00/work", ManifestDigest: "sandbox", Generation: 2,
+		}},
 	}), nil
 }
 
@@ -207,7 +210,7 @@ func TestWorkspaceStorageControlsUseBoundedExactNodeOperations(t *testing.T) {
 	rig := newStorageClientRig(t)
 	const uuid = "00000000-0000-4000-8000-000000000001"
 	status, err := rig.client.WorkspaceStorageStatus(t.Context(), uuid)
-	if err != nil || status.DiskUsedBytes != 7 || status.ProtectedBytes != 30 || status.HardBytes != 100 || !status.DiskFrozen {
+	if err != nil || status.DiskUsedBytes != 7 || status.WorkspaceProtectedBytes != 11 || len(status.Manifests) != 1 || status.ProtectedBytes != 30 || status.HardBytes != 100 || !status.DiskFrozen {
 		t.Fatalf("WorkspaceStorageStatus = %#v, %v", status, err)
 	}
 	transitions, err := rig.client.RejectWorkspaceChanges(t.Context(), uuid)

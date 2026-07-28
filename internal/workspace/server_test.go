@@ -590,7 +590,7 @@ func TestWorkspaceDiskControlRPCsValidateExactManifestSet(t *testing.T) {
 	}}
 	server.SetWorkspaceDiskController(controller)
 	status, err := server.GetWorkspaceDiskStatus(t.Context(), connect.NewRequest(&workspacev1.GetWorkspaceDiskStatusRequest{WorkspaceUuid: uuid}))
-	if err != nil || status.Msg.GetUsedBytes() != 9 || !status.Msg.GetFrozen() || !status.Msg.GetRunning() {
+	if err != nil || status.Msg.GetUsedBytes() != 9 || !status.Msg.GetFrozen() || !status.Msg.GetRunning() || len(status.Msg.GetCurrentManifests()) != 2 {
 		t.Fatalf("disk status = %#v, %v", status, err)
 	}
 	expected := make([]*workspacev1.ManifestExpectation, 0, len(states))

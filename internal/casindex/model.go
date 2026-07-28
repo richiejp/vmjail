@@ -63,6 +63,13 @@ type Manifest struct {
 	Payload        []byte         `json:"payload,omitempty"`
 }
 
+// WorkspaceStatus is bounded current-manifest and protection accounting for
+// one Workspace UUID. Shared chunks are counted once.
+type WorkspaceStatus struct {
+	ProtectedBytes uint64
+	Manifests      []Manifest
+}
+
 type ChunkRef struct {
 	Digest string `json:"digest"`
 	Size   uint64 `json:"size"`

@@ -116,14 +116,15 @@ type Node struct {
 }
 
 type Workspace struct {
-	UUID               string        `json:"uuid"`
-	Name               string        `json:"name"`
-	Generation         uint64        `json:"generation"`
-	ObservedGeneration uint64        `json:"observed_generation"`
-	CurrentSandboxUUID string        `json:"current_sandbox_uuid,omitempty"`
-	Ready              bool          `json:"ready"`
-	Missing            []string      `json:"missing"`
-	Spec               WorkspaceSpec `json:"spec"`
+	UUID               string                  `json:"uuid"`
+	Name               string                  `json:"name"`
+	Generation         uint64                  `json:"generation"`
+	ObservedGeneration uint64                  `json:"observed_generation"`
+	CurrentSandboxUUID string                  `json:"current_sandbox_uuid,omitempty"`
+	Ready              bool                    `json:"ready"`
+	Missing            []string                `json:"missing"`
+	Spec               WorkspaceSpec           `json:"spec"`
+	Storage            *workspaceStorageOutput `json:"storage,omitempty"`
 }
 
 type WorkspaceSummary struct {
@@ -290,22 +291,24 @@ type workspacePushOutput struct {
 }
 
 type workspaceStorageOutput struct {
-	WorkspaceUUID    string `json:"workspace_uuid"`
-	DiskUsedBytes    uint64 `json:"disk_used_bytes"`
-	DiskFreeBytes    uint64 `json:"disk_free_bytes"`
-	DiskBytes        uint64 `json:"disk_bytes"`
-	DiskFrozen       bool   `json:"disk_frozen"`
-	DiskRunning      bool   `json:"disk_running"`
-	CASUsageBytes    uint64 `json:"cas_usage_bytes"`
-	ProtectedBytes   uint64 `json:"protected_bytes"`
-	RecoverableBytes uint64 `json:"recoverable_bytes"`
-	QueuedBytes      uint64 `json:"queued_bytes"`
-	ChunkCount       uint64 `json:"chunk_count"`
-	QueuedCount      uint64 `json:"queued_count"`
-	HardBytes        uint64 `json:"hard_bytes"`
-	SoftBytes        uint64 `json:"soft_bytes"`
-	TargetBytes      uint64 `json:"target_bytes"`
-	ExpirySeconds    int64  `json:"expiry_seconds"`
+	WorkspaceUUID           string                     `json:"workspace_uuid"`
+	DiskUsedBytes           uint64                     `json:"disk_used_bytes"`
+	DiskFreeBytes           uint64                     `json:"disk_free_bytes"`
+	DiskBytes               uint64                     `json:"disk_bytes"`
+	DiskFrozen              bool                       `json:"disk_frozen"`
+	DiskRunning             bool                       `json:"disk_running"`
+	WorkspaceProtectedBytes uint64                     `json:"workspace_protected_bytes"`
+	Manifests               []manifestTransitionOutput `json:"manifests"`
+	CASUsageBytes           uint64                     `json:"cas_usage_bytes"`
+	ProtectedBytes          uint64                     `json:"protected_bytes"`
+	RecoverableBytes        uint64                     `json:"recoverable_bytes"`
+	QueuedBytes             uint64                     `json:"queued_bytes"`
+	ChunkCount              uint64                     `json:"chunk_count"`
+	QueuedCount             uint64                     `json:"queued_count"`
+	HardBytes               uint64                     `json:"hard_bytes"`
+	SoftBytes               uint64                     `json:"soft_bytes"`
+	TargetBytes             uint64                     `json:"target_bytes"`
+	ExpirySeconds           int64                      `json:"expiry_seconds"`
 }
 
 type manifestTransitionOutput struct {
@@ -529,7 +532,16 @@ func addWorkspaceTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations,
 				return nil, getWorkspaceOutput{}, fmt.Errorf("uuid is required")
 			}
 			workspace, err := reader.GetWorkspace(ctx, input.UUID)
-			return nil, getWorkspaceOutput{Workspace: workspace}, err
+			if err != nil {
+				return nil, getWorkspaceOutput{}, err
+			}
+			storage, err := reader.WorkspaceStorageStatus(ctx, input.UUID)
+			if err != nil {
+				return nil, getWorkspaceOutput{}, err
+			}
+			projected := workspaceStorageOutputFromClient(storage)
+			workspace.Storage = &projected
+			return nil, getWorkspaceOutput{Workspace: workspace}, nil
 		})
 	mcp.AddTool(server, &mcp.Tool{Name: workspaceValidateTool, Description: "Read the server-derived readiness of one owned Workspace without mutation.", Annotations: readAnnotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, getWorkspaceOutput, error) {
@@ -616,16 +628,24 @@ func addWorkspaceStorageTools(server *mcp.Server, readAnnotations *mcp.ToolAnnot
 }
 
 func workspaceStorageOutputFromClient(input daftclient.WorkspaceStorageStatus) workspaceStorageOutput {
-	return workspaceStorageOutput{
+	output := workspaceStorageOutput{
 		WorkspaceUUID: input.WorkspaceUUID, DiskUsedBytes: input.DiskUsedBytes,
 		DiskFreeBytes: input.DiskFreeBytes, DiskBytes: input.DiskBytes,
 		DiskFrozen: input.DiskFrozen, DiskRunning: input.DiskRunning,
-		CASUsageBytes: input.CASUsageBytes, ProtectedBytes: input.ProtectedBytes,
+		WorkspaceProtectedBytes: input.WorkspaceProtectedBytes,
+		CASUsageBytes:           input.CASUsageBytes, ProtectedBytes: input.ProtectedBytes,
 		RecoverableBytes: input.RecoverableBytes, QueuedBytes: input.QueuedBytes,
 		ChunkCount: input.ChunkCount, QueuedCount: input.QueuedCount,
 		HardBytes: input.HardBytes, SoftBytes: input.SoftBytes,
 		TargetBytes: input.TargetBytes, ExpirySeconds: input.ExpirySeconds,
 	}
+	for index := range input.Manifests {
+		output.Manifests = append(output.Manifests, manifestTransitionOutput{
+			Workspace: input.Manifests[index].Workspace, Digest: input.Manifests[index].Digest,
+			Generation: input.Manifests[index].Generation, Present: input.Manifests[index].Present,
+		})
+	}
+	return output
 }
 
 func addWorkspacePushTool(server *mcp.Server, reader Reader) {

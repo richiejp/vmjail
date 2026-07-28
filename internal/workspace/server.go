@@ -599,7 +599,11 @@ func (s *Server) GetWorkspaceDiskStatus(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
-	return connect.NewResponse(workspaceDiskStatusResponse(uuid, status)), nil
+	response, err := s.workspaceDiskStatusResponse(uuid, status)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(response), nil
 }
 
 func (s *Server) UnfreezeWorkspaceDisk(
@@ -621,7 +625,11 @@ func (s *Server) UnfreezeWorkspaceDisk(
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	return connect.NewResponse(workspaceDiskStatusResponse(uuid, status)), nil
+	response, err := s.workspaceDiskStatusResponse(uuid, status)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(response), nil
 }
 
 func (s *Server) DeleteWorkspaceData(
@@ -661,11 +669,26 @@ func (s *Server) workspaceDiskController() WorkspaceDiskController {
 	return s.diskControl
 }
 
-func workspaceDiskStatusResponse(uuid string, status WorkspaceDiskStatus) *workspacev1.GetWorkspaceDiskStatusResponse {
-	return &workspacev1.GetWorkspaceDiskStatusResponse{
+func (s *Server) workspaceDiskStatusResponse(uuid string, status WorkspaceDiskStatus) (*workspacev1.GetWorkspaceDiskStatusResponse, error) {
+	response := &workspacev1.GetWorkspaceDiskStatusResponse{
 		WorkspaceUuid: uuid, UsedBytes: status.UsedBytes, AvailableBytes: status.AvailableBytes,
 		AllowanceBytes: status.AllowanceBytes, Frozen: status.Frozen, Running: status.Running,
 	}
+	if s.index == nil {
+		return response, nil
+	}
+	indexed, err := s.index.WorkspaceStatus(uuid)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	response.ProtectedBytes = indexed.ProtectedBytes
+	for index := range indexed.Manifests {
+		manifest := &indexed.Manifests[index]
+		response.CurrentManifests = append(response.CurrentManifests, &workspacev1.ManifestExpectation{
+			Workspace: manifest.SyncKey, ManifestDigest: manifest.Digest, Generation: manifest.Generation,
+		})
+	}
+	return response, nil
 }
 
 func (s *Server) validateManifestExpectations(uuid string, expected []*workspacev1.ManifestExpectation) error {

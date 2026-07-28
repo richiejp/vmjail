@@ -2400,6 +2400,12 @@ func TestWorkspaceToProtoCarriesLock(t *testing.T) {
 	expiry := ws.Metadata.CreatedAt.Add(60 * time.Second)
 	_, err = cat.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
 		w.Status.Lock = workspacecatalog.Lock{OwnerFingerprint: owner, ExpiresAt: expiry}
+		w.Status.DiskUsedBytes = 7
+		w.Status.DiskAllowanceBytes = 20
+		w.Status.ProtectedBytes = 5
+		w.Status.ManifestDigest = "manifest"
+		w.Status.ManifestGeneration = 3
+		w.Status.SetCondition(workspacecatalog.ConditionStorageFrozen, workspacecatalog.ConditionStatusTrue, "ThresholdExceeded", "disk paused", expiry)
 		return nil
 	})
 	if err != nil {
@@ -2416,6 +2422,10 @@ func TestWorkspaceToProtoCarriesLock(t *testing.T) {
 	}
 	if !lock.GetExpiresAt().IsValid() {
 		t.Error("Lock.expires_at should be populated")
+	}
+	status := proto.GetStatus()
+	if status.GetDiskUsedBytes() != 7 || status.GetDiskAllowanceBytes() != 20 || status.GetProtectedBytes() != 5 || status.GetManifestDigest() != "manifest" || status.GetManifestGeneration() != 3 || !conditionIsTrue(status, workspacecatalog.ConditionStorageFrozen) {
+		t.Fatalf("storage status = %#v", status)
 	}
 }
 

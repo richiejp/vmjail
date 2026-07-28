@@ -286,8 +286,12 @@ func TestWorkspacePushPullRoundTrip(t *testing.T) {
 		t.Errorf("pulled body = %q, want %q", got, fileBody)
 	}
 
+	diskController := &cliWorkspaceDiskController{status: workspace.WorkspaceDiskStatus{
+		UsedBytes: 7, AvailableBytes: 13, AllowanceBytes: 20, Frozen: true,
+	}}
+	rig.nodeServer.SetWorkspaceDiskController(diskController)
 	statusOut, _, err := runDaft(t, append([]string{workspaceCmdName, storageSubName, statusSubName}, commonArgs...)...)
-	if err != nil || !strings.Contains(statusOut, "hard=") || !strings.Contains(statusOut, "protected=") {
+	if err != nil || !strings.Contains(statusOut, "hard=") || !strings.Contains(statusOut, "workspace_protected=") {
 		t.Fatalf("storage status = %q, %v", statusOut, err)
 	}
 	pruneOut, _, err := runDaft(t, append([]string{workspaceCmdName, storageSubName, pruneSubName, "--dry-run"}, commonArgs...)...)
@@ -317,10 +321,6 @@ func TestWorkspacePushPullRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	rig.nodeServer.ClearLiveMount(writableKey)
-	diskController := &cliWorkspaceDiskController{status: workspace.WorkspaceDiskStatus{
-		UsedBytes: 7, AvailableBytes: 13, AllowanceBytes: 20, Frozen: true,
-	}}
-	rig.nodeServer.SetWorkspaceDiskController(diskController)
 	rejectOut, _, err := runDaft(t, append([]string{workspaceCmdName, changesSubName, "reject"}, commonArgs...)...)
 	if err != nil || diskController.deleteCalls != 1 || !strings.Contains(rejectOut, "restored generation") {
 		t.Fatalf("changes reject = %q, %v, disk deletes %d", rejectOut, err, diskController.deleteCalls)
@@ -614,7 +614,7 @@ func TestRejectWorkspaceChangesBranchesAndStorageFormatting(t *testing.T) {
 		t.Fatalf("no-prior rejection = %q, %v", output.String(), err)
 	}
 	output.Reset()
-	if err := writeWorkspaceStorageStatus(&output, &workspacev1.GetStorageStatusResponse{UsageBytes: 7, HardBytes: 10}); err != nil || !strings.Contains(output.String(), "usage=7") {
+	if err := writeWorkspaceStorageStatus(&output, &workspacev1.GetWorkspaceDiskStatusResponse{UsedBytes: 3, ProtectedBytes: 2}, &workspacev1.GetStorageStatusResponse{UsageBytes: 7, HardBytes: 10}); err != nil || !strings.Contains(output.String(), "disk_used=3") || !strings.Contains(output.String(), "usage=7") {
 		t.Fatalf("status output = %q, %v", output.String(), err)
 	}
 	output.Reset()

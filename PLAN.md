@@ -309,13 +309,20 @@ Landed:
   tools with closed-world schemas and accurate read/destructive/idempotent
   annotations. They delegate to the same authenticated client controls rather
   than weakening generation checks or duplicating transport policy.
+- Node disk status now carries exact current manifests and deduplicated
+  per-Workspace protected bytes alongside usage, allowance, and frozen/running
+  state. CLI and trusted MCP project that live status with bounded global CAS
+  accounting. The catalog status schema/model includes the corresponding disk,
+  protected-byte, manifest digest/generation fields and the `StorageFrozen`
+  condition type.
 
 Remaining:
 
 - Add stop-time teardown snapshot control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
-- Finish workspace status disk fields and the `StorageFrozen` condition.
+- Persist live Node storage reports into the catalog's disk fields and
+  `StorageFrozen` condition so catalog-only readers retain the latest snapshot.
 - Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,
   capacity, persistence, freeze, live-grow, and leak acceptance tests.
 

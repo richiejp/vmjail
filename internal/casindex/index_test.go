@@ -86,6 +86,34 @@ func TestOpenMigratesLegacyChunksProtectedAndPersists(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStatusCountsUniqueProtectedChunksAndStableManifests(t *testing.T) {
+	rig, refs := newIndexRig(t, "shared", "only protected", "recoverable")
+	requests := []CommitRequest{
+		{SyncKey: "workspace\x00/b", Digest: manifestDigest("b"), Generation: 2, Chunks: refs[:2], Origin: OriginSandbox, Recoverability: RecoverabilityProtected},
+		{SyncKey: "workspace\x00/a", Digest: manifestDigest("a"), Generation: 1, Chunks: refs[:1], Origin: OriginSandbox, Recoverability: RecoverabilityProtected},
+		{SyncKey: "workspace\x00/c", Digest: manifestDigest("c"), Generation: 3, Chunks: refs[2:], Origin: OriginClientUpload, Recoverability: RecoverabilityRecoverable},
+		{SyncKey: "other\x00/a", Digest: manifestDigest("other"), Generation: 1, Chunks: refs[:1], Origin: OriginSandbox, Recoverability: RecoverabilityProtected},
+	}
+	for _, request := range requests {
+		if err := rig.index.CommitManifest(request); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status, err := rig.index.WorkspaceStatus("workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Manifests) != 3 || status.Manifests[0].SyncKey != "workspace\x00/a" || status.Manifests[2].SyncKey != "workspace\x00/c" {
+		t.Fatalf("manifests = %#v", status.Manifests)
+	}
+	if want := refs[0].Size + refs[1].Size; status.ProtectedBytes != want {
+		t.Fatalf("protected bytes = %d, want %d", status.ProtectedBytes, want)
+	}
+	if _, err := rig.index.WorkspaceStatus(""); err == nil {
+		t.Fatal("empty workspace status succeeded")
+	}
+}
+
 func TestManifestExactAdoptionRejectAndRestore(t *testing.T) {
 	rig, refs := newIndexRig(t, "client", "sandbox", "new sandbox")
 	clientDigest := manifestDigest("client")

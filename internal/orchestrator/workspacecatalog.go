@@ -1509,6 +1509,11 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 			CurrentSandbox:     sandboxRefToProto(ws.Status.CurrentSandbox),
 			Missing:            append([]string(nil), ws.Status.Missing...),
 			Lock:               lockToProto(ws.Status.Lock),
+			DiskUsedBytes:      ws.Status.DiskUsedBytes,
+			DiskAllowanceBytes: ws.Status.DiskAllowanceBytes,
+			ProtectedBytes:     ws.Status.ProtectedBytes,
+			ManifestDigest:     ws.Status.ManifestDigest,
+			ManifestGeneration: ws.Status.ManifestGeneration,
 		},
 	}
 }
