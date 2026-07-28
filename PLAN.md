@@ -269,6 +269,11 @@ Landed:
   allowance, and frozen state. A bounded poller pauses Cloud Hypervisor at 90%
   usage; live growth durably expands qcow2, resizes virtio-blk, grows XFS, and
   keeps an already-frozen VM paused until a separate validated unfreeze.
+- The retained-disk store reserves every qcow2 virtual maximum against the
+  durable filesystem capacity observed at Node startup, rejecting new disks
+  and live growth that cannot fit. Under host pressure, the bounded disk
+  monitor freezes actively growing sandboxes by recent growth rate, breaking
+  ties largest-first, while leaving idle sandboxes available.
 - A per-CAS Badger index durably records chunk size/access/provenance,
   exact manifest digest/generation references, recoverability, disposition,
   and crash-recoverable deletion queue state. Legacy unindexed chunks migrate

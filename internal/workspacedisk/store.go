@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 )
 
 const (
@@ -18,18 +20,24 @@ const (
 	migrationMarker  = ".legacy-mounts-removed-v1"
 )
 
-var ErrSizeConflict = errors.New("workspacedisk: retained disk has a different virtual size")
+var (
+	ErrSizeConflict        = errors.New("workspacedisk: retained disk has a different virtual size")
+	ErrReservationExceeded = errors.New("workspacedisk: durable storage reservation exceeded")
+)
 
 // Store atomically creates and reopens retained workspace images.
 type Store struct {
-	root       string
-	create     func(string, string) (temporaryFile, error)
-	link       func(string, string) error
-	remove     func(string) error
-	syncRoot   func(string) error
-	stat       func(string) (fs.FileInfo, error)
-	removeAll  func(string) error
-	openMarker func(string, int, fs.FileMode) (syncCloser, error)
+	mu               sync.Mutex
+	root             string
+	reservationBytes uint64
+	create           func(string, string) (temporaryFile, error)
+	link             func(string, string) error
+	remove           func(string) error
+	syncRoot         func(string) error
+	stat             func(string) (fs.FileInfo, error)
+	removeAll        func(string) error
+	openMarker       func(string, int, fs.FileMode) (syncCloser, error)
+	statfs           func(string, *syscall.Statfs_t) error
 }
 
 type temporaryFile interface {
@@ -61,6 +69,7 @@ func newStore() *Store {
 		openMarker: func(name string, flag int, perm fs.FileMode) (syncCloser, error) {
 			return os.OpenFile(name, flag, perm) // #nosec G304 -- name is beneath the validated root.
 		},
+		statfs: syscall.Statfs,
 	}
 }
 
@@ -78,6 +87,23 @@ func openStore(root, legacyMountRoot string, store *Store) (*Store, error) {
 	if err := store.migrateLegacyMounts(legacyMountRoot); err != nil {
 		return nil, err
 	}
+	reserved, err := store.reservedBytes()
+	if err != nil {
+		return nil, err
+	}
+	var stat syscall.Statfs_t
+	if err := store.statfs(root, &stat); err != nil {
+		return nil, fmt.Errorf("workspacedisk: inspect durable storage: %w", err)
+	}
+	available, err := filesystemAvailable(stat)
+	if err != nil {
+		return nil, err
+	}
+	if ^uint64(0)-reserved < available {
+		store.reservationBytes = ^uint64(0)
+	} else {
+		store.reservationBytes = reserved + available
+	}
 	return store, nil
 }
 
@@ -91,6 +117,8 @@ func (s *Store) Prepare(workspaceID string, virtualSize uint64) (path string, cr
 	if err := validateWorkspaceID(workspaceID); err != nil {
 		return "", false, err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	path = filepath.Join(s.root, workspaceID+diskSuffix)
 	currentSize, err := VirtualSize(path)
 	if err == nil {
@@ -100,6 +128,9 @@ func (s *Store) Prepare(workspaceID string, virtualSize uint64) (path string, cr
 		return path, false, nil
 	}
 	if !errors.Is(err, fs.ErrNotExist) {
+		return "", false, err
+	}
+	if err := s.checkReservation(virtualSize); err != nil {
 		return "", false, err
 	}
 
@@ -152,6 +183,8 @@ func (s *Store) Delete(workspaceID string) error {
 	if err := validateWorkspaceID(workspaceID); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	path := filepath.Join(s.root, workspaceID+diskSuffix)
 	if err := s.remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("workspacedisk: delete image: %w", err)
@@ -219,7 +252,18 @@ func (s *Store) Grow(workspaceID string, virtualSize uint64) error {
 	if err := validateWorkspaceID(workspaceID); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	path := filepath.Join(s.root, workspaceID+diskSuffix)
+	current, err := VirtualSize(path)
+	if err != nil {
+		return err
+	}
+	if virtualSize > current {
+		if err := s.checkReservation(virtualSize - current); err != nil {
+			return err
+		}
+	}
 	file, err := os.OpenFile(path, os.O_RDWR, 0) // #nosec G304 -- path is beneath the validated store root.
 	if err != nil {
 		return fmt.Errorf("workspacedisk: open image for growth: %w", err)
@@ -233,6 +277,67 @@ func (s *Store) Grow(workspaceID string, virtualSize uint64) error {
 		return fmt.Errorf("workspacedisk: close grown image: %w", closeErr)
 	}
 	return nil
+}
+
+// UnderPressure reports when the filesystem holding retained disks has less
+// than ten percent of the node's startup durable reservation still available.
+func (s *Store) UnderPressure() bool {
+	if s == nil || s.root == "" || s.reservationBytes == 0 {
+		return false
+	}
+	var stat syscall.Statfs_t
+	if err := s.statfs(s.root, &stat); err != nil {
+		return true
+	}
+	available, err := filesystemAvailable(stat)
+	if err != nil {
+		return true
+	}
+	return available < s.reservationBytes/10
+}
+
+func filesystemAvailable(stat syscall.Statfs_t) (uint64, error) {
+	if stat.Bsize <= 0 {
+		return 0, errors.New("workspacedisk: invalid durable filesystem block size")
+	}
+	blockSize := uint64(stat.Bsize) // #nosec G115 -- positivity is checked above.
+	if stat.Bavail > ^uint64(0)/blockSize {
+		return 0, errors.New("workspacedisk: durable filesystem capacity overflow")
+	}
+	return stat.Bavail * blockSize, nil
+}
+
+func (s *Store) checkReservation(additional uint64) error {
+	reserved, err := s.reservedBytes()
+	if err != nil {
+		return err
+	}
+	if additional > s.reservationBytes || reserved > s.reservationBytes-additional {
+		return fmt.Errorf("%w: reserved=%d requested=%d capacity=%d", ErrReservationExceeded, reserved, additional, s.reservationBytes)
+	}
+	return nil
+}
+
+func (s *Store) reservedBytes() (uint64, error) {
+	entries, err := os.ReadDir(s.root)
+	if err != nil {
+		return 0, fmt.Errorf("workspacedisk: list retained images: %w", err)
+	}
+	var total uint64
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), diskSuffix) {
+			continue
+		}
+		size, err := VirtualSize(filepath.Join(s.root, entry.Name()))
+		if err != nil {
+			return 0, err
+		}
+		if ^uint64(0)-total < size {
+			return 0, fmt.Errorf("%w: retained sizes overflow", ErrReservationExceeded)
+		}
+		total += size
+	}
+	return total, nil
 }
 
 func (s *Store) migrateLegacyMounts(legacyRoot string) error {

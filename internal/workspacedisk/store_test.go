@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -526,5 +527,100 @@ func TestStoreGrowRejectsInvalidAndMissingImages(t *testing.T) {
 	}
 	if err := store.Grow(testWorkspaceID, DefaultDiskBytes*2); err == nil {
 		t.Fatal("invalid image Grow succeeded")
+	}
+}
+
+func TestStoreRejectsCreateBeyondDurableReservation(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.reservationBytes = DefaultDiskBytes - 1
+	if _, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes); !errors.Is(err, ErrReservationExceeded) {
+		t.Fatalf("Prepare error = %v, want ErrReservationExceeded", err)
+	}
+}
+
+func TestStoreReservationAccountsRetainedImagesOnGrow(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Prepare(testWorkspaceID, 8<<20); err != nil {
+		t.Fatal(err)
+	}
+	store.reservationBytes = 12 << 20
+	if err := store.Grow(testWorkspaceID, 16<<20); !errors.Is(err, ErrReservationExceeded) {
+		t.Fatalf("Grow error = %v, want ErrReservationExceeded", err)
+	}
+}
+
+func TestFilesystemAvailableValidation(t *testing.T) {
+	if got, err := filesystemAvailable(syscall.Statfs_t{Bavail: 3, Bsize: 4}); err != nil || got != 12 {
+		t.Fatalf("filesystemAvailable = %d, %v", got, err)
+	}
+	if _, err := filesystemAvailable(syscall.Statfs_t{}); err == nil {
+		t.Fatal("zero block size accepted")
+	}
+	if _, err := filesystemAvailable(syscall.Statfs_t{Bavail: ^uint64(0), Bsize: 2}); err == nil {
+		t.Fatal("overflow accepted")
+	}
+}
+
+func TestStorePressureSignalsInspectionFailuresAndLowSpace(t *testing.T) {
+	var nilStore *Store
+	if nilStore.UnderPressure() {
+		t.Fatal("nil store reported pressure")
+	}
+	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.reservationBytes = 0
+	if store.UnderPressure() {
+		t.Fatal("zero reservation reported pressure")
+	}
+	store.reservationBytes = 1000
+	store.statfs = func(string, *syscall.Statfs_t) error { return errors.New("statfs") }
+	if !store.UnderPressure() {
+		t.Fatal("statfs failure did not report pressure")
+	}
+	store.statfs = func(_ string, stat *syscall.Statfs_t) error {
+		*stat = syscall.Statfs_t{}
+		return nil
+	}
+	if !store.UnderPressure() {
+		t.Fatal("invalid filesystem stats did not report pressure")
+	}
+	store.statfs = func(_ string, stat *syscall.Statfs_t) error {
+		*stat = syscall.Statfs_t{Bavail: 9, Bsize: 10}
+		return nil
+	}
+	if !store.UnderPressure() {
+		t.Fatal("low space did not report pressure")
+	}
+	store.statfs = func(_ string, stat *syscall.Statfs_t) error {
+		*stat = syscall.Statfs_t{Bavail: 10, Bsize: 10}
+		return nil
+	}
+	if store.UnderPressure() {
+		t.Fatal("threshold boundary reported pressure")
+	}
+}
+
+func TestOpenStoreRejectsInvalidDurableFilesystemStats(t *testing.T) {
+	statErr := errors.New("statfs")
+	store := newStore()
+	store.statfs = func(string, *syscall.Statfs_t) error { return statErr }
+	if _, err := openStore(filepath.Join(t.TempDir(), "disks"), "", store); !errors.Is(err, statErr) {
+		t.Fatalf("openStore error = %v", err)
+	}
+	store = newStore()
+	store.statfs = func(_ string, stat *syscall.Statfs_t) error {
+		*stat = syscall.Statfs_t{}
+		return nil
+	}
+	if _, err := openStore(filepath.Join(t.TempDir(), "disks"), "", store); err == nil {
+		t.Fatal("openStore accepted invalid filesystem stats")
 	}
 }

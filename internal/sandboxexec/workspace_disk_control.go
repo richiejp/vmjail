@@ -32,6 +32,10 @@ type workspaceDiskGrower interface {
 	Grow(workspaceID string, virtualSize uint64) error
 }
 
+type workspaceDiskPressureSource interface {
+	UnderPressure() bool
+}
+
 type workspaceVMController interface {
 	Pause(context.Context) error
 	Resume(context.Context) error
@@ -59,6 +63,9 @@ type workspaceDiskRuntime struct {
 	allowance  uint64
 	frozen     bool
 	resizeDone bool
+	lastPoll   time.Time
+	lastUsed   uint64
+	growthRate float64
 }
 
 func (e *Executor) registerWorkspaceDiskControl(ctx context.Context, cfg sandbox.Config, workspaceID, sandboxUID string, allowance uint64) func() {
@@ -109,15 +116,79 @@ func (e *Executor) pollWorkspaceDisk(ctx context.Context, runtime *workspaceDisk
 		return err
 	}
 	runtime.mu.Lock()
-	defer runtime.mu.Unlock()
+	now := time.Now()
+	if !runtime.lastPoll.IsZero() && now.After(runtime.lastPoll) && usage.Used > runtime.lastUsed {
+		runtime.growthRate = float64(usage.Used-runtime.lastUsed) / now.Sub(runtime.lastPoll).Seconds()
+	} else {
+		runtime.growthRate = 0
+	}
+	runtime.lastPoll, runtime.lastUsed = now, usage.Used
 	runtime.usage = usage
-	if runtime.frozen || !atWorkspaceFreezeThreshold(usage.Used, runtime.allowance) {
+	shouldFreeze := !runtime.frozen && atWorkspaceFreezeThreshold(usage.Used, runtime.allowance)
+	runtime.mu.Unlock()
+	if pressure, ok := e.workspaceDisks.(workspaceDiskPressureSource); ok && pressure.UnderPressure() {
+		if err := e.freezeGrowingWorkspaceDisks(ctx); err != nil {
+			return err
+		}
+	}
+	if !shouldFreeze {
+		return nil
+	}
+	runtime.mu.Lock()
+	defer runtime.mu.Unlock()
+	if runtime.frozen {
 		return nil
 	}
 	if err := runtime.controller.Pause(ctx); err != nil {
 		return fmt.Errorf("pause at storage threshold: %w", err)
 	}
 	runtime.frozen = true
+	return nil
+}
+
+func (e *Executor) freezeGrowingWorkspaceDisks(ctx context.Context) error {
+	e.diskMu.RLock()
+	type candidate struct {
+		runtime *workspaceDiskRuntime
+		rate    float64
+		used    uint64
+	}
+	candidates := make([]candidate, 0, len(e.workspaceDiskControls))
+	for _, runtime := range e.workspaceDiskControls {
+		runtime.mu.Lock()
+		candidates = append(candidates, candidate{runtime: runtime, rate: runtime.growthRate, used: runtime.usage.Used})
+		runtime.mu.Unlock()
+	}
+	e.diskMu.RUnlock()
+	slices.SortFunc(candidates, func(left, right candidate) int {
+		if left.rate != right.rate {
+			if left.rate > right.rate {
+				return -1
+			}
+			return 1
+		}
+		if left.used != right.used {
+			if left.used > right.used {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(left.runtime.workspaceID, right.runtime.workspaceID)
+	})
+	for _, candidate := range candidates {
+		runtime := candidate.runtime
+		runtime.mu.Lock()
+		if runtime.frozen || runtime.growthRate <= 0 {
+			runtime.mu.Unlock()
+			continue
+		}
+		if err := runtime.controller.Pause(ctx); err != nil {
+			runtime.mu.Unlock()
+			return fmt.Errorf("pause %s at host storage pressure: %w", runtime.workspaceID, err)
+		}
+		runtime.frozen = true
+		runtime.mu.Unlock()
+	}
 	return nil
 }
 

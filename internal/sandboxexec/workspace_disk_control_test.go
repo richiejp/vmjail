@@ -25,7 +25,10 @@ const (
 type fakeWorkspaceGrowStore struct {
 	sequence *[]string
 	err      error
+	pressure bool
 }
+
+func (s *fakeWorkspaceGrowStore) UnderPressure() bool { return s.pressure }
 
 func (*fakeWorkspaceGrowStore) Prepare(string, uint64) (path string, created bool, err error) {
 	return testControlDiskPath, false, nil
@@ -38,6 +41,7 @@ func (s *fakeWorkspaceGrowStore) Grow(string, uint64) error {
 
 type fakeWorkspaceVM struct {
 	sequence                *[]string
+	pauseStep               string
 	pauseErr, resumeErr     error
 	resizeErr               error
 	pauseCalls, resumeCalls int
@@ -45,8 +49,108 @@ type fakeWorkspaceVM struct {
 
 func (v *fakeWorkspaceVM) Pause(context.Context) error {
 	v.pauseCalls++
-	*v.sequence = append(*v.sequence, "pause")
+	step := v.pauseStep
+	if step == "" {
+		step = "pause"
+	}
+	*v.sequence = append(*v.sequence, step)
 	return v.pauseErr
+}
+
+func TestHostPressureFreezesGrowingDisksFastestFirst(t *testing.T) {
+	const (
+		fastID  = "fast"
+		largeID = "large"
+		idleID  = "idle"
+	)
+	sequence := []string{}
+	store := &fakeWorkspaceGrowStore{sequence: &sequence, pressure: true}
+	e := newWorkspaceControlExecutor(store, nil)
+	fast := &fakeWorkspaceVM{sequence: &sequence, pauseStep: fastID}
+	large := &fakeWorkspaceVM{sequence: &sequence, pauseStep: largeID}
+	idle := &fakeWorkspaceVM{sequence: &sequence, pauseStep: idleID}
+	e.workspaceDiskControls = map[string]*workspaceDiskRuntime{
+		fastID:  {workspaceID: fastID, controller: fast, growthRate: 20, usage: workspacesnapshot.Usage{Used: 10}},
+		largeID: {workspaceID: largeID, controller: large, growthRate: 10, usage: workspacesnapshot.Usage{Used: 100}},
+		idleID:  {workspaceID: idleID, controller: idle, usage: workspacesnapshot.Usage{Used: 1000}},
+	}
+	if err := e.freezeGrowingWorkspaceDisks(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(sequence, []string{fastID, largeID}) {
+		t.Fatalf("freeze order = %v", sequence)
+	}
+}
+
+func TestHostPressureFreezeFailureStopsSequence(t *testing.T) {
+	const (
+		failedID = "failed"
+		laterID  = "later"
+	)
+	sequence := []string{}
+	pauseErr := errors.New("pause")
+	failed := &fakeWorkspaceVM{sequence: &sequence, pauseStep: failedID, pauseErr: pauseErr}
+	later := &fakeWorkspaceVM{sequence: &sequence, pauseStep: laterID}
+	e := newWorkspaceControlExecutor(nil, nil)
+	e.workspaceDiskControls = map[string]*workspaceDiskRuntime{
+		failedID: {workspaceID: failedID, controller: failed, growthRate: 2},
+		laterID:  {workspaceID: laterID, controller: later, growthRate: 1},
+	}
+	if err := e.freezeGrowingWorkspaceDisks(t.Context()); !errors.Is(err, pauseErr) {
+		t.Fatalf("freeze error = %v", err)
+	}
+	if !slices.Equal(sequence, []string{failedID}) {
+		t.Fatalf("freeze sequence = %v", sequence)
+	}
+}
+
+func TestPollWorkspaceDiskAppliesHostPressure(t *testing.T) {
+	sequence := []string{}
+	store := &fakeWorkspaceGrowStore{sequence: &sequence, pressure: true}
+	vm := &fakeWorkspaceVM{sequence: &sequence}
+	e := newWorkspaceControlExecutor(store, vm)
+	runtime := &workspaceDiskRuntime{workspaceID: testWSUUID, controller: vm, allowance: testDiskAllowance}
+	e.workspaceDiskControls[testWSUUID] = runtime
+	used := uint64(1)
+	e.getWorkspaceUsage = func(context.Context, func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error) {
+		result := workspacesnapshot.Usage{Used: used}
+		used++
+		return result, nil
+	}
+	if err := e.pollWorkspaceDisk(t.Context(), runtime); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.pollWorkspaceDisk(t.Context(), runtime); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.frozen || vm.pauseCalls != 1 {
+		t.Fatalf("frozen=%v pause calls=%d", runtime.frozen, vm.pauseCalls)
+	}
+}
+
+func TestHostPressureTieBreaksLargestThenWorkspaceID(t *testing.T) {
+	sequence := []string{}
+	e := newWorkspaceControlExecutor(nil, nil)
+	for _, candidate := range []struct {
+		id   string
+		used uint64
+	}{
+		{id: "b-small", used: 1},
+		{id: "c-large", used: 2},
+		{id: "a-large", used: 2},
+	} {
+		vm := &fakeWorkspaceVM{sequence: &sequence, pauseStep: candidate.id}
+		e.workspaceDiskControls[candidate.id] = &workspaceDiskRuntime{
+			workspaceID: candidate.id, controller: vm, growthRate: 1,
+			usage: workspacesnapshot.Usage{Used: candidate.used},
+		}
+	}
+	if err := e.freezeGrowingWorkspaceDisks(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(sequence, []string{"a-large", "c-large", "b-small"}) {
+		t.Fatalf("freeze sequence = %v", sequence)
+	}
 }
 
 func (v *fakeWorkspaceVM) Resume(context.Context) error {
