@@ -333,6 +333,9 @@ Landed:
   mapping into a protected durable manifest before unregistering it. The
   real-KVM push/mutate/stop/pull acceptance path now also asserts the writable
   mount is XFS and supports reflink cloning.
+- The real-KVM XFS round trip now grows a running 512 MiB disk to 1 GiB through
+  `workspace resources --disk`, verifies the mounted filesystem expanded, then
+  stops and relaunches to prove the retained disk preserves guest mutations.
 - First-launch workspace contents now stream directly from durable manifests
   and CAS chunks into guest XFS over bounded per-VM vsock archive endpoints.
   Writable Workspace paths no longer create virtiofs shares or host seed

@@ -525,14 +525,21 @@ func newWorkspaceResourcesCmd() *cobra.Command {
 						return err
 					}
 					statusAllowance := current.Msg.GetWorkspace().GetStatus().GetDiskAllowanceBytes()
+					diskExists := statusAllowance > 0 || current.Msg.GetWorkspace().GetStatus().GetCurrentSandbox() != nil
+					if statusAllowance == 0 && diskExists {
+						statusAllowance = current.Msg.GetWorkspace().GetSpec().GetDiskBytes()
+						if statusAllowance == 0 {
+							statusAllowance = workspacedisk.DefaultDiskBytes
+						}
+					}
 					desiredAllowance := diskBytes
 					if desiredAllowance == 0 {
 						desiredAllowance = workspacedisk.DefaultDiskBytes
 					}
-					if statusAllowance > 0 && desiredAllowance < statusAllowance {
+					if diskExists && desiredAllowance < statusAllowance {
 						return fmt.Errorf("workspace disk cannot shrink: current=%d requested=%d", statusAllowance, desiredAllowance)
 					}
-					if statusAllowance > 0 && desiredAllowance > statusAllowance {
+					if diskExists && desiredAllowance > statusAllowance {
 						if err := resizeCatalogWorkspaceDisk(ctx, opts, current.Msg.GetWorkspace().GetMetadata().GetUuid(), desiredAllowance); err != nil {
 							return err
 						}

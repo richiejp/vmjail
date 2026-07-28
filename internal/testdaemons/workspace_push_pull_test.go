@@ -83,6 +83,9 @@ func TestClusterWorkspacePushMutatePull(t *testing.T) {
 		{Label: "target", Cmd: fmt.Sprintf(
 			"%s workspace target %s --name %s %s", prefix, c.SandboxdFP, wsName, orch,
 		)},
+		{Label: "resources", Cmd: fmt.Sprintf(
+			"%s workspace resources --disk 512M --name %s %s", prefix, wsName, orch,
+		)},
 		{Label: "push", Cmd: fmt.Sprintf(
 			"%s workspace push --name %s %s", prefix, wsName, orch,
 		)},
@@ -93,7 +96,8 @@ func TestClusterWorkspacePushMutatePull(t *testing.T) {
 
 	// The nix-shell-image entrypoint prints this once crun has the
 	// container up — the gate before exec can dial in.
-	c.WaitForSandboxdOutput(t, "daft-nix-shell ready", 90*time.Second)
+	readyOutput := c.WaitForSandboxdOutput(t, "daft-nix-shell ready", 90*time.Second)
+	readyCount := strings.Count(readyOutput, "daft-nix-shell ready")
 
 	// Read the pushed file and mutate the mount inside the VM, in one
 	// `daft workspace exec` run *off the pane*: exec's stdin pump only
@@ -119,6 +123,46 @@ func TestClusterWorkspacePushMutatePull(t *testing.T) {
 	waitForFileContains(t, execProc, execLog, s4PushedMarker, 60*time.Second, paneDump)
 	waitForFileContains(t, execProc, execLog, s4XFSSentinel, 60*time.Second, paneDump)
 	waitForFileContains(t, execProc, execLog, "S4-WROTE-0", 60*time.Second, paneDump)
+
+	// Grow through the public resource command while the VM is running. The
+	// command returns only after qcow2, virtio-blk, and guest XFS growth all
+	// succeed. Verify the mounted filesystem gained substantial capacity.
+	testdaemons.RunWorkspaceSteps(t, s, "S4GROW", []testdaemons.WorkspaceStep{{
+		Label: "grow", Cmd: fmt.Sprintf(
+			"%s workspace resources --disk 1G --name %s %s", prefix, wsName, orch,
+		),
+	}}, 60*time.Second)
+	growLog := filepath.Join(t.TempDir(), "grow.log")
+	growProc := startDaftSubprocess(t, growLog,
+		c.DaftBin, "--config-dir", c.ClientConfigDir,
+		"workspace", "exec", wsName, "--tty=false", "--orchestrator", c.OrchestratorURL,
+		"--", "/bin/dash", "-c",
+		"test $(df -B1 --output=size /workspace | tail -1) -gt 800000000 && echo S4-GROWN")
+	waitForFileContains(t, growProc, growLog, "S4-GROWN", 60*time.Second, paneDump)
+
+	// Stop and relaunch before pulling. The second boot must reopen the retained
+	// disk without reseeding it, preserving the guest mutation exactly.
+	testdaemons.RunWorkspaceSteps(t, s, "S4REUSE", []testdaemons.WorkspaceStep{
+		{Label: "stop", Cmd: fmt.Sprintf("%s workspace stop --name %s %s", prefix, wsName, orch)},
+		{Label: "launch", Cmd: fmt.Sprintf("%s workspace launch --name %s %s", prefix, wsName, orch)},
+	}, 60*time.Second)
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		output := c.WaitForSandboxdOutput(t, "daft-nix-shell ready", time.Second)
+		if strings.Count(output, "daft-nix-shell ready") > readyCount {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("second sandbox did not become ready\n%s", output)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	reuseLog := filepath.Join(t.TempDir(), "reuse.log")
+	reuseProc := startDaftSubprocess(t, reuseLog,
+		c.DaftBin, "--config-dir", c.ClientConfigDir,
+		"workspace", "exec", wsName, "--tty=false", "--orchestrator", c.OrchestratorURL,
+		"--", "/bin/dash", "-c", "cat /workspace/out.txt")
+	waitForFileContains(t, reuseProc, reuseLog, s4MutatedMarker, 60*time.Second, paneDump)
 
 	// Stop first so pull cannot use the live guest refresher. A successful pull
 	// therefore proves the stop path committed the final XFS contents into the

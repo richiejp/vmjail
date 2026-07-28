@@ -660,7 +660,11 @@ func TestWorkspaceResourcesGrowsExistingDiskBeforeCatalogUpdate(t *testing.T) {
 	h.run(append([]string{createSubName}, h.commonArgs...)...)
 	workspace := h.store.List(nil)[0]
 	_, err := h.store.Update(workspace.Metadata.UUID, workspacecatalog.MutateStatus, func(item *workspacecatalog.Workspace) error {
-		item.Status.DiskAllowanceBytes = 20 << 30
+		// Launch binding can become visible before the first disk-usage
+		// heartbeat. The CLI must still treat the default allowance as a live
+		// disk and route growth through the Node rather than merely updating
+		// the catalog declaration.
+		item.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: "launch-heartbeat-race"}
 		return nil
 	})
 	if err != nil {
