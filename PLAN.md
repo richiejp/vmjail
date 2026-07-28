@@ -348,6 +348,9 @@ Landed:
 - Exact pull acknowledgment now removes a stopped retained qcow2 after the CAS
   generation becomes recoverable. A running disk is retained because it may
   already contain writes newer than the acknowledged manifest.
+- The real-KVM stop/pull acceptance path asserts the stopped qcow2 exists until
+  exact adoption, then verifies both the image and per-Sandbox snapshot staging
+  tree disappear without leaking retained protection.
 
 Remaining:
 

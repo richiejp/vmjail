@@ -209,14 +209,23 @@ func TestClusterWorkspacePushMutatePull(t *testing.T) {
 	// Stop first so pull cannot use the live guest refresher. A successful pull
 	// therefore proves explicit unfreeze resumed guest services and the stop
 	// path committed final XFS contents into the durable protected manifest.
-	testdaemons.RunWorkspaceSteps(t, s, "S4PULL", []testdaemons.WorkspaceStep{
-		{Label: "stop", Cmd: fmt.Sprintf(
+	testdaemons.RunWorkspaceSteps(t, s, "S4STOP", []testdaemons.WorkspaceStep{{
+		Label: "stop", Cmd: fmt.Sprintf(
 			"%s workspace stop --name %s %s", prefix, wsName, orch,
-		)},
-		{Label: "pull", Cmd: fmt.Sprintf(
+		),
+	}}, 60*time.Second)
+	diskPattern := filepath.Join(c.SandboxdConfigDir, "workspace-disks", "*.qcow2")
+	waitForGlobCount(t, diskPattern, 1, 5*time.Second)
+	testdaemons.RunWorkspaceSteps(t, s, "S4PULL", []testdaemons.WorkspaceStep{{
+		Label: "pull", Cmd: fmt.Sprintf(
 			"%s workspace pull --name %s %s", prefix, wsName, orch,
-		)},
-	}, 60*time.Second)
+		),
+	}}, 60*time.Second)
+	// Exact pull acknowledgement adopts the stopped snapshot, so CAS becomes
+	// the recoverable copy and both qcow2 protection and snapshot staging are
+	// released synchronously/boundedly.
+	waitForGlobCount(t, diskPattern, 0, 5*time.Second)
+	waitForGlobCount(t, filepath.Join(c.SandboxdConfigDir, "mounts", "*"), 0, 5*time.Second)
 
 	got, err := os.ReadFile(filepath.Join(wsDir, "out.txt")) //nolint:gosec // G304: test-controlled path under t.TempDir
 	if err != nil {
@@ -237,5 +246,24 @@ func mustWriteFile(t *testing.T, path, data string) {
 	}
 	if err := os.WriteFile(path, []byte(data), 0o644); err != nil { //nolint:gosec // G306: test fixture file
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+func waitForGlobCount(t *testing.T, pattern string, want int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	//daft:lint:disable=forloopbound reason="bounded by deadline + t.Fatalf below"
+	for {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatalf("glob %q: %v", pattern, err)
+		}
+		if len(matches) == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("glob %q matched %v, want %d entries", pattern, matches, want)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }

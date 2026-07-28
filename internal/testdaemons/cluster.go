@@ -90,6 +90,10 @@ type Cluster struct {
 	// ClientConfigDir is a fresh config dir holding the client's
 	// identity + a peer store that approves the orchestrator.
 	ClientConfigDir string
+	// SandboxdConfigDir is the first Node's durable config/state root. Tests
+	// use it only for on-host lifecycle assertions such as retained disk and
+	// snapshot staging cleanup.
+	SandboxdConfigDir string
 	// MitmProxyBin is the absolute path to the freshly-built
 	// daft-mitm-proxy binary, for tests that route in-VM egress
 	// through the caching proxy (PLAN.md Phase I).
@@ -392,19 +396,20 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	}
 
 	return &Cluster{
-		DaftBin:         bins.daft,
-		MCPBin:          bins.mcp,
-		OrchestratorURL: url,
-		ClientConfigDir: cliDir,
-		MitmProxyBin:    bins.mitmProxy,
-		EgressProxyURL:  proxyURL,
-		OrchestratorFP:  orchID.Fingerprint(),
-		SandboxdFP:      sbxFPs[0],
-		SandboxdFPs:     sbxFPs,
-		ClientFP:        cliID.Fingerprint(),
-		ObserverDir:     observerDirs[0],
-		sandboxdOut:     sandboxdOuts[0],
-		sandboxdCmd:     sandboxdCmds[0],
+		DaftBin:           bins.daft,
+		MCPBin:            bins.mcp,
+		OrchestratorURL:   url,
+		ClientConfigDir:   cliDir,
+		SandboxdConfigDir: sbxDirs[0],
+		MitmProxyBin:      bins.mitmProxy,
+		EgressProxyURL:    proxyURL,
+		OrchestratorFP:    orchID.Fingerprint(),
+		SandboxdFP:        sbxFPs[0],
+		SandboxdFPs:       sbxFPs,
+		ClientFP:          cliID.Fingerprint(),
+		ObserverDir:       observerDirs[0],
+		sandboxdOut:       sandboxdOuts[0],
+		sandboxdCmd:       sandboxdCmds[0],
 	}
 }
 
