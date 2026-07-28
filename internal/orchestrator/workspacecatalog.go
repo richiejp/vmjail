@@ -16,6 +16,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
@@ -1081,6 +1082,47 @@ func (h *WorkspaceCatalogHandler) Delete(
 }
 
 var errSandboxBindingChanged = errors.New("workspace: Sandbox binding changed")
+
+const maxWorkspaceStorageReports = 1024
+
+// ReconcileWorkspaceStorage persists bounded reports only for Workspaces still
+// bound to the authenticated Node. Stale or foreign reports are ignored.
+func (h *WorkspaceCatalogHandler) ReconcileWorkspaceStorage(
+	nodeFP identity.Fingerprint,
+	reports []*nodectrlv1.WorkspaceStorageReport,
+) {
+	if nodeFP.IsZero() {
+		return
+	}
+	for _, report := range reports[:min(len(reports), maxWorkspaceStorageReports)] {
+		if report == nil || report.GetWorkspaceUuid() == "" {
+			continue
+		}
+		_, _ = h.store.Update(report.GetWorkspaceUuid(), workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+			current := value.Status.CurrentSandbox
+			if current == nil || current.NodeFingerprint != nodeFP || value.Spec.TargetSandboxFingerprint != nodeFP.String() {
+				return errSandboxBindingChanged
+			}
+			value.Status.DiskUsedBytes = report.GetUsedBytes()
+			value.Status.DiskAllowanceBytes = report.GetAllowanceBytes()
+			value.Status.ProtectedBytes = report.GetProtectedBytes()
+			if report.GetManifestGeneration() >= value.Status.ManifestGeneration {
+				value.Status.ManifestDigest = report.GetManifestDigest()
+				value.Status.ManifestGeneration = report.GetManifestGeneration()
+			}
+			conditionStatus := workspacecatalog.ConditionStatusFalse
+			reason := "BelowThreshold"
+			message := "workspace disk is writable"
+			if report.GetFrozen() {
+				conditionStatus = workspacecatalog.ConditionStatusTrue
+				reason = "UsageThresholdExceeded"
+				message = "workspace disk is paused pending remediation"
+			}
+			value.Status.SetCondition(workspacecatalog.ConditionStorageFrozen, conditionStatus, reason, message, time.Now())
+			return nil
+		})
+	}
+}
 
 // StopAgentSandbox idempotently tears down one exact Workspace Sandbox. A
 // stale AgentRun can never clear or stop a newer binding because both UUIDs are

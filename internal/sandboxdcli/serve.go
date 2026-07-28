@@ -14,12 +14,15 @@ import (
 	"syscall"
 	"time"
 
+	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 
 	"github.com/richiejp/darkaifactory/internal/brokerclient"
 	"github.com/richiejp/darkaifactory/internal/bundled"
 	"github.com/richiejp/darkaifactory/internal/cas"
 	"github.com/richiejp/darkaifactory/internal/casindex"
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
 	"github.com/richiejp/darkaifactory/internal/httpcache"
 	"github.com/richiejp/darkaifactory/internal/identity"
@@ -153,7 +156,9 @@ func runServe(
 	}
 
 	client, err := newServeNodeClient(orchestratorURL, id, peers, heartbeatInterval,
-		dispatcher, bridger, attachRegistry, observerRegistry, summaryRegistry, jobManager, secretDeliverer, stdout)
+		dispatcher, func(snapshotContext context.Context) []*nodectrlv1.WorkspaceStorageReport {
+			return workspaceStorageSnapshot(snapshotContext, dispatcher, sync.server)
+		}, bridger, attachRegistry, observerRegistry, summaryRegistry, jobManager, secretDeliverer, stdout)
 	if err != nil {
 		return err
 	}
@@ -249,6 +254,7 @@ func newServeNodeClient(
 	peers *identity.PeerStore,
 	heartbeatInterval time.Duration,
 	dispatcher *sandboxexec.Executor,
+	workspaceStorage func(context.Context) []*nodectrlv1.WorkspaceStorageReport,
 	bridger *sandboxgateway.Bridger,
 	attachRegistry *sandboxgateway.AttachRegistry,
 	observerRegistry *sandboxgateway.ObserverRegistry,
@@ -260,9 +266,44 @@ func newServeNodeClient(
 	return nodectrlclient.New(nodectrlclient.Config{
 		URL: orchestratorURL, Identity: id, Peers: peers, Version: version.Version, Hostname: detectHostname(),
 		HeartbeatInterval: heartbeatInterval, SandboxEvents: dispatcher, LiveSnapshot: dispatcher.LiveSnapshot,
-		Bridger: bridger, AttachBridger: attachRegistry, ObserverResolver: observerRegistry,
+		WorkspaceStorageSnapshot: workspaceStorage,
+		Bridger:                  bridger, AttachBridger: attachRegistry, ObserverResolver: observerRegistry,
 		SummaryResolver: summaryRegistry, JobManager: jobManager, SecretDeliverer: secretDeliverer, Stderr: stderr,
 	})
+}
+
+type workspaceDiskSnapshotter interface {
+	WorkspaceDiskStatuses() []sandboxexec.WorkspaceDiskStatus
+}
+
+func workspaceStorageSnapshot(ctx context.Context, executor workspaceDiskSnapshotter, server *workspace.Server) []*nodectrlv1.WorkspaceStorageReport {
+	if executor == nil || server == nil {
+		return nil
+	}
+	statuses := executor.WorkspaceDiskStatuses()
+	reports := make([]*nodectrlv1.WorkspaceStorageReport, 0, len(statuses))
+	for _, status := range statuses {
+		response, err := server.GetWorkspaceDiskStatus(ctx, connect.NewRequest(
+			&workspacev1.GetWorkspaceDiskStatusRequest{WorkspaceUuid: status.WorkspaceID},
+		))
+		if err != nil {
+			continue
+		}
+		var digest string
+		var generation uint64
+		for _, manifest := range response.Msg.GetCurrentManifests() {
+			if manifest.GetGeneration() > generation {
+				digest, generation = manifest.GetManifestDigest(), manifest.GetGeneration()
+			}
+		}
+		reports = append(reports, &nodectrlv1.WorkspaceStorageReport{
+			WorkspaceUuid: status.WorkspaceID, UsedBytes: response.Msg.GetUsedBytes(),
+			AvailableBytes: response.Msg.GetAvailableBytes(), AllowanceBytes: response.Msg.GetAllowanceBytes(),
+			ProtectedBytes: response.Msg.GetProtectedBytes(), ManifestDigest: digest,
+			ManifestGeneration: generation, Frozen: response.Msg.GetFrozen(),
+		})
+	}
+	return reports
 }
 
 // nodeSync bundles the node's persistent CAS-backed WorkspaceService

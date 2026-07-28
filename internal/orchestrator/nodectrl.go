@@ -60,15 +60,20 @@ type LivenessReconciler interface {
 	ReconcileLiveSandboxes(nodeFP identity.Fingerprint, live []*nodectrlv1.LiveSandbox)
 }
 
+type workspaceStorageReconciler interface {
+	ReconcileWorkspaceStorage(nodeFP identity.Fingerprint, reports []*nodectrlv1.WorkspaceStorageReport)
+}
+
 // NodeControlHandler adapts the nodectrl.Registry to the
 // Connect-RPC NodeControlService surface. Peer identity for
 // every RPC is the mTLS leaf-cert fingerprint surfaced via
 // withPeerMiddleware — there is no in-band sandbox_id.
 type NodeControlHandler struct {
 	nodectrlv1connect.UnimplementedNodeControlServiceHandler
-	reg        *nodectrl.Registry
-	peers      *identity.PeerStore
-	reconciler LivenessReconciler
+	reg               *nodectrl.Registry
+	peers             *identity.PeerStore
+	reconciler        LivenessReconciler
+	storageReconciler workspaceStorageReconciler
 
 	mu      sync.Mutex
 	streams map[identity.Fingerprint]*nodeRegistration
@@ -106,6 +111,10 @@ type nodeRegistration struct {
 // can't be passed at NewNodeControlHandler time.
 func (h *NodeControlHandler) SetReconciler(r LivenessReconciler) {
 	h.reconciler = r
+}
+
+func (h *NodeControlHandler) SetWorkspaceStorageReconciler(r workspaceStorageReconciler) {
+	h.storageReconciler = r
 }
 
 // NewNodeControlHandler returns a handler that records registrations
@@ -344,6 +353,9 @@ func (h *NodeControlHandler) Heartbeat(
 		// inline-call is fine; B5 may move it onto its own goroutine
 		// once the sweep grows side work.
 		h.reconciler.ReconcileLiveSandboxes(fp, req.Msg.GetLiveSandboxes())
+	}
+	if h.storageReconciler != nil {
+		h.storageReconciler.ReconcileWorkspaceStorage(fp, req.Msg.GetWorkspaceStorage())
 	}
 	return connect.NewResponse(&nodectrlv1.HeartbeatResponse{
 		SeenAt: timestamppb.New(seenAt),

@@ -116,6 +116,9 @@ type Config struct {
 	// the orchestrator treats as "Node has no live sandboxes" (an
 	// authoritative empty, not "no data").
 	LiveSnapshot func() []*nodectrlv1.LiveSandbox
+	// WorkspaceStorageSnapshot returns bounded live disk reports for catalog
+	// status reconciliation. Nil publishes an authoritative empty set.
+	WorkspaceStorageSnapshot func(context.Context) []*nodectrlv1.WorkspaceStorageReport
 	// Bridger is the per-(workspace, port) routing table that
 	// receives an inbound byte stream when the orchestrator
 	// pushes an OpenPortRequest event. Nil ⇒ OpenPortRequest
@@ -412,6 +415,9 @@ func (c *Client) sendHeartbeat(ctx context.Context, resources nodectrl.Resources
 	req := &nodectrlv1.HeartbeatRequest{Current: resourcesToProto(resources)}
 	if c.cfg.LiveSnapshot != nil {
 		req.LiveSandboxes = c.cfg.LiveSnapshot()
+	}
+	if c.cfg.WorkspaceStorageSnapshot != nil {
+		req.WorkspaceStorage = c.cfg.WorkspaceStorageSnapshot(ctx)
 	}
 	_, err := c.ctrl.Heartbeat(ctx, connect.NewRequest(req))
 	if err != nil {

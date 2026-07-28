@@ -12,21 +12,30 @@ import (
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/bundled"
+	"github.com/richiejp/darkaifactory/internal/cas"
+	"github.com/richiejp/darkaifactory/internal/casindex"
+	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxexec"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/richiejp/darkaifactory/internal/workspace"
 	"github.com/richiejp/darkaifactory/internal/workspacedisk"
 	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
 
 type fakeWorkspaceDiskExecutor struct {
 	status      sandboxexec.WorkspaceDiskStatus
+	statuses    []sandboxexec.WorkspaceDiskStatus
 	statusErr   error
 	unfreezeErr error
 	unfrozen    bool
+}
+
+func (f *fakeWorkspaceDiskExecutor) WorkspaceDiskStatuses() []sandboxexec.WorkspaceDiskStatus {
+	return f.statuses
 }
 
 func (f *fakeWorkspaceDiskExecutor) WorkspaceDiskStatus(string) (sandboxexec.WorkspaceDiskStatus, error) {
@@ -98,6 +107,54 @@ func TestNodeWorkspaceDiskControlPropagatesExecutorAndStoreErrors(t *testing.T) 
 	}
 	if err := control.Delete(t.Context(), "../invalid"); err == nil {
 		t.Fatal("Delete accepted invalid retained workspace ID")
+	}
+}
+
+func TestWorkspaceStorageSnapshotReportsRunningDisks(t *testing.T) {
+	const runningWorkspace = "running"
+	store, err := workspacedisk.OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	casStore, err := cas.Open(filepath.Join(t.TempDir(), "cas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(filepath.Join(t.TempDir(), "index"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	server, err := workspace.NewIndexedServer(casStore, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.Add(runningWorkspace+"\x00root", &workspacev1.Manifest{}); err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeWorkspaceDiskExecutor{
+		status: sandboxexec.WorkspaceDiskStatus{
+			WorkspaceID: runningWorkspace, Usage: workspacesnapshot.Usage{Used: 7, Available: 13}, Allowance: 20, Frozen: true,
+		},
+		statuses: []sandboxexec.WorkspaceDiskStatus{{WorkspaceID: runningWorkspace}, {WorkspaceID: "gone"}},
+	}
+	server.SetWorkspaceDiskController(&nodeWorkspaceDiskControl{executor: executor, store: store})
+	reports := workspaceStorageSnapshot(t.Context(), executor, server)
+	if len(reports) != 2 {
+		t.Fatalf("reports = %#v", reports)
+	}
+	if got := reports[0]; got.GetWorkspaceUuid() != runningWorkspace || got.GetUsedBytes() != 7 || got.GetAvailableBytes() != 13 || got.GetAllowanceBytes() != 20 || !got.GetFrozen() {
+		t.Fatalf("running report = %#v", got)
+	}
+	if reports[0].GetManifestDigest() == "" || reports[0].GetManifestGeneration() == 0 {
+		t.Fatalf("manifest identity missing: %#v", reports[0])
+	}
+	if workspaceStorageSnapshot(t.Context(), nil, server) != nil || workspaceStorageSnapshot(t.Context(), executor, nil) != nil {
+		t.Fatal("nil dependency returned reports")
+	}
+	executor.statusErr = errors.New("status unavailable")
+	if reports := workspaceStorageSnapshot(t.Context(), executor, server); len(reports) != 0 {
+		t.Fatalf("failed statuses returned reports: %#v", reports)
 	}
 }
 

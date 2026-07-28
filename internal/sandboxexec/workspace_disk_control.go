@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -141,6 +143,30 @@ func (e *Executor) WorkspaceDiskStatus(workspaceID string) (WorkspaceDiskStatus,
 		WorkspaceID: runtime.workspaceID, SandboxUID: runtime.sandboxUID,
 		Usage: runtime.usage, Allowance: runtime.allowance, Frozen: runtime.frozen,
 	}, nil
+}
+
+// WorkspaceDiskStatuses returns a stable coherent snapshot of every running
+// retained disk for heartbeat publication.
+func (e *Executor) WorkspaceDiskStatuses() []WorkspaceDiskStatus {
+	e.diskMu.RLock()
+	runtimes := make([]*workspaceDiskRuntime, 0, len(e.workspaceDiskControls))
+	for _, runtime := range e.workspaceDiskControls {
+		runtimes = append(runtimes, runtime)
+	}
+	e.diskMu.RUnlock()
+	statuses := make([]WorkspaceDiskStatus, 0, len(runtimes))
+	for _, runtime := range runtimes {
+		runtime.mu.Lock()
+		statuses = append(statuses, WorkspaceDiskStatus{
+			WorkspaceID: runtime.workspaceID, SandboxUID: runtime.sandboxUID,
+			Usage: runtime.usage, Allowance: runtime.allowance, Frozen: runtime.frozen,
+		})
+		runtime.mu.Unlock()
+	}
+	slices.SortFunc(statuses, func(left, right WorkspaceDiskStatus) int {
+		return strings.Compare(left.WorkspaceID, right.WorkspaceID)
+	})
+	return statuses
 }
 
 // ResizeWorkspaceDisk grows the retained qcow2 image, exposes the larger block

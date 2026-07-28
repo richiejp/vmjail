@@ -189,6 +189,40 @@ func TestHeartbeatUnknownNodeMapsToFailedPrecondition(t *testing.T) {
 	}
 }
 
+type recordingWorkspaceStorageReconciler struct {
+	node    identity.Fingerprint
+	reports []*nodectrlv1.WorkspaceStorageReport
+}
+
+func (r *recordingWorkspaceStorageReconciler) ReconcileWorkspaceStorage(
+	node identity.Fingerprint,
+	reports []*nodectrlv1.WorkspaceStorageReport,
+) {
+	r.node = node
+	r.reports = reports
+}
+
+func TestHeartbeatReconcilesWorkspaceStorage(t *testing.T) {
+	id := mustGenerate(t, identity.RoleSandboxHost)
+	reg := nodectrl.NewRegistry(nil)
+	reg.Register(id.Fingerprint(), "node", "v1", nodectrl.Resources{})
+	h, err := NewNodeControlHandler(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconciler := &recordingWorkspaceStorageReconciler{}
+	h.SetWorkspaceStorageReconciler(reconciler)
+	report := &nodectrlv1.WorkspaceStorageReport{WorkspaceUuid: "heartbeat-storage", UsedBytes: 7, Frozen: true}
+	req := connect.NewRequest(&nodectrlv1.HeartbeatRequest{WorkspaceStorage: []*nodectrlv1.WorkspaceStorageReport{report}})
+	req.Header().Set(peerFingerprintHeader, id.Fingerprint().String())
+	if _, err := h.Heartbeat(t.Context(), req); err != nil {
+		t.Fatal(err)
+	}
+	if reconciler.node != id.Fingerprint() || len(reconciler.reports) != 1 || reconciler.reports[0] != report {
+		t.Fatalf("reconciled node = %s, reports = %#v", reconciler.node, reconciler.reports)
+	}
+}
+
 func TestHeartbeatRejectsNonNodeRole(t *testing.T) {
 	peers := identity.NewMemoryPeerStore()
 	id := mustGenerate(t, identity.RoleClient)

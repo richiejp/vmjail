@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	"google.golang.org/protobuf/types/known/durationpb"
 
+	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
@@ -2288,6 +2289,60 @@ func TestDeleteWorkspaceRequiresExactStoppedGeneration(t *testing.T) {
 		Handle: uuidHandle(lockedWorkspace.GetMetadata().GetUuid()), ExpectedGeneration: lockedWorkspace.GetMetadata().GetGeneration(),
 	})); connect.CodeOf(err) != connect.CodeFailedPrecondition {
 		t.Fatalf("locked delete = %v", err)
+	}
+}
+
+func TestReconcileWorkspaceStorageAcceptsOnlyCurrentTargetNode(t *testing.T) {
+	const manifestDigest = "manifest"
+	store := workspacecatalog.NewStore(nil)
+	handler, err := NewWorkspaceCatalogHandler(store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := mustGenerate(t, identity.RoleClient).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	other := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	created, err := store.Create(workspacecatalog.CreateInput{UUID: "storage-report", Name: "storage-report", OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Update(created.Metadata.UUID, workspacecatalog.MutateSpec, func(value *workspacecatalog.Workspace) error {
+		value.Spec.TargetSandboxFingerprint = node.String()
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Update(created.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: "sandbox", NodeFingerprint: node}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := &nodectrlv1.WorkspaceStorageReport{
+		WorkspaceUuid: created.Metadata.UUID, UsedBytes: 7, AllowanceBytes: 20,
+		ProtectedBytes: 5, ManifestDigest: manifestDigest, ManifestGeneration: 3, Frozen: true,
+	}
+	handler.ReconcileWorkspaceStorage(identity.Fingerprint{}, []*nodectrlv1.WorkspaceStorageReport{report})
+	handler.ReconcileWorkspaceStorage(other, []*nodectrlv1.WorkspaceStorageReport{report})
+	unchanged, _ := store.Get(created.Metadata.UUID)
+	if unchanged.Status.DiskUsedBytes != 0 {
+		t.Fatalf("foreign report changed status: %#v", unchanged.Status)
+	}
+	handler.ReconcileWorkspaceStorage(node, []*nodectrlv1.WorkspaceStorageReport{nil, report})
+	updated, _ := store.Get(created.Metadata.UUID)
+	if updated.Status.DiskUsedBytes != 7 || updated.Status.DiskAllowanceBytes != 20 || updated.Status.ProtectedBytes != 5 || updated.Status.ManifestDigest != manifestDigest || updated.Status.ManifestGeneration != 3 || !updated.Status.IsTrue(workspacecatalog.ConditionStorageFrozen) {
+		t.Fatalf("storage report status = %#v", updated.Status)
+	}
+	report.UsedBytes = 8
+	report.ManifestDigest = "stale"
+	report.ManifestGeneration = 2
+	report.Frozen = false
+	handler.ReconcileWorkspaceStorage(node, []*nodectrlv1.WorkspaceStorageReport{report})
+	updated, _ = store.Get(created.Metadata.UUID)
+	if updated.Status.DiskUsedBytes != 8 || updated.Status.ManifestDigest != manifestDigest || updated.Status.IsTrue(workspacecatalog.ConditionStorageFrozen) {
+		t.Fatalf("updated storage report status = %#v", updated.Status)
 	}
 }
 

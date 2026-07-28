@@ -452,6 +452,20 @@ message HeartbeatRequest {
   // Reported every heartbeat — the snapshot is authoritative; an
   // empty list explicitly means "no live sandboxes," not "no data".
   repeated LiveSandbox live_sandboxes = 2;
+  // Bounded live retained-disk reports. Only the authenticated target Node's
+  // reports are accepted into Workspace catalog status.
+  repeated WorkspaceStorageReport workspace_storage = 3;
+}
+
+message WorkspaceStorageReport {
+  string workspace_uuid = 1;
+  uint64 used_bytes = 2;
+  uint64 available_bytes = 3;
+  uint64 allowance_bytes = 4;
+  uint64 protected_bytes = 5;
+  string manifest_digest = 6;
+  uint64 manifest_generation = 7;
+  bool frozen = 8;
 }
 
 // LiveSandbox is one row of the Node's reported sandbox liveness

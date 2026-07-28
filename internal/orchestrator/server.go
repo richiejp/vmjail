@@ -362,6 +362,7 @@ func resolveObserverBridger(cfg Config, sandboxCtrl *NodeControlHandler) Workspa
 // the workspace handler, each falling back to the orchestrator's own
 // NodeControlHandler. Factored out of New to keep it under funlen.
 func wireWorkspaceBridgers(workspaceCtrl *WorkspaceCatalogHandler, cfg Config, sandboxCtrl *NodeControlHandler) {
+	sandboxCtrl.SetWorkspaceStorageReconciler(workspaceCtrl)
 	workspaceCtrl.SetPortBridger(resolvePortBridger(cfg, sandboxCtrl))
 	workspaceCtrl.SetAttachBridger(resolveAttachBridger(cfg, sandboxCtrl))
 	workspaceCtrl.SetObserverBridger(resolveObserverBridger(cfg, sandboxCtrl))

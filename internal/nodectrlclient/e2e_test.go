@@ -184,6 +184,9 @@ func TestRegisterAndServeRecordsRegistrationAndHeartbeat(t *testing.T) {
 		Peers:             rig.sbPeer,
 		Version:           testFixtureVer,
 		HeartbeatInterval: 50 * time.Millisecond,
+		WorkspaceStorageSnapshot: func(context.Context) []*nodectrlv1.WorkspaceStorageReport {
+			return []*nodectrlv1.WorkspaceStorageReport{{WorkspaceUuid: "heartbeat-workspace"}}
+		},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

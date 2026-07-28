@@ -123,6 +123,10 @@ func TestWorkspaceDiskResizeOrdering(t *testing.T) {
 	if err != nil || status.Allowance != testGrownAllowance || status.Frozen {
 		t.Fatalf("status = %#v, %v", status, err)
 	}
+	statuses := e.WorkspaceDiskStatuses()
+	if len(statuses) != 1 || statuses[0] != status {
+		t.Fatalf("status snapshot = %#v, want %#v", statuses, status)
+	}
 }
 
 func TestFrozenWorkspaceResizeRequiresExplicitUnfreeze(t *testing.T) {

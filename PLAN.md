@@ -315,14 +315,17 @@ Landed:
   accounting. The catalog status schema/model includes the corresponding disk,
   protected-byte, manifest digest/generation fields and the `StorageFrozen`
   condition type.
+- Authenticated Node heartbeats now carry bounded live workspace-disk reports.
+  The orchestrator persists usage, allowance, protected bytes, non-regressing
+  manifest identity, and `StorageFrozen` only when the reporting Node still
+  owns the Workspace's current Sandbox binding; stale or foreign reports are
+  ignored.
 
 Remaining:
 
 - Add stop-time teardown snapshot control paths.
 - Replace the transitional read-only first-launch seed share with direct
   manifest streaming over vsock.
-- Persist live Node storage reports into the catalog's disk fields and
-  `StorageFrozen` condition so catalog-only readers retain the latest snapshot.
 - Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,
   capacity, persistence, freeze, live-grow, and leak acceptance tests.
 
