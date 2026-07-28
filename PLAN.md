@@ -324,11 +324,14 @@ Landed:
   mapping into a protected durable manifest before unregistering it. The
   real-KVM push/mutate/stop/pull acceptance path now also asserts the writable
   mount is XFS and supports reflink cloning.
+- First-launch workspace contents now stream directly from durable manifests
+  and CAS chunks into guest XFS over bounded per-VM vsock archive endpoints.
+  Writable Workspace paths no longer create virtiofs shares or host seed
+  trees; retained qcow2 images receive no seed endpoint and therefore cannot
+  be overwritten during relaunch. The real-KVM round trip exercises this path.
 
 Remaining:
 
-- Replace the transitional read-only first-launch seed share with direct
-  manifest streaming over vsock.
 - Add deterministic unit/e2e pressure and recovery coverage plus real-KVM XFS,
   capacity, persistence, freeze, live-grow, and leak acceptance tests.
 

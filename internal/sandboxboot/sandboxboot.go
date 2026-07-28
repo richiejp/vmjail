@@ -55,6 +55,9 @@ type Mount struct {
 	// executor's caller is responsible for ensuring the path exists
 	// and is reachable from the sandboxd process.
 	Source string
+	// GuestOnly creates the OCI bind mount but no virtiofs share. The guest
+	// agent has already bind-mounted retained XFS at Target before crun starts.
+	GuestOnly bool
 	// ReadOnly toggles between rw and ro bind options.
 	ReadOnly bool
 }
@@ -295,6 +298,9 @@ func buildShares(bundle *imagestore.Bundle, mounts []Mount) []*sandbox.ShareConf
 		translate = &sandbox.ShareTranslate{UID: bundle.UID, GID: bundle.GID}
 	}
 	for i, m := range mounts {
+		if m.GuestOnly {
+			continue
+		}
 		shares = append(shares, &sandbox.ShareConfig{
 			HostDir:    m.Source,
 			Tag:        mountTag(i),
@@ -407,7 +413,7 @@ func validateMounts(mounts []Mount) error {
 				i, m.Target,
 			)
 		}
-		if !filepath.IsAbs(m.Source) {
+		if !m.GuestOnly && !filepath.IsAbs(m.Source) {
 			return fmt.Errorf(
 				"sandboxboot: mounts[%d].Source %q must be absolute",
 				i, m.Source,

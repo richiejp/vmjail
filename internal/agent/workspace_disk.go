@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,16 +20,22 @@ const (
 )
 
 type workspaceDiskDeps struct {
-	readMagic func(string) ([4]byte, error)
-	mkdirAll  func(string, os.FileMode) error
-	mountXFS  func(string, string) error
-	bindMount func(string, string) error
-	copyTree  func(string, string) error
-	run       func(string, ...string) error
-	usage     func(string) (workspacesnapshot.Usage, error)
+	readMagic   func(string) ([4]byte, error)
+	mkdirAll    func(string, os.FileMode) error
+	mountXFS    func(string, string) error
+	bindMount   func(string, string) error
+	receiveSeed func(context.Context, func(context.Context) (net.Conn, error), string) error
+	run         func(string, ...string) error
+	usage       func(string) (workspacesnapshot.Usage, error)
 }
 
-func applyWorkspaceDisk(w io.Writer, deps workspaceDiskDeps, cfg *agentv1.GuestConfig) error {
+func applyWorkspaceDisk(
+	ctx context.Context,
+	w io.Writer,
+	deps workspaceDiskDeps,
+	cfg *agentv1.GuestConfig,
+	dial func(context.Context, uint32) (net.Conn, error),
+) error {
 	disk := cfg.GetWorkspaceDisk()
 	if disk == nil {
 		return nil
@@ -62,7 +70,7 @@ func applyWorkspaceDisk(w io.Writer, deps workspaceDiskDeps, cfg *agentv1.GuestC
 		}
 	}
 	for _, mount := range disk.GetMounts() {
-		if err := applyWorkspaceMount(deps, mount, initialize); err != nil {
+		if err := applyWorkspaceMount(ctx, deps, mount, initialize, dial); err != nil {
 			return err
 		}
 	}
@@ -70,7 +78,13 @@ func applyWorkspaceDisk(w io.Writer, deps workspaceDiskDeps, cfg *agentv1.GuestC
 	return nil
 }
 
-func applyWorkspaceMount(deps workspaceDiskDeps, mount *agentv1.GuestConfig_WorkspaceDisk_Mount, initialize bool) error {
+func applyWorkspaceMount(
+	ctx context.Context,
+	deps workspaceDiskDeps,
+	mount *agentv1.GuestConfig_WorkspaceDisk_Mount,
+	initialize bool,
+	dial func(context.Context, uint32) (net.Conn, error),
+) error {
 	if mount == nil || !filepath.IsAbs(mount.GetTarget()) {
 		return errors.New("agent: workspace mount target must be absolute")
 	}
@@ -82,11 +96,16 @@ func applyWorkspaceMount(deps workspaceDiskDeps, mount *agentv1.GuestConfig_Work
 	if err := deps.mkdirAll(source, 0o700); err != nil {
 		return fmt.Errorf("agent: create workspace source: %w", err)
 	}
-	if initialize && mount.GetSeed() != "" {
-		if !filepath.IsAbs(mount.GetSeed()) {
-			return errors.New("agent: workspace seed must be absolute")
+	if initialize && mount.GetSeedPort() != 0 {
+		if dial == nil {
+			return errors.New("agent: workspace seed transport unavailable")
 		}
-		if err := deps.copyTree(mount.GetSeed(), source); err != nil {
+		if deps.receiveSeed == nil {
+			return errors.New("agent: workspace seed receiver unavailable")
+		}
+		if err := deps.receiveSeed(ctx, func(ctx context.Context) (net.Conn, error) {
+			return dial(ctx, mount.GetSeedPort())
+		}, source); err != nil {
 			return fmt.Errorf("agent: seed workspace mount: %w", err)
 		}
 	}

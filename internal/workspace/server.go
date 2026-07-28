@@ -268,9 +268,8 @@ func (s *Server) Names() []string {
 // CAS is the sole source at launch, so an incomplete store is a bug, not
 // a fetch opportunity.
 //
-// This is the launch-time half of Slice S3: `push` lands the bytes here,
-// `launch` materialises them into a host backing dir that virtiofsd
-// serves into the VM.
+// This remains the launch path for read-only workspace shares. Writable XFS
+// mounts use StreamMount so their first-launch seed never needs a host tree.
 func (s *Server) MaterializeMount(ctx context.Context, key, dest string) (applied bool, err error) {
 	if dest == "" {
 		return false, errors.New("workspace: empty dest")

@@ -664,7 +664,7 @@ type GuestConfig_WorkspaceDisk_Mount struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Target        string                 `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
 	Directory     string                 `protobuf:"bytes,2,opt,name=directory,proto3" json:"directory,omitempty"`
-	Seed          string                 `protobuf:"bytes,3,opt,name=seed,proto3" json:"seed,omitempty"`
+	SeedPort      uint32                 `protobuf:"varint,4,opt,name=seed_port,json=seedPort,proto3" json:"seed_port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -713,11 +713,11 @@ func (x *GuestConfig_WorkspaceDisk_Mount) GetDirectory() string {
 	return ""
 }
 
-func (x *GuestConfig_WorkspaceDisk_Mount) GetSeed() string {
+func (x *GuestConfig_WorkspaceDisk_Mount) GetSeedPort() uint32 {
 	if x != nil {
-		return x.Seed
+		return x.SeedPort
 	}
-	return ""
+	return 0
 }
 
 var File_agent_v1_config_proto protoreflect.FileDescriptor
@@ -726,7 +726,7 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\n" +
 	"\x15agent/v1/config.proto\x12\rdaft.agent.v1\"9\n" +
 	"\x12GuestConfigRequest\x12#\n" +
-	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xa2\t\n" +
+	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xb1\t\n" +
 	"\vGuestConfig\x12\x16\n" +
 	"\x06bundle\x18\x01 \x01(\tR\x06bundle\x128\n" +
 	"\x06shares\x18\x02 \x03(\v2 .daft.agent.v1.GuestConfig.ShareR\x06shares\x12K\n" +
@@ -750,14 +750,14 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\vPortForward\x12\x1d\n" +
 	"\n" +
 	"vsock_port\x18\x01 \x01(\rR\tvsockPort\x12%\n" +
-	"\x0econtainer_port\x18\x02 \x01(\rR\rcontainerPort\x1a\xc2\x01\n" +
+	"\x0econtainer_port\x18\x02 \x01(\rR\rcontainerPort\x1a\xd1\x01\n" +
 	"\rWorkspaceDisk\x12\x16\n" +
 	"\x06device\x18\x01 \x01(\tR\x06device\x12F\n" +
-	"\x06mounts\x18\x02 \x03(\v2..daft.agent.v1.GuestConfig.WorkspaceDisk.MountR\x06mounts\x1aQ\n" +
+	"\x06mounts\x18\x02 \x03(\v2..daft.agent.v1.GuestConfig.WorkspaceDisk.MountR\x06mounts\x1a`\n" +
 	"\x05Mount\x12\x16\n" +
 	"\x06target\x18\x01 \x01(\tR\x06target\x12\x1c\n" +
-	"\tdirectory\x18\x02 \x01(\tR\tdirectory\x12\x12\n" +
-	"\x04seed\x18\x03 \x01(\tR\x04seed\x1a&\n" +
+	"\tdirectory\x18\x02 \x01(\tR\tdirectory\x12\x1b\n" +
+	"\tseed_port\x18\x04 \x01(\rR\bseedPortJ\x04\b\x03\x10\x04\x1a&\n" +
 	"\x10PostStartCommand\x12\x12\n" +
 	"\x04argv\x18\x01 \x03(\tR\x04argv\x1a\xb5\x01\n" +
 	"\aObserve\x12\x1c\n" +

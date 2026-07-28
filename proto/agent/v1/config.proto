@@ -115,7 +115,8 @@ message GuestConfig {
     message Mount {
       string target = 1;
       string directory = 2;
-      string seed = 3;
+      reserved 3;
+      uint32 seed_port = 4;
     }
   }
 

@@ -25,6 +25,29 @@ type snapshotListener struct {
 	done chan struct{}
 }
 
+func TestReceiveSeedExtractsDedicatedArchive(t *testing.T) {
+	client, server := net.Pipe()
+	go func() {
+		defer func() { _ = server.Close() }()
+		tw := tar.NewWriter(server)
+		_ = tw.WriteHeader(&tar.Header{Name: "seed.txt", Mode: 0o640, Size: 4})
+		_, _ = tw.Write([]byte("seed"))
+		_ = tw.Close()
+	}()
+	destination := filepath.Join(t.TempDir(), "mount")
+	if err := ReceiveSeed(t.Context(), func(context.Context) (net.Conn, error) { return client, nil }, destination); err != nil {
+		t.Fatal(err)
+	}
+	payload, err := os.ReadFile(filepath.Join(destination, "seed.txt")) //nolint:gosec // test-controlled TempDir path.
+	if err != nil || string(payload) != "seed" {
+		t.Fatalf("seed payload = %q, %v", payload, err)
+	}
+	want := errors.New("dial failed")
+	if err := ReceiveSeed(t.Context(), func(context.Context) (net.Conn, error) { return nil, want }, destination); !errors.Is(err, want) {
+		t.Fatalf("dial failure = %v", err)
+	}
+}
+
 func (l *snapshotListener) Accept() (net.Conn, error) {
 	if l.conn != nil {
 		conn := l.conn

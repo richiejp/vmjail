@@ -63,13 +63,9 @@ const (
 type Assembler func(ctx context.Context, ref string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error)
 
 // MountMaterializer is the node's mount-sync surface, shared between the
-// executor and the CAS-backed workspace.Server. MaterializeMount
-// reconstructs a previously-pushed workspace mount from the node's
-// persistent CAS into a host backing directory, with no network
-// round-trip (Slice S3): syncKey is workspace.SyncKey(workspace_uuid,
-// in-VM target); dest is the absolute backing dir to populate (created
-// if absent); applied is false when nothing was pushed under syncKey,
-// so the mount boots as an empty read-write tree.
+// executor and the CAS-backed workspace.Server. Read-only shares use
+// MaterializeMount; first-launch writable disks use StreamMount to avoid a
+// host seed tree and virtiofs entirely.
 //
 // SetLiveMount / ClearLiveMount bracket the lifetime of a running VM's
 // writable mount (Slice S4): while a (syncKey → dir) entry is live, a
@@ -78,6 +74,7 @@ type Assembler func(ctx context.Context, ref string, opts sandboxboot.BootOption
 // Production wires the node's workspace.Server.
 type MountMaterializer interface {
 	MaterializeMount(ctx context.Context, syncKey, dest string) (applied bool, err error)
+	StreamMount(ctx context.Context, syncKey string, destination io.Writer) (applied bool, err error)
 	SetLiveMount(syncKey, dir string)
 	PreserveLiveMount(ctx context.Context, syncKey string) error
 	ClearLiveMount(syncKey string)
@@ -861,8 +858,6 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 
 const workspaceDiskID = "workspace"
 
-const workspaceSeedRoot = "/run/daft/workspace-seed"
-
 func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *sandboxv1.SandboxSpec) error {
 	if e.workspaceDisks == nil {
 		return nil
@@ -872,13 +867,13 @@ func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *san
 		return errors.New("sandboxexec: retained disk requires spec.workspace_uuid")
 	}
 	size := workspaceDiskAllowance(spec)
-	path, _, err := e.workspaceDisks.Prepare(workspaceID, size)
+	path, created, err := e.workspaceDisks.Prepare(workspaceID, size)
 	if err != nil {
 		return fmt.Errorf("sandboxexec: prepare workspace disk: %w", err)
 	}
 	cfg.WorkspaceDisk = &sandbox.DiskConfig{Path: path, ID: workspaceDiskID}
 	cfg.APISocket = filepath.Join(e.vsockDir, uid+".api.sock")
-	configureWorkspaceMounts(cfg, spec.GetMounts())
+	configureWorkspaceMounts(cfg, workspaceID, spec.GetMounts(), created, e.mountMaterializer)
 	return nil
 }
 
@@ -890,22 +885,30 @@ func workspaceDiskAllowance(spec *sandboxv1.SandboxSpec) uint64 {
 	return size
 }
 
-func configureWorkspaceMounts(cfg *sandbox.Config, mounts []*sandboxv1.Mount) {
+func configureWorkspaceMounts(cfg *sandbox.Config, workspaceID string, mounts []*sandboxv1.Mount, seed bool, materializer MountMaterializer) {
 	for i, mount := range mounts {
 		if mount == nil || mount.GetReadOnly() || filepath.IsAbs(mount.GetSource()) {
 			continue
 		}
-		seed := fmt.Sprintf("%s/%d", workspaceSeedRoot, i)
+		port := sandbox.WorkspaceSeedBaseVsockPort + uint32(i)
+		var seedPort uint32
+		if seed {
+			seedPort = port
+		}
 		cfg.WorkspaceMounts = append(cfg.WorkspaceMounts, sandbox.WorkspaceMount{
-			Target: mount.GetTarget(), Directory: fmt.Sprintf("mounts/%d", i), Seed: seed,
+			Target: mount.GetTarget(), Directory: fmt.Sprintf("mounts/%d", i), SeedPort: seedPort,
 		})
-		for _, share := range cfg.Shares {
-			if share.Mountpoint == mount.GetTarget() {
-				share.Mountpoint = seed
-				share.ReadOnly = true
-				share.Overlay = false
-				break
-			}
+		cfg.Shares = slices.DeleteFunc(cfg.Shares, func(share *sandbox.ShareConfig) bool {
+			return share != nil && share.Mountpoint == mount.GetTarget()
+		})
+		if seed && materializer != nil {
+			key := workspace.SyncKey(workspaceID, mount.GetTarget())
+			cfg.WorkspaceSeeds = append(cfg.WorkspaceSeeds, sandbox.WorkspaceSeed{
+				Port: port,
+				Stream: func(ctx context.Context, destination io.Writer) (bool, error) {
+					return materializer.StreamMount(ctx, key, destination)
+				},
+			})
 		}
 	}
 }
@@ -1318,6 +1321,14 @@ func (e *Executor) resolveMounts(ctx context.Context, uid string, spec *sandboxv
 		}
 		dest := e.mountDir(uid, i)
 		key := workspace.SyncKey(spec.GetWorkspaceUuid(), m.GetTarget())
+		if e.workspaceDisks != nil && !m.GetReadOnly() {
+			if err := os.MkdirAll(dest, 0o700); err != nil {
+				return nil, fmt.Errorf("create workspace staging mount %s: %w", m.GetTarget(), err)
+			}
+			e.mountMaterializer.SetLiveMount(key, dest)
+			out = append(out, sandboxboot.Mount{Target: m.GetTarget(), GuestOnly: true})
+			continue
+		}
 		applied, err := e.mountMaterializer.MaterializeMount(ctx, key, dest)
 		if err != nil {
 			return nil, fmt.Errorf("materialize mount %s: %w", m.GetTarget(), err)

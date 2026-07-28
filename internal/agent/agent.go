@@ -197,7 +197,7 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	ctx, bootSpan := trace.Start(ctx, "agent.boot")
 	bundle := resolveBundle(w, cfg)
 	applyShares(w, d, cfg, bundle != "")
-	if err := applyWorkspaceDisk(w, d.workspace, cfg); err != nil {
+	if err := applyWorkspaceDisk(ctx, w, d.workspace, cfg, d.dialVsock); err != nil {
 		return err
 	}
 	startWorkspaceSnapshotListener(ctx, w, cfg, d.workspace)

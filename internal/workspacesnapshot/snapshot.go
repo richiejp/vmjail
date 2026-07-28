@@ -209,6 +209,18 @@ func Pull(ctx context.Context, dial func(context.Context) (net.Conn, error), dir
 	return extract(tar.NewReader(bufio.NewReader(conn)), destination)
 }
 
+// ReceiveSeed extracts a host-initiated mount archive from a dedicated vsock
+// connection. Unlike Pull it sends no request: the per-VM, per-mount socket is
+// already bound to exactly one durable manifest.
+func ReceiveSeed(ctx context.Context, dial func(context.Context) (net.Conn, error), destination string) error {
+	conn, err := dial(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	return extract(tar.NewReader(bufio.NewReader(conn)), destination)
+}
+
 func extract(tr *tar.Reader, destination string) error {
 	if err := os.RemoveAll(destination); err != nil {
 		return err

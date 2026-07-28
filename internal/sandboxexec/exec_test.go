@@ -691,6 +691,7 @@ type fakeMaterializer struct {
 	cleared     []string
 	preserveErr error
 	refreshers  map[string]func(context.Context, string) error
+	streamed    []string
 }
 
 func (f *fakeMaterializer) SetLiveMountRefresher(key string, refresh func(context.Context, string) error) {
@@ -705,17 +706,19 @@ type fakeDiskPreparer struct {
 	size      uint64
 	path      string
 	err       error
+	retained  bool
 }
 
 func (f *fakeDiskPreparer) Prepare(workspaceID string, virtualSize uint64) (path string, created bool, err error) {
 	f.workspace = workspaceID
 	f.size = virtualSize
-	return f.path, true, f.err
+	return f.path, !f.retained, f.err
 }
 
 func TestApplyWorkspaceDiskDefaultsAndConfiguresVMM(t *testing.T) {
-	preparer := &fakeDiskPreparer{path: "/state/workspace.qcow2"}
-	e := &Executor{workspaceDisks: preparer, vsockDir: testVsockDir}
+	preparer := &fakeDiskPreparer{path: testControlDiskPath}
+	materializer := &fakeMaterializer{}
+	e := &Executor{workspaceDisks: preparer, mountMaterializer: materializer, vsockDir: testVsockDir}
 	cfg := sandbox.Config{Shares: []*sandbox.ShareConfig{
 		{Tag: "bundles", Mountpoint: "/bundles"},
 		{Tag: "rw", Mountpoint: mntWorkspace},
@@ -737,18 +740,23 @@ func TestApplyWorkspaceDiskDefaultsAndConfiguresVMM(t *testing.T) {
 		t.Errorf("APISocket = %q", cfg.APISocket)
 	}
 	if len(cfg.WorkspaceMounts) != 1 || cfg.WorkspaceMounts[0].Target != mntWorkspace ||
-		cfg.WorkspaceMounts[0].Directory != "mounts/0" || cfg.WorkspaceMounts[0].Seed != workspaceSeedRoot+"/0" {
+		cfg.WorkspaceMounts[0].Directory != "mounts/0" || cfg.WorkspaceMounts[0].SeedPort != sandbox.WorkspaceSeedBaseVsockPort {
 		t.Errorf("WorkspaceMounts = %#v", cfg.WorkspaceMounts)
 	}
-	if len(cfg.Shares) != 3 || cfg.Shares[1].Mountpoint != workspaceSeedRoot+"/0" || !cfg.Shares[1].ReadOnly ||
-		cfg.Shares[2].Mountpoint != mntReference {
-		t.Errorf("Shares = %#v, want bundle, read-only seed, and read-only reference", cfg.Shares)
+	if len(cfg.WorkspaceSeeds) != 1 {
+		t.Fatalf("WorkspaceSeeds = %#v", cfg.WorkspaceSeeds)
+	}
+	if _, err := cfg.WorkspaceSeeds[0].Stream(t.Context(), io.Discard); err != nil || !slices.Equal(materializer.streamed, []string{workspace.SyncKey(testWSUUID, mntWorkspace)}) {
+		t.Fatalf("seed stream = %v, keys %v", err, materializer.streamed)
+	}
+	if len(cfg.Shares) != 2 || cfg.Shares[0].Mountpoint != "/bundles" || cfg.Shares[1].Mountpoint != mntReference {
+		t.Errorf("Shares = %#v, want bundle and read-only reference", cfg.Shares)
 	}
 }
 
 func TestConfigureWorkspaceMountsKeepsAbsoluteHostControlMountWritable(t *testing.T) {
 	cfg := sandbox.Config{Shares: []*sandbox.ShareConfig{{Mountpoint: mntData}}}
-	configureWorkspaceMounts(&cfg, []*sandboxv1.Mount{{Target: mntData, Source: hostWS}})
+	configureWorkspaceMounts(&cfg, testWSUUID, []*sandboxv1.Mount{{Target: mntData, Source: hostWS}}, true, &fakeMaterializer{})
 	if len(cfg.WorkspaceMounts) != 0 || cfg.Shares[0].Mountpoint != mntData || cfg.Shares[0].ReadOnly {
 		t.Fatalf("config = %#v", cfg)
 	}
@@ -765,6 +773,19 @@ func TestApplyWorkspaceDiskUsesExplicitSizeAndPropagatesErrors(t *testing.T) {
 	}
 	if err := e.applyWorkspaceDisk(&sandbox.Config{}, testSandboxID, &sandboxv1.SandboxSpec{}); err == nil {
 		t.Fatal("missing workspace UUID accepted")
+	}
+}
+
+func TestApplyWorkspaceDiskDoesNotSeedRetainedImage(t *testing.T) {
+	preparer := &fakeDiskPreparer{path: testControlDiskPath, retained: true}
+	e := &Executor{workspaceDisks: preparer, mountMaterializer: &fakeMaterializer{}, vsockDir: testVsockDir}
+	cfg := sandbox.Config{}
+	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}}}
+	if err := e.applyWorkspaceDisk(&cfg, testSandboxID, spec); err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.WorkspaceMounts) != 1 || cfg.WorkspaceMounts[0].SeedPort != 0 || len(cfg.WorkspaceSeeds) != 0 {
+		t.Fatalf("retained disk seed config = mounts %#v seeds %#v", cfg.WorkspaceMounts, cfg.WorkspaceSeeds)
 	}
 }
 
@@ -803,6 +824,11 @@ func (f *fakeMaterializer) MaterializeMount(_ context.Context, key, dest string)
 		}
 	}
 	return f.applied, nil
+}
+
+func (f *fakeMaterializer) StreamMount(_ context.Context, key string, _ io.Writer) (bool, error) {
+	f.streamed = append(f.streamed, key)
+	return f.applied, f.err
 }
 
 func (f *fakeMaterializer) SetLiveMount(key, dir string) {
@@ -1337,6 +1363,43 @@ func TestHandleSandboxEventMaterializesMounts(t *testing.T) {
 	// The backing tree is cleaned up once the dispatch returns.
 	if _, statErr := os.Stat(filepath.Join(backing, "sb-mat")); !os.IsNotExist(statErr) {
 		t.Errorf("backing dir not cleaned up: stat err = %v", statErr)
+	}
+}
+
+func TestHandleSandboxEventStreamsWritableDiskMountWithoutVirtiofs(t *testing.T) {
+	var assembled sandboxboot.BootOptions
+	var launched sandbox.Config
+	assembler := func(_ context.Context, _ string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		assembled = opts
+		return sandbox.Config{}, func() {}, nil
+	}
+	materializer := &fakeMaterializer{applied: true}
+	executor, err := New(Config{
+		Stdout: io.Discard, Assembler: assembler,
+		Runner:            func(_ context.Context, _ io.Writer, cfg sandbox.Config) error { launched = cfg; return nil },
+		MountMaterializer: materializer, MountBackingDir: t.TempDir(),
+		WorkspaceDisks: &fakeDiskPreparer{path: testControlDiskPath}, VsockDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &sandboxv1.SandboxSpec{
+		ImageRef: testImageRef, WorkspaceUuid: testWSUUID,
+		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}, {Target: mntReference, ReadOnly: true}},
+	}
+	if err := executor.HandleSandboxEvent(t.Context(), addedEvent("disk-stream", spec)); err != nil {
+		t.Fatal(err)
+	}
+	readOnlyKey := workspace.SyncKey(testWSUUID, mntReference)
+	if !slices.Equal(materializer.keys, []string{readOnlyKey}) {
+		t.Fatalf("materialized keys = %v, want only %q", materializer.keys, readOnlyKey)
+	}
+	if len(assembled.Mounts) != 2 || assembled.Mounts[0].Target != mntWorkspace || !assembled.Mounts[0].GuestOnly ||
+		assembled.Mounts[1].Target != mntReference || !assembled.Mounts[1].ReadOnly {
+		t.Fatalf("virtiofs mounts = %#v", assembled.Mounts)
+	}
+	if len(launched.WorkspaceSeeds) != 1 || len(launched.WorkspaceMounts) != 1 || launched.WorkspaceMounts[0].SeedPort == 0 {
+		t.Fatalf("launched seed config = seeds %#v mounts %#v", launched.WorkspaceSeeds, launched.WorkspaceMounts)
 	}
 }
 

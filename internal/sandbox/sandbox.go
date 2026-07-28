@@ -72,6 +72,9 @@ type Config struct {
 	// WorkspaceMounts are writable in-container paths backed by directories
 	// on WorkspaceDisk rather than host virtiofs trees.
 	WorkspaceMounts []WorkspaceMount
+	// WorkspaceSeeds stream first-launch manifest archives over dedicated
+	// per-VM vsock ports. Retained disks leave this empty.
+	WorkspaceSeeds []WorkspaceSeed
 	// Memory is the guest RAM size, e.g. "256M". Defaults to 256M when
 	// empty so simple smoke tests don't need to think about it. When
 	// Shares is non-empty the value is silently upgraded to include
@@ -212,7 +215,14 @@ type Config struct {
 type WorkspaceMount struct {
 	Target    string
 	Directory string
-	Seed      string
+	SeedPort  uint32
+}
+
+// WorkspaceSeed binds one dedicated per-VM vsock port to a durable manifest
+// archive. Stream must write a complete tar archive or return an error.
+type WorkspaceSeed struct {
+	Port   uint32
+	Stream func(context.Context, io.Writer) (bool, error)
 }
 
 // DiskConfig identifies a retained qcow2 workspace image. ID is the stable
@@ -328,6 +338,21 @@ func (c *Config) validate() error {
 		}
 		if c.APISocket == "" {
 			return errors.New("sandbox: APISocket is required when WorkspaceDisk is configured")
+		}
+	}
+	if len(c.WorkspaceSeeds) > 0 {
+		if c.Vsock == nil || c.Vsock.HostSocket == "" {
+			return errors.New("sandbox: Vsock is required when WorkspaceSeeds are configured")
+		}
+		seenPorts := make(map[uint32]struct{}, len(c.WorkspaceSeeds))
+		for index, seed := range c.WorkspaceSeeds {
+			if seed.Port == 0 || seed.Stream == nil {
+				return fmt.Errorf("sandbox: WorkspaceSeeds[%d] is incomplete", index)
+			}
+			if _, exists := seenPorts[seed.Port]; exists {
+				return fmt.Errorf("sandbox: duplicate WorkspaceSeed port %d", seed.Port)
+			}
+			seenPorts[seed.Port] = struct{}{}
 		}
 	}
 	if len(c.Shares) > 0 {

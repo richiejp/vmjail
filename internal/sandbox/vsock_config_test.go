@@ -193,7 +193,7 @@ func TestBuildGuestConfigProjectsConfig(t *testing.T) {
 	cfg.PortForwards = []PortForward{{VsockPort: 10001, ContainerPort: 8080}}
 	cfg.PostStartCommands = [][]string{{"/bin/sh", "-c", "bun run dev"}, nil, {"echo", "hi"}}
 	cfg.WorkspaceDisk = &DiskConfig{Path: "/state/workspace.qcow2", ID: "workspace"}
-	cfg.WorkspaceMounts = []WorkspaceMount{{Target: testWorkspaceMount, Directory: "mounts/0", Seed: "/seed/0"}}
+	cfg.WorkspaceMounts = []WorkspaceMount{{Target: testWorkspaceMount, Directory: "mounts/0", SeedPort: WorkspaceSeedBaseVsockPort}}
 	cfg.OpensnoopLogPath = "/run/daft/observe/opensnoop.log"
 	cfg.ObserveSummaryPath = "/run/daft/observe/progress.json"
 	gc := buildGuestConfig(cfg)
@@ -207,7 +207,7 @@ func TestBuildGuestConfigProjectsConfig(t *testing.T) {
 		t.Errorf("port_forwards = %v, want one 10001->8080", pfs)
 	}
 	if disk := gc.GetWorkspaceDisk(); disk.GetDevice() != workspaceDiskGuestDevice || len(disk.GetMounts()) != 1 ||
-		disk.GetMounts()[0].GetTarget() != testWorkspaceMount || disk.GetMounts()[0].GetSeed() != "/seed/0" {
+		disk.GetMounts()[0].GetTarget() != testWorkspaceMount || disk.GetMounts()[0].GetSeedPort() != WorkspaceSeedBaseVsockPort {
 		t.Errorf("workspace_disk = %v", disk)
 	}
 	// Empty argv entries are dropped; the rest project in order.
