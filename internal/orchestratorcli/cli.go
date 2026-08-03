@@ -114,6 +114,7 @@ func versionCommand() *cobra.Command {
 func serveCommand() *cobra.Command {
 	var (
 		addr      string
+		webAddr   string
 		configDir string
 	)
 	cmd := &cobra.Command{
@@ -154,6 +155,7 @@ func serveCommand() *cobra.Command {
 				Identity:         id,
 				Peers:            peers,
 				Addr:             addr,
+				WebAddr:          webAddr,
 				RegistrySeeds:    seeds,
 				WorkspaceCatalog: workspaceCat,
 				AgentRunCatalog:  agentRuns,
@@ -166,9 +168,10 @@ func serveCommand() *cobra.Command {
 			}
 			banner := fmt.Sprintf(
 				"daft-orchestrator: listening on %s\n"+
+					"daft-orchestrator: web UI %s\n"+
 					"daft-orchestrator: fingerprint %s\n"+
 					"daft-orchestrator: peers in %s\n",
-				srv.Addr(), id.Fingerprint(), peers.Path(),
+				srv.Addr(), srv.WebAddr(), id.Fingerprint(), peers.Path(),
 			)
 			if _, err := io.WriteString(cmd.OutOrStdout(), banner); err != nil {
 				return errors.Join(err, workspaceCat.Close(), control.Close())
@@ -178,6 +181,8 @@ func serveCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&addr, "addr", "0.0.0.0:14443",
 		"TCP listen address (host:port)")
+	cmd.Flags().StringVar(&webAddr, "web-addr", "",
+		"optional plain-HTTP read-only dashboard listen address (bind to loopback or a private interface)")
 	cmd.Flags().StringVar(&configDir, "config-dir", "",
 		"override the orchestrator config dir (default: $XDG_CONFIG_HOME/daft/orchestrator)")
 	return cmd

@@ -62,6 +62,12 @@ type Config struct {
 	// is used and Server.Addr() reports the actual bound address.
 	Addr string
 
+	// WebAddr optionally enables a separate plain-HTTP, read-only dashboard.
+	// Deployments bind it to loopback or a private interface and publish it
+	// through a trusted private reverse proxy; it never shares or weakens the
+	// mTLS control-plane listener.
+	WebAddr string
+
 	// ReadHeaderTimeout caps how long the server waits for a client
 	// to send request headers. Belt-and-braces against slow-loris.
 	ReadHeaderTimeout time.Duration
@@ -160,6 +166,8 @@ type RegistrySeed struct {
 // plus a /debug/traces dump endpoint.
 type Server struct {
 	inner            *mtls.Server
+	web              *http.Server
+	webListener      net.Listener
 	tracer           *trace.Tracer
 	reaper           *trace.IngressReaper
 	matcher          *workspacebroker.Matcher
@@ -280,12 +288,11 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	reaper := cfg.Reaper
-	if reaper == nil {
-		reaper = trace.NewIngressReaper(tracer, component.Orchestrator)
-	}
+	web := newDashboardServer(cfg.WebAddr, nodeReg, workspaceCat)
+	reaper := resolveReaper(cfg.Reaper, tracer)
 	return &Server{
 		inner:            inner,
+		web:              web,
 		tracer:           tracer,
 		reaper:           reaper,
 		matcher:          matcher,
@@ -296,6 +303,20 @@ func New(cfg Config) (*Server, error) {
 		agentRunCtrl:     agentRunCtrl,
 		reconciler:       rec,
 	}, nil
+}
+
+func resolveReaper(reaper *trace.IngressReaper, tracer *trace.Tracer) *trace.IngressReaper {
+	if reaper == nil {
+		return trace.NewIngressReaper(tracer, component.Orchestrator)
+	}
+	return reaper
+}
+
+func newDashboardServer(addr string, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store) *http.Server {
+	if addr == "" {
+		return nil
+	}
+	return &http.Server{Addr: addr, Handler: dashboardHandler(nodes, workspaces), ReadHeaderTimeout: 10 * time.Second}
 }
 
 func newAgentRunController(runs *agentruncatalog.Store, workspaces *workspacecatalog.Store, nodes *nodectrl.Registry, jobs *NodeControlHandler, launcher agentSandboxLauncher) *AgentRunHandler {
@@ -507,8 +528,28 @@ func hostedRepoTag(ref string) (string, error) {
 // the buffer directly for tests.
 func (s *Server) Tracer() *trace.Tracer { return s.tracer }
 
-func (s *Server) Listen() error { return s.inner.Listen() }
-func (s *Server) Addr() string  { return s.inner.Addr() }
+func (s *Server) Listen() error {
+	if err := s.inner.Listen(); err != nil {
+		return err
+	}
+	if s.web == nil {
+		return nil
+	}
+	listener, err := net.Listen("tcp", s.web.Addr)
+	if err != nil {
+		_ = s.inner.Shutdown(context.Background())
+		return fmt.Errorf("orchestrator: web listen: %w", err)
+	}
+	s.webListener = listener
+	return nil
+}
+func (s *Server) Addr() string { return s.inner.Addr() }
+func (s *Server) WebAddr() string {
+	if s.webListener == nil {
+		return ""
+	}
+	return s.webListener.Addr().String()
+}
 
 // Serve starts the ingress reaper + the reconciler sweep, then
 // blocks on the inner HTTP server. Both background lifetimes span
@@ -516,7 +557,25 @@ func (s *Server) Addr() string  { return s.inner.Addr() }
 func (s *Server) Serve() error {
 	s.startReaper()
 	s.startReconciler()
-	return s.inner.Serve()
+	if s.webListener == nil {
+		return s.inner.Serve()
+	}
+	errs := make(chan error, 2)
+	go func() { errs <- s.inner.Serve() }()
+	go func() { errs <- s.web.Serve(s.webListener) }()
+	first := <-errs
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = s.inner.Shutdown(ctx)
+	_ = s.web.Shutdown(ctx)
+	second := <-errs
+	if errors.Is(first, http.ErrServerClosed) {
+		first = nil
+	}
+	if errors.Is(second, http.ErrServerClosed) {
+		second = nil
+	}
+	return errors.Join(first, second)
 }
 
 // Shutdown stops the reconciler and reaper before draining the
@@ -524,7 +583,11 @@ func (s *Server) Serve() error {
 // its span sources.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.stopBackground()
-	return s.inner.Shutdown(ctx)
+	var webErr error
+	if s.web != nil {
+		webErr = s.web.Shutdown(ctx)
+	}
+	return errors.Join(s.inner.Shutdown(ctx), webErr)
 }
 
 func (s *Server) startReconciler() {

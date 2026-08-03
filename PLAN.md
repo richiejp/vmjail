@@ -94,6 +94,15 @@ record/replay, and guest CA injection. Host `/proc`/cgroup sampling and guest
 eBPF gadgets provide bounded resource and build-progress observations; see
 [`OBSERVABILITY.md`](OBSERVABILITY.md).
 
+The orchestrator now has an optional, separate read-only HTTP dashboard
+listener. It is intended to bind to loopback or a private interface and sit
+behind a trusted private HTTPS route; the mTLS control-plane listener remains unchanged. The dashboard
+lists connected and disconnected Nodes and groups active and inactive
+Workspaces by their live Sandbox Node or declared target, with unassigned
+Workspaces retained in a separate section. Its bounded JSON status document is
+available alongside the HTML page and health endpoint. Deployment on Dell and
+its private Devroute name remain the final operational step for this slice.
+
 ## Active milestone: overseer-controlled agent runs
 
 The target interaction is: “develop `/project/path` in darkaifactory on

@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -141,6 +143,9 @@ func TestServerAddrEmptyBeforeListen(t *testing.T) {
 	if got := srv.Addr(); got != "" {
 		t.Errorf("Addr before Listen = %q, want empty", got)
 	}
+	if got := srv.WebAddr(); got != "" {
+		t.Errorf("WebAddr before Listen = %q, want empty", got)
+	}
 	if err := srv.Serve(); err == nil {
 		t.Error("Serve before Listen should error")
 	}
@@ -185,6 +190,26 @@ func TestServerShutdownIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestServerOptionalDashboardListener(t *testing.T) {
+	p := newTestPair(t, true, true, func(cfg *Config) { cfg.WebAddr = testListenAddr })
+	if p.server.WebAddr() == "" {
+		t.Fatal("WebAddr is empty after Listen")
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	response, err := client.Get("http://" + p.server.WebAddr() + "/v1/status")
+	if err != nil {
+		t.Fatalf("GET dashboard: %v", err)
+	}
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close dashboard response: %v", err)
+		}
+	}()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("dashboard response = %s %v", response.Status, response.Header)
+	}
+}
+
 func TestListenFailsForBadAddr(t *testing.T) {
 	srv, err := New(Config{
 		Identity: mustGenerate(t, identity.RoleOrchestrator),
@@ -196,6 +221,28 @@ func TestListenFailsForBadAddr(t *testing.T) {
 	}
 	if err := srv.Listen(); err == nil {
 		t.Fatal("expected Listen error for malformed addr")
+	}
+}
+
+func TestListenRollsBackWhenDashboardAddrIsBusy(t *testing.T) {
+	busy, err := net.Listen("tcp", testListenAddr)
+	if err != nil {
+		t.Fatalf("listen busy dashboard: %v", err)
+	}
+	defer func() {
+		if closeErr := busy.Close(); closeErr != nil {
+			t.Errorf("close busy dashboard: %v", closeErr)
+		}
+	}()
+	srv, err := New(Config{
+		Identity: mustGenerate(t, identity.RoleOrchestrator),
+		Peers:    mustOpenStore(t), Addr: testListenAddr, WebAddr: busy.Addr().String(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := srv.Listen(); err == nil || !strings.Contains(err.Error(), "web listen") {
+		t.Fatalf("Listen error = %v, want web listen failure", err)
 	}
 }
 
