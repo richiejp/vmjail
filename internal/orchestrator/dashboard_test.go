@@ -59,7 +59,7 @@ func TestDashboardHTTPJSONHTMLAndHealth(t *testing.T) {
 
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", http.NoBody))
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "DarkAIFactory") || !strings.Contains(page.Body.String(), "No nodes are connected") {
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "darkaifactory") || !strings.Contains(page.Body.String(), "No nodes are connected") {
 		t.Fatalf("page = %d %q", page.Code, page.Body.String())
 	}
 	health := httptest.NewRecorder()
