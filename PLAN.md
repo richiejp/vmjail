@@ -103,10 +103,11 @@ Workspaces retained in a separate section. Its bounded JSON status document is
 available alongside the HTML page and health endpoint. Deployment on Dell and
 its private Devroute name remain the final operational step for this slice.
 
-The permanent deployment is described by `nix/orchestrator.nix`; service
-arguments, restart policy, private bindings, and state access belong to that
-NixOS-managed systemd unit. Host deployments select the package and addresses,
-then redeploy with a single `nixos-rebuild switch` rather than `systemd-run`.
+The reusable service is described by the parameterised NixOS module
+`nix/orchestrator.nix`. Machine-specific deployment expressions select the
+package, addresses, user, and state path from the private operations
+configuration rather than this source repository; they redeploy with a single
+`nixos-rebuild switch` rather than `systemd-run`.
 
 ## Active milestone: overseer-controlled agent runs
 
