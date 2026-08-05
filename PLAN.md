@@ -100,21 +100,10 @@ behind a trusted private HTTPS route; the mTLS control-plane listener remains un
 lists connected and disconnected Nodes and groups active and inactive
 Workspaces by their live Sandbox Node or declared target, with unassigned
 Workspaces retained in a separate section. Its bounded JSON status document is
-available alongside the HTML page and health endpoint. Dell currently exposes
-it through its private Devroute name; its temporary user service still needs
-to migrate to the shared operations deployment described below.
+available alongside the HTML page and health endpoint.
 
-Application repositories export packages and parameterised service modules,
-but never machine-specific paths, addresses, identities, or service
-configuration. Dell and Ledbx deployments belong under `~/ops`: their NixOS
-configurations in `~/ops/nix` consume independently versioned application
-flakes and parameterised NixOS modules, while Docker Compose deployments live
-under the relevant `~/docker` directory. Hosts deploy through their normal
-`nixos-rebuild switch`; systemd reconciliation is part of that activation, not
-a second manual deployment mechanism. Services remain independently packaged,
-configured, observable, and restartable even though the host activates one
-atomic NixOS generation. `nix/orchestrator.nix` remains the reusable
-darkaifactory service module; machine-specific values stay in `~/ops/nix`.
+`nix/orchestrator.nix` exports a parameterised NixOS service module. It contains
+no host-specific paths, addresses, identities, or service configuration.
 
 ## Active milestone: overseer-controlled agent runs
 
@@ -204,8 +193,8 @@ Core runtime implementation is complete. Documentation and agent integration
 still need cleanup: the canonical supported workflow belongs in the visible
 `docs/usage/agentic-development.md`, while `.agents/skills` may contain only a
 thin harness adapter that points to that guide. The current adaptive binary
-deployment skill and its stage/rollback scripts conflict with Nix-managed
-operations and must be removed. The project-development adapter must stop
+deployment skill and its stage/rollback scripts encode environment-specific
+operations policy and must be removed. The project-development adapter must stop
 deploying Nodes implicitly and require an already registered healthy Node.
 Durable handoff state should ultimately be product/Ordino state rather than an
 ad-hoc file maintained by an agent. Direct interactive takeover remains
