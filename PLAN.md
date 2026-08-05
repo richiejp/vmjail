@@ -200,6 +200,12 @@ Durable handoff state should ultimately be product/Ordino state rather than an
 ad-hoc file maintained by an agent. Direct interactive takeover remains
 intentionally deferred under the contract below.
 
+The Nix build keeps its dependency boundaries explicit: `kconfig-verify` uses
+a deliberately narrowed source tree and therefore owns a
+separate `buildGoModule` vendor hash rather than sharing the full application
+hash. Kernel builds use the fixed-hash upstream release tarball, avoiding both
+a remote default-branch lookup and a full Git-history clone.
+
 ## Deferred direct AgentRun takeover contract
 
 Direct terminal/browser takeover remains out of the current milestone. The

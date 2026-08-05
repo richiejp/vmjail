@@ -6,12 +6,9 @@
     flake-utils.url = "github:numtide/flake-utils";
     # Submodule contents are NOT pulled into the flake source — at
     # ~1.9 GB across linux + u-root they made every flake eval scan
-    # the full tree. Each submodule is fetched from upstream via
-    # builtins.fetchGit, driven by third_party/submodule-revs.json
-    # (url + rev per submodule). A pre-commit hook keeps the JSON
-    # in sync with `git submodule status` + `.gitmodules`. fetchGit
-    # is content-addressed by rev, so the second eval is
-    # cache-instant; first eval on a fresh machine clones once.
+    # the full tree. Runtime submodules are fetched from their pinned
+    # revisions; Linux uses its fixed-hash release tarball so a build
+    # neither clones kernel history nor depends on the remote Git HEAD.
   };
 
   outputs = { self, nixpkgs, flake-utils }:
@@ -32,7 +29,11 @@
         fetchSubmodule = name: builtins.fetchGit {
           inherit (submoduleRevs.${name}) url rev;
         };
-        linuxSrc = fetchSubmodule "linux";
+        kernelVersion = "7.0.10";
+        linuxSrc = pkgs.fetchurl {
+          url = "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${kernelVersion}.tar.xz";
+          hash = "sha256-CUl362LCDj0ZOf6BqSlYofmH8zlEblMvqGljsoBOMtw=";
+        };
         uRootSrc = fetchSubmodule "u-root";
         cloudHypervisorSrc = fetchSubmodule "cloud-hypervisor";
         virtiofsdSrc = fetchSubmodule "virtiofsd";
@@ -74,6 +75,12 @@
             ./internal/kconfig
           ];
         };
+
+        # kconfigVerifySrc intentionally contains only the packages reachable
+        # from the kernel's small build-time verifier. buildGoModule vendors
+        # that source independently, so it must not reuse the full-project
+        # module graph hash below.
+        kconfigVerifyVendorHash = "sha256-1GU95MJoGhrDwKxekJ4ywPgvZuQt8fhOh/j6psrIaRQ=";
 
         # The pinned xfsprogs static build fails in upstream's ICU/C++ link.
         # Relocate only the three tools we use plus their small shared-library
@@ -123,11 +130,12 @@
           platforms ? pkgs.lib.platforms.unix,
           preBuild ? "",
           src ? goSrc,
+          vendorHash ? "sha256-EwZee0qVr8QoU6LBzXuGuv8lHd7CJoKaozq2IxrvNAg=",
         }: pkgs.buildGoModule ({
           pname = name;
           inherit version;
           inherit src;
-          vendorHash = "sha256-EwZee0qVr8QoU6LBzXuGuv8lHd7CJoKaozq2IxrvNAg=";
+          inherit vendorHash;
           env.CGO_ENABLED = if cgoEnabled then "1" else "0";
           ldflags = [
             "-s" "-w"
@@ -325,6 +333,7 @@
             description = "darkaifactory kernel-config survival checker";
             platforms = pkgs.lib.platforms.linux;
             src = kconfigVerifySrc;
+            vendorHash = kconfigVerifyVendorHash;
           };
 
           # daft-hello-container is the workload binary in the v0
@@ -803,7 +812,7 @@
           # for Cloud Hypervisor PVH or bzImage boot).
           kernel = pkgs.stdenv.mkDerivation {
             pname = "linux-daft";
-            version = "7.0.10";
+            version = kernelVersion;
 
             src = linuxSrc;
 
