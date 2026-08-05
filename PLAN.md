@@ -106,13 +106,15 @@ to migrate to the shared operations deployment described below.
 
 Application repositories export packages and parameterised service modules,
 but never machine-specific paths, addresses, identities, or service
-configuration. Dell and Ledbx deployments belong under `~/ops`: standalone
-Home Manager configuration in `~/ops/nix` owns unprivileged user services,
-while privileged host prerequisites remain in NixOS and Docker Compose
-deployments live under the relevant `~/docker` directory. Once Home Manager is
-bootstrapped, routine user-service deployment uses `home-manager switch`
-without a NixOS system switch. The current `nix/orchestrator.nix` NixOS service
-module must be replaced or adapted to this user-service model.
+configuration. Dell and Ledbx deployments belong under `~/ops`: their NixOS
+configurations in `~/ops/nix` consume independently versioned application
+flakes and parameterised NixOS modules, while Docker Compose deployments live
+under the relevant `~/docker` directory. Hosts deploy through their normal
+`nixos-rebuild switch`; systemd reconciliation is part of that activation, not
+a second manual deployment mechanism. Services remain independently packaged,
+configured, observable, and restartable even though the host activates one
+atomic NixOS generation. `nix/orchestrator.nix` remains the reusable
+darkaifactory service module; machine-specific values stay in `~/ops/nix`.
 
 ## Active milestone: overseer-controlled agent runs
 
