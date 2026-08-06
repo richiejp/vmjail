@@ -180,6 +180,9 @@ func openStore() (*imagestore.Store, error) {
 
 func storeRoot() (string, error) {
 	if v := os.Getenv(EnvStoreDir); v != "" {
+		if !filepath.IsAbs(v) {
+			return "", fmt.Errorf("daft-sandboxd: %s %q must be absolute", EnvStoreDir, v)
+		}
 		return v, nil
 	}
 	base, err := os.UserCacheDir()

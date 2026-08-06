@@ -590,12 +590,20 @@ func egressProxyFromEnv(logSink io.Writer) (*sandboxexec.EgressProxy, error) {
 	if !egressProxyEnabled() {
 		return nil, nil //nolint:nilnil // nil config = feature off, not an error.
 	}
-	certs, err := mitmproxy.LoadOrCreateCertCache(os.Getenv(envEgressProxyCADir))
+	caDir, err := absoluteEnvDir(envEgressProxyCADir)
+	if err != nil {
+		return nil, err
+	}
+	cacheDir, err := absoluteEnvDir(envEgressProxyCacheDir)
+	if err != nil {
+		return nil, err
+	}
+	certs, err := mitmproxy.LoadOrCreateCertCache(caDir)
 	if err != nil {
 		return nil, fmt.Errorf("sandboxd: egress proxy CA: %w", err)
 	}
 	proxy := mitmproxy.New(certs, envTruthy(os.Getenv(envEgressProxyInsecureUpstream)), logSink)
-	if cacheDir := os.Getenv(envEgressProxyCacheDir); cacheDir != "" {
+	if cacheDir != "" {
 		cache, cerr := httpcache.Open(cacheDir, envTruthy(os.Getenv(envEgressProxyOffline)), 0)
 		if cerr != nil {
 			return nil, fmt.Errorf("sandboxd: egress proxy cache: %w", cerr)
@@ -603,6 +611,14 @@ func egressProxyFromEnv(logSink io.Writer) (*sandboxexec.EgressProxy, error) {
 		proxy.SetCache(cache)
 	}
 	return &sandboxexec.EgressProxy{Handler: proxy, CACertPEM: certs.CACertPEM()}, nil
+}
+
+func absoluteEnvDir(name string) (string, error) {
+	dir := os.Getenv(name)
+	if dir != "" && !filepath.IsAbs(dir) {
+		return "", fmt.Errorf("sandboxd: %s %q must be absolute", name, dir)
+	}
+	return dir, nil
 }
 
 // egressProxyEnabled reports whether the in-stack proxy is on. It is on

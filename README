@@ -13,6 +13,11 @@ A new class of coder emerged who was not really a coder at all, but instead a la
 
 Anyway enough of that, Darkaifactory is a sandbox based on Linux microvms that host a minimal Go based userland that launches containers. It is motivated from the observation that writing software is getting dangerous and opaque. In fact it has always been opaque to anyone except those who have a very strong grasp of system wide debugging and tracing tools. In modern Linux you have incredible power to instrument and trace every instruction, but realistically very few systems are configured for it and even less people know how to use these tools.
 
+Host-side configuration, state, cache, runtime, and temporary paths have
+different ownership and cleanup rules. See
+[`docs/usage/storage-paths.md`](docs/usage/storage-paths.md) before configuring
+a managed orchestrator or sandbox node.
+
 The emergence of AI coding agents has made these tools easier to use in theory, but in practice the LLM doesn't choose to use them on its own and it needs privileged access to the kernel to activate them. Which brings me onto the point that software dev has now taken on a new level of risk.
 
 Basically a coding agent gives remote code execution to whatever machine it is running on with whatever privileges the user who started it has. Yes, if you are running a local LLM then it's technically not RCE, but conceptually you are still handing over control to something that may execute any code.

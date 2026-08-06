@@ -392,7 +392,7 @@ func Down(stateDir string, purge bool) error {
 // DAFT_* env var to connect.
 func DefaultStateDir() (string, error) {
 	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
+	if !filepath.IsAbs(base) {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("localcluster: locate home dir: %w", err)

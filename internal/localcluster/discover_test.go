@@ -35,6 +35,19 @@ func TestDefaultStateDirHomeFallback(t *testing.T) {
 	}
 }
 
+func TestDefaultStateDirIgnoresRelativeXDGStateHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", "relative/state")
+	t.Setenv("HOME", home)
+	got, err := DefaultStateDir()
+	if err != nil {
+		t.Fatalf("DefaultStateDir: %v", err)
+	}
+	if want := filepath.Join(home, ".local", "state", "daft", "cluster"); got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
 func TestLoadAbsentIsNilNoError(t *testing.T) {
 	c, err := Load(t.TempDir()) // no cluster.json under a fresh dir
 	if err != nil {

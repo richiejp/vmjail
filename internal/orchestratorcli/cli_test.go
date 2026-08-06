@@ -55,6 +55,12 @@ func TestResolveConfigDirHonoursOverride(t *testing.T) {
 	}
 }
 
+func TestResolveConfigDirRejectsRelativeOverride(t *testing.T) {
+	if _, err := resolveConfigDir("relative/config"); err == nil {
+		t.Fatal("expected relative orchestrator config dir to be rejected")
+	}
+}
+
 // TestResolveConfigDirPropagatesUserConfigDirError forces
 // os.UserConfigDir to fail.
 func TestResolveConfigDirPropagatesUserConfigDirError(t *testing.T) {

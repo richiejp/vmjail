@@ -126,6 +126,13 @@ func TestStoreRootHonoursEnv(t *testing.T) {
 	}
 }
 
+func TestStoreRootRejectsRelativeEnv(t *testing.T) {
+	t.Setenv(EnvStoreDir, "relative/store")
+	if _, err := storeRoot(); err == nil {
+		t.Fatal("storeRoot should reject a relative DAFT_STORE_DIR")
+	}
+}
+
 func TestImagesPruneRequiresOlderThan(t *testing.T) {
 	t.Setenv(EnvStoreDir, t.TempDir())
 	_, _, err := runCmd(t, "images", "prune")

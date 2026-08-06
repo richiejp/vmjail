@@ -222,6 +222,9 @@ func runServer(ctx context.Context, srv *orchestrator.Server) error {
 // XDG-aware os.UserConfigDir + configSubdir.
 func resolveConfigDir(override string) (string, error) {
 	if override != "" {
+		if !filepath.IsAbs(override) {
+			return "", fmt.Errorf("orchestrator: --config-dir %q must be absolute", override)
+		}
 		return override, nil
 	}
 	base, err := os.UserConfigDir()

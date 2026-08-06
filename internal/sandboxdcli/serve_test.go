@@ -775,3 +775,17 @@ func TestEgressProxyFromEnv(t *testing.T) {
 		}
 	})
 }
+
+func TestEgressProxyRejectsRelativePersistentDirs(t *testing.T) {
+	t.Setenv(envEgressProxy, "1")
+	t.Setenv(envEgressProxyCADir, "relative/ca")
+	t.Setenv(envEgressProxyCacheDir, "")
+	if _, err := egressProxyFromEnv(io.Discard); err == nil {
+		t.Fatal("want error for relative CA dir")
+	}
+	t.Setenv(envEgressProxyCADir, "")
+	t.Setenv(envEgressProxyCacheDir, "relative/cache")
+	if _, err := egressProxyFromEnv(io.Discard); err == nil {
+		t.Fatal("want error for relative cache dir")
+	}
+}

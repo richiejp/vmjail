@@ -20,6 +20,9 @@ const peersFilename = "peers.json"
 
 func resolveSandboxdDir(override string) (string, error) {
 	if override != "" {
+		if !filepath.IsAbs(override) {
+			return "", fmt.Errorf("daft-sandboxd: --config-dir %q must be absolute", override)
+		}
 		return override, nil
 	}
 	base, err := os.UserConfigDir()

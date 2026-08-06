@@ -17,6 +17,12 @@ func TestResolveSandboxdDirHonoursOverride(t *testing.T) {
 	}
 }
 
+func TestResolveSandboxdDirRejectsRelativeOverride(t *testing.T) {
+	if _, err := resolveSandboxdDir("relative/config"); err == nil {
+		t.Fatal("expected relative sandboxd config dir to be rejected")
+	}
+}
+
 func TestResolveSandboxdDirFallsBackToUserConfig(t *testing.T) {
 	got, err := resolveSandboxdDir("")
 	if err != nil {

@@ -206,10 +206,12 @@ separate `buildGoModule` vendor hash rather than sharing the full application
 hash. Kernel builds use the fixed-hash upstream release tarball, avoiding both
 a remote default-branch lookup and a full Git-history clone.
 
-Host filesystem defaults are being audited by lifetime and ownership. Runtime
-Unix sockets prefer a service runtime directory, while configuration and
-identity, durable state, and rebuildable caches remain separate and keep their
-existing explicit overrides.
+Host filesystem defaults are classified by lifetime and ownership in
+`docs/usage/storage-paths.md`. Runtime Unix sockets prefer service or XDG
+runtime directories and are checked against Linux's path limit; configuration
+and identity, durable state, and rebuildable caches remain separate. Relative
+XDG state values are ignored and explicit store/state/runtime roots must be
+absolute so service working-directory changes cannot redirect data.
 
 ## Deferred direct AgentRun takeover contract
 
