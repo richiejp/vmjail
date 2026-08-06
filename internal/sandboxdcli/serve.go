@@ -78,7 +78,7 @@ func newServeCmd() *cobra.Command {
 		"orchestrator endpoint URL (e.g. https://orchestrator.example:14443)")
 	cmd.Flags().StringVar(&configDir, "config-dir", "", configDirFlagDesc)
 	cmd.Flags().StringVar(&vsockDir, "vsock-dir", "",
-		"parent directory for per-Sandbox hybrid-vsock UDS files; defaults to <os.TempDir>/daft-sandboxd-vsock")
+		"parent directory for per-Sandbox hybrid-vsock UDS files; defaults under $RUNTIME_DIRECTORY, $XDG_RUNTIME_DIR, or the temporary directory")
 	cmd.Flags().DurationVar(&heartbeatInterval, "heartbeat-interval",
 		nodectrlclient.DefaultHeartbeatInterval,
 		"how often to ping the orchestrator with a Heartbeat")
@@ -117,10 +117,11 @@ func runServe(
 		return err
 	}
 
-	vsockDir, err := resolveVsockDir(vsockDirOverride)
+	vsockDir, cleanupVsockDir, err := resolveVsockDir(vsockDirOverride)
 	if err != nil {
 		return err
 	}
+	defer cleanupVsockDir()
 
 	sync, err := buildNodeSync(dir, orchestratorURL, id, peers)
 	if err != nil {
@@ -661,11 +662,6 @@ func extractWithEnvFallback(base sandbox.Config) func(dir string) (bundled.Paths
 	}
 }
 
-// resolveVsockDir returns the absolute, mkdir'd parent directory
-// for per-Sandbox hybrid-vsock UDS files. An explicit override
-// must already be absolute. Empty override → a per-sandboxd-process
-// subdir under os.TempDir so test parallelism and multiple daemons
-// on one host don't collide on UDS paths.
 // detectHostname returns the OS hostname for node registration, or ""
 // if the host can't report one. Best-effort: the fingerprint is the
 // canonical node id, so a missing hostname only costs the friendly
@@ -678,19 +674,73 @@ func detectHostname() string {
 	return h
 }
 
-func resolveVsockDir(override string) (string, error) {
-	dir := override
+// resolveVsockDir returns the absolute, mkdir'd parent directory for
+// per-Sandbox hybrid-vsock UDS files and a cleanup function. An explicit
+// override must already be absolute and remains caller-owned. Otherwise a
+// short application directory is selected below systemd's RUNTIME_DIRECTORY
+// or the user's XDG_RUNTIME_DIR. The unmanaged os.TempDir fallback is private
+// to this process and removed at clean shutdown. Socket listeners pre-clean
+// their exact stale paths before binding.
+func resolveVsockDir(override string) (dir string, cleanup func(), err error) {
+	dir = override
+	owned := false
 	if dir == "" {
-		dir = filepath.Join(os.TempDir(),
-			fmt.Sprintf("daft-sandboxd-vsock-%d", os.Getpid()))
+		dir, owned = defaultVsockDir()
 	}
 	if !filepath.IsAbs(dir) {
-		return "", fmt.Errorf("daft-sandboxd serve: --vsock-dir %q must be absolute", dir)
+		return "", nil, fmt.Errorf("daft-sandboxd serve: --vsock-dir %q must be absolute", dir)
+	}
+	if err := validateVsockDirLength(dir); err != nil {
+		return "", nil, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", fmt.Errorf("daft-sandboxd serve: mkdir vsock dir: %w", err)
+		return "", nil, fmt.Errorf("daft-sandboxd serve: mkdir vsock dir: %w", err)
 	}
-	return dir, nil
+	cleanup = func() {}
+	if owned {
+		cleanup = func() {
+			// The directory contains only daemon-owned Unix sockets. Removal is
+			// best-effort during shutdown; startup always selects a fresh path.
+			_ = os.RemoveAll(dir)
+		}
+	}
+	return dir, cleanup, nil
+}
+
+func validateVsockDirLength(dir string) error {
+	// Linux sockaddr_un.sun_path is 108 bytes including its terminating NUL.
+	// The longest current listener path is a 36-byte Sandbox UUID plus the
+	// devcontainer-build and hybrid-vsock port suffixes.
+	const maxUnixPathBytes = 107
+	const longestSocketLeaf = "00000000-0000-0000-0000-000000000000-build.sock_7000"
+	path := filepath.Join(dir, longestSocketLeaf)
+	if len(path) > maxUnixPathBytes {
+		return fmt.Errorf("daft-sandboxd serve: vsock directory %q leaves no room for Unix socket names (%d-byte path exceeds %d)",
+			dir, len(path), maxUnixPathBytes)
+	}
+	return nil
+}
+
+func defaultVsockDir() (string, bool) {
+	if dir := firstAbsolutePath(os.Getenv("RUNTIME_DIRECTORY")); dir != "" {
+		return filepath.Join(dir, "vsock"), false
+	}
+	if dir := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(dir) {
+		return filepath.Join(dir, "daft-vsock"), false
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("daft-vsock-%d", os.Getpid())), true
+}
+
+// firstAbsolutePath selects the first absolute entry from a systemd
+// RUNTIME_DIRECTORY value, which may contain a colon-separated list when a
+// unit declares more than one RuntimeDirectory.
+func firstAbsolutePath(value string) string {
+	for _, dir := range filepath.SplitList(value) {
+		if filepath.IsAbs(dir) {
+			return dir
+		}
+	}
+	return ""
 }
 
 // openSandboxbootStore opens the same production imagestore the legacy `run`

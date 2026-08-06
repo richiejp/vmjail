@@ -206,6 +206,11 @@ separate `buildGoModule` vendor hash rather than sharing the full application
 hash. Kernel builds use the fixed-hash upstream release tarball, avoiding both
 a remote default-branch lookup and a full Git-history clone.
 
+Host filesystem defaults are being audited by lifetime and ownership. Runtime
+Unix sockets prefer a service runtime directory, while configuration and
+identity, durable state, and rebuildable caches remain separate and keep their
+existing explicit overrides.
+
 ## Deferred direct AgentRun takeover contract
 
 Direct terminal/browser takeover remains out of the current milestone. The

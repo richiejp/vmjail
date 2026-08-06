@@ -3,6 +3,7 @@ package sandboxdcli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -525,7 +526,9 @@ func writeBlocker(path string) error {
 // mkdirs it so the Executor has somewhere to put per-Sandbox UDS
 // files at dispatch time.
 func TestResolveVsockDirDefaultCreatesTempSubdir(t *testing.T) {
-	dir, err := resolveVsockDir("")
+	t.Setenv("RUNTIME_DIRECTORY", "")
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	dir, cleanup, err := resolveVsockDir("")
 	if err != nil {
 		t.Fatalf("resolveVsockDir(\"\"): %v", err)
 	}
@@ -536,14 +539,63 @@ func TestResolveVsockDirDefaultCreatesTempSubdir(t *testing.T) {
 	if !info.IsDir() {
 		t.Errorf("%s is not a directory", dir)
 	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	cleanup()
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("owned runtime dir still exists after cleanup: %v", err)
+	}
+}
+
+func TestResolveVsockDirPrefersSystemdRuntimeDirectory(t *testing.T) {
+	runtimeDir := filepath.Join(os.TempDir(), fmt.Sprintf("daft-systemd-%d", os.Getpid()))
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+	t.Setenv("RUNTIME_DIRECTORY", runtimeDir)
+	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+	dir, cleanup, err := resolveVsockDir("")
+	if err != nil {
+		t.Fatalf("resolveVsockDir: %v", err)
+	}
+	defer cleanup()
+	want := filepath.Join(runtimeDir, "vsock")
+	if dir != want {
+		t.Errorf("runtime dir = %q, want %q", dir, want)
+	}
+}
+
+func TestResolveVsockDirUsesXDGRuntimeDirectory(t *testing.T) {
+	runtimeDir := filepath.Join(os.TempDir(), fmt.Sprintf("daft-xdg-%d", os.Getpid()))
+	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
+	t.Setenv("RUNTIME_DIRECTORY", "relative")
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	dir, cleanup, err := resolveVsockDir("")
+	if err != nil {
+		t.Fatalf("resolveVsockDir: %v", err)
+	}
+	defer cleanup()
+	want := filepath.Join(runtimeDir, "daft-vsock")
+	if dir != want {
+		t.Errorf("runtime dir = %q, want %q", dir, want)
+	}
+	// A build VM adds a UUID, "-build.sock", and a hybrid-vsock port
+	// suffix. Keep the normal Linux user-runtime path inside sockaddr_un.
+	worstSocket := filepath.Join(dir, strings.Repeat("a", 36)+"-build.sock_7000")
+	if len(worstSocket) >= 108 {
+		t.Errorf("default hybrid-vsock path is %d bytes, must be below 108: %q", len(worstSocket), worstSocket)
+	}
+}
+
+func TestResolveVsockDirRejectsPathTooLongForSockets(t *testing.T) {
+	dir := filepath.Join(os.TempDir(), strings.Repeat("x", 80))
+	if _, _, err := resolveVsockDir(dir); err == nil {
+		t.Fatal("expected error for a vsock directory that leaves no socket-name budget")
+	}
 }
 
 // TestResolveVsockDirAbsoluteOverride covers the explicit-path
 // branch: an absolute override is mkdir'd and returned as-is.
 func TestResolveVsockDirAbsoluteOverride(t *testing.T) {
-	override := t.TempDir() + "/vsock-sub"
-	got, err := resolveVsockDir(override)
+	override := filepath.Join(os.TempDir(), fmt.Sprintf("daft-override-%d", os.Getpid()))
+	t.Cleanup(func() { _ = os.RemoveAll(override) })
+	got, cleanup, err := resolveVsockDir(override)
 	if err != nil {
 		t.Fatalf("resolveVsockDir: %v", err)
 	}
@@ -553,6 +605,10 @@ func TestResolveVsockDirAbsoluteOverride(t *testing.T) {
 	if _, err := os.Stat(override); err != nil {
 		t.Errorf("dir not created: %v", err)
 	}
+	cleanup()
+	if _, err := os.Stat(override); err != nil {
+		t.Errorf("explicit directory was removed: %v", err)
+	}
 }
 
 // TestResolveVsockDirRejectsRelative pins the absolute-path
@@ -560,7 +616,7 @@ func TestResolveVsockDirAbsoluteOverride(t *testing.T) {
 // runs, so a typo in the CLI flag surfaces as a clear error
 // rather than mkdir'ing under the current working directory.
 func TestResolveVsockDirRejectsRelative(t *testing.T) {
-	if _, err := resolveVsockDir("relative/path"); err == nil {
+	if _, _, err := resolveVsockDir("relative/path"); err == nil {
 		t.Fatal("expected error for relative override")
 	}
 }
@@ -574,7 +630,7 @@ func TestResolveVsockDirMkdirError(t *testing.T) {
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
 		t.Fatalf("seed blocker: %v", err)
 	}
-	if _, err := resolveVsockDir(blocker + "/sub"); err == nil {
+	if _, _, err := resolveVsockDir(blocker + "/sub"); err == nil {
 		t.Fatal("expected error when mkdir fails")
 	}
 }
