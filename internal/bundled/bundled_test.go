@@ -123,6 +123,27 @@ func TestExtractRewritesOnSizeChange(t *testing.T) {
 	}
 }
 
+func TestExtractRewritesOnSameSizeContentChange(t *testing.T) {
+	dir := t.TempDir()
+	old := bytes.Repeat([]byte("X"), minBundledSize)
+	if _, err := extractTo(dir, old, old, old, old); err != nil {
+		t.Fatalf("first extractTo: %v", err)
+	}
+
+	newer := bytes.Repeat([]byte("Y"), minBundledSize)
+	if _, err := extractTo(dir, newer, newer, newer, newer); err != nil {
+		t.Fatalf("second extractTo: %v", err)
+	}
+	// #nosec G304 -- test path under t.TempDir.
+	got, err := os.ReadFile(filepath.Join(dir, "cloud-hypervisor"))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !bytes.Equal(got, newer) {
+		t.Error("file not rewritten on same-size content change")
+	}
+}
+
 // TestExtractMkdirError covers the error path of os.MkdirAll inside
 // extractTo. We point dir at a path whose parent is a regular file,
 // which makes MkdirAll fail with ENOTDIR.
@@ -144,7 +165,7 @@ func TestExtractMkdirError(t *testing.T) {
 // TestExtractWriteError covers the error path of writeIfChanged when
 // the target path is a directory rather than a file. A directory may report
 // the same size as the payload (notably 4096 bytes on ext4), but it must never
-// satisfy the unchanged regular-artifact shortcut.
+// satisfy the unchanged regular-artifact digest check.
 func TestExtractWriteError(t *testing.T) {
 	dir := t.TempDir()
 	// Pre-create a directory at the path where cloud-hypervisor would be
@@ -157,6 +178,43 @@ func TestExtractWriteError(t *testing.T) {
 	_, err := extractTo(dir, bytesAtSize, bytesAtSize, bytesAtSize, bytesAtSize)
 	if err == nil {
 		t.Fatal("expected error when artifact path is a directory")
+	}
+}
+
+func TestWriteIfChangedCreateTempError(t *testing.T) {
+	parent := t.TempDir()
+	blocker := filepath.Join(parent, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatalf("seed blocker: %v", err)
+	}
+	if err := writeIfChanged(filepath.Join(blocker, "artifact"), []byte("data"), 0o644); err == nil {
+		t.Fatal("expected temporary-file creation error under regular file")
+	}
+}
+
+func TestWriteIfChangedTempOperationErrors(t *testing.T) {
+	savedChmod, savedWrite, savedClose := tempChmod, tempWrite, tempClose
+	t.Cleanup(func() {
+		tempChmod, tempWrite, tempClose = savedChmod, savedWrite, savedClose
+	})
+	want := errors.New("injected")
+	tests := []struct {
+		name   string
+		inject func()
+	}{
+		{"chmod", func() { tempChmod = func(*os.File, os.FileMode) error { return want } }},
+		{"write", func() { tempWrite = func(*os.File, []byte) (int, error) { return 0, want } }},
+		{"close", func() { tempClose = func(*os.File) error { return want } }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tempChmod, tempWrite, tempClose = savedChmod, savedWrite, savedClose
+			tc.inject()
+			err := writeIfChanged(filepath.Join(t.TempDir(), "artifact"), []byte("data"), 0o644)
+			if !errors.Is(err, want) {
+				t.Fatalf("error = %v, want injected error", err)
+			}
+		})
 	}
 }
 

@@ -9,9 +9,12 @@
 package bundled
 
 import (
+	"bytes"
+	"crypto/sha256"
 	_ "embed"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -50,6 +53,13 @@ var ErrNotBundled = errors.New("bundled: sandbox artifacts not embedded in this 
 // safely below any real artifact.
 const minBundledSize = 4 * 1024
 
+//nolint:gochecknoglobals // narrow filesystem hooks make atomic-write failures deterministic in tests.
+var (
+	tempChmod = func(f *os.File, mode os.FileMode) error { return f.Chmod(mode) }
+	tempWrite = func(f *os.File, data []byte) (int, error) { return f.Write(data) }
+	tempClose = func(f *os.File) error { return f.Close() }
+)
+
 // IsBundled reports whether this binary has real artifacts embedded.
 // Useful for tests and for emitting better diagnostics on the dev
 // `go build` path.
@@ -64,8 +74,8 @@ func IsBundled() bool {
 // and returns their paths. Returns ErrNotBundled if the artifacts are
 // stubs.
 //
-// Re-extraction is idempotent: if a target file already exists with
-// the same size, it is not rewritten — letting callers pass a
+// Re-extraction is idempotent: if a target regular file already exists with
+// the same SHA-256 digest, it is not rewritten — letting callers pass a
 // persistent cache (e.g. $XDG_CACHE_HOME/daft) to avoid recopying ~20
 // MiB on every invocation.
 func Extract(dir string) (Paths, error) {
@@ -108,18 +118,43 @@ func extractTo(dir string, ch, kernel, initramfs, virtiofsd []byte) (Paths, erro
 	return p, nil
 }
 
-// writeIfChanged writes data to path only if path doesn't already
-// exist with matching size. Size is a cheap proxy for content match;
-// the cache dir's keying (binary version + checksum) is the real
-// guarantee against staleness, so a file with the right size at the
-// right path is treated as fresh.
+// writeIfChanged writes data atomically unless path is already a regular file
+// with the exact SHA-256 digest. The cache directory is stable across binary
+// upgrades, so size alone cannot distinguish same-sized artifact revisions.
 func writeIfChanged(path string, data []byte, perm os.FileMode) error {
-	fi, err := os.Stat(path)
-	if err == nil && fi.Mode().IsRegular() && fi.Size() == int64(len(data)) {
-		return nil
+	want := sha256.Sum256(data)
+	f, err := os.Open(path) //nolint:gosec // path is the caller-selected cache directory.
+	if err == nil {
+		fi, statErr := f.Stat()
+		if statErr == nil && fi.Mode().IsRegular() && fi.Size() == int64(len(data)) {
+			h := sha256.New()
+			if _, copyErr := io.Copy(h, f); copyErr == nil && bytes.Equal(h.Sum(nil), want[:]) {
+				_ = f.Close()
+				return nil
+			}
+		}
+		_ = f.Close()
 	}
-	if err := os.WriteFile(path, data, perm); err != nil {
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
 		return fmt.Errorf("bundled: write %s: %w", path, err)
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if err := tempChmod(tmp, perm); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("bundled: chmod %s: %w", path, err)
+	}
+	if _, err := tempWrite(tmp, data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("bundled: write %s: %w", path, err)
+	}
+	if err := tempClose(tmp); err != nil {
+		return fmt.Errorf("bundled: close %s: %w", path, err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return fmt.Errorf("bundled: replace %s: %w", path, err)
 	}
 	return nil
 }
