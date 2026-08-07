@@ -115,7 +115,7 @@ func extractTo(dir string, ch, kernel, initramfs, virtiofsd []byte) (Paths, erro
 // right path is treated as fresh.
 func writeIfChanged(path string, data []byte, perm os.FileMode) error {
 	fi, err := os.Stat(path)
-	if err == nil && fi.Size() == int64(len(data)) {
+	if err == nil && fi.Mode().IsRegular() && fi.Size() == int64(len(data)) {
 		return nil
 	}
 	if err := os.WriteFile(path, data, perm); err != nil {

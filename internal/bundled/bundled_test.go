@@ -142,12 +142,13 @@ func TestExtractMkdirError(t *testing.T) {
 }
 
 // TestExtractWriteError covers the error path of writeIfChanged when
-// the target path is a directory rather than a file (so the OpenFile
-// inside os.WriteFile fails).
+// the target path is a directory rather than a file. A directory may report
+// the same size as the payload (notably 4096 bytes on ext4), but it must never
+// satisfy the unchanged regular-artifact shortcut.
 func TestExtractWriteError(t *testing.T) {
 	dir := t.TempDir()
-	// Pre-create a directory at the path where cloud-hypervisor would
-	// be written — os.WriteFile then can't replace it.
+	// Pre-create a directory at the path where cloud-hypervisor would be
+	// written. The payload deliberately matches ext4's common directory size.
 	// #nosec G301 — test-only; dir is t.TempDir().
 	if err := os.MkdirAll(filepath.Join(dir, "cloud-hypervisor"), 0o755); err != nil {
 		t.Fatalf("pre-create dir: %v", err)

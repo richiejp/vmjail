@@ -393,6 +393,9 @@ Landed:
   configures QEMU user networking and emits an SSH protocol banner. It keeps
   the real BIOS ISO boot, nested KVM, slirp, and orchestrator-forwarding path
   without spending minutes booting a 494 MiB installer distribution.
+- Bundled-artifact cache hits require a regular file as well as the expected
+  size; directories and other filesystem objects can never masquerade as an
+  extracted VMM, kernel, initramfs, or virtiofsd binary.
 - `workspace resources --disk` now grows an existing retained disk through an
   authenticated exact-manifest Node RPC before committing the catalog change.
   Running disks execute the qcow2, virtio-blk, and guest `xfs_growfs` sequence;
