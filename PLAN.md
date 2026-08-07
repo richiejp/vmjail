@@ -389,6 +389,10 @@ Landed:
   helpers bound graceful subprocess cleanup and force-kill hung streaming
   clients instead of silently spending transport-timeout minutes after a test
   has already passed; slow cases are measured and fixed rather than removed.
+- The nested-ISO proof uses a purpose-built kernel/initramfs ISO whose init
+  configures QEMU user networking and emits an SSH protocol banner. It keeps
+  the real BIOS ISO boot, nested KVM, slirp, and orchestrator-forwarding path
+  without spending minutes booting a 494 MiB installer distribution.
 - `workspace resources --disk` now grows an existing retained disk through an
   authenticated exact-manifest Node RPC before committing the catalog change.
   Running disks execute the qcow2, virtio-blk, and guest `xfs_growfs` sequence;

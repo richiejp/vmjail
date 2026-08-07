@@ -359,6 +359,13 @@
             platforms = pkgs.lib.platforms.linux;
           };
 
+          daft-iso-fixture-init = mkDaftBinary {
+            name = "daft-iso-fixture-init";
+            subPackage = "./cmd/daft-iso-fixture";
+            description = "Minimal init and SSH-banner endpoint for the nested-ISO test fixture";
+            platforms = pkgs.lib.platforms.linux;
+          };
+
           # daft-http-fetch is the D6c.2 slice-4 client workload:
           # a tiny HTTPS GET that prints a known-shape sentinel on
           # success. Baked into the nix-shell-image so the
@@ -1219,58 +1226,63 @@
 
           # iso-ssh-fixture is the slice-1 proof payload for the
           # ISO-nested-QEMU diversion (branch iso-nested-qemu): a
-          # deliberately tiny bootable NixOS ISO that starts sshd on
-          # boot. It stands in for a third-party "Linux + agent" ISO we
+          # deliberately tiny bootable Linux ISO that exposes an SSH banner.
+          # It stands in for a third-party "Linux + agent" ISO we
           # cannot rebuild — the integration test boots it under QEMU
           # *inside* a daft sandbox VM (nested KVM), forwards its sshd
           # out, and asserts the SSH banner is reachable end-to-end.
           # Pointing the mechanism at a real ISO is a one-line --source
           # swap; this fixture exists only so the chain is CI-provable.
           #
-          # Stripped to the bone (profiles/minimal.nix, no docs) so it
-          # builds quickly and stays far under the installer default.
-          # Serial console on ttyS0 so QEMU -nographic surfaces the boot.
+          # The fixture reuses daft's small kernel and a u-root initramfs. Its
+          # only userspace payload configures eth0 at QEMU slirp's conventional
+          # guest address and emits an SSH-2.0 banner on port 22.
+          iso-fixture-initramfs = pkgs.runCommand "daft-iso-fixture-initramfs.cpio.gz" {
+            nativeBuildInputs = [ pkgs.go pkgs.gzip pkgs.cpio ];
+          } ''
+            export HOME=$TMPDIR
+            export GOCACHE=$TMPDIR/go-cache
+            export GOPATH=$TMPDIR/go
+            export GOROOT=${pkgs.go}/share/go
+            cp -r --no-preserve=mode ${uRootSrc} u-root-src
+            cd u-root-src
+            ${u-root}/bin/u-root \
+              -o $TMPDIR/initramfs.cpio \
+              -defaultsh="" \
+              -base=/dev/null \
+              -files "${daft-iso-fixture-init}/bin/daft-iso-fixture:bin/daft-iso-fixture-init" \
+              -uinitcmd=/bin/daft-iso-fixture-init \
+              ./cmds/core/init
+            gzip < $TMPDIR/initramfs.cpio > $out
+          '';
+
           iso-ssh-fixture =
-            (nixpkgs.lib.nixosSystem {
-              inherit system;
-              modules = [
-                ({ lib, modulesPath, ... }: {
-                  imports = [
-                    "${modulesPath}/installer/cd-dvd/iso-image.nix"
-                    "${modulesPath}/profiles/minimal.nix"
-                  ];
-
-                  isoImage.makeEfiBootable = true;
-                  isoImage.makeUsbBootable = true;
-                  # zstd: small output without a slow build.
-                  isoImage.squashfsCompression =
-                    "zstd -Xcompression-level 6";
-
-                  # sshd on boot with password auth so the test (and a
-                  # human) can reach it; this fixture is a throwaway.
-                  services.openssh.enable = true;
-                  services.openssh.settings = {
-                    PermitRootLogin = "yes";
-                    PasswordAuthentication = true;
-                  };
-                  users.users.root.password = "root";
-
-                  # Serial console for QEMU -nographic boot visibility.
-                  boot.kernelParams = [
-                    "console=ttyS0,115200n8"
-                    "console=tty0"
-                  ];
-
-                  # Shrink: drop docs + redistributable firmware blobs
-                  # the fixture never needs.
-                  documentation.enable = lib.mkForce false;
-                  documentation.nixos.enable = lib.mkForce false;
-                  hardware.enableRedistributableFirmware = lib.mkForce false;
-
-                  system.stateVersion = "24.11";
-                })
-              ];
-            }).config.system.build.isoImage;
+            let
+              isolinuxCfg = pkgs.writeText "isolinux.cfg" ''
+                DEFAULT daft
+                PROMPT 0
+                TIMEOUT 1
+                LABEL daft
+                  KERNEL /bzImage
+                  INITRD /initramfs.cpio.gz
+                  APPEND console=ttyS0,115200n8 panic=-1
+              '';
+            in pkgs.runCommand "daft-iso-ssh-fixture" {
+              nativeBuildInputs = [ pkgs.xorriso ];
+            } ''
+              mkdir -p $out/iso image/isolinux
+              cp ${kernel}/bzImage image/bzImage
+              cp ${iso-fixture-initramfs} image/initramfs.cpio.gz
+              cp ${pkgs.syslinux}/share/syslinux/isolinux.bin image/isolinux/
+              cp ${pkgs.syslinux}/share/syslinux/ldlinux.c32 image/isolinux/
+              cp ${isolinuxCfg} image/isolinux/isolinux.cfg
+              xorriso -as mkisofs \
+                -o $out/iso/daft-iso-ssh-fixture.iso \
+                -b isolinux/isolinux.bin \
+                -c isolinux/boot.cat \
+                -no-emul-boot -boot-load-size 4 -boot-info-table \
+                image
+            '';
         };
       });
 }
