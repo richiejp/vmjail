@@ -12,6 +12,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+const dashboardTestHost = "example.com"
+
 func TestDashboardAuthLoginAndSession(t *testing.T) {
 	auth := testDashboardAuth(t, "correct horse")
 	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
@@ -47,6 +49,19 @@ func TestDashboardAuthLoginAndSession(t *testing.T) {
 	handler.ServeHTTP(unlocked, unlockedRequest)
 	if unlocked.Code != http.StatusNoContent {
 		t.Fatalf("unlocked response = %d", unlocked.Code)
+	}
+
+	logoutRequest := httptest.NewRequest(http.MethodPost, "/logout", http.NoBody)
+	logoutRequest.Header.Set("Origin", "https://"+dashboardTestHost)
+	logoutRequest.Host = dashboardTestHost
+	logoutRequest.AddCookie(cookies[0])
+	logout := httptest.NewRecorder()
+	handler.ServeHTTP(logout, logoutRequest)
+	if logout.Code != http.StatusSeeOther || logout.Header().Get("Location") != "/login" {
+		t.Fatalf("logout response = %d %q", logout.Code, logout.Header().Get("Location"))
+	}
+	if auth.validSession(cookies[0].Value) {
+		t.Fatal("logout did not revoke session")
 	}
 }
 
@@ -94,9 +109,42 @@ func TestDashboardAuthExpiryInvalidTokensAndFailures(t *testing.T) {
 	badForm := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password="+strings.Repeat("x", dashboardLoginBytes)))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "https://"+dashboardTestHost)
+	request.Host = dashboardTestHost
 	handler.ServeHTTP(badForm, request)
 	if badForm.Code != http.StatusBadRequest {
 		t.Fatalf("oversized form response = %d", badForm.Code)
+	}
+}
+
+func TestDashboardAuthRequiresSameOriginAndAudits(t *testing.T) {
+	auth := testDashboardAuth(t, "secret")
+	var events []string
+	auth.audit = func(event, _ string) { events = append(events, event) }
+	handler := auth.wrap(http.NotFoundHandler())
+	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("password=secret"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "https://attacker.example")
+	request.Host = "dashboard.example"
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || len(events) != 1 || events[0] != "login_origin_rejected" {
+		t.Fatalf("cross-origin response/events = %d %#v", response.Code, events)
+	}
+	if dashboardSameOrigin(httptest.NewRequest(http.MethodPost, "/", http.NoBody)) {
+		t.Fatal("missing origin must fail closed")
+	}
+
+	login := dashboardLoginRequest(handler, "secret")
+	cookie := login.Result().Cookies()[0]
+	crossOriginLogout := httptest.NewRequest(http.MethodPost, "/logout", http.NoBody)
+	crossOriginLogout.Header.Set("Origin", "https://attacker.example")
+	crossOriginLogout.Host = dashboardTestHost
+	crossOriginLogout.AddCookie(cookie)
+	logoutResponse := httptest.NewRecorder()
+	handler.ServeHTTP(logoutResponse, crossOriginLogout)
+	if logoutResponse.Code != http.StatusForbidden || events[len(events)-1] != "logout_origin_rejected" {
+		t.Fatalf("cross-origin logout = %d %#v", logoutResponse.Code, events)
 	}
 }
 
@@ -117,12 +165,31 @@ func TestDashboardAuthBoundsStateAndParsesClients(t *testing.T) {
 	if !auth.rateLimited("new-client", now) {
 		t.Fatal("full client table must fail closed")
 	}
+	auth.recordFailure("another-client", now)
+	if len(auth.attempts) != dashboardMaxClients {
+		t.Fatalf("attempt table grew to %d", len(auth.attempts))
+	}
+	auth.deleteSession("invalid!")
+	auth.deleteSession("c2hvcnQ")
+	withoutCookie := httptest.NewRecorder()
+	auth.logout(withoutCookie, sameOriginRequest(http.MethodPost, "/logout"))
+	if withoutCookie.Code != http.StatusSeeOther {
+		t.Fatalf("direct logout without cookie = %d", withoutCookie.Code)
+	}
 	if got := dashboardClient("192.0.2.1:1234"); got != "192.0.2.1" {
 		t.Fatalf("parsed client = %q", got)
 	}
 	if got := dashboardClient("local"); got != "local" {
 		t.Fatalf("unparsed client = %q", got)
 	}
+}
+
+func TestDashboardAuthDefaultAudit(t *testing.T) {
+	hash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("hash password: %v", err)
+	}
+	newDashboardAuth(hash).audit("test", "client")
 }
 
 func testDashboardAuth(t *testing.T, password string) *dashboardAuth {
@@ -139,6 +206,7 @@ func testDashboardAuth(t *testing.T, password string) *dashboardAuth {
 		}
 		return len(dst), nil
 	}
+	auth.audit = func(string, string) {}
 	return auth
 }
 
@@ -146,8 +214,17 @@ func dashboardLoginRequest(handler http.Handler, password string) *httptest.Resp
 	form := url.Values{"password": {password}}
 	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "https://"+dashboardTestHost)
+	request.Host = dashboardTestHost
 	request.RemoteAddr = "192.0.2.1:1234"
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response
+}
+
+func sameOriginRequest(method, path string) *http.Request {
+	request := httptest.NewRequest(method, path, http.NoBody)
+	request.Header.Set("Origin", "https://"+dashboardTestHost)
+	request.Host = dashboardTestHost
+	return request
 }

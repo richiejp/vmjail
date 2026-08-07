@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"html/template"
+	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -40,6 +42,7 @@ type dashboardAuth struct {
 	now          func() time.Time
 	rand         func([]byte) (int, error)
 	loginPage    *template.Template
+	audit        func(string, string)
 }
 
 func newDashboardAuth(passwordHash []byte) *dashboardAuth {
@@ -50,6 +53,9 @@ func newDashboardAuth(passwordHash []byte) *dashboardAuth {
 		now:          time.Now,
 		rand:         rand.Read,
 		loginPage:    template.Must(template.New("login").Parse(dashboardLoginHTML)),
+		audit: func(event, client string) {
+			slog.Info("dashboard authentication", "event", event, "client", client)
+		},
 	}
 }
 
@@ -58,6 +64,7 @@ func (a *dashboardAuth) wrap(next http.Handler) http.Handler {
 	mux.HandleFunc("GET /login", a.serveLogin)
 	mux.HandleFunc("POST /login", a.login)
 	mux.Handle("GET /healthz", next)
+	mux.Handle("POST /logout", a.requireSession(http.HandlerFunc(a.logout)))
 	mux.Handle("/", a.requireSession(next))
 	return mux
 }
@@ -95,8 +102,14 @@ func (a *dashboardAuth) serveLogin(w http.ResponseWriter, _ *http.Request) {
 
 func (a *dashboardAuth) login(w http.ResponseWriter, r *http.Request) {
 	client := dashboardClient(r.RemoteAddr)
+	if !dashboardSameOrigin(r) {
+		a.audit("login_origin_rejected", client)
+		http.Error(w, "invalid origin", http.StatusForbidden)
+		return
+	}
 	now := a.now().UTC()
 	if a.rateLimited(client, now) {
+		a.audit("login_throttled", client)
 		http.Error(w, "too many login attempts", http.StatusTooManyRequests)
 		return
 	}
@@ -107,21 +120,60 @@ func (a *dashboardAuth) login(w http.ResponseWriter, r *http.Request) {
 	}
 	if bcrypt.CompareHashAndPassword(a.passwordHash, []byte(r.FormValue("password"))) != nil {
 		a.recordFailure(client, now)
+		a.audit("login_failed", client)
 		http.Error(w, "invalid login", http.StatusUnauthorized)
 		return
 	}
 	token := make([]byte, 32)
 	if _, err := a.rand(token); err != nil {
+		a.audit("login_session_failed", client)
 		http.Error(w, "create session", http.StatusInternalServerError)
 		return
 	}
 	a.recordSuccess(client, sha256.Sum256(token), now)
+	a.audit("login_succeeded", client)
 	http.SetCookie(w, &http.Cookie{
 		Name: dashboardSessionCookie, Value: base64.RawURLEncoding.EncodeToString(token),
 		Path: "/", MaxAge: int(dashboardSessionTTL.Seconds()), Expires: now.Add(dashboardSessionTTL),
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 	})
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (a *dashboardAuth) logout(w http.ResponseWriter, r *http.Request) {
+	client := dashboardClient(r.RemoteAddr)
+	if !dashboardSameOrigin(r) {
+		a.audit("logout_origin_rejected", client)
+		http.Error(w, "invalid origin", http.StatusForbidden)
+		return
+	}
+	if cookie, err := r.Cookie(dashboardSessionCookie); err == nil {
+		a.deleteSession(cookie.Value)
+	}
+	a.audit("logout", client)
+	http.SetCookie(w, &http.Cookie{
+		Name: dashboardSessionCookie, Path: "/", MaxAge: -1, Expires: time.Unix(1, 0),
+		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
+	})
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+func (a *dashboardAuth) deleteSession(token string) {
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil || len(raw) != 32 {
+		return
+	}
+	a.mu.Lock()
+	delete(a.sessions, sha256.Sum256(raw))
+	a.mu.Unlock()
+}
+
+func dashboardSameOrigin(r *http.Request) bool {
+	origin, err := url.Parse(r.Header.Get("Origin"))
+	if err != nil || origin.Scheme == "" || origin.Host == "" {
+		return false
+	}
+	return (origin.Scheme == "http" || origin.Scheme == "https") && origin.Host == r.Host
 }
 
 func (a *dashboardAuth) rateLimited(client string, now time.Time) bool {

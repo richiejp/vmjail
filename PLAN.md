@@ -249,10 +249,12 @@ Stages:
    this read-only stage.
 2. **In progress:** add dashboard unlock and session handling. The password
    path uses a bcrypt hash supplied outside the repository, bounded server-side
-   sessions, secure cookies, expiry, and login throttling. Add YubiKey/WebAuthn
-   as an independent alternative, then Origin/CSRF validation for mutations
-   and an audit trail. Keep the listener on a trusted private network and do
-   not introduce per-Workspace grants.
+   sessions, secure cookies, expiry, login throttling, same-origin login/logout,
+   explicit session revocation, and structured authentication audit events.
+   Add YubiKey/WebAuthn as an independent alternative, then reusable CSRF
+   tokens and mutation audit records with the first operational controls. Keep
+   the listener on a trusted private network and do not introduce per-Workspace
+   grants.
 3. Add bounded live feeds for AgentRun events, logs, probes, and traces. Prefer
    server-sent events for one-way data and retain existing server-side byte,
    record, and queue limits so slow or disconnected browsers cannot create

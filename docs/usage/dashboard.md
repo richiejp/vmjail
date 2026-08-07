@@ -21,4 +21,6 @@ credential, keeping the hash out of the Nix store and command line.
 The health endpoint remains unauthenticated for service probes. All status,
 detail, JSON, and event endpoints require an unlocked session when password
 protection is configured. Sessions are held only in memory, expire after 12
-hours, and are invalidated by an orchestrator restart.
+hours, and are invalidated by an orchestrator restart. Login and logout require
+a matching browser Origin, and authentication decisions are emitted as
+structured service-log events without passwords or session tokens.
