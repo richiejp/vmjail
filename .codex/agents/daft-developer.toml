@@ -10,8 +10,8 @@ Never include OAuth credentials or terminal transcripts in the response.
 """
 
 [mcp_servers.daft]
-command = "/home/rich/go/src/github.com/localai-org/darkaifactory/bin/daft-mcp"
-args = ["--project-dir", "/home/rich/go/src/github.com/localai-org/darkaifactory"]
+command = "daft-mcp"
+args = []
 required = true
 startup_timeout_sec = 10
 tool_timeout_sec = 120

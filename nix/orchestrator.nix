@@ -18,7 +18,6 @@ in
 
     user = lib.mkOption {
       type = lib.types.str;
-      default = "rich";
       description = "User that owns the orchestrator state and process.";
     };
 
@@ -43,14 +42,8 @@ in
     systemd.services.darkaifactory-orchestrator = {
       description = "darkaifactory orchestrator";
       wantedBy = [ "multi-user.target" ];
-      wants = [
-        "network-online.target"
-        "tailscaled.service"
-      ];
-      after = [
-        "network-online.target"
-        "tailscaled.service"
-      ];
+      wants = [ "network-online.target" ];
+      after = [ "network-online.target" ];
       serviceConfig = {
         ExecStart = lib.escapeShellArgs [
           "${cfg.package}/bin/daft-orchestrator"

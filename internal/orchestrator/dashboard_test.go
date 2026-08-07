@@ -24,7 +24,7 @@ func TestDashboardGroupsActiveInactiveDisconnectedAndUnassigned(t *testing.T) {
 	disconnected := dashboardFingerprint(t, '2')
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
 	nodes := nodectrl.NewRegistry(func() time.Time { return now })
-	nodes.Register(connected, "ledbx", "0.1.0", nodectrl.Resources{CPUs: 16, MemoryBytes: 64 << 30})
+	nodes.Register(connected, "node-a", "0.1.0", nodectrl.Resources{CPUs: 16, MemoryBytes: 64 << 30})
 	workspaces := workspacecatalog.NewStore(func() time.Time { return now })
 	createDashboardWorkspace(t, workspaces, "a", "active", connected, true)
 	createDashboardWorkspace(t, workspaces, "b", "inactive", connected, false)
@@ -35,7 +35,7 @@ func TestDashboardGroupsActiveInactiveDisconnectedAndUnassigned(t *testing.T) {
 	if status.NodeCount != 1 || status.WorkspaceCount != 4 || len(status.Nodes) != 2 || len(status.Unassigned) != 1 {
 		t.Fatalf("status counts = %+v", status)
 	}
-	if !status.Nodes[0].Connected || status.Nodes[0].Hostname != "ledbx" || len(status.Nodes[0].Workspaces) != 2 {
+	if !status.Nodes[0].Connected || status.Nodes[0].Hostname != "node-a" || len(status.Nodes[0].Workspaces) != 2 {
 		t.Fatalf("connected node = %+v", status.Nodes[0])
 	}
 	if !status.Nodes[0].Workspaces[0].Active || status.Nodes[0].Workspaces[1].Active {

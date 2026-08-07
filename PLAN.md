@@ -102,8 +102,8 @@ Workspaces by their live Sandbox Node or declared target, with unassigned
 Workspaces retained in a separate section. Its bounded JSON status document is
 available alongside the HTML page and health endpoint.
 
-The dashboard is presently a single-user administration surface reachable only
-through the private VPN. Unlocking it will require either a password or a
+The dashboard is presently a single-user administration surface intended for a
+trusted private network. Unlocking it will require either a password or a
 YubiKey/WebAuthn credential as alternative login methods, not two factors in
 one login. There is no per-Workspace authorization model: an unlocked session
 may inspect and operate every Workspace. This does not weaken the existing
@@ -203,9 +203,9 @@ thin harness adapter that points to that guide. The current adaptive binary
 deployment skill and its stage/rollback scripts encode environment-specific
 operations policy and must be removed. The project-development adapter must stop
 deploying Nodes implicitly and require an already registered healthy Node.
-Durable handoff state should ultimately be product/Ordino state rather than an
-ad-hoc file maintained by an agent. Direct interactive takeover remains
-intentionally deferred under the contract below.
+Durable handoff state should ultimately live in the integrating task system
+rather than an ad-hoc file maintained by an agent. Direct interactive takeover
+remains intentionally deferred under the contract below.
 
 The Nix build keeps its dependency boundaries explicit: `kconfig-verify` uses
 a deliberately narrowed source tree and therefore owns a
@@ -240,14 +240,14 @@ Stages:
    matching bounded Workspace JSON. Semantic Node changes (registration,
    disconnect, or reported resource changes), Workspace changes, and AgentRun
    changes drive a coalescing Server-Sent Events change feed; routine Node
-   liveness heartbeats do not reload the page. Open
-   pages reload after a short debounce, following Ordino's model without timer
-   polling or frontend packages. Observer content, mutations, and terminal
-   access remain out of this read-only stage.
+   liveness heartbeats do not reload the page. Open pages reload after a short
+   debounce, using change notifications without timer polling or frontend
+   packages. Observer content, mutations, and terminal access remain out of
+   this read-only stage.
 2. Add dashboard unlock and session handling. Support password and
    YubiKey/WebAuthn as independent alternatives, with secure cookies, expiry,
    login throttling, Origin/CSRF validation for mutations, and an audit trail.
-   Keep the listener behind the private VPN route and do not introduce
+   Keep the listener on a trusted private network and do not introduce
    per-Workspace grants.
 3. Add bounded live feeds for AgentRun events, logs, probes, and traces. Prefer
    server-sent events for one-way data and retain existing server-side byte,
