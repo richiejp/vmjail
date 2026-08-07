@@ -130,7 +130,7 @@
           platforms ? pkgs.lib.platforms.unix,
           preBuild ? "",
           src ? goSrc,
-          vendorHash ? "sha256-EwZee0qVr8QoU6LBzXuGuv8lHd7CJoKaozq2IxrvNAg=",
+          vendorHash ? "sha256-OFljTd2R3tFWyuC37UuPnItrSV2GYFXBRenYXLCvinc=",
         }: pkgs.buildGoModule ({
           pname = name;
           inherit version;
@@ -738,7 +738,7 @@
             pname = "daft-sandboxd";
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-EwZee0qVr8QoU6LBzXuGuv8lHd7CJoKaozq2IxrvNAg=";
+            vendorHash = "sha256-OFljTd2R3tFWyuC37UuPnItrSV2GYFXBRenYXLCvinc=";
             env.CGO_ENABLED = "0";
 
             # Stage the real artifacts into internal/bundled/assets/

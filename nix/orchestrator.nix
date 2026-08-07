@@ -32,6 +32,12 @@ in
       description = "Private read-only dashboard listen address.";
     };
 
+    dashboardPasswordHashFile = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "Runtime path to a bcrypt dashboard password hash; kept out of the Nix store via a systemd credential.";
+    };
+
     configDir = lib.mkOption {
       type = lib.types.str;
       description = "Persistent orchestrator identity, peer, and catalogue directory.";
@@ -45,16 +51,22 @@ in
       wants = [ "network-online.target" ];
       after = [ "network-online.target" ];
       serviceConfig = {
-        ExecStart = lib.escapeShellArgs [
-          "${cfg.package}/bin/daft-orchestrator"
-          "serve"
-          "--addr"
-          cfg.controlAddress
-          "--web-addr"
-          cfg.webAddress
-          "--config-dir"
-          cfg.configDir
-        ];
+        ExecStart = lib.escapeShellArgs (
+          [
+            "${cfg.package}/bin/daft-orchestrator"
+            "serve"
+            "--addr"
+            cfg.controlAddress
+            "--web-addr"
+            cfg.webAddress
+            "--config-dir"
+            cfg.configDir
+          ]
+          ++ lib.optionals (cfg.dashboardPasswordHashFile != null) [
+            "--web-password-file"
+            "/run/credentials/darkaifactory-orchestrator.service/dashboard-password"
+          ]
+        );
         User = cfg.user;
         Restart = "on-failure";
         RestartSec = "2s";
@@ -67,6 +79,8 @@ in
           "AF_INET"
           "AF_INET6"
         ];
+      } // lib.optionalAttrs (cfg.dashboardPasswordHashFile != null) {
+        LoadCredential = "dashboard-password:${cfg.dashboardPasswordHashFile}";
       };
     };
 

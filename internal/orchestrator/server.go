@@ -68,6 +68,11 @@ type Config struct {
 	// mTLS control-plane listener.
 	WebAddr string
 
+	// WebPasswordHash enables dashboard authentication when non-empty. It must
+	// be a bcrypt hash; the separate dashboard listener remains disabled when
+	// WebAddr is empty.
+	WebPasswordHash []byte
+
 	// ReadHeaderTimeout caps how long the server waits for a client
 	// to send request headers. Belt-and-braces against slow-loris.
 	ReadHeaderTimeout time.Duration
@@ -288,7 +293,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	web := newDashboardServer(cfg.WebAddr, nodeReg, workspaceCat, cfg.AgentRunCatalog)
+	web := newDashboardServer(cfg.WebAddr, cfg.WebPasswordHash, nodeReg, workspaceCat, cfg.AgentRunCatalog)
 	reaper := resolveReaper(cfg.Reaper, tracer)
 	return &Server{
 		inner:            inner,
@@ -312,11 +317,15 @@ func resolveReaper(reaper *trace.IngressReaper, tracer *trace.Tracer) *trace.Ing
 	return reaper
 }
 
-func newDashboardServer(addr string, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store, runs *agentruncatalog.Store) *http.Server {
+func newDashboardServer(addr string, passwordHash []byte, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store, runs *agentruncatalog.Store) *http.Server {
 	if addr == "" {
 		return nil
 	}
-	return &http.Server{Addr: addr, Handler: dashboardHandler(nodes, workspaces, runs), ReadHeaderTimeout: 10 * time.Second}
+	handler := dashboardHandler(nodes, workspaces, runs)
+	if len(passwordHash) > 0 {
+		handler = newDashboardAuth(passwordHash).wrap(handler)
+	}
+	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 }
 
 func newAgentRunController(runs *agentruncatalog.Store, workspaces *workspacecatalog.Store, nodes *nodectrl.Registry, jobs *NodeControlHandler, launcher agentSandboxLauncher) *AgentRunHandler {

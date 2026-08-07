@@ -13,10 +13,12 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/crypto/bcrypt"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
@@ -43,6 +45,26 @@ const peersFile = "peers.json"
 // serveCmdName is the literal cobra command name used to register
 // and invoke the long-running listener.
 const serveCmdName = "serve"
+
+func readDashboardPasswordHash(path string) ([]byte, error) {
+	// #nosec G304 -- this is an explicit operator-supplied secret path.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read dashboard password hash: %w", err)
+	}
+	hash := []byte(strings.TrimSpace(string(data)))
+	if _, err := bcrypt.Cost(hash); err != nil {
+		return nil, fmt.Errorf("dashboard password file must contain a bcrypt hash: %w", err)
+	}
+	return hash, nil
+}
+
+func optionalDashboardPasswordHash(path string) ([]byte, error) {
+	if path == "" {
+		return nil, nil
+	}
+	return readDashboardPasswordHash(path)
+}
 
 // builtinRegistrySeeds returns the images the orchestrator auto-seeds into
 // its embedded registry at startup. A Nix-built daft-orchestrator embeds
@@ -89,6 +111,7 @@ func New(stdout, stderr io.Writer) *cobra.Command {
 
 	root.AddCommand(versionCommand())
 	root.AddCommand(serveCommand())
+	root.AddCommand(dashboardCommand())
 	root.AddCommand(newAuthCmd())
 	return root
 }
@@ -113,9 +136,10 @@ func versionCommand() *cobra.Command {
 
 func serveCommand() *cobra.Command {
 	var (
-		addr      string
-		webAddr   string
-		configDir string
+		addr            string
+		webAddr         string
+		webPasswordFile string
+		configDir       string
 	)
 	cmd := &cobra.Command{
 		Use:   serveCmdName,
@@ -151,11 +175,16 @@ func serveCommand() *cobra.Command {
 			if err != nil {
 				return errors.Join(err, workspaceCat.Close(), control.Close())
 			}
+			webPasswordHash, err := optionalDashboardPasswordHash(webPasswordFile)
+			if err != nil {
+				return errors.Join(err, workspaceCat.Close(), control.Close())
+			}
 			srv, err := orchestrator.New(orchestrator.Config{
 				Identity:         id,
 				Peers:            peers,
 				Addr:             addr,
 				WebAddr:          webAddr,
+				WebPasswordHash:  webPasswordHash,
 				RegistrySeeds:    seeds,
 				WorkspaceCatalog: workspaceCat,
 				AgentRunCatalog:  agentRuns,
@@ -179,13 +208,15 @@ func serveCommand() *cobra.Command {
 			return errors.Join(runServer(ctx, srv), workspaceCat.Close(), control.Close())
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", "0.0.0.0:14443",
-		"TCP listen address (host:port)")
-	cmd.Flags().StringVar(&webAddr, "web-addr", "",
-		"optional plain-HTTP read-only dashboard listen address (bind to loopback or a private interface)")
-	cmd.Flags().StringVar(&configDir, "config-dir", "",
-		"override the orchestrator config dir (default: $XDG_CONFIG_HOME/daft/orchestrator)")
+	addServeFlags(cmd, &addr, &webAddr, &webPasswordFile, &configDir)
 	return cmd
+}
+
+func addServeFlags(cmd *cobra.Command, addr, webAddr, webPasswordFile, configDir *string) {
+	cmd.Flags().StringVar(addr, "addr", "0.0.0.0:14443", "TCP listen address (host:port)")
+	cmd.Flags().StringVar(webAddr, "web-addr", "", "optional plain-HTTP read-only dashboard listen address (bind to loopback or a private interface)")
+	cmd.Flags().StringVar(webPasswordFile, "web-password-file", "", "path to a bcrypt password hash protecting the dashboard")
+	cmd.Flags().StringVar(configDir, "config-dir", "", "override the orchestrator config dir (default: $XDG_CONFIG_HOME/daft/orchestrator)")
 }
 
 // runServer blocks on Serve and triggers a graceful shutdown when
