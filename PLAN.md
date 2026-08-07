@@ -237,8 +237,10 @@ Stages:
    manifest generation, StorageFrozen state, conditions, and recent AgentRun
    state without exposing prompts, results, environment values, or arbitrary
    host files. Stable links connect the existing lists and detail pages, with
-   matching bounded Workspace JSON. Successful Node, Workspace, and AgentRun
-   store mutations drive a coalescing Server-Sent Events change feed; open
+   matching bounded Workspace JSON. Semantic Node changes (registration,
+   disconnect, or reported resource changes), Workspace changes, and AgentRun
+   changes drive a coalescing Server-Sent Events change feed; routine Node
+   liveness heartbeats do not reload the page. Open
    pages reload after a short debounce, following Ordino's model without timer
    polling or frontend packages. Observer content, mutations, and terminal
    access remain out of this read-only stage.

@@ -153,11 +153,14 @@ func (r *Registry) Heartbeat(fp identity.Fingerprint, res Resources) (time.Time,
 		return time.Time{}, ErrUnknownNode
 	}
 	entry.LastSeenAt = now
+	resourcesChanged := res != (Resources{}) && res != entry.Resources
 	if res != (Resources{}) {
 		entry.Resources = res
 	}
 	r.all[fp] = entry
-	r.notifyLocked()
+	if resourcesChanged {
+		r.notifyLocked()
+	}
 	return now, nil
 }
 
