@@ -51,11 +51,16 @@ import (
 // exercises. Swapping this fixture for a real LocalAI ISO is a one-line
 // --source change on the /iso mount.
 func TestClusterNestedISOBoot(t *testing.T) {
+	started := time.Now()
+	mark := func(stage string) {
+		t.Logf("timing: %s completed at %s", stage, time.Since(started).Round(time.Millisecond))
+	}
 	qemuImg := requireEnvPath(t, "DAFT_ISO_QEMU_IMAGE",
 		"make integration-build (nix build .#iso-qemu-runner-image -o bin/iso-qemu-runner-image)")
 	isoPath := requireEnvPath(t, "DAFT_ISO_SSH_FIXTURE",
 		"make integration-build (nix build .#iso-ssh-fixture -o bin/iso-ssh-fixture)")
 	ref := pushDockerTarballToRegistry(t, qemuImg, "test/iso-qemu-runner:v1")
+	mark("publish qemu image")
 
 	// Mount the ISO read-only off its own /nix/store directory. The Make
 	// env resolves DAFT_ISO_SSH_FIXTURE to the real .iso (realpath, no
@@ -66,6 +71,7 @@ func TestClusterNestedISOBoot(t *testing.T) {
 	isoName := filepath.Base(isoPath)
 
 	c := testdaemons.NewCluster(t)
+	mark("start cluster")
 	s := testtmux.New(t)
 
 	wsName := "nested-iso"
@@ -118,8 +124,10 @@ func TestClusterNestedISOBoot(t *testing.T) {
 			"%s workspace launch --name %s %s", prefix, wsName, orch,
 		)},
 	}, 30*time.Second)
+	mark("launch outer workspace")
 
 	c.WaitForSandboxdOutput(t, "daft-iso-qemu ready", 60*time.Second)
+	mark("start outer container")
 
 	// Layer 1: boot the ISO as a nested L2 VM. launch-iso backgrounds
 	// qemu, polls the slirp-forwarded sshd until it speaks SSH-2.0, then
@@ -136,6 +144,7 @@ func TestClusterNestedISOBoot(t *testing.T) {
 		fmt.Sprintf("%d", containerPort))
 	waitForFileContains(t, bootProc, bootLog,
 		"DAFT_ISO_SSH_READY", 5*time.Minute, paneDump)
+	mark("boot nested ISO")
 
 	// Layer 2: reach that sshd from the HOST through daft's port-forward.
 	forwardLog := filepath.Join(t.TempDir(), "forward.log")
@@ -149,6 +158,7 @@ func TestClusterNestedISOBoot(t *testing.T) {
 
 	banner := readSSHBanner(t,
 		fmt.Sprintf("127.0.0.1:%d", localPort), 30*time.Second)
+	mark("forward SSH banner")
 	if !strings.HasPrefix(banner, "SSH-2.0") {
 		t.Fatalf("forwarded-port banner = %q, want SSH-2.0 prefix", banner)
 	}

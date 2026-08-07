@@ -144,7 +144,7 @@
           subPackages = [ subPackage ];
           meta = with pkgs.lib; {
             inherit description platforms;
-            license = licenses.mit;
+            license = licenses.asl20;
             maintainers = [ ];
           };
         } // pkgs.lib.optionalAttrs (preBuild != "") { inherit preBuild; });
@@ -269,7 +269,7 @@
             paths = [ daft daft-orchestrator daft-sandboxd ];
             meta = with pkgs.lib; {
               description = "darkaifactory CLI + orchestrator + sandbox-host (local-cluster toolset)";
-              license = licenses.mit;
+              license = licenses.asl20;
               maintainers = [ ];
               platforms = platforms.linux;
               mainProgram = "daft";
@@ -751,7 +751,7 @@
 
             meta = with pkgs.lib; {
               description = "darkaifactory sandbox-host (single-executable, statically linked)";
-              license = licenses.mit;
+              license = licenses.asl20;
               maintainers = [ ];
               platforms = platforms.linux;
             };
@@ -1178,30 +1178,26 @@
                 echo "daft-iso-qemu: launched qemu pid=$QPID iso=$ISO hostfwd=127.0.0.1:''${HOSTPORT}->:22"
                 trap 'kill -TERM "$QPID" 2>/dev/null' TERM INT
 
-                ready=
-                for i in $(seq 1 "''${QEMU_READY_TRIES:-180}"); do
-                  if ! kill -0 "$QPID" 2>/dev/null; then
-                    echo "daft-iso-qemu: FATAL qemu exited before sshd came up"
-                    echo "--- serial tail ---"; tail -n 40 "$SER" 2>/dev/null || true
-                    exit 1
-                  fi
-                  banner=$(exec 3<>"/dev/tcp/127.0.0.1/''${HOSTPORT}" 2>/dev/null && head -c 40 <&3 2>/dev/null)
-                  case "$banner" in
-                    SSH-2.0*)
-                      echo "daft-iso-qemu: sshd reachable: ''${banner%%$'\r'*}"
-                      echo "DAFT_ISO_SSH_READY"
-                      ready=1
-                      break
-                      ;;
-                  esac
-                  sleep 1
-                done
-                if [ -z "$ready" ]; then
+                # Slirp accepts the host-forward connection before the guest
+                # sshd exists, then completes that same connection when the
+                # guest starts listening. Keep one bounded connection: rapid
+                # reconnects leave stale slirp forwards and delay readiness.
+                banner=$(timeout "''${QEMU_READY_SECONDS:-180}" bash -c '
+                  until exec 3<>"/dev/tcp/127.0.0.1/$1"; do sleep 0.1; done
+                  head -c 40 <&3
+                ' _ "''${HOSTPORT}" 2>/dev/null)
+                case "$banner" in
+                  SSH-2.0*)
+                    echo "daft-iso-qemu: sshd reachable: ''${banner%%$'\r'*}"
+                    echo "DAFT_ISO_SSH_READY"
+                    ;;
+                  *)
                   echo "daft-iso-qemu: FATAL sshd not reachable within timeout"
                   echo "--- serial tail ---"; tail -n 40 "$SER" 2>/dev/null || true
                   kill -9 "$QPID" 2>/dev/null
                   exit 1
-                fi
+                    ;;
+                esac
 
                 wait "$QPID"
               '';

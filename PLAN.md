@@ -109,6 +109,9 @@ one login. There is no per-Workspace authorization model: an unlocked session
 may inspect and operate every Workspace. This does not weaken the existing
 owner and role checks on non-dashboard control-plane APIs.
 
+The project is distributed under the Apache License 2.0; Nix package metadata
+for darkaifactory outputs uses the matching `asl20` identifier.
+
 `nix/orchestrator.nix` exports a parameterised NixOS service module. It contains
 no host-specific paths, addresses, identities, or service configuration.
 
@@ -379,6 +382,13 @@ Landed:
   and live growth that cannot fit. Under host pressure, the bounded disk
   monitor freezes actively growing sandboxes by recent growth rate, breaking
   ties largest-first, while leaving idle sandboxes available.
+- Retained-disk unit tests use a small explicit virtual allowance while
+  separately testing the 20 GiB default projection and reservation rejection.
+  Their result no longer depends on the test host having 20 GiB free.
+- The full verification gate remains a fast pre-commit invariant. Real-VM test
+  helpers bound graceful subprocess cleanup and force-kill hung streaming
+  clients instead of silently spending transport-timeout minutes after a test
+  has already passed; slow cases are measured and fixed rather than removed.
 - `workspace resources --disk` now grows an existing retained disk through an
   authenticated exact-manifest Node RPC before committing the catalog change.
   Running disks execute the qcow2, virtio-blk, and guest `xfs_growfs` sequence;

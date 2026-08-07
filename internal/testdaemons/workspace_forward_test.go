@@ -224,14 +224,34 @@ func startDaftSubprocess(t *testing.T, logPath string, daftBin string, args ...s
 	}()
 	t.Cleanup(func() {
 		_ = devNull.Close()
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		}
-		<-p.done // the Wait goroutine owns cmd.Wait(); let it finish
+		stopDaftSubprocess(t, p)
 		teed.disable()
 		_ = out.Close()
 	})
 	return p
+}
+
+// stopDaftSubprocess gives the command a short graceful shutdown window, then
+// kills its process group. Streaming RPC clients can otherwise wait for their
+// transport timeout after SIGTERM, adding roughly a minute of idle cleanup to
+// every successful end-to-end test.
+func stopDaftSubprocess(t *testing.T, p *daftProc) {
+	t.Helper()
+	if p.exited() || p.cmd.Process == nil {
+		return
+	}
+	_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGTERM)
+	select {
+	case <-p.done:
+		return
+	case <-time.After(time.Second):
+	}
+	_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
+	select {
+	case <-p.done:
+	case <-time.After(5 * time.Second):
+		t.Errorf("subprocess %d did not exit after SIGKILL", p.cmd.Process.Pid)
+	}
 }
 
 // testLogTee fans subprocess output into both an on-disk log

@@ -12,7 +12,10 @@ import (
 	"testing"
 )
 
-const testWorkspaceID = "00000000-0000-4000-8000-000000000001"
+const (
+	testWorkspaceID = "00000000-0000-4000-8000-000000000001"
+	testDiskBytes   = 64 << 20
+)
 
 type failingFile struct {
 	*os.File
@@ -49,18 +52,18 @@ func TestStorePrepareAndReuse(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, created, err := store.Prepare(testWorkspaceID, DefaultDiskBytes)
+	path, created, err := store.Prepare(testWorkspaceID, testDiskBytes)
 	if err != nil || !created {
 		t.Fatalf("first Prepare = %q, %v, %v", path, created, err)
 	}
-	if got, err := VirtualSize(path); err != nil || got != DefaultDiskBytes {
+	if got, err := VirtualSize(path); err != nil || got != testDiskBytes {
 		t.Fatalf("VirtualSize = %d, %v", got, err)
 	}
-	again, created, err := store.Prepare(testWorkspaceID, DefaultDiskBytes)
+	again, created, err := store.Prepare(testWorkspaceID, testDiskBytes)
 	if err != nil || created || again != path {
 		t.Fatalf("second Prepare = %q, %v, %v", again, created, err)
 	}
-	if _, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes*2); !errors.Is(err, ErrSizeConflict) {
+	if _, _, err := store.Prepare(testWorkspaceID, testDiskBytes*2); !errors.Is(err, ErrSizeConflict) {
 		t.Fatalf("size conflict = %v, want %v", err, ErrSizeConflict)
 	}
 }
@@ -73,11 +76,11 @@ func TestStoreSizeAndDeleteAreDurableAndIdempotent(t *testing.T) {
 	if size, exists, err := store.Size(testWorkspaceID); err != nil || exists || size != 0 {
 		t.Fatalf("missing Size = %d, %t, %v", size, exists, err)
 	}
-	path, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes)
+	path, _, err := store.Prepare(testWorkspaceID, testDiskBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if size, exists, err := store.Size(testWorkspaceID); err != nil || !exists || size != DefaultDiskBytes {
+	if size, exists, err := store.Size(testWorkspaceID); err != nil || !exists || size != testDiskBytes {
 		t.Fatalf("retained Size = %d, %t, %v", size, exists, err)
 	}
 	if err := store.Delete(testWorkspaceID); err != nil {
@@ -147,7 +150,7 @@ func TestStorePrepareConcurrentConverges(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			path, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes)
+			path, _, err := store.Prepare(testWorkspaceID, testDiskBytes)
 			paths <- path
 			errs <- err
 		}()
@@ -225,7 +228,7 @@ func TestVirtualSizeRejectsUnsupportedHeaders(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := CreateEmptyQCOW2(file, DefaultDiskBytes); err != nil {
+			if err := CreateEmptyQCOW2(file, testDiskBytes); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := file.WriteAt(tc.value, tc.offset); err != nil {
@@ -254,7 +257,7 @@ func TestStorePrepareFailurePaths(t *testing.T) {
 	if err := os.WriteFile(corruptPath, []byte("corrupt"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes); err == nil {
+	if _, _, err := store.Prepare(testWorkspaceID, testDiskBytes); err == nil {
 		t.Fatal("corrupt retained image accepted")
 	}
 	if err := os.Remove(corruptPath); err != nil {
@@ -263,7 +266,7 @@ func TestStorePrepareFailurePaths(t *testing.T) {
 	if err := os.RemoveAll(root); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes); err == nil {
+	if _, _, err := store.Prepare(testWorkspaceID, testDiskBytes); err == nil {
 		t.Fatal("missing store root accepted")
 	}
 }
@@ -299,7 +302,7 @@ func TestStorePreparePublishFailurePaths(t *testing.T) {
 					return err
 				}
 				var size [8]byte
-				binary.BigEndian.PutUint64(size[:], DefaultDiskBytes*2)
+				binary.BigEndian.PutUint64(size[:], testDiskBytes*2)
 				if _, err := file.WriteAt(size[:], 24); err != nil {
 					_ = file.Close() // Preserve the write error.
 					return err
@@ -319,7 +322,7 @@ func TestStorePreparePublishFailurePaths(t *testing.T) {
 				t.Fatal(err)
 			}
 			store.link = tc.link
-			path, created, err := store.Prepare(testWorkspaceID, DefaultDiskBytes)
+			path, created, err := store.Prepare(testWorkspaceID, testDiskBytes)
 			if tc.want != nil && !errors.Is(err, tc.want) {
 				t.Fatalf("Prepare error = %v, want %v", err, tc.want)
 			}
@@ -339,7 +342,7 @@ func TestStorePrepareSyncAndCleanupErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.syncRoot = func(string) error { return errors.New("sync failed") }
-	if _, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes); err == nil {
+	if _, _, err := store.Prepare(testWorkspaceID, testDiskBytes); err == nil {
 		t.Fatal("directory sync error ignored")
 	}
 
@@ -348,7 +351,7 @@ func TestStorePrepareSyncAndCleanupErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	store.remove = func(string) error { return errors.New("remove failed") }
-	if _, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes); err == nil {
+	if _, _, err := store.Prepare(testWorkspaceID, testDiskBytes); err == nil {
 		t.Fatal("temporary cleanup error ignored")
 	}
 }
@@ -371,7 +374,7 @@ func TestStorePrepareTemporaryFileErrors(t *testing.T) {
 				file, err := os.CreateTemp(dir, pattern)
 				return &failingFile{File: file, syncErr: tc.syncErr, closeErr: tc.closeErr}, err
 			}
-			if _, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes); err == nil {
+			if _, _, err := store.Prepare(testWorkspaceID, testDiskBytes); err == nil {
 				t.Fatalf("%s error ignored", tc.name)
 			}
 		})
@@ -384,7 +387,7 @@ func TestStorePrepareTemporaryFileErrors(t *testing.T) {
 	store.create = func(string, string) (temporaryFile, error) {
 		return nil, errors.New("create failed")
 	}
-	if _, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes); err == nil {
+	if _, _, err := store.Prepare(testWorkspaceID, testDiskBytes); err == nil {
 		t.Fatal("temporary creation error ignored")
 	}
 }
@@ -472,12 +475,12 @@ func TestStoreRejectsUnsafeInputs(t *testing.T) {
 		if runtime.GOOS == "windows" && id == "a/b" {
 			continue
 		}
-		if _, _, err := store.Prepare(id, DefaultDiskBytes); err == nil {
+		if _, _, err := store.Prepare(id, testDiskBytes); err == nil {
 			t.Errorf("unsafe id %q accepted", id)
 		}
 	}
 	var nilStore *Store
-	if _, _, err := nilStore.Prepare(testWorkspaceID, DefaultDiskBytes); err == nil {
+	if _, _, err := nilStore.Prepare(testWorkspaceID, testDiskBytes); err == nil {
 		t.Fatal("nil store accepted")
 	}
 	if err := syncDir(filepath.Join(t.TempDir(), "missing")); err == nil {
@@ -490,7 +493,7 @@ func TestStoreGrow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	path, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes)
+	path, _, err := store.Prepare(testWorkspaceID, testDiskBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -501,31 +504,31 @@ func TestStoreGrow(t *testing.T) {
 	if got, err := VirtualSize(path); err != nil || got != grown {
 		t.Fatalf("VirtualSize = %d, %v; want %d", got, err, uint64(grown))
 	}
-	if err := store.Grow(testWorkspaceID, DefaultDiskBytes); !errors.Is(err, ErrShrink) {
+	if err := store.Grow(testWorkspaceID, testDiskBytes); !errors.Is(err, ErrShrink) {
 		t.Fatalf("shrink error = %v, want %v", err, ErrShrink)
 	}
 }
 
 func TestStoreGrowRejectsInvalidAndMissingImages(t *testing.T) {
 	var nilStore *Store
-	if err := nilStore.Grow(testWorkspaceID, DefaultDiskBytes*2); err == nil {
+	if err := nilStore.Grow(testWorkspaceID, testDiskBytes*2); err == nil {
 		t.Fatal("nil store Grow succeeded")
 	}
 	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Grow("../escape", DefaultDiskBytes*2); err == nil {
+	if err := store.Grow("../escape", testDiskBytes*2); err == nil {
 		t.Fatal("invalid workspace Grow succeeded")
 	}
-	if err := store.Grow(testWorkspaceID, DefaultDiskBytes*2); !errors.Is(err, fs.ErrNotExist) {
+	if err := store.Grow(testWorkspaceID, testDiskBytes*2); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("missing image Grow = %v", err)
 	}
 	path := filepath.Join(store.root, testWorkspaceID+diskSuffix)
 	if err := os.WriteFile(path, []byte("not qcow2"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Grow(testWorkspaceID, DefaultDiskBytes*2); err == nil {
+	if err := store.Grow(testWorkspaceID, testDiskBytes*2); err == nil {
 		t.Fatal("invalid image Grow succeeded")
 	}
 }
@@ -535,8 +538,8 @@ func TestStoreRejectsCreateBeyondDurableReservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store.reservationBytes = DefaultDiskBytes - 1
-	if _, _, err := store.Prepare(testWorkspaceID, DefaultDiskBytes); !errors.Is(err, ErrReservationExceeded) {
+	store.reservationBytes = testDiskBytes - 1
+	if _, _, err := store.Prepare(testWorkspaceID, testDiskBytes); !errors.Is(err, ErrReservationExceeded) {
 		t.Fatalf("Prepare error = %v, want ErrReservationExceeded", err)
 	}
 }

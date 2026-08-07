@@ -61,7 +61,8 @@ func TestNodeWorkspaceDiskControlRunningAndRetainedStates(t *testing.T) {
 		t.Fatal(err)
 	}
 	const workspaceID = "00000000-0000-4000-8000-000000000001"
-	if _, _, err := store.Prepare(workspaceID, workspacedisk.DefaultDiskBytes); err != nil {
+	const initialDiskBytes = 64 << 20
+	if _, _, err := store.Prepare(workspaceID, initialDiskBytes); err != nil {
 		t.Fatal(err)
 	}
 	executor := &fakeWorkspaceDiskExecutor{status: sandboxexec.WorkspaceDiskStatus{
@@ -82,7 +83,7 @@ func TestNodeWorkspaceDiskControlRunningAndRetainedStates(t *testing.T) {
 		t.Fatalf("unfreeze = %v, called %t", err, executor.unfrozen)
 	}
 	executor.statusErr = sandboxexec.ErrWorkspaceDiskNotRunning
-	const grown = 24 << 30
+	const grown = 96 << 20
 	if err := control.Resize(t.Context(), workspaceID, grown); err != nil {
 		t.Fatalf("stopped resize = %v", err)
 	}
