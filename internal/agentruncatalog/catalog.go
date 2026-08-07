@@ -128,11 +128,14 @@ type persisted[T any] struct {
 }
 
 type Store struct {
-	db       *badger.DB
-	now      func() time.Time
-	mu       sync.Mutex
-	runs     map[string]Run
-	requests map[string]string
+	db        *badger.DB
+	now       func() time.Time
+	mu        sync.Mutex
+	runs      map[string]Run
+	requests  map[string]string
+	revision  uint64
+	nextWatch uint64
+	watchers  map[uint64]chan uint64
 }
 
 func Open(db *badger.DB, now func() time.Time) (*Store, error) {
@@ -142,11 +145,37 @@ func Open(db *badger.DB, now func() time.Time) (*Store, error) {
 	if now == nil {
 		now = time.Now
 	}
-	s := &Store{db: db, now: now, runs: map[string]Run{}, requests: map[string]string{}}
+	s := &Store{db: db, now: now, runs: map[string]Run{}, requests: map[string]string{}, watchers: map[uint64]chan uint64{}}
 	if err := s.load(); err != nil {
 		return nil, err
 	}
 	return s, nil
+}
+
+// Watch reports durable run changes. Notifications are coalesced; consumers
+// resnapshot the catalog and do not use this as an event log.
+func (s *Store) Watch() (changes <-chan uint64, stop func()) {
+	s.mu.Lock()
+	id := s.nextWatch
+	s.nextWatch++
+	ch := make(chan uint64, 1)
+	s.watchers[id] = ch
+	s.mu.Unlock()
+	return ch, func() {
+		s.mu.Lock()
+		delete(s.watchers, id)
+		s.mu.Unlock()
+	}
+}
+
+func (s *Store) notifyLocked() {
+	s.revision++
+	for _, ch := range s.watchers {
+		select {
+		case ch <- s.revision:
+		default:
+		}
+	}
 }
 
 func (s *Store) Create(in CreateInput) (Run, error) {
@@ -200,6 +229,7 @@ func (s *Store) create(in CreateInput, converge bool) (Run, bool, error) {
 	if r.RequestID != "" {
 		s.requests[requestKey(r.OwnerFingerprint, r.RequestID)] = r.UUID
 	}
+	s.notifyLocked()
 	return cloneRun(r), true, nil
 }
 
@@ -369,6 +399,7 @@ func (s *Store) Transition(owner identity.Fingerprint, uuid string, in Transitio
 		return Run{}, err
 	}
 	s.runs[uuid] = next
+	s.notifyLocked()
 	return cloneRun(next), nil
 }
 
@@ -398,6 +429,7 @@ func (s *Store) CompleteTeardown(owner identity.Fingerprint, uuid string) (Run, 
 		return Run{}, err
 	}
 	s.runs[uuid] = run
+	s.notifyLocked()
 	return cloneRun(run), nil
 }
 

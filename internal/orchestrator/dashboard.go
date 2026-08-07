@@ -6,8 +6,10 @@ import (
 	"html/template"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/richiejp/darkaifactory/internal/agentruncatalog"
 	"github.com/richiejp/darkaifactory/internal/nodectrl"
 	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
@@ -44,15 +46,23 @@ type dashboardStatus struct {
 	Unassigned     []dashboardWorkspace `json:"unassigned_workspaces"`
 }
 
-func dashboardHandler(nodes *nodectrl.Registry, workspaces *workspacecatalog.Store) http.Handler {
+func dashboardHandler(nodes *nodectrl.Registry, workspaces *workspacecatalog.Store, runStores ...*agentruncatalog.Store) http.Handler {
 	mux := http.NewServeMux()
 	page := newDashboardPage()
+	var runs *agentruncatalog.Store
+	if len(runStores) > 0 {
+		runs = runStores[0]
+	}
 	status := func() dashboardStatus { return buildDashboardStatus(nodes, workspaces, time.Now().UTC()) }
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeDashboardJSON(w, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("GET /v1/status", func(w http.ResponseWriter, _ *http.Request) {
 		writeDashboardJSON(w, status())
+	})
+	registerDashboardDetailRoutes(mux, nodes, workspaces, runs)
+	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
+		serveDashboardEvents(w, r, nodes, workspaces, runs)
 	})
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -129,20 +139,25 @@ func writeDashboardJSON(w http.ResponseWriter, value any) {
 	_, _ = w.Write(data) // The client disconnect is not recoverable inside a completed HTTP handler.
 }
 
-func newDashboardPage() *template.Template {
-	return template.Must(template.New("dashboard").Funcs(template.FuncMap{
+func dashboardTemplateFuncs() template.FuncMap {
+	return template.FuncMap{
 		"stamp": func(value time.Time) string {
 			if value.IsZero() {
 				return "never"
 			}
 			return value.Local().Format("2006-01-02 15:04:05 MST")
 		},
-		"gib": formatGiB,
-	}).Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>darkaifactory orchestrator</title><style>
+		"gib":  formatGiB,
+		"join": func(values []string) string { return strings.Join(values, ", ") },
+	}
+}
+
+func newDashboardPage() *template.Template {
+	return template.Must(template.New("dashboard").Funcs(dashboardTemplateFuncs()).Parse(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>darkaifactory orchestrator</title><style>
 :root{color-scheme:light dark;--bg:#0c1117;--panel:#151d27;--line:#2d3b4d;--text:#edf3f8;--muted:#9fb0c1;--accent:#60d394;--warn:#ffca6a}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 ui-sans-serif,system-ui,sans-serif}main{max-width:1180px;margin:auto;padding:32px 20px 64px}h1{font-size:2.1rem;margin:0}h2{margin:34px 0 12px}.summary{display:flex;gap:14px;flex-wrap:wrap;margin:18px 0}.pill,.card{background:var(--panel);border:1px solid var(--line);border-radius:10px}.pill{padding:8px 12px}.card{padding:16px;margin:12px 0}.ok{color:var(--accent)}.warn{color:var(--warn)}.muted{color:var(--muted)}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}th{color:var(--muted);font-weight:600}code{font:13px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace}.state{display:inline-block;padding:2px 7px;border:1px solid var(--line);border-radius:999px;font-size:12px}.active{border-color:var(--accent);color:var(--accent)}@media(max-width:760px){table{display:block;overflow-x:auto}}
 </style></head><body><main><h1>darkaifactory</h1><div class="muted">Orchestrator fleet and workspace status</div><div class="summary"><div class="pill"><span class="ok">● healthy</span></div><div class="pill">{{.NodeCount}} connected nodes</div><div class="pill">{{.WorkspaceCount}} workspaces</div><div class="pill">updated {{stamp .GeneratedAt}}</div></div>
-<h2>Nodes</h2>{{if .Nodes}}{{range .Nodes}}<section class="card"><h3>{{if .Hostname}}{{.Hostname}}{{else}}Unnamed node{{end}} {{if .Connected}}<span class="ok">● connected</span>{{else}}<span class="warn">● disconnected</span>{{end}}</h3><div class="muted"><code>{{.Fingerprint}}</code>{{if .Version}} · version {{.Version}}{{end}}{{if .Connected}} · {{.CPUs}} CPUs · {{gib .MemoryBytes}} GiB RAM · seen {{stamp .LastSeenAt}}{{end}}</div>{{if .Workspaces}}<table><thead><tr><th>Workspace</th><th>State</th><th>Generation</th><th>Storage</th><th>Identity</th></tr></thead><tbody>{{range .Workspaces}}<tr><td>{{.Name}}</td><td>{{if .Active}}<span class="state active">active</span>{{else}}<span class="state">inactive</span>{{end}} {{if .Ready}}ready{{else}}not ready{{end}}</td><td>{{.ObservedGeneration}} / {{.Generation}}</td><td>{{gib .DiskUsedBytes}} / {{gib .DiskAllowanceBytes}} GiB</td><td><code>{{.UUID}}</code>{{if .SandboxUUID}}<br><small>Sandbox <code>{{.SandboxUUID}}</code></small>{{end}}</td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No workspaces target this node.</p>{{end}}</section>{{end}}{{else}}<div class="card muted">No nodes are connected.</div>{{end}}
-{{if .Unassigned}}<h2>Unassigned workspaces</h2><section class="card"><table><thead><tr><th>Workspace</th><th>State</th><th>Generation</th><th>Identity</th></tr></thead><tbody>{{range .Unassigned}}<tr><td>{{.Name}}</td><td>inactive</td><td>{{.ObservedGeneration}} / {{.Generation}}</td><td><code>{{.UUID}}</code></td></tr>{{end}}</tbody></table></section>{{end}}<p class="muted"><a href="/v1/status">JSON status</a> · <a href="/healthz">health</a></p></main></body></html>`))
+<h2>Nodes</h2>{{if .Nodes}}{{range .Nodes}}<section class="card"><h3><a href="/nodes/{{.Fingerprint}}">{{if .Hostname}}{{.Hostname}}{{else}}Unnamed node{{end}}</a> {{if .Connected}}<span class="ok">● connected</span>{{else}}<span class="warn">● disconnected</span>{{end}}</h3><div class="muted"><code>{{.Fingerprint}}</code>{{if .Version}} · version {{.Version}}{{end}}{{if .Connected}} · {{.CPUs}} CPUs · {{gib .MemoryBytes}} GiB RAM · seen {{stamp .LastSeenAt}}{{end}}</div>{{if .Workspaces}}<table><thead><tr><th>Workspace</th><th>State</th><th>Generation</th><th>Storage</th><th>Identity</th></tr></thead><tbody>{{range .Workspaces}}<tr><td><a href="/workspaces/{{.UUID}}">{{.Name}}</a></td><td>{{if .Active}}<span class="state active">active</span>{{else}}<span class="state">inactive</span>{{end}} {{if .Ready}}ready{{else}}not ready{{end}}</td><td>{{.ObservedGeneration}} / {{.Generation}}</td><td>{{gib .DiskUsedBytes}} / {{gib .DiskAllowanceBytes}} GiB</td><td><code>{{.UUID}}</code>{{if .SandboxUUID}}<br><small>Sandbox <a href="/sandboxes/{{.SandboxUUID}}"><code>{{.SandboxUUID}}</code></a></small>{{end}}</td></tr>{{end}}</tbody></table>{{else}}<p class="muted">No workspaces target this node.</p>{{end}}</section>{{end}}{{else}}<div class="card muted">No nodes are connected.</div>{{end}}
+{{if .Unassigned}}<h2>Unassigned workspaces</h2><section class="card"><table><thead><tr><th>Workspace</th><th>State</th><th>Generation</th><th>Identity</th></tr></thead><tbody>{{range .Unassigned}}<tr><td><a href="/workspaces/{{.UUID}}">{{.Name}}</a></td><td>inactive</td><td>{{.ObservedGeneration}} / {{.Generation}}</td><td><code>{{.UUID}}</code></td></tr>{{end}}</tbody></table></section>{{end}}<p class="muted"><a href="/v1/status">JSON status</a> · <a href="/healthz">health</a></p></main><script>` + dashboardLiveJS + `</script></body></html>`))
 }
 
 func formatGiB(value uint64) string {

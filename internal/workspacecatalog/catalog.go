@@ -296,7 +296,10 @@ type Store struct {
 	closed  bool
 	// alias indexes (owner, name) → uuid; populated on Create and
 	// kept consistent on every Update / Delete.
-	byAlias map[aliasKey]string
+	byAlias   map[aliasKey]string
+	revision  uint64
+	nextWatch uint64
+	watchers  map[uint64]chan uint64
 }
 
 type workspaceBackend interface {
@@ -318,9 +321,36 @@ func NewStore(now func() time.Time) *Store {
 		now = time.Now
 	}
 	return &Store{
-		now:     now,
-		all:     map[string]Workspace{},
-		byAlias: map[aliasKey]string{},
+		now:      now,
+		all:      map[string]Workspace{},
+		byAlias:  map[aliasKey]string{},
+		watchers: map[uint64]chan uint64{},
+	}
+}
+
+// Watch reports successful catalog changes. Notifications are coalesced when
+// a reader is slow; consumers resnapshot instead of treating this as an event log.
+func (s *Store) Watch() (changes <-chan uint64, stop func()) {
+	s.mu.Lock()
+	id := s.nextWatch
+	s.nextWatch++
+	ch := make(chan uint64, 1)
+	s.watchers[id] = ch
+	s.mu.Unlock()
+	return ch, func() {
+		s.mu.Lock()
+		delete(s.watchers, id)
+		s.mu.Unlock()
+	}
+}
+
+func (s *Store) notifyLocked() {
+	s.revision++
+	for _, ch := range s.watchers {
+		select {
+		case ch <- s.revision:
+		default:
+		}
 	}
 }
 
@@ -382,6 +412,7 @@ func (s *Store) Create(in CreateInput) (Workspace, error) {
 	}
 	s.all[in.UUID] = ws
 	s.byAlias[key] = in.UUID
+	s.notifyLocked()
 	return cloneWorkspace(ws), nil
 }
 
@@ -490,6 +521,7 @@ func (s *Store) Update(uuid string, kind MutateKind, fn func(*Workspace) error) 
 		s.byAlias[newKey] = uuid
 	}
 	s.all[uuid] = next
+	s.notifyLocked()
 	return cloneWorkspace(next), nil
 }
 
@@ -537,6 +569,7 @@ func (s *Store) ApplySpec(
 		}
 	}
 	s.all[uuid] = next
+	s.notifyLocked()
 	return cloneWorkspace(next), true, nil
 }
 
@@ -579,6 +612,7 @@ func (s *Store) ApplySpecByName(
 			}
 		}
 		s.all[existingUUID] = next
+		s.notifyLocked()
 		return cloneWorkspace(next), false, true, nil
 	}
 	if expectedGeneration != 0 {
@@ -604,6 +638,7 @@ func (s *Store) ApplySpecByName(
 	}
 	s.all[uuid] = ws
 	s.byAlias[key] = uuid
+	s.notifyLocked()
 	return cloneWorkspace(ws), true, true, nil
 }
 
@@ -660,6 +695,7 @@ func (s *Store) Delete(uuid string) error {
 	}
 	delete(s.all, uuid)
 	delete(s.byAlias, aliasKey{owner: prev.Metadata.OwnerFingerprint, name: prev.Metadata.Name})
+	s.notifyLocked()
 	return nil
 }
 

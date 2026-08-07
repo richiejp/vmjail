@@ -288,7 +288,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	web := newDashboardServer(cfg.WebAddr, nodeReg, workspaceCat)
+	web := newDashboardServer(cfg.WebAddr, nodeReg, workspaceCat, cfg.AgentRunCatalog)
 	reaper := resolveReaper(cfg.Reaper, tracer)
 	return &Server{
 		inner:            inner,
@@ -312,11 +312,11 @@ func resolveReaper(reaper *trace.IngressReaper, tracer *trace.Tracer) *trace.Ing
 	return reaper
 }
 
-func newDashboardServer(addr string, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store) *http.Server {
+func newDashboardServer(addr string, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store, runs *agentruncatalog.Store) *http.Server {
 	if addr == "" {
 		return nil
 	}
-	return &http.Server{Addr: addr, Handler: dashboardHandler(nodes, workspaces), ReadHeaderTimeout: 10 * time.Second}
+	return &http.Server{Addr: addr, Handler: dashboardHandler(nodes, workspaces, runs), ReadHeaderTimeout: 10 * time.Second}
 }
 
 func newAgentRunController(runs *agentruncatalog.Store, workspaces *workspacecatalog.Store, nodes *nodectrl.Registry, jobs *NodeControlHandler, launcher agentSandboxLauncher) *AgentRunHandler {

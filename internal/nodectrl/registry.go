@@ -60,8 +60,11 @@ type Entry struct {
 type Registry struct {
 	now func() time.Time
 
-	mu  sync.Mutex
-	all map[identity.Fingerprint]Entry
+	mu        sync.Mutex
+	all       map[identity.Fingerprint]Entry
+	revision  uint64
+	nextWatch uint64
+	watchers  map[uint64]chan uint64
 }
 
 // NewRegistry returns an empty Registry. now is called for every
@@ -72,8 +75,35 @@ func NewRegistry(now func() time.Time) *Registry {
 		now = time.Now
 	}
 	return &Registry{
-		now: now,
-		all: map[identity.Fingerprint]Entry{},
+		now:      now,
+		all:      map[identity.Fingerprint]Entry{},
+		watchers: map[uint64]chan uint64{},
+	}
+}
+
+// Watch reports successful registry changes. Notifications are coalesced when
+// a reader is slow; the revision tells callers only that they must resnapshot.
+func (r *Registry) Watch() (changes <-chan uint64, stop func()) {
+	r.mu.Lock()
+	id := r.nextWatch
+	r.nextWatch++
+	ch := make(chan uint64, 1)
+	r.watchers[id] = ch
+	r.mu.Unlock()
+	return ch, func() {
+		r.mu.Lock()
+		delete(r.watchers, id)
+		r.mu.Unlock()
+	}
+}
+
+func (r *Registry) notifyLocked() {
+	r.revision++
+	for _, ch := range r.watchers {
+		select {
+		case ch <- r.revision:
+		default:
+		}
 	}
 }
 
@@ -106,6 +136,7 @@ func (r *Registry) RegisterInstance(fp identity.Fingerprint, instanceID, hostnam
 		RegisteredAt: registered,
 		LastSeenAt:   now,
 	}
+	r.notifyLocked()
 	return now
 }
 
@@ -126,6 +157,7 @@ func (r *Registry) Heartbeat(fp identity.Fingerprint, res Resources) (time.Time,
 		entry.Resources = res
 	}
 	r.all[fp] = entry
+	r.notifyLocked()
 	return now, nil
 }
 
@@ -135,7 +167,10 @@ func (r *Registry) Heartbeat(fp identity.Fingerprint, res Resources) (time.Time,
 func (r *Registry) Forget(fp identity.Fingerprint) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.all, fp)
+	if _, ok := r.all[fp]; ok {
+		delete(r.all, fp)
+		r.notifyLocked()
+	}
 }
 
 // Snapshot returns the current set of registrations, sorted by

@@ -102,6 +102,13 @@ Workspaces by their live Sandbox Node or declared target, with unassigned
 Workspaces retained in a separate section. Its bounded JSON status document is
 available alongside the HTML page and health endpoint.
 
+The dashboard is presently a single-user administration surface reachable only
+through the private VPN. Unlocking it will require either a password or a
+YubiKey/WebAuthn credential as alternative login methods, not two factors in
+one login. There is no per-Workspace authorization model: an unlocked session
+may inspect and operate every Workspace. This does not weaken the existing
+owner and role checks on non-dashboard control-plane APIs.
+
 `nix/orchestrator.nix` exports a parameterised NixOS service module. It contains
 no host-specific paths, addresses, identities, or service configuration.
 
@@ -212,6 +219,61 @@ runtime directories and are checked against Linux's path limit; configuration
 and identity, durable state, and rebuildable caches remain separate. Relative
 XDG state values are ignored and explicit store/state/runtime roots must be
 absolute so service working-directory changes cannot redirect data.
+
+## Planned milestone: workspace web console and dependency quarantine
+
+Extend the optional orchestrator dashboard into a single-user operational
+console without adding frontend dependencies to the core service. The existing
+read-only dashboard and health/status endpoints remain available as the small,
+dependency-free base. Interactive access requires an unlocked dashboard
+session, authenticated by either password or YubiKey/WebAuthn; per-Workspace
+authorization and mandatory two-factor authentication are out of scope.
+
+Stages:
+
+1. **Landed:** dependency-free Workspace, Sandbox, and Node detail pages use Go
+   templates and small first-party browser code. They show bounded current
+   state, bindings, declared resource configuration, disk/CAS protection,
+   manifest generation, StorageFrozen state, conditions, and recent AgentRun
+   state without exposing prompts, results, environment values, or arbitrary
+   host files. Stable links connect the existing lists and detail pages, with
+   matching bounded Workspace JSON. Successful Node, Workspace, and AgentRun
+   store mutations drive a coalescing Server-Sent Events change feed; open
+   pages reload after a short debounce, following Ordino's model without timer
+   polling or frontend packages. Observer content, mutations, and terminal
+   access remain out of this read-only stage.
+2. Add dashboard unlock and session handling. Support password and
+   YubiKey/WebAuthn as independent alternatives, with secure cookies, expiry,
+   login throttling, Origin/CSRF validation for mutations, and an audit trail.
+   Keep the listener behind the private VPN route and do not introduce
+   per-Workspace grants.
+3. Add bounded live feeds for AgentRun events, logs, probes, and traces. Prefer
+   server-sent events for one-way data and retain existing server-side byte,
+   record, and queue limits so slow or disconnected browsers cannot create
+   unbounded work.
+4. Add an optional browser terminal. A WebSocket gateway translates browser
+   input, output, resize, and exit frames to the existing authenticated
+   `AttachSandbox` stream. It opens a new Workspace process; it must not be
+   described as takeover of an existing detached AgentRun. Use a maintained
+   terminal emulator rather than implementing escape-sequence handling in
+   application code.
+5. Package any third-party browser assets as a separate, pinned Nix output.
+   Resolve dependencies and build immutable assets inside a monitored
+   darkaifactory Sandbox; the orchestrator runtime receives only the resulting
+   static files and never Node, npm, `node_modules`, or registry credentials.
+   The dependency-free dashboard remains usable when this output is absent.
+6. Establish a general dependency-update procedure and AgentProfile. Perform
+   updates without repository push or deployment credentials, with narrowly
+   allowed and recorded egress; inspect the exact Workspace changes, package
+   scripts, process/network observations, and dependency graph; then reproduce
+   the locked build in a second clean, preferably offline Sandbox. Record input
+   lock digests, output hashes, tests, scanner results, and anomalous activity,
+   and require explicit adoption of the exact manifest before promotion.
+
+Sandbox observations reduce blast radius and provide evidence but do not prove
+a dependency benign. Reproducible clean builds, output comparison, explicit
+lifecycle-script policy, vulnerability/license checks, and review of the exact
+manifest remain separate promotion gates.
 
 ## Deferred direct AgentRun takeover contract
 
