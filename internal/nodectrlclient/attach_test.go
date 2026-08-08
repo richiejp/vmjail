@@ -129,6 +129,7 @@ type fakeAttachBridger struct {
 	lastReq  sandboxgateway.AttachRequest
 	sessions []sandboxgateway.AttachSession
 	err      error
+	wait     bool
 }
 
 // waitForDataFrame polls the fake stream's outbound buffer until
@@ -148,13 +149,20 @@ func waitForDataFrame(s *fakeAttachStream, want []byte, timeout time.Duration) b
 	return false
 }
 
-func (b *fakeAttachBridger) Attach(_ context.Context, req sandboxgateway.AttachRequest) (sandboxgateway.AttachSession, error) {
+func (b *fakeAttachBridger) Attach(ctx context.Context, req sandboxgateway.AttachRequest) (sandboxgateway.AttachSession, error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.calls++
 	b.lastReq = req
-	if b.err != nil {
-		return nil, b.err
+	wait := b.wait
+	err := b.err
+	if wait {
+		b.mu.Unlock()
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	defer b.mu.Unlock()
+	if err != nil {
+		return nil, err
 	}
 	if len(b.sessions) == 0 {
 		return nil, errors.New("fakeAttachBridger: out of sessions")
@@ -242,14 +250,16 @@ func TestRunAttachHelloSendError(t *testing.T) {
 	want := errors.New("synthetic send fail")
 	s := newFakeAttachStream()
 	s.sendErr = want
-	br := &fakeAttachBridger{}
+	local, remote := net.Pipe()
+	t.Cleanup(func() { _ = local.Close() })
+	br := &fakeAttachBridger{sessions: []sandboxgateway.AttachSession{&fakeAttachSession{Conn: remote}}}
 	err := runAttach(context.Background(),
 		&nodectrlv1.AttachRequest{SessionId: testAttachSession}, s, br)
 	if !errors.Is(err, want) {
 		t.Errorf("err = %v, want wrap of %v", err, want)
 	}
-	if br.calls != 0 {
-		t.Errorf("bridger called %d times; want 0 after Hello error", br.calls)
+	if br.calls != 1 {
+		t.Errorf("bridger called %d times; want 1 before Hello", br.calls)
 	}
 }
 
@@ -262,6 +272,28 @@ func TestRunAttachBridgerError(t *testing.T) {
 		&nodectrlv1.AttachRequest{SessionId: testAttachSession, SandboxUid: testAttachSandbox}, s, br)
 	if !errors.Is(err, want) {
 		t.Errorf("err = %v, want wrap of %v", err, want)
+	}
+	sent := s.sent()
+	if len(sent) != 1 || sent[0].GetHello().GetError() == "" {
+		t.Fatalf("sent = %+v, want one rejection Hello", sent)
+	}
+}
+
+func TestRunAttachBoundsGuestHandshake(t *testing.T) {
+	s := newFakeAttachStream()
+	br := &fakeAttachBridger{wait: true}
+	started := time.Now()
+	err := runAttachWithTimeout(context.Background(),
+		&nodectrlv1.AttachRequest{SessionId: testAttachSession, SandboxUid: testAttachSandbox},
+		s, br, 20*time.Millisecond)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want DeadlineExceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("bounded attach took %s", elapsed)
+	}
+	if sent := s.sent(); len(sent) != 1 || sent[0].GetHello().GetError() == "" {
+		t.Fatalf("sent = %+v, want bounded rejection Hello", sent)
 	}
 }
 

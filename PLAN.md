@@ -395,6 +395,12 @@ Landed:
   helpers bound graceful subprocess cleanup and force-kill hung streaming
   clients instead of silently spending transport-timeout minutes after a test
   has already passed; slow cases are measured and fixed rather than removed.
+- Finite blocking operations must carry an explicit deadline or inherit an
+  earlier one. Intentionally long-lived VM, registration, observation, and
+  interactive-session contexts instead require cancellation plus observable
+  liveness and bounded dead-peer detection and teardown. The attach path is
+  the first audited application: the Node bounds guest-vsock CONNECT and
+  reports a concrete rejection before acknowledging the rendezvous.
 - The nested-ISO proof uses a purpose-built kernel/initramfs ISO whose init
   configures QEMU user networking and emits an SSH protocol banner. It keeps
   the real BIOS ISO boot, nested KVM, slirp, and orchestrator-forwarding path

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -210,6 +211,23 @@ func TestOpenAttachBridgePushesEventThenSplices(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("runAttachStream did not return after Close")
+	}
+}
+
+func TestOpenAttachBridgeReturnsNodeRejection(t *testing.T) {
+	h, fp, events := newAttachTestHandler(t)
+	bridgeDone := startAttachBridge(t, h, fp)
+	sessionID := awaitAttachEvent(t, events)
+	stream := newFakeAttachServerStream()
+	stream.push(&nodectrlv1.AttachStreamMessage{Body: &nodectrlv1.AttachStreamMessage_Hello{
+		Hello: &nodectrlv1.AttachStreamHello{SessionId: sessionID, Error: "guest CONNECT timed out"},
+	}})
+	if err := h.runAttachStream(t.Context(), stream); err != nil {
+		t.Fatalf("runAttachStream: %v", err)
+	}
+	res := <-bridgeDone
+	if res.err == nil || !strings.Contains(res.err.Error(), "guest CONNECT timed out") {
+		t.Fatalf("OpenAttachBridge err = %v, want Node rejection", res.err)
 	}
 }
 

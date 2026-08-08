@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 
 	"connectrpc.com/connect"
 
@@ -14,6 +15,11 @@ import (
 	"github.com/richiejp/darkaifactory/internal/oops"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 )
+
+// DefaultAttachGuestHandshakeTimeout bounds the finite Node-to-guest vsock
+// CONNECT phase. It is shorter than the orchestrator's rendezvous timeout so
+// the Node can return the concrete failure before the outer wait expires.
+const DefaultAttachGuestHandshakeTimeout = 8 * time.Second
 
 // AttachBridger is the sandboxd-side seam the Node-side handler
 // dispatches AttachRequest events to: open an attach session
@@ -50,15 +56,19 @@ func runAttach(
 	stream attachStreamRPC,
 	bridger AttachBridger,
 ) error {
+	return runAttachWithTimeout(ctx, req, stream, bridger, DefaultAttachGuestHandshakeTimeout)
+}
+
+func runAttachWithTimeout(
+	ctx context.Context,
+	req *nodectrlv1.AttachRequest,
+	stream attachStreamRPC,
+	bridger AttachBridger,
+	handshakeTimeout time.Duration,
+) error {
 	defer func() { oops.Skip("nodectrlclient: close AttachStream response", stream.CloseResponse(), io.EOF) }()
-	if err := stream.Send(&nodectrlv1.AttachStreamMessage{
-		Body: &nodectrlv1.AttachStreamMessage_Hello{
-			Hello: &nodectrlv1.AttachStreamHello{SessionId: req.GetSessionId()},
-		},
-	}); err != nil {
-		return fmt.Errorf("nodectrlclient: AttachStream Hello: %w", err)
-	}
-	session, err := bridger.Attach(ctx, sandboxgateway.AttachRequest{
+	dialCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
+	session, err := bridger.Attach(dialCtx, sandboxgateway.AttachRequest{
 		SessionID:  req.GetSessionId(),
 		SandboxUID: req.GetSandboxUid(),
 		Command:    req.GetCommand(),
@@ -66,11 +76,31 @@ func runAttach(
 		Cols:       req.GetCols(),
 		Rows:       req.GetRows(),
 	})
+	cancel()
 	if err != nil {
-		return fmt.Errorf("nodectrlclient: bridger.Attach sandbox=%s: %w", req.GetSandboxUid(), err)
+		attachErr := fmt.Errorf("nodectrlclient: bridger.Attach sandbox=%s: %w", req.GetSandboxUid(), err)
+		if sendErr := sendAttachHello(stream, req.GetSessionId(), attachErr.Error()); sendErr != nil {
+			return errors.Join(attachErr, sendErr)
+		}
+		return attachErr
+	}
+	if err := sendAttachHello(stream, req.GetSessionId(), ""); err != nil {
+		oops.Skip("nodectrlclient: close unused attach session", session.Close(), net.ErrClosed)
+		return err
 	}
 	defer func() { oops.Skip("nodectrlclient: close attach session", session.Close(), net.ErrClosed) }()
 	return pumpAttachStream(stream, session)
+}
+
+func sendAttachHello(stream attachStreamRPC, sessionID, failure string) error {
+	if err := stream.Send(&nodectrlv1.AttachStreamMessage{
+		Body: &nodectrlv1.AttachStreamMessage_Hello{
+			Hello: &nodectrlv1.AttachStreamHello{SessionId: sessionID, Error: failure},
+		},
+	}); err != nil {
+		return fmt.Errorf("nodectrlclient: AttachStream Hello: %w", err)
+	}
+	return nil
 }
 
 // pumpAttachStream copies bytes + resize frames between the bidi

@@ -44,6 +44,7 @@ type pendingAttach struct {
 type attachStreamArrival struct {
 	stream  serverAttachStream
 	release chan struct{}
+	err     error
 }
 
 // serverAttachStream is the subset of the server-side
@@ -99,6 +100,9 @@ func (h *NodeControlHandler) OpenAttachBridge(
 	defer cancel()
 	select {
 	case arrival := <-pending.arrived:
+		if arrival.err != nil {
+			return nil, arrival.err
+		}
 		handedOff = true
 		return newServerAttachSession(arrival.stream, arrival.release), nil
 	case <-waitCtx.Done():
@@ -176,6 +180,10 @@ func (h *NodeControlHandler) runAttachStream(ctx context.Context, stream serverA
 			fmt.Errorf("%w: %s", ErrUnknownAttachSession, sessionID))
 	}
 	release := make(chan struct{})
+	if hello.GetError() != "" {
+		pending.arrived <- attachStreamArrival{err: fmt.Errorf("orchestrator: Node attach failed: %s", hello.GetError())}
+		return nil
+	}
 	pending.arrived <- attachStreamArrival{stream: stream, release: release}
 	select {
 	case <-release:

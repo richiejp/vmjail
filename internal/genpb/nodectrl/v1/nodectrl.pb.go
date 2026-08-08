@@ -1843,8 +1843,12 @@ func (*AttachStreamMessage_Resize) isAttachStreamMessage_Body() {}
 func (*AttachStreamMessage_Exit) isAttachStreamMessage_Body() {}
 
 type AttachStreamHello struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionId     string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Non-empty when the Node could not open the requested guest attach
+	// session. The Node still sends Hello so the orchestrator can resolve the
+	// pending rendezvous immediately instead of waiting for its timeout.
+	Error         string `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1882,6 +1886,13 @@ func (*AttachStreamHello) Descriptor() ([]byte, []int) {
 func (x *AttachStreamHello) GetSessionId() string {
 	if x != nil {
 		return x.SessionId
+	}
+	return ""
+}
+
+func (x *AttachStreamHello) GetError() string {
+	if x != nil {
+		return x.Error
 	}
 	return ""
 }
@@ -2929,10 +2940,11 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\x04data\x18\x02 \x01(\fH\x00R\x04data\x12>\n" +
 	"\x06resize\x18\x03 \x01(\v2$.daft.nodectrl.v1.AttachStreamResizeH\x00R\x06resize\x128\n" +
 	"\x04exit\x18\x04 \x01(\v2\".daft.nodectrl.v1.AttachStreamExitH\x00R\x04exitB\x06\n" +
-	"\x04body\"2\n" +
+	"\x04body\"H\n" +
 	"\x11AttachStreamHello\x12\x1d\n" +
 	"\n" +
-	"session_id\x18\x01 \x01(\tR\tsessionId\"<\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"<\n" +
 	"\x12AttachStreamResize\x12\x12\n" +
 	"\x04cols\x18\x01 \x01(\rR\x04cols\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\"<\n" +

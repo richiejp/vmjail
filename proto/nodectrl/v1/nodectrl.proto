@@ -336,6 +336,10 @@ message AttachStreamMessage {
 
 message AttachStreamHello {
   string session_id = 1;
+  // Non-empty when the Node could not open the requested guest attach
+  // session. The Node still sends Hello so the orchestrator can resolve the
+  // pending rendezvous immediately instead of waiting for its timeout.
+  string error = 2;
 }
 
 // AttachStreamResize forwards a window-resize event from the
