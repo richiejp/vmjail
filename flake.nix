@@ -80,7 +80,7 @@
         # from the kernel's small build-time verifier. buildGoModule vendors
         # that source independently, so it must not reuse the full-project
         # module graph hash below.
-        kconfigVerifyVendorHash = "sha256-1GU95MJoGhrDwKxekJ4ywPgvZuQt8fhOh/j6psrIaRQ=";
+        kconfigVerifyVendorHash = "sha256-FUQsIWPumWRthlrJ71jHztjPRlUNTh0pAcbxZq74NuM=";
 
         # The pinned xfsprogs static build fails in upstream's ICU/C++ link.
         # Relocate only the three tools we use plus their small shared-library
@@ -130,7 +130,7 @@
           platforms ? pkgs.lib.platforms.unix,
           preBuild ? "",
           src ? goSrc,
-          vendorHash ? "sha256-OFljTd2R3tFWyuC37UuPnItrSV2GYFXBRenYXLCvinc=",
+          vendorHash ? "sha256-Z3qTJE2mVIoj4YG0KSiL0rgUTsL/aVJIUEMRIfe4CSw=",
         }: pkgs.buildGoModule ({
           pname = name;
           inherit version;
@@ -738,7 +738,7 @@
             pname = "daft-sandboxd";
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-OFljTd2R3tFWyuC37UuPnItrSV2GYFXBRenYXLCvinc=";
+            vendorHash = "sha256-Z3qTJE2mVIoj4YG0KSiL0rgUTsL/aVJIUEMRIfe4CSw=";
             env.CGO_ENABLED = "0";
 
             # Stage the real artifacts into internal/bundled/assets/

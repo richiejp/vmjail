@@ -73,6 +73,10 @@ type Config struct {
 	// WebAddr is empty.
 	WebPasswordHash []byte
 
+	// WebAuthn enables origin-bound security-key enrollment and login. Initial
+	// enrollment requires an already unlocked password session.
+	WebAuthn *DashboardWebAuthnConfig
+
 	// ReadHeaderTimeout caps how long the server waits for a client
 	// to send request headers. Belt-and-braces against slow-loris.
 	ReadHeaderTimeout time.Duration
@@ -283,17 +287,14 @@ func New(cfg Config) (*Server, error) {
 	handler := withPeerMiddleware(mux)
 
 	var err error
-	inner, err = mtls.New(mtls.Config{
-		Identity:          cfg.Identity,
-		Peers:             cfg.Peers,
-		Addr:              cfg.Addr,
-		Handler:           handler,
-		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
-	})
+	inner, err = newControlServer(cfg, handler)
 	if err != nil {
 		return nil, err
 	}
-	web := newDashboardServer(cfg.WebAddr, cfg.WebPasswordHash, nodeReg, workspaceCat, cfg.AgentRunCatalog)
+	web, err := dashboardServerFromConfig(cfg, nodeReg, workspaceCat)
+	if err != nil {
+		return nil, err
+	}
 	reaper := resolveReaper(cfg.Reaper, tracer)
 	return &Server{
 		inner:            inner,
@@ -310,6 +311,17 @@ func New(cfg Config) (*Server, error) {
 	}, nil
 }
 
+func newControlServer(cfg Config, handler http.Handler) (*mtls.Server, error) {
+	return mtls.New(mtls.Config{
+		Identity: cfg.Identity, Peers: cfg.Peers, Addr: cfg.Addr, Handler: handler,
+		ReadHeaderTimeout: cfg.ReadHeaderTimeout,
+	})
+}
+
+func dashboardServerFromConfig(cfg Config, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store) (*http.Server, error) {
+	return newDashboardServer(cfg.WebAddr, cfg.WebPasswordHash, cfg.WebAuthn, nodes, workspaces, cfg.AgentRunCatalog)
+}
+
 func resolveReaper(reaper *trace.IngressReaper, tracer *trace.Tracer) *trace.IngressReaper {
 	if reaper == nil {
 		return trace.NewIngressReaper(tracer, component.Orchestrator)
@@ -317,15 +329,26 @@ func resolveReaper(reaper *trace.IngressReaper, tracer *trace.Tracer) *trace.Ing
 	return reaper
 }
 
-func newDashboardServer(addr string, passwordHash []byte, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store, runs *agentruncatalog.Store) *http.Server {
+func newDashboardServer(addr string, passwordHash []byte, webAuthnConfig *DashboardWebAuthnConfig, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store, runs *agentruncatalog.Store) (*http.Server, error) {
 	if addr == "" {
-		return nil
+		return nil, nil //nolint:nilnil // A nil server means the optional listener is disabled.
 	}
 	handler := dashboardHandler(nodes, workspaces, runs)
-	if len(passwordHash) > 0 {
-		handler = newDashboardAuth(passwordHash).wrap(handler)
+	if len(passwordHash) > 0 || webAuthnConfig != nil {
+		auth := newDashboardAuth(passwordHash)
+		if webAuthnConfig != nil {
+			webAuthn, err := newDashboardWebAuthn(*webAuthnConfig)
+			if err != nil {
+				return nil, err
+			}
+			if len(passwordHash) == 0 && webAuthn.store.credentialCount() == 0 {
+				return nil, errors.New("dashboard WebAuthn requires a password for initial enrollment or an existing credential")
+			}
+			auth.webAuthn = webAuthn
+		}
+		handler = auth.wrap(handler)
 	}
-	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}, nil
 }
 
 func newAgentRunController(runs *agentruncatalog.Store, workspaces *workspacecatalog.Store, nodes *nodectrl.Registry, jobs *NodeControlHandler, launcher agentSandboxLauncher) *AgentRunHandler {

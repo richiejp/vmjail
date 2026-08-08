@@ -66,6 +66,31 @@ func optionalDashboardPasswordHash(path string) ([]byte, error) {
 	return readDashboardPasswordHash(path)
 }
 
+func optionalDashboardWebAuthnConfig(rpID string, origins []string, configDir string) (*orchestrator.DashboardWebAuthnConfig, error) {
+	if rpID == "" {
+		if len(origins) > 0 {
+			return nil, errors.New("--web-authn-origin requires --web-authn-rp-id")
+		}
+		return nil, nil //nolint:nilnil // A nil config means the optional login method is disabled.
+	}
+	if len(origins) == 0 {
+		return nil, errors.New("--web-authn-rp-id requires at least one --web-authn-origin")
+	}
+	return &orchestrator.DashboardWebAuthnConfig{
+		RPID: rpID, RPOrigins: append([]string(nil), origins...),
+		StatePath: filepath.Join(configDir, "state", "dashboard-webauthn.json"),
+	}, nil
+}
+
+func loadDashboardAuthentication(passwordPath, rpID string, origins []string, configDir string) ([]byte, *orchestrator.DashboardWebAuthnConfig, error) {
+	passwordHash, err := optionalDashboardPasswordHash(passwordPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	webAuthn, err := optionalDashboardWebAuthnConfig(rpID, origins, configDir)
+	return passwordHash, webAuthn, err
+}
+
 // builtinRegistrySeeds returns the images the orchestrator auto-seeds into
 // its embedded registry at startup. A Nix-built daft-orchestrator embeds
 // the buildah build image (internal/buildimage); we seed it under
@@ -139,6 +164,8 @@ func serveCommand() *cobra.Command {
 		addr            string
 		webAddr         string
 		webPasswordFile string
+		webAuthnRPID    string
+		webAuthnOrigins []string
 		configDir       string
 	)
 	cmd := &cobra.Command{
@@ -175,7 +202,7 @@ func serveCommand() *cobra.Command {
 			if err != nil {
 				return errors.Join(err, workspaceCat.Close(), control.Close())
 			}
-			webPasswordHash, err := optionalDashboardPasswordHash(webPasswordFile)
+			webPasswordHash, webAuthnConfig, err := loadDashboardAuthentication(webPasswordFile, webAuthnRPID, webAuthnOrigins, dir)
 			if err != nil {
 				return errors.Join(err, workspaceCat.Close(), control.Close())
 			}
@@ -185,6 +212,7 @@ func serveCommand() *cobra.Command {
 				Addr:             addr,
 				WebAddr:          webAddr,
 				WebPasswordHash:  webPasswordHash,
+				WebAuthn:         webAuthnConfig,
 				RegistrySeeds:    seeds,
 				WorkspaceCatalog: workspaceCat,
 				AgentRunCatalog:  agentRuns,
@@ -208,14 +236,16 @@ func serveCommand() *cobra.Command {
 			return errors.Join(runServer(ctx, srv), workspaceCat.Close(), control.Close())
 		},
 	}
-	addServeFlags(cmd, &addr, &webAddr, &webPasswordFile, &configDir)
+	addServeFlags(cmd, &addr, &webAddr, &webPasswordFile, &webAuthnRPID, &webAuthnOrigins, &configDir)
 	return cmd
 }
 
-func addServeFlags(cmd *cobra.Command, addr, webAddr, webPasswordFile, configDir *string) {
+func addServeFlags(cmd *cobra.Command, addr, webAddr, webPasswordFile, webAuthnRPID *string, webAuthnOrigins *[]string, configDir *string) {
 	cmd.Flags().StringVar(addr, "addr", "0.0.0.0:14443", "TCP listen address (host:port)")
 	cmd.Flags().StringVar(webAddr, "web-addr", "", "optional plain-HTTP read-only dashboard listen address (bind to loopback or a private interface)")
 	cmd.Flags().StringVar(webPasswordFile, "web-password-file", "", "path to a bcrypt password hash protecting the dashboard")
+	cmd.Flags().StringVar(webAuthnRPID, "web-authn-rp-id", "", "WebAuthn relying-party domain (enables security-key login)")
+	cmd.Flags().StringSliceVar(webAuthnOrigins, "web-authn-origin", nil, "exact public HTTPS origin allowed for WebAuthn (repeatable)")
 	cmd.Flags().StringVar(configDir, "config-dir", "", "override the orchestrator config dir (default: $XDG_CONFIG_HOME/daft/orchestrator)")
 }
 

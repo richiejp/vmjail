@@ -38,6 +38,18 @@ in
       description = "Runtime path to a bcrypt dashboard password hash; kept out of the Nix store via a systemd credential.";
     };
 
+    webAuthnRPID = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = "WebAuthn relying-party domain; null disables security-key login.";
+    };
+
+    webAuthnOrigins = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      description = "Exact public HTTPS origins permitted for WebAuthn ceremonies.";
+    };
+
     configDir = lib.mkOption {
       type = lib.types.str;
       description = "Persistent orchestrator identity, peer, and catalogue directory.";
@@ -45,6 +57,13 @@ in
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.webAuthnRPID == null || cfg.webAuthnOrigins != [ ];
+        message = "services.darkaifactory-orchestrator.webAuthnOrigins must be set when webAuthnRPID is enabled";
+      }
+    ];
+
     systemd.services.darkaifactory-orchestrator = {
       description = "darkaifactory orchestrator";
       wantedBy = [ "multi-user.target" ];
@@ -66,6 +85,16 @@ in
             "--web-password-file"
             "/run/credentials/darkaifactory-orchestrator.service/dashboard-password"
           ]
+          ++ lib.optionals (cfg.webAuthnRPID != null) (
+            [
+              "--web-authn-rp-id"
+              cfg.webAuthnRPID
+            ]
+            ++ lib.concatMap (origin: [
+              "--web-authn-origin"
+              origin
+            ]) cfg.webAuthnOrigins
+          )
         );
         User = cfg.user;
         Restart = "on-failure";

@@ -62,3 +62,23 @@ func TestReadDashboardPasswordHash(t *testing.T) {
 		t.Fatalf("empty optional hash = %q, %v", hash, err)
 	}
 }
+
+func TestOptionalDashboardWebAuthnConfig(t *testing.T) {
+	dir := t.TempDir()
+	config, err := optionalDashboardWebAuthnConfig("example.com", []string{"https://example.com"}, dir)
+	if err != nil {
+		t.Fatalf("config: %v", err)
+	}
+	if config.RPID != "example.com" || len(config.RPOrigins) != 1 || config.StatePath != filepath.Join(dir, "state", "dashboard-webauthn.json") {
+		t.Fatalf("config = %#v", config)
+	}
+	if config, err := optionalDashboardWebAuthnConfig("", nil, dir); err != nil || config != nil {
+		t.Fatalf("disabled config = %#v, %v", config, err)
+	}
+	if _, err := optionalDashboardWebAuthnConfig("", []string{"https://example.com"}, dir); err == nil {
+		t.Fatal("expected origins-without-RP-ID error")
+	}
+	if _, err := optionalDashboardWebAuthnConfig("example.com", nil, dir); err == nil {
+		t.Fatal("expected RP-ID-without-origin error")
+	}
+}

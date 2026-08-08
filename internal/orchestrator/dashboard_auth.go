@@ -36,6 +36,7 @@ type dashboardAttempt struct {
 
 type dashboardAuth struct {
 	passwordHash []byte
+	webAuthn     *dashboardWebAuthn
 	mu           sync.Mutex
 	sessions     map[[sha256.Size]byte]dashboardSession
 	attempts     map[string]dashboardAttempt
@@ -65,6 +66,9 @@ func (a *dashboardAuth) wrap(next http.Handler) http.Handler {
 	mux.HandleFunc("POST /login", a.login)
 	mux.Handle("GET /healthz", next)
 	mux.Handle("POST /logout", a.requireSession(http.HandlerFunc(a.logout)))
+	if a.webAuthn != nil {
+		a.registerWebAuthnRoutes(mux)
+	}
 	mux.Handle("/", a.requireSession(next))
 	return mux
 }
@@ -97,7 +101,7 @@ func (a *dashboardAuth) validSession(token string) bool {
 func (a *dashboardAuth) serveLogin(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = a.loginPage.Execute(w, nil)
+	_ = a.loginPage.Execute(w, struct{ Password, WebAuthn bool }{len(a.passwordHash) > 0, a.webAuthn != nil && a.webAuthn.store.credentialCount() > 0})
 }
 
 func (a *dashboardAuth) login(w http.ResponseWriter, r *http.Request) {
@@ -113,6 +117,11 @@ func (a *dashboardAuth) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "too many login attempts", http.StatusTooManyRequests)
 		return
 	}
+	if len(a.passwordHash) == 0 {
+		a.audit("login_password_disabled", client)
+		http.Error(w, "password login disabled", http.StatusNotFound)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, dashboardLoginBytes)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "invalid login", http.StatusBadRequest)
@@ -124,20 +133,27 @@ func (a *dashboardAuth) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid login", http.StatusUnauthorized)
 		return
 	}
-	token := make([]byte, 32)
-	if _, err := a.rand(token); err != nil {
+	if err := a.establishSession(w, client, now); err != nil {
 		a.audit("login_session_failed", client)
 		http.Error(w, "create session", http.StatusInternalServerError)
 		return
 	}
-	a.recordSuccess(client, sha256.Sum256(token), now)
 	a.audit("login_succeeded", client)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (a *dashboardAuth) establishSession(w http.ResponseWriter, client string, now time.Time) error {
+	token := make([]byte, 32)
+	if _, err := a.rand(token); err != nil {
+		return err
+	}
+	a.recordSuccess(client, sha256.Sum256(token), now)
 	http.SetCookie(w, &http.Cookie{
 		Name: dashboardSessionCookie, Value: base64.RawURLEncoding.EncodeToString(token),
 		Path: "/", MaxAge: int(dashboardSessionTTL.Seconds()), Expires: now.Add(dashboardSessionTTL),
 		HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode,
 	})
-	http.Redirect(w, r, "/", http.StatusSeeOther)
+	return nil
 }
 
 func (a *dashboardAuth) logout(w http.ResponseWriter, r *http.Request) {
@@ -237,4 +253,4 @@ func dashboardClient(remoteAddr string) string {
 	return host
 }
 
-const dashboardLoginHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Unlock darkaifactory</title><style>body{font:16px system-ui;max-width:24rem;margin:12vh auto;padding:1rem;background:#111827;color:#e5e7eb}form{display:grid;gap:1rem;padding:1.5rem;background:#1f2937;border-radius:.75rem}input,button{font:inherit;padding:.75rem}button{cursor:pointer}</style></head><body><main><h1>Unlock orchestrator</h1><form method="post" action="/login"><label>Password <input name="password" type="password" required autofocus autocomplete="current-password"></label><button type="submit">Unlock</button></form></main></body></html>`
+const dashboardLoginHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Unlock darkaifactory</title><style>body{font:16px system-ui;max-width:24rem;margin:12vh auto;padding:1rem;background:#111827;color:#e5e7eb}form,.key{display:grid;gap:1rem;padding:1.5rem;background:#1f2937;border-radius:.75rem;margin:1rem 0}input,button{font:inherit;padding:.75rem}button{cursor:pointer}.error{color:#fca5a5}</style></head><body><main><h1>Unlock orchestrator</h1>{{if .Password}}<form method="post" action="/login"><label>Password <input name="password" type="password" required autofocus autocomplete="current-password"></label><button type="submit">Unlock with password</button></form>{{end}}{{if .WebAuthn}}<section class="key"><button id="security-key" type="button">Unlock with security key</button><div id="key-error" class="error" role="alert"></div></section><script>` + dashboardWebAuthnJS + `document.getElementById('security-key').addEventListener('click',()=>webAuthnLogin().catch(e=>document.getElementById('key-error').textContent=e.message));</script>{{end}}</main></body></html>`
