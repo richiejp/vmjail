@@ -333,7 +333,7 @@ func TestDeleteWorkspaceReleasesProtection(t *testing.T) {
 	if err := rig.index.CommitManifest(commitRequest(1, digest, refs, OriginSandbox, RecoverabilityProtected)); err != nil {
 		t.Fatal(err)
 	}
-	if err := rig.index.DeleteWorkspace("workspace"); err != nil {
+	if err := rig.index.DeleteWorkspace(WorkspaceID("workspace")); err != nil {
 		t.Fatal(err)
 	}
 	chunk, _ := rig.index.Chunk(refs[0].Digest)
@@ -344,11 +344,32 @@ func TestDeleteWorkspaceReleasesProtection(t *testing.T) {
 	if manifest.Current || manifest.Disposition != DispositionDeleted {
 		t.Fatalf("deleted manifest = %#v", manifest)
 	}
-	if err := rig.index.DeleteWorkspace(""); err == nil {
+	if err := rig.index.DeleteWorkspace(WorkspaceID("")); err == nil {
 		t.Fatal("empty workspace deletion accepted")
 	}
-	if err := rig.index.DeleteWorkspace("absent"); err != nil {
+	if err := rig.index.DeleteWorkspace(WorkspaceID("absent")); err != nil {
 		t.Fatalf("absent workspace deletion: %v", err)
+	}
+}
+
+func TestDeleteManifestRequiresExactCurrentGeneration(t *testing.T) {
+	rig, refs := newIndexRig(t, "sandbox")
+	digest := manifestDigest("sandbox")
+	if err := rig.index.CommitManifest(commitRequest(2, digest, refs, OriginSandbox, RecoverabilityProtected)); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.DeleteManifest(testSyncKey, digest, 1); !errors.Is(err, ErrStaleManifest) {
+		t.Fatalf("stale delete = %v, want ErrStaleManifest", err)
+	}
+	if err := rig.index.DeleteManifest(testSyncKey, digest, 2); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := rig.index.Manifest(testSyncKey, digest, 2)
+	if err != nil || manifest.Current || manifest.Disposition != DispositionDeleted || manifest.Recoverability != RecoverabilityRecoverable {
+		t.Fatalf("deleted manifest = %#v, %v", manifest, err)
+	}
+	if err := rig.index.DeleteManifest(testSyncKey, digest, 2); !errors.Is(err, ErrManifestMissing) {
+		t.Fatalf("idempotent delete = %v, want ErrManifestMissing", err)
 	}
 }
 
@@ -363,7 +384,7 @@ func TestDeletingOneSharedWorkspacePreservesOtherProtection(t *testing.T) {
 	if err := rig.index.CommitManifest(second); err != nil {
 		t.Fatal(err)
 	}
-	if err := rig.index.DeleteWorkspace("workspace"); err != nil {
+	if err := rig.index.DeleteWorkspace(WorkspaceID("workspace")); err != nil {
 		t.Fatal(err)
 	}
 	chunk, _ := rig.index.Chunk(refs[0].Digest)
@@ -614,7 +635,7 @@ func TestLowLevelValidationAndPersistenceErrors(t *testing.T) {
 		}},
 		{"acknowledge", func() error { return rig.index.Acknowledge(testSyncKey, closedDigest, 1) }},
 		{"reject", func() error { return rig.index.Reject(testSyncKey, closedDigest, 1) }},
-		{"delete workspace", func() error { return rig.index.DeleteWorkspace(testSyncKey) }},
+		{"delete workspace", func() error { return rig.index.DeleteWorkspace(WorkspaceID("workspace")) }},
 		{"queue plan", func() error { return rig.index.QueuePlan(Plan{}) }},
 	}
 	for _, operation := range closedOps {
@@ -665,10 +686,10 @@ func TestSharedChunkRetainsStrongestRemainingRecoverability(t *testing.T) {
 	if err != nil || chunk.Recoverability != RecoverabilityProtected {
 		t.Fatalf("shared protected chunk = %#v, %v", chunk, err)
 	}
-	if err := rig.index.DeleteWorkspace(protectedA.SyncKey); err != nil {
+	if err := rig.index.DeleteManifest(protectedA.SyncKey, protectedA.Digest, protectedA.Generation); err != nil {
 		t.Fatal(err)
 	}
-	if err := rig.index.DeleteWorkspace(protectedB.SyncKey); err != nil {
+	if err := rig.index.DeleteManifest(protectedB.SyncKey, protectedB.Digest, protectedB.Generation); err != nil {
 		t.Fatal(err)
 	}
 

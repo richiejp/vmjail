@@ -748,6 +748,15 @@ func TestWorkspaceDiskControlRPCsValidateExactManifestSet(t *testing.T) {
 	if names := server.Names(); len(names) != 0 {
 		t.Fatalf("manifests remain after delete: %v", names)
 	}
+	if currents, err := index.CurrentManifests(); err != nil || len(currents) != 0 {
+		t.Fatalf("indexed current manifests after delete = %#v, %v", currents, err)
+	}
+	for key, state := range states {
+		manifest, err := index.Manifest(key, state.digest, state.generation)
+		if err != nil || manifest.Current || manifest.Disposition != casindex.DispositionDeleted {
+			t.Fatalf("indexed deleted manifest %q = %#v, %v", key, manifest, err)
+		}
+	}
 }
 
 //nolint:funlen // The shared indexed manifest fixture makes the lifecycle failure matrix race-representative and easier to audit together.

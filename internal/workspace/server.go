@@ -604,7 +604,7 @@ func (s *Server) DeleteManifest(
 	if err := s.requireExactIndexedManifest(name, req.Msg.GetManifestDigest(), req.Msg.GetGeneration()); err != nil {
 		return nil, err
 	}
-	if err := s.index.DeleteWorkspace(name); err != nil {
+	if err := s.index.DeleteManifest(name, req.Msg.GetManifestDigest(), req.Msg.GetGeneration()); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	s.mu.Lock()
@@ -757,10 +757,10 @@ func (s *Server) DeleteWorkspaceData(
 	if err := controller.Delete(ctx, uuid); err != nil {
 		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
+	if err := s.index.DeleteWorkspace(casindex.WorkspaceID(uuid)); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
 	for _, expected := range req.Msg.GetExpectedManifests() {
-		if err := s.index.DeleteWorkspace(expected.GetWorkspace()); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
-		}
 		s.mu.Lock()
 		delete(s.manifests, expected.GetWorkspace())
 		delete(s.states, expected.GetWorkspace())

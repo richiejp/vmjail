@@ -374,12 +374,50 @@ func hasProtectedReference(txn *badger.Txn, references []Reference, skip *Refere
 	return false, nil
 }
 
+// WorkspaceID is the UUID namespace prefix shared by every mount SyncKey for
+// one workspace. Keeping it distinct from a raw SyncKey prevents accidental
+// no-op deletion when callers pass "uuid\x00/target" as the prefix.
+type WorkspaceID string
+
+// DeleteManifest marks one exact current mount manifest deleted. The exact
+// digest/generation check makes retries safe and stale deletion fail closed.
+func (i *Index) DeleteManifest(syncKey, digest string, generation uint64) error {
+	if syncKey == "" || generation == 0 || !validDigest(digest) {
+		return errors.New("casindex: invalid manifest deletion")
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.db.Update(func(txn *badger.Txn) error {
+		var current Manifest
+		if err := getJSON(txn, currentKey(syncKey), &current); err != nil {
+			if errors.Is(err, badger.ErrKeyNotFound) {
+				return ErrManifestMissing
+			}
+			return err
+		}
+		if current.Digest != digest || current.Generation != generation {
+			return ErrStaleManifest
+		}
+		current.Current = false
+		current.Disposition = DispositionDeleted
+		current.Recoverability = RecoverabilityRecoverable
+		if err := i.removeManifestReferences(txn, current, true); err != nil {
+			return err
+		}
+		if err := setJSON(txn, manifestKey(current.SyncKey, current.Generation, current.Digest), current); err != nil {
+			return err
+		}
+		return txn.Delete(currentKey(current.SyncKey))
+	})
+}
+
 // DeleteWorkspace releases protection for every current mount manifest owned
 // by workspaceID. Historical manifests remain as audit/provenance records.
-func (i *Index) DeleteWorkspace(workspaceID string) error {
+func (i *Index) DeleteWorkspace(workspaceID WorkspaceID) error {
 	if workspaceID == "" {
 		return errors.New("casindex: empty workspace ID")
 	}
+	prefixID := string(workspaceID)
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.db.Update(func(txn *badger.Txn) error {
@@ -392,7 +430,7 @@ func (i *Index) DeleteWorkspace(workspaceID string) error {
 			if err := iterator.Item().Value(func(value []byte) error { return json.Unmarshal(value, &manifest) }); err != nil {
 				return err
 			}
-			if strings.HasPrefix(manifest.SyncKey, workspaceID+"\x00") {
+			if strings.HasPrefix(manifest.SyncKey, prefixID+"\x00") {
 				currents = append(currents, manifest)
 			}
 		}
