@@ -401,6 +401,10 @@ Landed:
   liveness and bounded dead-peer detection and teardown. The attach path is
   the first audited application: the Node bounds guest-vsock CONNECT and
   reports a concrete rejection before acknowledging the rendezvous.
+- Data-moving and execution operations fail closed when a Workspace's desired
+  generation differs from the generation materialised by its live Sandbox.
+  Exec, forwarding, and pull report both generations and require a relaunch,
+  preventing stale execution and stale disk content overwriting newer work.
 - The nested-ISO proof uses a purpose-built kernel/initramfs ISO whose init
   configures QEMU user networking and emits an SSH protocol banner. It keeps
   the real BIOS ISO boot, nested KVM, slirp, and orchestrator-forwarding path

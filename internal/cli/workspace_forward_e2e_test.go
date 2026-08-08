@@ -322,6 +322,7 @@ func seedRunningWorkspace(
 	}
 	if _, err := cat.Update(e2eForwardWorkspaceUUID, workspacecatalog.MutateStatus,
 		func(ws *workspacecatalog.Workspace) error {
+			ws.Status.ObservedGeneration = ws.Metadata.Generation
 			ws.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
 				UID:             "sb-1",
 				NodeFingerprint: nodeFP,

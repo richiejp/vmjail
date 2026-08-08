@@ -25,6 +25,10 @@ var ErrAttachHelloMissing = errors.New("orchestrator: AttachSandbox first frame 
 // the addressed workspace has no current_sandbox.
 var ErrAttachWorkspaceNotRunning = errors.New("orchestrator: workspace has no current sandbox; not RUNNING")
 
+// ErrWorkspaceGenerationPending prevents commands from silently executing in
+// a Sandbox materialised from an older Workspace specification.
+var ErrWorkspaceGenerationPending = errors.New("orchestrator: workspace edit is pending restart")
+
 // attachServerStream is the subset of the server-side connect
 // bidi stream that AttachSandbox uses. Isolated for tests.
 type attachServerStream interface {
@@ -101,15 +105,43 @@ func readAttachHello(stream attachServerStream) (*workspacev1.AttachHello, error
 // resolveAttachWorkspace looks up the workspace and confirms it
 // is RUNNING. Same shape as resolveForwardWorkspace.
 func (h *WorkspaceCatalogHandler) resolveAttachWorkspace(callerFP identity.Fingerprint, hello *workspacev1.AttachHello) (workspacecatalog.Workspace, error) {
-	ws, err := h.resolveHandle(callerFP, hello.GetWorkspace())
+	return h.resolveCurrentWorkspace(callerFP, hello.GetWorkspace(), ErrAttachWorkspaceNotRunning)
+}
+
+func (h *WorkspaceCatalogHandler) resolveCurrentWorkspace(
+	callerFP identity.Fingerprint,
+	handle *workspacev1.WorkspaceHandle,
+	notRunning error,
+) (workspacecatalog.Workspace, error) {
+	ws, err := h.resolveHandle(callerFP, handle)
 	if err != nil {
 		return workspacecatalog.Workspace{}, err
 	}
 	if ws.Status.CurrentSandbox == nil || ws.Status.CurrentSandbox.UID == "" {
 		return workspacecatalog.Workspace{}, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("%w: workspace=%s", ErrAttachWorkspaceNotRunning, ws.Metadata.UUID))
+			fmt.Errorf("%w: workspace=%s", notRunning, ws.Metadata.UUID))
+	}
+	if err := requireCurrentWorkspaceGeneration(ws); err != nil {
+		return workspacecatalog.Workspace{}, err
 	}
 	return ws, nil
+}
+
+func requireCurrentWorkspaceGeneration(ws workspacecatalog.Workspace) error {
+	launchGeneration := ws.Status.CurrentSandbox.WorkspaceGeneration
+	// Bindings created before launch-generation provenance was introduced use
+	// observed_generation as a compatibility fallback. New launches always set
+	// WorkspaceGeneration, including while their first heartbeat is pending.
+	if launchGeneration == 0 {
+		launchGeneration = ws.Status.ObservedGeneration
+	}
+	if ws.Metadata.Generation == launchGeneration {
+		return nil
+	}
+	return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
+		"%w: workspace=%s desired=%d launched=%d; stop and relaunch before executing",
+		ErrWorkspaceGenerationPending, ws.Metadata.UUID, ws.Metadata.Generation, launchGeneration,
+	))
 }
 
 // pumpAttach copies bytes + resize frames between the client

@@ -6,9 +6,12 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"connectrpc.com/connect"
 
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/genpb/workspace/v1/workspacev1connect"
@@ -166,6 +169,7 @@ func newAttachTestHandlerWithWorkspace(t *testing.T, br WorkspaceAttachBridger) 
 	}
 	if _, err := cat.Update(uid, workspacecatalog.MutateStatus,
 		func(ws *workspacecatalog.Workspace) error {
+			ws.Status.ObservedGeneration = ws.Metadata.Generation
 			ws.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
 				UID:             "sb-running",
 				NodeFingerprint: identity.Fingerprint{0xcc},
@@ -175,6 +179,30 @@ func newAttachTestHandlerWithWorkspace(t *testing.T, br WorkspaceAttachBridger) 
 		t.Fatalf("catalog.Update: %v", err)
 	}
 	return h, uid, owner
+}
+
+func TestRequireCurrentWorkspaceGenerationRejectsPendingEdit(t *testing.T) {
+	ws := workspacecatalog.Workspace{
+		Metadata: workspacecatalog.Metadata{UUID: "ws", Generation: 4},
+		Status: workspacecatalog.Status{ObservedGeneration: 3, CurrentSandbox: &workspacecatalog.SandboxRef{
+			WorkspaceGeneration: 3,
+		}},
+	}
+	err := requireCurrentWorkspaceGeneration(ws)
+	if !errors.Is(err, ErrWorkspaceGenerationPending) || connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("err = %v, want FailedPrecondition ErrWorkspaceGenerationPending", err)
+	}
+	if !strings.Contains(err.Error(), "desired=4 launched=3") {
+		t.Fatalf("err = %v, want both generations", err)
+	}
+	ws.Status.CurrentSandbox.WorkspaceGeneration = 4
+	if err := requireCurrentWorkspaceGeneration(ws); err != nil {
+		t.Fatalf("equal generations rejected: %v", err)
+	}
+	ws.Status.ObservedGeneration = 0
+	if err := requireCurrentWorkspaceGeneration(ws); err != nil {
+		t.Fatalf("first-heartbeat lag rejected: %v", err)
+	}
 }
 
 func attachHelloFrame(uuid string) *workspacev1.AttachFrame {
@@ -600,6 +628,7 @@ func TestAttachSandboxConnectE2E(t *testing.T) {
 	}
 	if _, err := cat.Update(uid, workspacecatalog.MutateStatus,
 		func(ws *workspacecatalog.Workspace) error {
+			ws.Status.ObservedGeneration = ws.Metadata.Generation
 			ws.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
 				UID: "sb-r", NodeFingerprint: identity.Fingerprint{0xcc},
 			}

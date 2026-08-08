@@ -291,6 +291,10 @@ message SandboxRef {
   // Non-empty only for a Sandbox composed from an immutable AgentProfile.
   // AgentRun reuse requires an exact digest match.
   string agent_profile_digest = 3;
+  // Workspace generation materialised when this Sandbox was launched.
+  // Unlike WorkspaceStatus.observed_generation this is immutable provenance,
+  // so callers can distinguish startup lag from a stale Sandbox after edits.
+  uint64 workspace_generation = 4;
 }
 
 // EventType is the K8s-style watch discriminator. Carried on

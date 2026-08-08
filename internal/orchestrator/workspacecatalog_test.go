@@ -826,6 +826,49 @@ func TestSetResourcesRoundTripsAndClears(t *testing.T) {
 	}
 }
 
+func TestSetResourcesAdvancesOnlyLiveDiskGrowth(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "live-resize"},
+	))
+	uuid := created.Msg.GetWorkspace().GetMetadata().GetUuid()
+	handle := uuidHandle(uuid)
+	before, err := rig.catalog.Update(uuid, workspacecatalog.MutateStatus, func(ws *workspacecatalog.Workspace) error {
+		ws.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
+			UID: "sandbox", WorkspaceGeneration: ws.Metadata.Generation,
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	grown, err := rig.client.SetResources(t.Context(), connect.NewRequest(
+		&workspacev1.SetResourcesRequest{Handle: handle, DiskBytes: 24 << 30},
+	))
+	if err != nil {
+		t.Fatalf("grow: %v", err)
+	}
+	if got, want := grown.Msg.GetWorkspace().GetStatus().GetCurrentSandbox().GetWorkspaceGeneration(), before.Metadata.Generation+1; got != want {
+		t.Fatalf("live growth generation = %d, want %d", got, want)
+	}
+	if _, err := rig.client.SetResources(t.Context(), connect.NewRequest(
+		&workspacev1.SetResourcesRequest{Handle: handle, DiskBytes: 10 << 30},
+	)); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("live shrink error = %v, want FailedPrecondition", err)
+	}
+
+	edited, err := rig.client.SetResources(t.Context(), connect.NewRequest(
+		&workspacev1.SetResourcesRequest{Handle: handle, MemoryBytes: 4 << 30, DiskBytes: 24 << 30},
+	))
+	if err != nil {
+		t.Fatalf("memory edit: %v", err)
+	}
+	if edited.Msg.GetWorkspace().GetStatus().GetCurrentSandbox().GetWorkspaceGeneration() == edited.Msg.GetWorkspace().GetMetadata().GetGeneration() {
+		t.Fatal("non-live memory edit incorrectly advanced Sandbox generation")
+	}
+}
+
 // TestSetNestedVirtualizationRoundTripsAndClears proves the grant
 // toggles on then back off through the wire spec — the field the
 // Launch projection reads onto SandboxSpec.nested_virtualization.
@@ -1491,6 +1534,10 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 	}
 	if got.GetStatus().GetCurrentSandbox().GetUid() == "" {
 		t.Error("current_sandbox.uid not populated")
+	}
+	if got.GetStatus().GetCurrentSandbox().GetWorkspaceGeneration() != got.GetMetadata().GetGeneration() {
+		t.Errorf("current_sandbox.workspace_generation = %d, want %d",
+			got.GetStatus().GetCurrentSandbox().GetWorkspaceGeneration(), got.GetMetadata().GetGeneration())
 	}
 	call, ok := fake.last()
 	if !ok {

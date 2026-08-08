@@ -1316,8 +1316,12 @@ type SandboxRef struct {
 	// Non-empty only for a Sandbox composed from an immutable AgentProfile.
 	// AgentRun reuse requires an exact digest match.
 	AgentProfileDigest string `protobuf:"bytes,3,opt,name=agent_profile_digest,json=agentProfileDigest,proto3" json:"agent_profile_digest,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Workspace generation materialised when this Sandbox was launched.
+	// Unlike WorkspaceStatus.observed_generation this is immutable provenance,
+	// so callers can distinguish startup lag from a stale Sandbox after edits.
+	WorkspaceGeneration uint64 `protobuf:"varint,4,opt,name=workspace_generation,json=workspaceGeneration,proto3" json:"workspace_generation,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *SandboxRef) Reset() {
@@ -1369,6 +1373,13 @@ func (x *SandboxRef) GetAgentProfileDigest() string {
 		return x.AgentProfileDigest
 	}
 	return ""
+}
+
+func (x *SandboxRef) GetWorkspaceGeneration() uint64 {
+	if x != nil {
+		return x.WorkspaceGeneration
+	}
+	return 0
 }
 
 // Condition is the standard K8s-style status entry. type +
@@ -1530,12 +1541,13 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"+\n" +
 	"\aNodeRef\x12 \n" +
-	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\"~\n" +
+	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\"\xb1\x01\n" +
 	"\n" +
 	"SandboxRef\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12,\n" +
 	"\x04node\x18\x02 \x01(\v2\x18.daft.sandbox.v1.NodeRefR\x04node\x120\n" +
-	"\x14agent_profile_digest\x18\x03 \x01(\tR\x12agentProfileDigest\"\xd9\x01\n" +
+	"\x14agent_profile_digest\x18\x03 \x01(\tR\x12agentProfileDigest\x121\n" +
+	"\x14workspace_generation\x18\x04 \x01(\x04R\x13workspaceGeneration\"\xd9\x01\n" +
 	"\tCondition\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x128\n" +
 	"\x06status\x18\x02 \x01(\x0e2 .daft.sandbox.v1.ConditionStatusR\x06status\x12\x16\n" +

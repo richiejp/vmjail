@@ -465,10 +465,11 @@ func runWorkspaceSync(
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
-	uuid, nodeFP, err := resolveSyncTarget(ctx, catalog, handle)
+	target, err := resolveSyncTargetDetails(ctx, catalog, handle)
 	if err != nil {
 		return trace.RecordError(ctx, err)
 	}
+	uuid, nodeFP := target.uuid, target.nodeFP
 
 	cc, err := openClientCtx(opts.configDir, casDir, opts.orchestrator)
 	if err != nil {
@@ -482,6 +483,9 @@ func runWorkspaceSync(
 			shipTraces(ctx, tracer, httpc, trimURLScheme(orchestrator), spanName(verb))
 		}
 		return nil
+	}
+	if err := requireObservedSyncTarget(target); err != nil {
+		return trace.RecordError(ctx, err)
 	}
 	wsClient, closeRelay, err := dialNodeWorkspaceService(ctx, cc, orchestrator, uuid, nodeFP, tracer)
 	if err != nil {
@@ -531,22 +535,62 @@ func resolveSyncTarget(
 	catalog workspacev1connect.WorkspaceCatalogServiceClient,
 	handle *workspacev1.WorkspaceHandle,
 ) (uuid string, nodeFP identity.Fingerprint, err error) {
+	target, err := resolveSyncTargetDetails(ctx, catalog, handle)
+	return target.uuid, target.nodeFP, err
+}
+
+type syncTarget struct {
+	uuid               string
+	nodeFP             identity.Fingerprint
+	generation         uint64
+	observedGeneration uint64
+	launchGeneration   uint64
+	active             bool
+}
+
+func requireObservedSyncTarget(target syncTarget) error {
+	if !target.active {
+		return nil
+	}
+	materialized := target.launchGeneration
+	if materialized == 0 {
+		materialized = target.observedGeneration
+	}
+	if target.generation == materialized {
+		return nil
+	}
+	return fmt.Errorf(
+		"daft workspace pull: refusing stale materialization: desired generation %d, launched %d; stop and relaunch before pulling",
+		target.generation, materialized,
+	)
+}
+
+func resolveSyncTargetDetails(
+	ctx context.Context,
+	catalog workspacev1connect.WorkspaceCatalogServiceClient,
+	handle *workspacev1.WorkspaceHandle,
+) (syncTarget, error) {
 	resp, err := catalog.Get(ctx, connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: handle}))
 	if err != nil {
-		return "", identity.Fingerprint{}, fmt.Errorf("daft workspace: get workspace: %w", err)
+		return syncTarget{}, fmt.Errorf("daft workspace: get workspace: %w", err)
 	}
 	ws := resp.Msg.GetWorkspace()
 	fpStr := ws.GetSpec().GetTargetSandboxFingerprint()
 	if fpStr == "" {
-		return "", identity.Fingerprint{}, errors.New(
+		return syncTarget{}, errors.New(
 			"daft workspace: workspace has no target node; run `daft workspace target <node-fingerprint>` first",
 		)
 	}
-	nodeFP, err = identity.ParseFingerprint(fpStr)
+	nodeFP, err := identity.ParseFingerprint(fpStr)
 	if err != nil {
-		return "", identity.Fingerprint{}, fmt.Errorf("daft workspace: parse target fingerprint %q: %w", fpStr, err)
+		return syncTarget{}, fmt.Errorf("daft workspace: parse target fingerprint %q: %w", fpStr, err)
 	}
-	return ws.GetMetadata().GetUuid(), nodeFP, nil
+	return syncTarget{
+		uuid: ws.GetMetadata().GetUuid(), nodeFP: nodeFP,
+		generation: ws.GetMetadata().GetGeneration(), observedGeneration: ws.GetStatus().GetObservedGeneration(),
+		launchGeneration: ws.GetStatus().GetCurrentSandbox().GetWorkspaceGeneration(),
+		active:           ws.GetStatus().GetCurrentSandbox() != nil,
+	}, nil
 }
 
 // dialNodeWorkspaceService opens a brokered relay to the target

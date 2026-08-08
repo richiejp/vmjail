@@ -545,8 +545,9 @@ func TestResolveSyncTargetOK(t *testing.T) {
 		t.Fatalf("Generate: %v", err)
 	}
 	ws := &workspacev1.Workspace{
-		Metadata: &workspacev1.WorkspaceMetadata{Uuid: "u-ok"},
+		Metadata: &workspacev1.WorkspaceMetadata{Uuid: "u-ok", Generation: 7},
 		Spec:     &workspacev1.WorkspaceSpec{TargetSandboxFingerprint: node.Fingerprint().String()},
+		Status:   &workspacev1.WorkspaceStatus{ObservedGeneration: 6},
 	}
 	c := fakeCatalogClient(t, &fakeCatalog{ws: ws})
 	uuid, fp, err := resolveSyncTarget(context.Background(), c, handleByName("x"))
@@ -555,6 +556,31 @@ func TestResolveSyncTargetOK(t *testing.T) {
 	}
 	if uuid != "u-ok" || fp != node.Fingerprint() {
 		t.Errorf("got (%q,%s), want (u-ok,%s)", uuid, fp, node.Fingerprint())
+	}
+	target, err := resolveSyncTargetDetails(context.Background(), c, handleByName("x"))
+	if err != nil || target.generation != 7 || target.observedGeneration != 6 {
+		t.Fatalf("details = %+v, %v; want generations 7/6", target, err)
+	}
+}
+
+func TestRequireObservedSyncTargetRejectsStaleMaterialization(t *testing.T) {
+	target := syncTarget{generation: 9, observedGeneration: 8, launchGeneration: 8, active: true}
+	err := requireObservedSyncTarget(target)
+	if err == nil || !strings.Contains(err.Error(), "desired generation 9, launched 8") {
+		t.Fatalf("err = %v, want both generations", err)
+	}
+	target.launchGeneration = 9
+	if err := requireObservedSyncTarget(target); err != nil {
+		t.Fatalf("equal generations rejected: %v", err)
+	}
+	target.observedGeneration = 0
+	if err := requireObservedSyncTarget(target); err != nil {
+		t.Fatalf("first-heartbeat lag rejected: %v", err)
+	}
+	target.launchGeneration = 8
+	target.active = false
+	if err := requireObservedSyncTarget(target); err != nil {
+		t.Fatalf("inactive workspace rejected: %v", err)
 	}
 }
 

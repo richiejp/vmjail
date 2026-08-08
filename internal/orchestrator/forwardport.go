@@ -114,15 +114,7 @@ func readForwardHello(stream forwardServerStream) (*workspacev1.ForwardHello, er
 // (UUID-first; name lookups are scoped to callerFP) and confirms
 // the workspace is running (current_sandbox set).
 func (h *WorkspaceCatalogHandler) resolveForwardWorkspace(callerFP identity.Fingerprint, hello *workspacev1.ForwardHello) (workspacecatalog.Workspace, error) {
-	ws, err := h.resolveHandle(callerFP, hello.GetWorkspace())
-	if err != nil {
-		return workspacecatalog.Workspace{}, err
-	}
-	if ws.Status.CurrentSandbox == nil || ws.Status.CurrentSandbox.UID == "" {
-		return workspacecatalog.Workspace{}, connect.NewError(connect.CodeFailedPrecondition,
-			fmt.Errorf("%w: workspace=%s", ErrForwardWorkspaceNotRunning, ws.Metadata.UUID))
-	}
-	return ws, nil
+	return h.resolveCurrentWorkspace(callerFP, hello.GetWorkspace(), ErrForwardWorkspaceNotRunning)
 }
 
 // spliceConns runs io.Copy in both directions and returns the

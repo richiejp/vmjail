@@ -117,9 +117,10 @@ type PortMapping struct {
 // Carried on Workspace so the catalog package stays independent of
 // the wire types.
 type SandboxRef struct {
-	UID                string
-	NodeFingerprint    identity.Fingerprint
-	AgentProfileDigest string
+	UID                 string
+	NodeFingerprint     identity.Fingerprint
+	AgentProfileDigest  string
+	WorkspaceGeneration uint64
 }
 
 // Lock is the workspace's optional write-lock. Zero owner ⇒ unlocked.

@@ -23,6 +23,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
+	"github.com/richiejp/darkaifactory/internal/workspacedisk"
 )
 
 // errUnauthenticated is returned when an inbound request has no
@@ -339,9 +340,30 @@ func (h *WorkspaceCatalogHandler) SetResources(
 	diskBytes := req.Msg.GetDiskBytes()
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
+			oldDiskBytes := w.Spec.DiskBytes
+			if oldDiskBytes == 0 {
+				oldDiskBytes = workspacedisk.DefaultDiskBytes
+			}
+			newDiskBytes := diskBytes
+			if newDiskBytes == 0 {
+				newDiskBytes = workspacedisk.DefaultDiskBytes
+			}
+			if w.Status.CurrentSandbox != nil && newDiskBytes < oldDiskBytes {
+				return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf(
+					"workspace: live disk cannot shrink: current=%d requested=%d", oldDiskBytes, newDiskBytes,
+				))
+			}
+			liveDiskOnlyGrowth := w.Status.CurrentSandbox != nil && newDiskBytes > oldDiskBytes &&
+				w.Spec.MemoryBytes == memBytes && w.Spec.CPUCores == cpuCores
 			w.Spec.MemoryBytes = memBytes
 			w.Spec.CPUCores = cpuCores
 			w.Spec.DiskBytes = diskBytes
+			if liveDiskOnlyGrowth {
+				// The public client commits SetResources only after the Node has
+				// resized qcow2, virtio-blk, and XFS. MutateSpec increments the
+				// generation after this callback, so stamp that exact generation.
+				w.Status.CurrentSandbox.WorkspaceGeneration = w.Metadata.Generation + 1
+			}
 			return nil
 		})
 }
@@ -818,8 +840,9 @@ func (h *WorkspaceCatalogHandler) Launch(
 			w.Spec.TargetSandboxFingerprint = targetFP.String()
 		}
 		w.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
-			UID:             sandboxUID,
-			NodeFingerprint: targetFP,
+			UID:                 sandboxUID,
+			NodeFingerprint:     targetFP,
+			WorkspaceGeneration: ws.Metadata.Generation,
 		}
 		w.Status.SetCondition(
 			workspacecatalog.ConditionDispatched,
@@ -917,7 +940,10 @@ func (h *WorkspaceCatalogHandler) LaunchAgentSandbox(owner identity.Fingerprint,
 		return workspacecatalog.SandboxRef{}, mapSandboxPublishError(pubErr)
 	}
 
-	ref := workspacecatalog.SandboxRef{UID: sandboxUID, NodeFingerprint: targetFP, AgentProfileDigest: policy.ProfileDigest}
+	ref := workspacecatalog.SandboxRef{
+		UID: sandboxUID, NodeFingerprint: targetFP, AgentProfileDigest: policy.ProfileDigest,
+		WorkspaceGeneration: ws.Metadata.Generation,
+	}
 	mutation := workspacecatalog.MutateStatus
 	if autoSelected {
 		mutation = workspacecatalog.MutateSpec
@@ -1625,9 +1651,10 @@ func sandboxRefToProto(ref *workspacecatalog.SandboxRef) *sandboxv1.SandboxRef {
 		return nil
 	}
 	return &sandboxv1.SandboxRef{
-		Uid:                ref.UID,
-		Node:               &sandboxv1.NodeRef{Fingerprint: ref.NodeFingerprint.String()},
-		AgentProfileDigest: ref.AgentProfileDigest,
+		Uid:                 ref.UID,
+		Node:                &sandboxv1.NodeRef{Fingerprint: ref.NodeFingerprint.String()},
+		AgentProfileDigest:  ref.AgentProfileDigest,
+		WorkspaceGeneration: ref.WorkspaceGeneration,
 	}
 }
 

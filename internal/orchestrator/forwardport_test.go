@@ -115,6 +115,7 @@ func newForwardingTestHandler(t *testing.T, bridger WorkspacePortBridger) (*Work
 	// Mark the workspace RUNNING by stamping CurrentSandbox.
 	if _, err := cat.Update(uid, workspacecatalog.MutateStatus,
 		func(ws *workspacecatalog.Workspace) error {
+			ws.Status.ObservedGeneration = ws.Metadata.Generation
 			ws.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
 				UID:             "sb-1",
 				NodeFingerprint: identity.Fingerprint{0xcc},
@@ -398,6 +399,7 @@ func TestForwardPortConnectE2E(t *testing.T) {
 	}
 	if _, err := cat.Update(uid, workspacecatalog.MutateStatus,
 		func(ws *workspacecatalog.Workspace) error {
+			ws.Status.ObservedGeneration = ws.Metadata.Generation
 			ws.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
 				UID: "sb-1", NodeFingerprint: identity.Fingerprint{0xcc},
 			}
