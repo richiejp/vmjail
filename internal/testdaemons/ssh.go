@@ -105,6 +105,11 @@ func (s *SSHServer) ClientArgs() []string {
 		"-i", s.IdentityFile,
 		"-o", "BatchMode=yes",
 		"-o", "IdentitiesOnly=yes",
+		"-o", "IdentityAgent=none",
+		"-o", "ConnectTimeout=10",
+		"-o", "ConnectionAttempts=3",
+		"-o", "ServerAliveInterval=5",
+		"-o", "ServerAliveCountMax=3",
 		"-o", "StrictHostKeyChecking=yes",
 		"-o", "UserKnownHostsFile=" + s.KnownHostsFile,
 		s.Destination,
@@ -115,6 +120,7 @@ func (s *SSHServer) Run(t *testing.T, stdin io.Reader, remoteCommand string) str
 	t.Helper()
 	args := append(s.ClientArgs(), remoteCommand)
 	command := exec.CommandContext(t.Context(), "ssh", args...)
+	command.Env = append(os.Environ(), "SSH_AUTH_SOCK=")
 	command.Stdin = stdin
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -155,6 +161,10 @@ func (s *SSHServer) Upload(t *testing.T, localPath, remotePath string) {
 		"-i", s.IdentityFile,
 		"-o", "BatchMode=yes",
 		"-o", "IdentitiesOnly=yes",
+		"-o", "ConnectTimeout=10",
+		"-o", "ConnectionAttempts=3",
+		"-o", "ServerAliveInterval=5",
+		"-o", "ServerAliveCountMax=3",
 		"-o", "StrictHostKeyChecking=yes",
 		"-o", "UserKnownHostsFile=" + s.KnownHostsFile,
 		localPath,
@@ -170,6 +180,7 @@ func shellQuote(value string) string {
 func runCommand(t *testing.T, name string, args ...string) {
 	t.Helper()
 	command := exec.CommandContext(t.Context(), name, args...) //nolint:gosec // test-owned executable and arguments.
+	command.Env = append(os.Environ(), "SSH_AUTH_SOCK=")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, output)
 	}

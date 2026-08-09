@@ -21,8 +21,9 @@ import (
 // catalogFakeDispatcher mirrors the in-orchestrator fake (which
 // can't be imported across package boundaries).
 type catalogFakeDispatcher struct {
-	mu    sync.Mutex
-	calls []catalogDispatchCall
+	mu     sync.Mutex
+	calls  []catalogDispatchCall
+	onCall func(catalogDispatchCall)
 }
 
 type catalogDispatchCall struct {
@@ -33,8 +34,13 @@ type catalogDispatchCall struct {
 
 func (f *catalogFakeDispatcher) PublishSandboxEvent(fp identity.Fingerprint, eventType sandboxv1.EventType, sandbox *sandboxv1.Sandbox) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, catalogDispatchCall{fp: fp, eventType: eventType, sandbox: sandbox})
+	call := catalogDispatchCall{fp: fp, eventType: eventType, sandbox: sandbox}
+	f.calls = append(f.calls, call)
+	onCall := f.onCall
+	f.mu.Unlock()
+	if onCall != nil {
+		onCall(call)
+	}
 	return nil
 }
 
@@ -321,6 +327,23 @@ func newWorkspaceE2EHarness(t *testing.T) *workspaceE2EHarness {
 	}
 	fake := &catalogFakeDispatcher{}
 	catalogStore := workspacecatalog.NewStore(nil)
+	fake.onCall = func(call catalogDispatchCall) {
+		if call.eventType != sandboxv1.EventType_EVENT_TYPE_DELETED {
+			return
+		}
+		uid := call.sandbox.GetMetadata().GetUid()
+		matches := catalogStore.List(func(ws *workspacecatalog.Workspace) bool {
+			return ws.Status.CurrentSandbox != nil && ws.Status.CurrentSandbox.UID == uid
+		})
+		for index := range matches {
+			ws := &matches[index]
+			_, _ = catalogStore.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(current *workspacecatalog.Workspace) error {
+				current.Status.CurrentSandbox = nil
+				current.Status.SetCondition(workspacecatalog.ConditionDispatched, workspacecatalog.ConditionStatusFalse, "Killed", "", time.Now())
+				return nil
+			})
+		}
+	}
 	addr, srvID := runOrchestratorWithCatalog(t, srvStore, catalogStore, fake)
 	if _, _, err := runDaft(t, authCmdName, configDirArg, clientDir, "approve",
 		srvID.Fingerprint().String(), "--role", "orchestrator"); err != nil {

@@ -447,6 +447,10 @@ Landed:
   deletion, and the workspace-wide API accepts a distinct `WorkspaceID` type.
   This prevents a mount SyncKey from silently becoming a mismatched prefix;
   tests assert both in-memory and durable current references are removed.
+- Public Workspace stop keeps its Sandbox binding until a Node heartbeat
+  reports the exact Sandbox terminal. The bounded wait returns a retryable
+  deadline failure without clearing ownership, so delete cannot race an
+  asynchronous VM/disk teardown.
 - Exact rejection now removes the stopped retained qcow2 before restoring CAS
   provenance, refuses a running disk, and leaves the protected manifest current
   when disk deletion fails. Relaunch therefore seeds only the restored client

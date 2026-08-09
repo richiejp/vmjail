@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -235,6 +236,7 @@ type fakeDispatcher struct {
 	mu        sync.Mutex
 	calls     []dispatchCall
 	nextError error
+	onCall    func(dispatchCall)
 }
 
 type callbackDispatcher struct {
@@ -272,13 +274,19 @@ type dispatchCall struct {
 
 func (f *fakeDispatcher) PublishSandboxEvent(fp identity.Fingerprint, eventType sandboxv1.EventType, sandbox *sandboxv1.Sandbox) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	if f.nextError != nil {
 		err := f.nextError
 		f.nextError = nil
+		f.mu.Unlock()
 		return err
 	}
-	f.calls = append(f.calls, dispatchCall{fp: fp, eventType: eventType, sandbox: sandbox})
+	call := dispatchCall{fp: fp, eventType: eventType, sandbox: sandbox}
+	f.calls = append(f.calls, call)
+	onCall := f.onCall
+	f.mu.Unlock()
+	if onCall != nil {
+		onCall(call)
+	}
 	return nil
 }
 
@@ -835,7 +843,7 @@ func TestSetResourcesAdvancesOnlyLiveDiskGrowth(t *testing.T) {
 	handle := uuidHandle(uuid)
 	before, err := rig.catalog.Update(uuid, workspacecatalog.MutateStatus, func(ws *workspacecatalog.Workspace) error {
 		ws.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
-			UID: "sandbox", WorkspaceGeneration: ws.Metadata.Generation,
+			UID: testAgentSandbox, WorkspaceGeneration: ws.Metadata.Generation,
 		}
 		return nil
 	})
@@ -2131,6 +2139,18 @@ func TestStopFromRunningTransitionsAndClearsDispatch(t *testing.T) {
 	)); err != nil {
 		t.Fatalf("Launch: %v", err)
 	}
+	fake.mu.Lock()
+	fake.onCall = func(call dispatchCall) {
+		if call.eventType != sandboxv1.EventType_EVENT_TYPE_DELETED {
+			return
+		}
+		_, _ = rig.catalog.Update(uuid, workspacecatalog.MutateStatus, func(ws *workspacecatalog.Workspace) error {
+			ws.Status.CurrentSandbox = nil
+			ws.Status.SetCondition(workspacecatalog.ConditionDispatched, workspacecatalog.ConditionStatusFalse, "Killed", "", time.Now())
+			return nil
+		})
+	}
+	fake.mu.Unlock()
 	resp, err := rig.client.Stop(t.Context(), connect.NewRequest(
 		&workspacev1.StopRequest{Handle: uuidHandle(uuid)},
 	))
@@ -2187,6 +2207,61 @@ func TestStopPublishFailureKeepsSandboxBound(t *testing.T) {
 	}
 }
 
+func TestStopTimeoutKeepsSandboxBoundForRetry(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
+	uuid := readyWorkspace(t, rig, "stop-timeout", target)
+	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.client.Launch(t.Context(), connect.NewRequest(&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)})); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := rig.client.Stop(ctx, connect.NewRequest(&workspacev1.StopRequest{Handle: uuidHandle(uuid)})); connect.CodeOf(err) != connect.CodeDeadlineExceeded {
+		t.Fatalf("Stop error = %v, want DeadlineExceeded", err)
+	}
+	ws, err := rig.catalog.Get(uuid)
+	if err != nil || ws.Status.CurrentSandbox == nil || !ws.Status.IsTrue(workspacecatalog.ConditionDispatched) {
+		t.Fatalf("workspace after unacknowledged stop = %+v, %v", ws, err)
+	}
+}
+
+func TestWaitForSandboxStopTerminalStates(t *testing.T) {
+	store := workspacecatalog.NewStore(nil)
+	ws, err := store.Create(workspacecatalog.CreateInput{UUID: "wait-stop", Name: "wait-stop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := NewWorkspaceCatalogHandler(store, &fakeDispatcher{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := make(chan uint64)
+	if got, err := h.waitForSandboxStop(t.Context(), ws.Metadata.UUID, "old", changes); err != nil || got.Metadata.UUID != ws.Metadata.UUID {
+		t.Fatalf("already stopped = %#v, %v", got, err)
+	}
+	if _, err := store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(current *workspacecatalog.Workspace) error {
+		current.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: "new"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.waitForSandboxStop(t.Context(), ws.Metadata.UUID, "old", changes); err != nil || got.Status.CurrentSandbox.UID != "new" {
+		t.Fatalf("replaced binding = %#v, %v", got, err)
+	}
+	if _, err := h.waitForSandboxStop(t.Context(), "missing", "old", changes); connect.CodeOf(err) != connect.CodeNotFound {
+		t.Fatalf("missing workspace = %v, want NotFound", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := h.waitForSandboxStop(ctx, ws.Metadata.UUID, "new", changes); connect.CodeOf(err) != connect.CodeDeadlineExceeded {
+		t.Fatalf("canceled wait = %v, want DeadlineExceeded", err)
+	}
+}
+
 func TestStopAgentSandboxValidatesAndIgnoresStaleBindings(t *testing.T) {
 	store := workspacecatalog.NewStore(nil)
 	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
@@ -2199,20 +2274,20 @@ func TestStopAgentSandboxValidatesAndIgnoresStaleBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := withoutDispatcher.StopAgentSandbox(owner, ws.Metadata.UUID, "sandbox"); connect.CodeOf(err) != connect.CodeUnimplemented {
+	if err := withoutDispatcher.StopAgentSandbox(owner, ws.Metadata.UUID, testAgentSandbox); connect.CodeOf(err) != connect.CodeUnimplemented {
 		t.Fatalf("missing dispatcher error = %v", err)
 	}
 	h, err := NewWorkspaceCatalogHandler(store, &fakeDispatcher{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := h.StopAgentSandbox(identity.Fingerprint{}, ws.Metadata.UUID, "sandbox"); connect.CodeOf(err) != connect.CodeInvalidArgument {
+	if err := h.StopAgentSandbox(identity.Fingerprint{}, ws.Metadata.UUID, testAgentSandbox); connect.CodeOf(err) != connect.CodeInvalidArgument {
 		t.Fatalf("incomplete binding error = %v", err)
 	}
-	if err := h.StopAgentSandbox(owner, "missing", "sandbox"); connect.CodeOf(err) != connect.CodeNotFound {
+	if err := h.StopAgentSandbox(owner, "missing", testAgentSandbox); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatalf("missing workspace error = %v", err)
 	}
-	if err := h.StopAgentSandbox(other, ws.Metadata.UUID, "sandbox"); connect.CodeOf(err) != connect.CodeNotFound {
+	if err := h.StopAgentSandbox(other, ws.Metadata.UUID, testAgentSandbox); connect.CodeOf(err) != connect.CodeNotFound {
 		t.Fatalf("foreign workspace error = %v", err)
 	}
 	if err := h.StopAgentSandbox(owner, ws.Metadata.UUID, "stale-sandbox"); err != nil {
@@ -2255,6 +2330,41 @@ func TestStopAgentSandboxCannotClearNewBindingAfterPublish(t *testing.T) {
 	got, err := store.Get(ws.Metadata.UUID)
 	if err != nil || got.Status.CurrentSandbox == nil || got.Status.CurrentSandbox.UID != newUID || !got.Status.IsTrue(workspacecatalog.ConditionDispatched) {
 		t.Fatalf("new binding after stale teardown = %+v, %v", got.Status, err)
+	}
+}
+
+func TestStopAgentSandboxClearsOnlyAfterSuccessfulPublish(t *testing.T) {
+	store := workspacecatalog.NewStore(nil)
+	owner := mustGenerate(t, identity.RoleOperator).Fingerprint()
+	node := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	ws, err := store.Create(workspacecatalog.CreateInput{UUID: "agent-stop", Name: "agent-stop", OwnerFingerprint: owner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(current *workspacecatalog.Workspace) error {
+		current.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node}
+		current.Status.SetCondition(workspacecatalog.ConditionDispatched, workspacecatalog.ConditionStatusTrue, "Launched", "", time.Now())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := &fakeDispatcher{nextError: ErrNodeNotConnected}
+	h, err := NewWorkspaceCatalogHandler(store, dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.StopAgentSandbox(owner, ws.Metadata.UUID, testAgentSandbox); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Fatalf("publish failure = %v", err)
+	}
+	if current, _ := store.Get(ws.Metadata.UUID); current.Status.CurrentSandbox == nil {
+		t.Fatal("failed publish cleared binding")
+	}
+	if err := h.StopAgentSandbox(owner, ws.Metadata.UUID, testAgentSandbox); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.Get(ws.Metadata.UUID)
+	if err != nil || current.Status.CurrentSandbox != nil || current.Status.IsTrue(workspacecatalog.ConditionDispatched) {
+		t.Fatalf("acknowledged agent stop = %+v, %v", current.Status, err)
 	}
 }
 
@@ -2361,7 +2471,7 @@ func TestReconcileWorkspaceStorageAcceptsOnlyCurrentTargetNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = store.Update(created.Metadata.UUID, workspacecatalog.MutateStatus, func(value *workspacecatalog.Workspace) error {
-		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: "sandbox", NodeFingerprint: node}
+		value.Status.CurrentSandbox = &workspacecatalog.SandboxRef{UID: testAgentSandbox, NodeFingerprint: node}
 		return nil
 	})
 	if err != nil {

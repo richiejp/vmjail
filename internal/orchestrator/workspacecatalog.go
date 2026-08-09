@@ -1032,7 +1032,7 @@ func (h *WorkspaceCatalogHandler) reconcileBefore(uuid string) {
 // A publish failure leaves the catalog dispatched so a retry cannot silently
 // strand a VM. The Node-side delete is idempotent.
 func (h *WorkspaceCatalogHandler) Stop(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[workspacev1.StopRequest],
 ) (*connect.Response[workspacev1.WorkspaceResponse], error) {
 	fp, ok := PeerFingerprintFromRequestHeader(req.Header())
@@ -1064,12 +1064,17 @@ func (h *WorkspaceCatalogHandler) Stop(
 	if !dispatched || ws.Status.CurrentSandbox == nil {
 		return nil, connect.NewError(connect.CodeInternal, errors.New("workspace: inconsistent dispatched Sandbox binding"))
 	}
-	if err := h.stopAgentSandbox(fp, ws.Metadata.UUID, ws.Status.CurrentSandbox.UID); err != nil {
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	sandboxUID := ws.Status.CurrentSandbox.UID
+	changes, stopWatching := h.store.Watch()
+	defer stopWatching()
+	if err := h.publishSandboxStop(ws.Status.CurrentSandbox); err != nil {
 		return nil, err
 	}
-	updated, err := h.store.Get(ws.Metadata.UUID)
+	updated, err := h.waitForSandboxStop(waitCtx, ws.Metadata.UUID, sandboxUID, changes)
 	if err != nil {
-		return nil, mapCatalogErr(err)
+		return nil, err
 	}
 	return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: workspaceToProto(updated)}), nil
 }
@@ -1174,9 +1179,8 @@ func (h *WorkspaceCatalogHandler) stopAgentSandbox(owner identity.Fingerprint, w
 	if current == nil || current.UID != sandboxUID {
 		return nil
 	}
-	sandbox := &sandboxv1.Sandbox{Metadata: &sandboxv1.SandboxMetadata{Uid: sandboxUID}}
-	if err := h.dispatcher.PublishSandboxEvent(current.NodeFingerprint, sandboxv1.EventType_EVENT_TYPE_DELETED, sandbox); err != nil {
-		return mapSandboxPublishError(err)
+	if err := h.publishSandboxStop(current); err != nil {
+		return err
 	}
 	_, err = h.store.Update(workspaceUUID, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
 		if w.Status.CurrentSandbox == nil || w.Status.CurrentSandbox.UID != sandboxUID {
@@ -1193,6 +1197,40 @@ func (h *WorkspaceCatalogHandler) stopAgentSandbox(owner identity.Fingerprint, w
 		return mapCatalogErr(err)
 	}
 	return nil
+}
+
+func (h *WorkspaceCatalogHandler) publishSandboxStop(current *workspacecatalog.SandboxRef) error {
+	sandbox := &sandboxv1.Sandbox{Metadata: &sandboxv1.SandboxMetadata{Uid: current.UID}}
+	if err := h.dispatcher.PublishSandboxEvent(current.NodeFingerprint, sandboxv1.EventType_EVENT_TYPE_DELETED, sandbox); err != nil {
+		return mapSandboxPublishError(err)
+	}
+	return nil
+}
+
+func (h *WorkspaceCatalogHandler) waitForSandboxStop(
+	ctx context.Context,
+	workspaceUUID, sandboxUID string,
+	changes <-chan uint64,
+) (workspacecatalog.Workspace, error) {
+	//daft:lint:disable=forloopbound reason="bounded by the 30s caller context; exits on teardown notification, binding replacement, catalog error, or deadline"
+	for {
+		ws, err := h.store.Get(workspaceUUID)
+		if err != nil {
+			return workspacecatalog.Workspace{}, mapCatalogErr(err)
+		}
+		if ws.Status.CurrentSandbox == nil {
+			return ws, nil
+		}
+		if ws.Status.CurrentSandbox.UID != sandboxUID {
+			return ws, nil
+		}
+		select {
+		case <-ctx.Done():
+			return workspacecatalog.Workspace{}, connect.NewError(connect.CodeDeadlineExceeded,
+				fmt.Errorf("workspace: timed out waiting for Sandbox %s teardown acknowledgment: %w", sandboxUID, ctx.Err()))
+		case <-changes:
+		}
+	}
 }
 
 // Acquire takes or refreshes the workspace's write lock. Refresh
