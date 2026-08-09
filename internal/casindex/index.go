@@ -1,6 +1,8 @@
 package casindex
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -24,7 +26,27 @@ const (
 	manifestPrefix = "manifest/"
 	currentPrefix  = "current/"
 	indexDirName   = "metadata.badger"
+	chunkTxnBatch  = 128
 )
+
+type storedManifest struct {
+	Version        uint32         `json:"version"`
+	SyncKey        string         `json:"sync_key"`
+	Digest         string         `json:"digest"`
+	Generation     uint64         `json:"generation"`
+	Origin         Origin         `json:"origin"`
+	Recoverability Recoverability `json:"recoverability"`
+	Disposition    Disposition    `json:"disposition"`
+	Current        bool           `json:"current"`
+	NeedsRepush    bool           `json:"needs_repush,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	Body           []byte         `json:"body"`
+}
+
+type manifestBody struct {
+	Chunks  []ChunkRef `json:"chunks"`
+	Payload []byte     `json:"payload,omitempty"`
+}
 
 var (
 	ErrStaleManifest   = errors.New("casindex: stale manifest generation or digest")
@@ -61,6 +83,10 @@ func Open(casRoot string, now func() time.Time) (*Index, error) {
 	}
 	index := &Index{db: db, store: store, now: now, touches: map[string]time.Time{}}
 	if err := index.migrateLegacy(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := index.repairReferences(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -126,6 +152,81 @@ func (i *Index) migrateLegacy() error {
 	return nil
 }
 
+// repairReferences removes conservative leftovers from a process crash between
+// staged reference batches and the atomic current-pointer update. It never
+// invents eligibility: unreferenced legacy chunks retain their protected state.
+func (i *Index) repairReferences() error {
+	var after []byte
+	//daft:lint:disable=forloopbound reason="terminates after advancing through the finite Badger chunk-key snapshot in 128-key batches"
+	for {
+		var digests []string
+		var last []byte
+		if err := i.db.View(func(txn *badger.Txn) error {
+			iterator := txn.NewIterator(badger.DefaultIteratorOptions)
+			defer iterator.Close()
+			prefix := []byte(chunkPrefix)
+			seek := prefix
+			if len(after) != 0 {
+				seek = after
+			}
+			for iterator.Seek(seek); iterator.ValidForPrefix(prefix) && len(digests) < chunkTxnBatch; iterator.Next() {
+				key := iterator.Item().KeyCopy(nil)
+				if bytes.Equal(key, after) {
+					continue
+				}
+				digests = append(digests, strings.TrimPrefix(string(key), chunkPrefix))
+				last = key
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		if len(digests) == 0 {
+			return nil
+		}
+		if err := i.db.Update(func(txn *badger.Txn) error {
+			for _, digest := range digests {
+				chunk, err := chunkInTxn(txn, digest)
+				if err != nil {
+					return err
+				}
+				kept := chunk.References[:0]
+				protected := false
+				for _, reference := range chunk.References {
+					var manifest Manifest
+					if err := getManifest(txn, manifestKey(reference.SyncKey, reference.Generation, reference.Digest), &manifest); err != nil {
+						if errors.Is(err, badger.ErrKeyNotFound) {
+							continue
+						}
+						return err
+					}
+					if !manifest.Current {
+						continue
+					}
+					kept = append(kept, reference)
+					protected = protected || manifest.Recoverability == RecoverabilityProtected
+				}
+				chunk.References = kept
+				if len(kept) != 0 {
+					chunk.Disposition = DispositionActive
+					if protected {
+						chunk.Recoverability = RecoverabilityProtected
+					} else {
+						chunk.Recoverability = RecoverabilityRecoverable
+					}
+				}
+				if err := setJSON(txn, chunkKey(digest), chunk); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		after = last
+	}
+}
+
 func (i *Index) Chunk(digest string) (Chunk, error) {
 	var chunk Chunk
 	err := i.db.View(func(txn *badger.Txn) error { return getJSON(txn, chunkKey(digest), &chunk) })
@@ -135,7 +236,7 @@ func (i *Index) Chunk(digest string) (Chunk, error) {
 func (i *Index) Manifest(syncKey, digest string, generation uint64) (Manifest, error) {
 	var manifest Manifest
 	err := i.db.View(func(txn *badger.Txn) error {
-		return getJSON(txn, manifestKey(syncKey, generation, digest), &manifest)
+		return getManifest(txn, manifestKey(syncKey, generation, digest), &manifest)
 	})
 	return manifest, err
 }
@@ -144,81 +245,132 @@ func (i *Index) Manifest(syncKey, digest string, generation uint64) (Manifest, e
 // every referenced chunk exists. Repeating the same digest/generation is
 // idempotent; stale or conflicting commits are rejected.
 func (i *Index) CommitManifest(request CommitRequest) error {
+	request, err := i.prepareCommitRequest(request)
+	if err != nil {
+		return err
+	}
+
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	var previous Manifest
+	hasPrevious := false
+	if err := i.db.View(func(txn *badger.Txn) error {
+		var err error
+		hasPrevious, err = getOptionalCurrentManifest(txn, request.SyncKey, &previous)
+		return err
+	}); err != nil {
+		return err
+	}
+	if hasPrevious {
+		if previous.Generation == request.Generation && previous.Digest == request.Digest {
+			return nil
+		}
+		if request.Generation <= previous.Generation {
+			return ErrStaleManifest
+		}
+	}
+	manifest := Manifest{
+		SyncKey: request.SyncKey, Digest: request.Digest, Generation: request.Generation,
+		Chunks: request.Chunks, Origin: request.Origin, Recoverability: request.Recoverability,
+		Disposition: DispositionActive, CreatedAt: i.now(), Payload: slices.Clone(request.Payload),
+	}
+	// Stage the immutable body and every conservative reference first. The
+	// small current pointer below is the atomic publication point.
+	if err := i.db.Update(func(txn *badger.Txn) error { return setManifest(txn, manifest) }); err != nil {
+		return err
+	}
+	if err := i.addManifestReferencesBatched(manifest); err != nil {
+		return err
+	}
+	manifest.Current = true
+	if hasPrevious {
+		previous.Current = false
+		previous.Disposition = DispositionSuperseded
+	}
+	if err := i.publishStagedManifest(request.SyncKey, manifest, previous, hasPrevious); err != nil {
+		return err
+	}
+	if hasPrevious {
+		return i.removeManifestReferencesBatched(previous, false)
+	}
+	return nil
+}
+
+func (i *Index) prepareCommitRequest(request CommitRequest) (CommitRequest, error) {
 	if request.SyncKey == "" || request.Generation == 0 || !validDigest(request.Digest) {
-		return errors.New("casindex: invalid manifest identity")
+		return CommitRequest{}, errors.New("casindex: invalid manifest identity")
 	}
 	if request.Origin == OriginSandbox {
 		request.Recoverability = RecoverabilityProtected
 	}
 	if request.Recoverability == "" {
-		return errors.New("casindex: manifest recoverability is required")
+		return CommitRequest{}, errors.New("casindex: manifest recoverability is required")
 	}
 	var err error
 	request.Chunks, err = uniqueChunkRefs(request.Chunks)
 	if err != nil {
-		return err
+		return CommitRequest{}, err
 	}
 	for _, ref := range request.Chunks {
 		has, err := i.store.Has(ref.Digest)
 		if err != nil {
-			return err
+			return CommitRequest{}, err
 		}
 		if !has {
-			return fmt.Errorf("casindex: manifest chunk %s is missing", ref.Digest)
+			return CommitRequest{}, fmt.Errorf("casindex: manifest chunk %s is missing", ref.Digest)
 		}
 	}
+	return request, nil
+}
 
-	i.mu.Lock()
-	defer i.mu.Unlock()
+func (i *Index) publishStagedManifest(syncKey string, manifest, previous Manifest, hasPrevious bool) error {
 	return i.db.Update(func(txn *badger.Txn) error {
-		var previous Manifest
-		hasPrevious, err := getOptionalJSON(txn, currentKey(request.SyncKey), &previous)
+		var current Manifest
+		hasCurrent, err := getOptionalCurrentManifest(txn, syncKey, &current)
 		if err != nil {
 			return err
 		}
+		if hasCurrent != hasPrevious || hasCurrent && (current.Digest != previous.Digest || current.Generation != previous.Generation) {
+			return ErrStaleManifest
+		}
 		if hasPrevious {
-			if previous.Generation == request.Generation && previous.Digest == request.Digest {
-				return nil
-			}
-			if request.Generation <= previous.Generation {
-				return ErrStaleManifest
-			}
-			previous.Current = false
-			previous.Disposition = DispositionSuperseded
-			if err := setJSON(txn, manifestKey(previous.SyncKey, previous.Generation, previous.Digest), previous); err != nil {
-				return err
-			}
-			if err := i.removeManifestReferences(txn, previous, false); err != nil {
+			if err := setManifest(txn, previous); err != nil {
 				return err
 			}
 		}
-		manifest := Manifest{
-			SyncKey: request.SyncKey, Digest: request.Digest, Generation: request.Generation,
-			Chunks: request.Chunks, Origin: request.Origin, Recoverability: request.Recoverability,
-			Disposition: DispositionActive, Current: true, CreatedAt: i.now(), Payload: slices.Clone(request.Payload),
-		}
-		if err := i.addManifestReferences(txn, manifest); err != nil {
+		if err := setManifest(txn, manifest); err != nil {
 			return err
 		}
-		if err := setJSON(txn, manifestKey(manifest.SyncKey, manifest.Generation, manifest.Digest), manifest); err != nil {
-			return err
-		}
-		return setJSON(txn, currentKey(manifest.SyncKey), manifest)
+		return setCurrentManifest(txn, manifest)
 	})
 }
 
 // Acknowledge adopts only the exact current manifest. A stale client cannot
 // make newer sandbox writes recoverable.
 func (i *Index) Acknowledge(syncKey, digest string, generation uint64) error {
-	return i.transitionExact(syncKey, digest, generation, func(txn *badger.Txn, manifest *Manifest) error {
-		manifest.Origin = OriginClientAdopted
-		manifest.Recoverability = RecoverabilityRecoverable
-		for _, ref := range manifest.Chunks {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	manifest, err := i.exactCurrent(syncKey, digest, generation)
+	if err != nil {
+		return err
+	}
+	manifest.Origin = OriginClientAdopted
+	manifest.Recoverability = RecoverabilityRecoverable
+	if err := i.db.Update(func(txn *badger.Txn) error {
+		if err := setManifest(txn, manifest); err != nil {
+			return err
+		}
+		return setCurrentManifest(txn, manifest)
+	}); err != nil {
+		return err
+	}
+	return i.mutateManifestReferencesBatched(manifest, func(txn *badger.Txn, batch Manifest) error {
+		for _, ref := range batch.Chunks {
 			chunk, err := chunkInTxn(txn, ref.Digest)
 			if err != nil {
 				return err
 			}
-			self := Reference{SyncKey: manifest.SyncKey, Digest: manifest.Digest, Generation: manifest.Generation}
+			self := Reference{SyncKey: batch.SyncKey, Digest: batch.Digest, Generation: batch.Generation}
 			protected, err := hasProtectedReference(txn, chunk.References, &self)
 			if err != nil {
 				return err
@@ -240,57 +392,66 @@ func (i *Index) Acknowledge(syncKey, digest string, generation uint64) error {
 // Reject makes the exact unadopted current manifest eligible and restores the
 // newest prior recoverable manifest, when one exists.
 func (i *Index) Reject(syncKey, digest string, generation uint64) error {
-	return i.transitionExact(syncKey, digest, generation, func(txn *badger.Txn, manifest *Manifest) error {
-		manifest.Current = false
-		manifest.Disposition = DispositionRejected
-		manifest.Recoverability = RecoverabilityRecoverable
-		if err := i.removeManifestReferences(txn, *manifest, true); err != nil {
-			return err
-		}
-		restored, ok, err := newestRecoverable(txn, syncKey, generation)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return txn.Delete(currentKey(syncKey))
-		}
-		restored.Current = true
-		restored.Disposition = DispositionActive
-		if err := i.addManifestReferences(txn, restored); err != nil {
-			return err
-		}
-		if err := setJSON(txn, manifestKey(restored.SyncKey, restored.Generation, restored.Digest), restored); err != nil {
-			return err
-		}
-		return setJSON(txn, currentKey(syncKey), restored)
-	})
-}
-
-func (i *Index) transitionExact(syncKey, digest string, generation uint64, mutate func(*badger.Txn, *Manifest) error) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	return i.db.Update(func(txn *badger.Txn) error {
-		var current Manifest
-		if err := getJSON(txn, currentKey(syncKey), &current); err != nil {
+	manifest, err := i.exactCurrent(syncKey, digest, generation)
+	if err != nil {
+		return err
+	}
+	var restored Manifest
+	var restore bool
+	if err := i.db.View(func(txn *badger.Txn) error {
+		var err error
+		restored, restore, err = newestRecoverable(txn, syncKey, generation)
+		return err
+	}); err != nil {
+		return err
+	}
+	if restore {
+		restored.Current = true
+		restored.Disposition = DispositionActive
+		if err := i.addManifestReferencesBatched(restored); err != nil {
+			return err
+		}
+	}
+	manifest.Current = false
+	manifest.Disposition = DispositionRejected
+	manifest.Recoverability = RecoverabilityRecoverable
+	if err := i.db.Update(func(txn *badger.Txn) error {
+		if err := setManifest(txn, manifest); err != nil {
+			return err
+		}
+		if !restore {
+			return txn.Delete(currentKey(syncKey))
+		}
+		if err := setManifest(txn, restored); err != nil {
+			return err
+		}
+		return setCurrentManifest(txn, restored)
+	}); err != nil {
+		return err
+	}
+	return i.removeManifestReferencesBatched(manifest, true)
+}
+
+func (i *Index) exactCurrent(syncKey, digest string, generation uint64) (Manifest, error) {
+	var current Manifest
+	err := i.db.View(func(txn *badger.Txn) error {
+		if err := getCurrentManifest(txn, syncKey, &current); err != nil {
 			if errors.Is(err, badger.ErrKeyNotFound) {
 				return ErrManifestMissing
 			}
 			return err
 		}
-		if current.Digest != digest || current.Generation != generation {
-			return ErrStaleManifest
-		}
-		if err := mutate(txn, &current); err != nil {
-			return err
-		}
-		if err := setJSON(txn, manifestKey(current.SyncKey, current.Generation, current.Digest), current); err != nil {
-			return err
-		}
-		if current.Current {
-			return setJSON(txn, currentKey(current.SyncKey), current)
-		}
 		return nil
 	})
+	if err != nil {
+		return Manifest{}, err
+	}
+	if current.Digest != digest || current.Generation != generation {
+		return Manifest{}, ErrStaleManifest
+	}
+	return current, nil
 }
 
 func (i *Index) addManifestReferences(txn *badger.Txn, manifest Manifest) error {
@@ -319,6 +480,30 @@ func (i *Index) addManifestReferences(txn *badger.Txn, manifest Manifest) error 
 			SyncKey: manifest.SyncKey, Digest: manifest.Digest, Generation: manifest.Generation,
 		})
 		if err := setJSON(txn, chunkKey(chunk.Digest), chunk); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (i *Index) addManifestReferencesBatched(manifest Manifest) error {
+	return i.mutateManifestReferencesBatched(manifest, func(txn *badger.Txn, batch Manifest) error {
+		return i.addManifestReferences(txn, batch)
+	})
+}
+
+func (i *Index) removeManifestReferencesBatched(manifest Manifest, explicitlyRecoverable bool) error {
+	return i.mutateManifestReferencesBatched(manifest, func(txn *badger.Txn, batch Manifest) error {
+		return i.removeManifestReferences(txn, batch, explicitlyRecoverable)
+	})
+}
+
+func (i *Index) mutateManifestReferencesBatched(manifest Manifest, mutate func(*badger.Txn, Manifest) error) error {
+	for start := 0; start < len(manifest.Chunks); start += chunkTxnBatch {
+		end := min(start+chunkTxnBatch, len(manifest.Chunks))
+		batch := manifest
+		batch.Chunks = manifest.Chunks[start:end]
+		if err := i.db.Update(func(txn *badger.Txn) error { return mutate(txn, batch) }); err != nil {
 			return err
 		}
 	}
@@ -364,7 +549,7 @@ func hasProtectedReference(txn *badger.Txn, references []Reference, skip *Refere
 			continue
 		}
 		var manifest Manifest
-		if err := getJSON(txn, manifestKey(reference.SyncKey, reference.Generation, reference.Digest), &manifest); err != nil {
+		if err := getManifest(txn, manifestKey(reference.SyncKey, reference.Generation, reference.Digest), &manifest); err != nil {
 			return false, err
 		}
 		if manifest.Recoverability == RecoverabilityProtected {
@@ -387,28 +572,22 @@ func (i *Index) DeleteManifest(syncKey, digest string, generation uint64) error 
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	return i.db.Update(func(txn *badger.Txn) error {
-		var current Manifest
-		if err := getJSON(txn, currentKey(syncKey), &current); err != nil {
-			if errors.Is(err, badger.ErrKeyNotFound) {
-				return ErrManifestMissing
-			}
-			return err
-		}
-		if current.Digest != digest || current.Generation != generation {
-			return ErrStaleManifest
-		}
-		current.Current = false
-		current.Disposition = DispositionDeleted
-		current.Recoverability = RecoverabilityRecoverable
-		if err := i.removeManifestReferences(txn, current, true); err != nil {
-			return err
-		}
-		if err := setJSON(txn, manifestKey(current.SyncKey, current.Generation, current.Digest), current); err != nil {
+	current, err := i.exactCurrent(syncKey, digest, generation)
+	if err != nil {
+		return err
+	}
+	current.Current = false
+	current.Disposition = DispositionDeleted
+	current.Recoverability = RecoverabilityRecoverable
+	if err := i.db.Update(func(txn *badger.Txn) error {
+		if err := setManifest(txn, current); err != nil {
 			return err
 		}
 		return txn.Delete(currentKey(current.SyncKey))
-	})
+	}); err != nil {
+		return err
+	}
+	return i.removeManifestReferencesBatched(current, true)
 }
 
 // DeleteWorkspace releases protection for every current mount manifest owned
@@ -420,37 +599,31 @@ func (i *Index) DeleteWorkspace(workspaceID WorkspaceID) error {
 	prefixID := string(workspaceID)
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	return i.db.Update(func(txn *badger.Txn) error {
-		prefix := []byte(currentPrefix)
-		iterator := txn.NewIterator(badger.DefaultIteratorOptions)
-		defer iterator.Close()
-		var currents []Manifest
-		for iterator.Seek(prefix); iterator.ValidForPrefix(prefix); iterator.Next() {
-			var manifest Manifest
-			if err := iterator.Item().Value(func(value []byte) error { return json.Unmarshal(value, &manifest) }); err != nil {
-				return err
-			}
-			if strings.HasPrefix(manifest.SyncKey, prefixID+"\x00") {
-				currents = append(currents, manifest)
-			}
+	currents, err := i.CurrentManifests()
+	if err != nil {
+		return err
+	}
+	for manifestIndex := range currents {
+		manifest := currents[manifestIndex]
+		if !strings.HasPrefix(manifest.SyncKey, prefixID+"\x00") {
+			continue
 		}
-		for manifestIndex := range currents {
-			manifest := currents[manifestIndex]
-			manifest.Current = false
-			manifest.Disposition = DispositionDeleted
-			manifest.Recoverability = RecoverabilityRecoverable
-			if err := i.removeManifestReferences(txn, manifest, true); err != nil {
+		manifest.Current = false
+		manifest.Disposition = DispositionDeleted
+		manifest.Recoverability = RecoverabilityRecoverable
+		if err := i.db.Update(func(txn *badger.Txn) error {
+			if err := setManifest(txn, manifest); err != nil {
 				return err
 			}
-			if err := setJSON(txn, manifestKey(manifest.SyncKey, manifest.Generation, manifest.Digest), manifest); err != nil {
-				return err
-			}
-			if err := txn.Delete(currentKey(manifest.SyncKey)); err != nil {
-				return err
-			}
+			return txn.Delete(currentKey(manifest.SyncKey))
+		}); err != nil {
+			return err
 		}
-		return nil
-	})
+		if err := i.removeManifestReferencesBatched(manifest, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (i *Index) Touch(digest string) {
@@ -467,47 +640,78 @@ func (i *Index) FlushAccesses() error {
 	if len(touches) == 0 {
 		return nil
 	}
-	return i.db.Update(func(txn *badger.Txn) error {
-		for digest, accessed := range touches {
-			chunk, err := chunkInTxn(txn, digest)
-			if errors.Is(err, badger.ErrKeyNotFound) {
-				continue
+	type touch struct {
+		digest   string
+		accessed time.Time
+	}
+	pending := make([]touch, 0, len(touches))
+	for digest, accessed := range touches {
+		pending = append(pending, touch{digest: digest, accessed: accessed})
+	}
+	for start := 0; start < len(pending); start += chunkTxnBatch {
+		end := min(start+chunkTxnBatch, len(pending))
+		if err := i.db.Update(func(txn *badger.Txn) error {
+			for _, touched := range pending[start:end] {
+				digest, accessed := touched.digest, touched.accessed
+				chunk, err := chunkInTxn(txn, digest)
+				if errors.Is(err, badger.ErrKeyNotFound) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				if accessed.After(chunk.LastUse) {
+					chunk.LastUse = accessed
+				}
+				if err := setJSON(txn, chunkKey(digest), chunk); err != nil {
+					return err
+				}
 			}
-			if err != nil {
-				return err
+			return nil
+		}); err != nil {
+			i.touchMu.Lock()
+			for _, touched := range pending[start:] {
+				if touched.accessed.After(i.touches[touched.digest]) {
+					i.touches[touched.digest] = touched.accessed
+				}
 			}
-			if accessed.After(chunk.LastUse) {
-				chunk.LastUse = accessed
-			}
-			if err := setJSON(txn, chunkKey(digest), chunk); err != nil {
-				return err
-			}
+			i.touchMu.Unlock()
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 func (i *Index) QueuePlan(plan Plan) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	queuedAt := i.now()
-	return i.db.Update(func(txn *badger.Txn) error {
-		for _, candidate := range plan.Candidates {
-			chunk, err := chunkInTxn(txn, candidate.Digest)
-			if err != nil {
-				return err
+	if len(plan.Candidates) == 0 {
+		return i.db.View(func(*badger.Txn) error { return nil })
+	}
+	for start := 0; start < len(plan.Candidates); start += chunkTxnBatch {
+		end := min(start+chunkTxnBatch, len(plan.Candidates))
+		if err := i.db.Update(func(txn *badger.Txn) error {
+			for _, candidate := range plan.Candidates[start:end] {
+				chunk, err := chunkInTxn(txn, candidate.Digest)
+				if err != nil {
+					return err
+				}
+				if !eligible(&chunk) {
+					continue
+				}
+				chunk.QueuedAt = queuedAt
+				chunk.QueueScore = candidate.Score
+				if err := setJSON(txn, chunkKey(chunk.Digest), chunk); err != nil {
+					return err
+				}
 			}
-			if !eligible(&chunk) {
-				continue
-			}
-			chunk.QueuedAt = queuedAt
-			chunk.QueueScore = candidate.Score
-			if err := setJSON(txn, chunkKey(chunk.Digest), chunk); err != nil {
-				return err
-			}
+			return nil
+		}); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 func (i *Index) Chunks() ([]Chunk, error) {
@@ -517,7 +721,24 @@ func (i *Index) Chunks() ([]Chunk, error) {
 // CurrentManifests returns every currently published manifest in stable
 // sync-key order so a Node can restore its serving table after restart.
 func (i *Index) CurrentManifests() ([]Manifest, error) {
-	manifests, err := listJSON[Manifest](i.db, currentPrefix)
+	var manifests []Manifest
+	err := i.db.View(func(txn *badger.Txn) error {
+		iterator := txn.NewIterator(badger.DefaultIteratorOptions)
+		defer iterator.Close()
+		prefix := []byte(currentPrefix)
+		for iterator.Seek(prefix); iterator.ValidForPrefix(prefix); iterator.Next() {
+			var reference Reference
+			if err := iterator.Item().Value(func(value []byte) error { return json.Unmarshal(value, &reference) }); err != nil {
+				return err
+			}
+			var manifest Manifest
+			if err := getManifest(txn, manifestKey(reference.SyncKey, reference.Generation, reference.Digest), &manifest); err != nil {
+				return err
+			}
+			manifests = append(manifests, manifest)
+		}
+		return nil
+	})
 	if err == nil {
 		slices.SortFunc(manifests, func(a, b Manifest) int { return strings.Compare(a.SyncKey, b.SyncKey) })
 	}
@@ -596,9 +817,9 @@ func (i *Index) Queued(limit int) ([]Chunk, error) {
 	return chunks[:min(limit, len(chunks))], nil
 }
 
-// DeleteQueued revalidates protection and references immediately before
-// unlinking. A crash after unlink but before the metadata delete is recovered
-// by the next call, which treats an already-missing CAS file as deleted.
+// DeleteQueued revalidates protection immediately before deletion. Every
+// affected manifest is marked in bounded transactions before unlinking, so a
+// crash can only create a conservative false-positive NeedsRepush marker.
 func (i *Index) DeleteQueued(_ context.Context, digest string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -609,27 +830,33 @@ func (i *Index) DeleteQueued(_ context.Context, digest string) error {
 	if chunk.QueuedAt.IsZero() || !eligible(&chunk) {
 		return ErrChunkReferenced
 	}
+	for start := 0; start < len(chunk.References); start += chunkTxnBatch {
+		end := min(start+chunkTxnBatch, len(chunk.References))
+		if err := i.db.Update(func(txn *badger.Txn) error {
+			for _, reference := range chunk.References[start:end] {
+				var manifest Manifest
+				if err := getManifest(txn, manifestKey(reference.SyncKey, reference.Generation, reference.Digest), &manifest); err != nil {
+					return err
+				}
+				manifest.NeedsRepush = true
+				if err := setManifest(txn, manifest); err != nil {
+					return err
+				}
+				if manifest.Current {
+					if err := setCurrentManifest(txn, manifest); err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
 	if err := i.store.Delete(digest); err != nil {
 		return err
 	}
-	return i.db.Update(func(txn *badger.Txn) error {
-		for _, reference := range chunk.References {
-			var manifest Manifest
-			if err := getJSON(txn, manifestKey(reference.SyncKey, reference.Generation, reference.Digest), &manifest); err != nil {
-				return err
-			}
-			manifest.NeedsRepush = true
-			if err := setJSON(txn, manifestKey(manifest.SyncKey, manifest.Generation, manifest.Digest), manifest); err != nil {
-				return err
-			}
-			if manifest.Current {
-				if err := setJSON(txn, currentKey(manifest.SyncKey), manifest); err != nil {
-					return err
-				}
-			}
-		}
-		return txn.Delete(chunkKey(digest))
-	})
+	return i.db.Update(func(txn *badger.Txn) error { return txn.Delete(chunkKey(digest)) })
 }
 
 func (i *Index) saveChunk(chunk Chunk) error {
@@ -644,7 +871,7 @@ func newestRecoverable(txn *badger.Txn, syncKey string, before uint64) (Manifest
 	found := false
 	for iterator.Seek(prefix); iterator.ValidForPrefix(prefix); iterator.Next() {
 		var candidate Manifest
-		if err := iterator.Item().Value(func(value []byte) error { return json.Unmarshal(value, &candidate) }); err != nil {
+		if err := getManifest(txn, iterator.Item().KeyCopy(nil), &candidate); err != nil {
 			return Manifest{}, false, err
 		}
 		if candidate.Generation < before && candidate.Recoverability == RecoverabilityRecoverable &&
@@ -728,10 +955,90 @@ func getJSON(txn *badger.Txn, key []byte, destination any) error {
 	return item.Value(func(value []byte) error { return json.Unmarshal(value, destination) })
 }
 
-func getOptionalJSON(txn *badger.Txn, key []byte, destination any) (bool, error) {
-	err := getJSON(txn, key, destination)
+func setManifest(txn *badger.Txn, manifest Manifest) error {
+	body, err := json.Marshal(manifestBody{Chunks: manifest.Chunks, Payload: manifest.Payload})
+	if err != nil {
+		return err
+	}
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write(body); err != nil {
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	return setJSON(txn, manifestKey(manifest.SyncKey, manifest.Generation, manifest.Digest), storedManifest{
+		Version: 1, SyncKey: manifest.SyncKey, Digest: manifest.Digest, Generation: manifest.Generation,
+		Origin: manifest.Origin, Recoverability: manifest.Recoverability, Disposition: manifest.Disposition,
+		Current: manifest.Current, NeedsRepush: manifest.NeedsRepush, CreatedAt: manifest.CreatedAt,
+		Body: compressed.Bytes(),
+	})
+}
+
+func getManifest(txn *badger.Txn, key []byte, manifest *Manifest) error {
+	item, err := txn.Get(key)
+	if err != nil {
+		return err
+	}
+	return item.Value(func(value []byte) error {
+		var stored storedManifest
+		if err := json.Unmarshal(value, &stored); err != nil {
+			return err
+		}
+		if stored.Version == 0 {
+			return json.Unmarshal(value, manifest)
+		}
+		if stored.Version != 1 {
+			return fmt.Errorf("casindex: unsupported manifest version %d", stored.Version)
+		}
+		reader, err := gzip.NewReader(bytes.NewReader(stored.Body))
+		if err != nil {
+			return err
+		}
+		decompressed, readErr := io.ReadAll(reader)
+		closeErr := reader.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		var body manifestBody
+		if err := json.Unmarshal(decompressed, &body); err != nil {
+			return err
+		}
+		*manifest = Manifest{
+			SyncKey: stored.SyncKey, Digest: stored.Digest, Generation: stored.Generation,
+			Chunks: body.Chunks, Origin: stored.Origin, Recoverability: stored.Recoverability,
+			Disposition: stored.Disposition, Current: stored.Current, NeedsRepush: stored.NeedsRepush,
+			CreatedAt: stored.CreatedAt, Payload: body.Payload,
+		}
+		return nil
+	})
+}
+
+func getCurrentManifest(txn *badger.Txn, syncKey string, manifest *Manifest) error {
+	var reference Reference
+	if err := getJSON(txn, currentKey(syncKey), &reference); err != nil {
+		return err
+	}
+	if reference.SyncKey == "" || reference.Digest == "" || reference.Generation == 0 {
+		return errors.New("casindex: invalid current manifest pointer")
+	}
+	return getManifest(txn, manifestKey(reference.SyncKey, reference.Generation, reference.Digest), manifest)
+}
+
+func getOptionalCurrentManifest(txn *badger.Txn, syncKey string, manifest *Manifest) (bool, error) {
+	err := getCurrentManifest(txn, syncKey, manifest)
 	if errors.Is(err, badger.ErrKeyNotFound) {
 		return false, nil
 	}
 	return err == nil, err
+}
+
+func setCurrentManifest(txn *badger.Txn, manifest Manifest) error {
+	return setJSON(txn, currentKey(manifest.SyncKey), Reference{
+		SyncKey: manifest.SyncKey, Digest: manifest.Digest, Generation: manifest.Generation,
+	})
 }

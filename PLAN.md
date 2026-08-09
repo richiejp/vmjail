@@ -96,6 +96,12 @@ silently diverge. Devcontainer auto-registration follows the same rule:
 unreadable declarations and catalog/local mount failures fail the command and
 restore the prior declaration instead of being downgraded to warnings.
 
+CAS manifest publication uses a compact immutable body plus a small atomic
+current-generation pointer. Chunk-reference fan-out, adoption, rejection, and
+deletion are bounded to 128 records per Badger transaction. A crash between
+staging and publication can therefore only retain conservative references;
+startup repairs those boundedly before cleanup can consider the chunks.
+
 The in-process egress proxy and DNS path support default-deny networking,
 record/replay, and guest CA injection. Host `/proc`/cgroup sampling and guest
 eBPF gadgets provide bounded resource and build-progress observations; see

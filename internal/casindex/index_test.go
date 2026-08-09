@@ -2,10 +2,12 @@ package casindex
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -111,6 +113,133 @@ func TestWorkspaceStatusCountsUniqueProtectedChunksAndStableManifests(t *testing
 	}
 	if _, err := rig.index.WorkspaceStatus(""); err == nil {
 		t.Fatal("empty workspace status succeeded")
+	}
+}
+
+func TestCommitManifestBatchesLargeChunkFanout(t *testing.T) {
+	rig, _ := newIndexRig(t)
+	const chunkCount = 4096
+	refs := make([]ChunkRef, 0, chunkCount)
+	for index := range chunkCount {
+		digest, size, err := rig.store.Put(bytes.NewBufferString(fmt.Sprintf("chunk-%d", index)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		refs = append(refs, ChunkRef{Digest: digest, Size: size})
+	}
+	payload := bytes.Repeat([]byte("manifest-entry\n"), 1<<15)
+	digest := manifestDigest("large-fanout")
+	if err := rig.index.CommitManifest(CommitRequest{
+		SyncKey: testSyncKey, Digest: digest, Generation: 1, Chunks: refs,
+		Origin: OriginSandbox, Recoverability: RecoverabilityProtected, Payload: payload,
+	}); err != nil {
+		t.Fatalf("CommitManifest large fanout: %v", err)
+	}
+	manifest, err := rig.index.Manifest(testSyncKey, digest, 1)
+	if err != nil || len(manifest.Chunks) != chunkCount || !bytes.Equal(manifest.Payload, payload) {
+		t.Fatalf("large manifest = %d chunks, %d payload bytes, %v", len(manifest.Chunks), len(manifest.Payload), err)
+	}
+	if err := rig.index.db.View(func(txn *badger.Txn) error {
+		item, err := txn.Get(currentKey(testSyncKey))
+		if err != nil {
+			return err
+		}
+		return item.Value(func(value []byte) error {
+			if len(value) > 256 {
+				return fmt.Errorf("current pointer grew to %d bytes", len(value))
+			}
+			return nil
+		})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.Acknowledge(testSyncKey, digest, 1); err != nil {
+		t.Fatalf("Acknowledge large fanout: %v", err)
+	}
+	rig.index.now = func() time.Time { return rig.now.Add(time.Hour) }
+	plan := Plan{Candidates: make([]Candidate, 0, len(refs))}
+	for _, ref := range refs {
+		rig.index.Touch(ref.Digest)
+		plan.Candidates = append(plan.Candidates, Candidate{Digest: ref.Digest, Score: 0.5})
+	}
+	if err := rig.index.FlushAccesses(); err != nil {
+		t.Fatalf("FlushAccesses large batch: %v", err)
+	}
+	if err := rig.index.QueuePlan(plan); err != nil {
+		t.Fatalf("QueuePlan large batch: %v", err)
+	}
+	if err := rig.index.DeleteManifest(testSyncKey, digest, 1); err != nil {
+		t.Fatalf("DeleteManifest large fanout: %v", err)
+	}
+	chunk, err := rig.index.Chunk(refs[len(refs)-1].Digest)
+	if err != nil || len(chunk.References) != 0 || chunk.Recoverability != RecoverabilityRecoverable {
+		t.Fatalf("last chunk after large deletion = %#v, %v", chunk, err)
+	}
+}
+
+func TestOpenRepairsUnpublishedStagedReferences(t *testing.T) {
+	rig, refs := newIndexRig(t, "staged", "recoverable", "protected payload")
+	staged := Manifest{
+		SyncKey: testSyncKey, Digest: manifestDigest("staged"), Generation: 1,
+		Chunks: refs, Origin: OriginSandbox, Recoverability: RecoverabilityProtected,
+		Disposition: DispositionActive, CreatedAt: rig.now,
+	}
+	if err := rig.index.db.Update(func(txn *badger.Txn) error { return setManifest(txn, staged) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.addManifestReferencesBatched(staged); err != nil {
+		t.Fatal(err)
+	}
+	missing := Reference{SyncKey: "missing", Digest: manifestDigest("missing"), Generation: 1}
+	if err := rig.index.db.Update(func(txn *badger.Txn) error {
+		chunk, err := chunkInTxn(txn, refs[0].Digest)
+		if err != nil {
+			return err
+		}
+		chunk.References = append(chunk.References, missing)
+		return setJSON(txn, chunkKey(chunk.Digest), chunk)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	recoverable := commitRequest(1, manifestDigest("recoverable-current"), refs[1:2], OriginClientUpload, RecoverabilityRecoverable)
+	recoverable.SyncKey = "recoverable"
+	if err := rig.index.CommitManifest(recoverable); err != nil {
+		t.Fatal(err)
+	}
+	protected := commitRequest(1, manifestDigest("protected-current"), refs[2:], OriginSandbox, RecoverabilityProtected)
+	protected.SyncKey = "protected-sync"
+	if err := rig.index.CommitManifest(protected); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.db.Update(func(txn *badger.Txn) error {
+		chunk, err := chunkInTxn(txn, refs[1].Digest)
+		if err != nil {
+			return err
+		}
+		chunk.Recoverability = RecoverabilityProtected
+		return setJSON(txn, chunkKey(chunk.Digest), chunk)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(rig.root, func() time.Time { return rig.now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	chunk, err := reopened.Chunk(refs[0].Digest)
+	if err != nil || len(chunk.References) != 0 {
+		t.Fatalf("repaired staged reference = %#v, %v", chunk, err)
+	}
+	recovered, err := reopened.Chunk(refs[1].Digest)
+	if err != nil || len(recovered.References) != 1 || recovered.Recoverability != RecoverabilityRecoverable {
+		t.Fatalf("repaired recoverable reference = %#v, %v", recovered, err)
+	}
+	stillProtected, err := reopened.Chunk(refs[2].Digest)
+	if err != nil || len(stillProtected.References) != 1 || stillProtected.Recoverability != RecoverabilityProtected {
+		t.Fatalf("repaired protected reference = %#v, %v", stillProtected, err)
 	}
 }
 
@@ -611,6 +740,12 @@ func TestLowLevelValidationAndPersistenceErrors(t *testing.T) {
 		t.Fatalf("duplicate reference appended: %#v", got)
 	}
 	rig, _ := newIndexRig(t)
+	if err := rig.index.DeleteManifest("", manifestDigest("invalid-delete"), 1); err == nil {
+		t.Fatal("invalid manifest deletion accepted")
+	}
+	if err := rig.index.DeleteManifest(testSyncKey, manifestDigest("missing-delete"), 1); !errors.Is(err, ErrManifestMissing) {
+		t.Fatalf("missing manifest deletion = %v", err)
+	}
 	if err := rig.index.db.Update(func(txn *badger.Txn) error {
 		return setJSON(txn, []byte("bad-json"), make(chan struct{}))
 	}); err == nil {
@@ -664,6 +799,157 @@ func TestLowLevelValidationAndPersistenceErrors(t *testing.T) {
 	rig.index.Touch(manifestDigest("after-close"))
 	if err := rig.index.Close(); err == nil {
 		t.Fatal("closed index flush succeeded")
+	}
+}
+
+func TestOpenFailsClosedOnCorruptRepairMetadata(t *testing.T) {
+	t.Run("chunk", func(t *testing.T) {
+		rig, refs := newIndexRig(t, "corrupt chunk")
+		if err := rig.index.db.Update(func(txn *badger.Txn) error {
+			return txn.Set(chunkKey(refs[0].Digest), []byte("{"))
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := rig.index.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(rig.root, time.Now); err == nil {
+			t.Fatal("corrupt chunk metadata accepted on startup")
+		}
+	})
+
+	t.Run("referenced manifest", func(t *testing.T) {
+		rig, refs := newIndexRig(t, "corrupt manifest")
+		digest := manifestDigest("corrupt manifest")
+		if err := rig.index.CommitManifest(commitRequest(1, digest, refs, OriginSandbox, RecoverabilityProtected)); err != nil {
+			t.Fatal(err)
+		}
+		if err := rig.index.db.Update(func(txn *badger.Txn) error {
+			return txn.Set(manifestKey(testSyncKey, 1, digest), []byte("{"))
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := rig.index.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Open(rig.root, time.Now); err == nil {
+			t.Fatal("corrupt referenced manifest accepted on startup")
+		}
+	})
+}
+
+func TestDeleteQueuedMarksCurrentRecoverableManifestForRepush(t *testing.T) {
+	rig, refs := newIndexRig(t, "recoverable current")
+	digest := manifestDigest("recoverable current")
+	request := commitRequest(1, digest, refs, OriginClientUpload, RecoverabilityRecoverable)
+	if err := rig.index.CommitManifest(request); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.QueuePlan(Plan{Candidates: []Candidate{{Digest: refs[0].Digest, Score: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.DeleteQueued(t.Context(), refs[0].Digest); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := rig.index.Manifest(testSyncKey, digest, 1)
+	if err != nil || !manifest.NeedsRepush {
+		t.Fatalf("deleted manifest = %#v, %v", manifest, err)
+	}
+}
+
+func TestManifestScansRejectCorruptRecords(t *testing.T) {
+	rig, refs := newIndexRig(t, "corrupt scan")
+	digest := manifestDigest("corrupt scan")
+	request := commitRequest(1, digest, refs, OriginClientUpload, RecoverabilityRecoverable)
+	if err := rig.index.CommitManifest(request); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.QueuePlan(Plan{Candidates: []Candidate{{Digest: refs[0].Digest, Score: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.db.Update(func(txn *badger.Txn) error {
+		return txn.Set(manifestKey(testSyncKey, 1, digest), []byte("{"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.DeleteQueued(t.Context(), refs[0].Digest); err == nil {
+		t.Fatal("queued deletion accepted a corrupt referenced manifest")
+	}
+	if err := rig.index.db.View(func(txn *badger.Txn) error {
+		_, _, err := newestRecoverable(txn, testSyncKey, 2)
+		return err
+	}); err == nil {
+		t.Fatal("recoverable scan accepted a corrupt manifest")
+	}
+}
+
+func TestCompactManifestDecodeRejectsCorruptMetadata(t *testing.T) {
+	rig, _ := newIndexRig(t)
+	digest := manifestDigest("compact-corrupt")
+	key := manifestKey(testSyncKey, 1, digest)
+	write := func(value any) {
+		t.Helper()
+		if err := rig.index.db.Update(func(txn *badger.Txn) error { return setJSON(txn, key, value) }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(storedManifest{Version: 2})
+	if _, err := rig.index.Manifest(testSyncKey, digest, 1); err == nil {
+		t.Fatal("unsupported compact manifest version accepted")
+	}
+	write(storedManifest{Version: 1, Body: []byte("not gzip")})
+	if _, err := rig.index.Manifest(testSyncKey, digest, 1); err == nil {
+		t.Fatal("invalid compact manifest compression accepted")
+	}
+	var compressed bytes.Buffer
+	writer := gzip.NewWriter(&compressed)
+	if _, err := writer.Write([]byte("not json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	write(storedManifest{Version: 1, Body: compressed.Bytes()})
+	if _, err := rig.index.Manifest(testSyncKey, digest, 1); err == nil {
+		t.Fatal("invalid compact manifest body accepted")
+	}
+	if err := rig.index.db.Update(func(txn *badger.Txn) error {
+		return setJSON(txn, currentKey(testSyncKey), Reference{SyncKey: testSyncKey})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.index.CurrentManifests(); err == nil {
+		t.Fatal("invalid current pointer accepted")
+	}
+	legacy := Manifest{SyncKey: testSyncKey, Digest: digest, Generation: 1, Payload: []byte("legacy")}
+	write(legacy)
+	decoded, err := rig.index.Manifest(testSyncKey, digest, 1)
+	if err != nil || !bytes.Equal(decoded.Payload, legacy.Payload) {
+		t.Fatalf("legacy manifest decode = %#v, %v", decoded, err)
+	}
+}
+
+func TestPublishStagedManifestRejectsPointerRaces(t *testing.T) {
+	rig, refs := newIndexRig(t, "current")
+	currentRequest := commitRequest(1, manifestDigest("current"), refs, OriginClientUpload, RecoverabilityRecoverable)
+	if err := rig.index.CommitManifest(currentRequest); err != nil {
+		t.Fatal(err)
+	}
+	staged := Manifest{SyncKey: testSyncKey, Digest: manifestDigest("staged-race"), Generation: 2, Current: true}
+	if err := rig.index.publishStagedManifest(testSyncKey, staged, Manifest{}, false); !errors.Is(err, ErrStaleManifest) {
+		t.Fatalf("missing expected pointer race = %v", err)
+	}
+	wrongPrevious := Manifest{SyncKey: testSyncKey, Digest: manifestDigest("wrong"), Generation: 1}
+	if err := rig.index.publishStagedManifest(testSyncKey, staged, wrongPrevious, true); !errors.Is(err, ErrStaleManifest) {
+		t.Fatalf("wrong expected pointer race = %v", err)
+	}
+	if err := rig.index.db.Update(func(txn *badger.Txn) error {
+		return setJSON(txn, currentKey(testSyncKey), Reference{SyncKey: testSyncKey})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rig.index.publishStagedManifest(testSyncKey, staged, Manifest{}, false); err == nil {
+		t.Fatal("corrupt current pointer accepted during publication")
 	}
 }
 
