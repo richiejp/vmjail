@@ -207,6 +207,12 @@ func newWorkspaceCatalogRigWith(t *testing.T, dispatcher Dispatcher) *workspaceC
 	}
 	env := newOrchTestEnv(t, identity.RoleClient, cfg)
 	client := workspacev1connect.NewWorkspaceCatalogServiceClient(env.httpc, env.baseURL)
+	switch typed := dispatcher.(type) {
+	case *fakeDispatcher:
+		typed.catalog = cat
+	case *blockingDispatcher:
+		typed.catalog = cat
+	}
 	return &workspaceCatalogRig{
 		server:     env.server,
 		catalog:    cat,
@@ -237,6 +243,7 @@ type fakeDispatcher struct {
 	calls     []dispatchCall
 	nextError error
 	onCall    func(dispatchCall)
+	catalog   *workspacecatalog.Store
 }
 
 type callbackDispatcher struct {
@@ -248,6 +255,7 @@ type blockingDispatcher struct {
 	release chan struct{}
 	mu      sync.Mutex
 	calls   []dispatchCall
+	catalog *workspacecatalog.Store
 }
 
 func (d *blockingDispatcher) PublishSandboxEvent(fp identity.Fingerprint, eventType sandboxv1.EventType, sandbox *sandboxv1.Sandbox) error {
@@ -259,6 +267,7 @@ func (d *blockingDispatcher) PublishSandboxEvent(fp identity.Fingerprint, eventT
 		close(d.entered)
 		<-d.release
 	}
+	ackSandboxRunning(d.catalog, eventType, sandbox)
 	return nil
 }
 
@@ -287,7 +296,37 @@ func (f *fakeDispatcher) PublishSandboxEvent(fp identity.Fingerprint, eventType 
 	if onCall != nil {
 		onCall(call)
 	}
+	ackSandboxRunning(f.catalog, eventType, sandbox)
 	return nil
+}
+
+func ackSandboxRunning(catalog *workspacecatalog.Store, eventType sandboxv1.EventType, sandbox *sandboxv1.Sandbox) {
+	if catalog == nil || eventType != sandboxv1.EventType_EVENT_TYPE_ADDED {
+		return
+	}
+	changes, stop := catalog.Watch()
+	go func() {
+		defer stop()
+		deadline := time.NewTimer(time.Second)
+		defer deadline.Stop()
+		//daft:lint:disable=forloopbound reason="test dispatcher acknowledgment is bounded by a one-second timer and the exact Sandbox binding"
+		for {
+			ws, err := catalog.Get(sandbox.GetSpec().GetWorkspaceUuid())
+			if err == nil && ws.Status.CurrentSandbox != nil && ws.Status.CurrentSandbox.UID == sandbox.GetMetadata().GetUid() {
+				_, _ = catalog.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(current *workspacecatalog.Workspace) error {
+					current.Status.ObservedGeneration = current.Status.CurrentSandbox.WorkspaceGeneration
+					current.Status.SetCondition(workspacecatalog.ConditionReconciled, workspacecatalog.ConditionStatusTrue, "RUNNING", "", time.Now())
+					return nil
+				})
+				return
+			}
+			select {
+			case <-changes:
+			case <-deadline.C:
+				return
+			}
+		}
+	}()
 }
 
 // conditionIsTrue is the test-side mirror of
@@ -1576,6 +1615,53 @@ func TestLaunchDispatchesComposedSandboxSpec(t *testing.T) {
 		t.Error("spec.nested_virtualization.enable = false, want true (projected from workspace)")
 	}
 	assertIdempotentLaunch(t, rig, fake, uuid, got.GetStatus().GetCurrentSandbox().GetUid())
+}
+
+func TestLaunchRequiresExactRunningAcknowledgement(t *testing.T) {
+	fake := &fakeDispatcher{}
+	rig := newWorkspaceCatalogRigWith(t, fake)
+	fake.catalog = nil
+	target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint().String()
+	uuid := readyWorkspace(t, rig, "launch-ack", target)
+	if _, err := rig.client.Validate(t.Context(), connect.NewRequest(
+		&workspacev1.ValidateRequest{Handle: uuidHandle(uuid)},
+	)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.catalog.Update(uuid, workspacecatalog.MutateStatus, func(ws *workspacecatalog.Workspace) error {
+		ws.Status.ObservedGeneration = ws.Metadata.Generation
+		ws.Status.SetCondition(workspacecatalog.ConditionReconciled, workspacecatalog.ConditionStatusTrue, "STALE", "", time.Now())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := rig.client.Launch(ctx, connect.NewRequest(&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)})); connect.CodeOf(err) != connect.CodeDeadlineExceeded {
+		t.Fatalf("unacknowledged Launch = %v, want DeadlineExceeded", err)
+	}
+	bound, err := rig.catalog.Get(uuid)
+	if err != nil || bound.Status.CurrentSandbox == nil {
+		t.Fatalf("binding after readiness timeout = %#v, %v", bound.Status.CurrentSandbox, err)
+	}
+	uid := bound.Status.CurrentSandbox.UID
+	if bound.Status.IsTrue(workspacecatalog.ConditionReconciled) {
+		t.Fatal("stale Reconciled=True satisfied a new launch")
+	}
+	if _, err := rig.catalog.Update(uuid, workspacecatalog.MutateStatus, func(ws *workspacecatalog.Workspace) error {
+		ws.Status.ObservedGeneration = ws.Status.CurrentSandbox.WorkspaceGeneration
+		ws.Status.SetCondition(workspacecatalog.ConditionReconciled, workspacecatalog.ConditionStatusTrue, "RUNNING", "", time.Now())
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := rig.client.Launch(t.Context(), connect.NewRequest(&workspacev1.LaunchRequest{Handle: uuidHandle(uuid)}))
+	if err != nil || retried.Msg.GetWorkspace().GetStatus().GetCurrentSandbox().GetUid() != uid {
+		t.Fatalf("acknowledged Launch retry = %+v, %v", retried, err)
+	}
+	if len(fake.calls) != 1 {
+		t.Fatalf("readiness retry published %d Sandboxes, want 1", len(fake.calls))
+	}
 }
 
 func assertIdempotentLaunch(t *testing.T, rig *workspaceCatalogRig, fake *fakeDispatcher, uuid, sandboxUID string) {

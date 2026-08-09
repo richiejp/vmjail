@@ -778,7 +778,7 @@ func (h *WorkspaceCatalogHandler) Validate(
 // Node is momentarily backlogged; Unimplemented when no dispatcher
 // is wired (catalog-only test rigs).
 func (h *WorkspaceCatalogHandler) Launch(
-	_ context.Context,
+	ctx context.Context,
 	req *connect.Request[workspacev1.LaunchRequest],
 ) (*connect.Response[workspacev1.WorkspaceResponse], error) {
 	if h.dispatcher == nil {
@@ -792,6 +792,12 @@ func (h *WorkspaceCatalogHandler) Launch(
 	ws, err := h.resolveHandle(fp, req.Msg.GetHandle())
 	if err != nil {
 		return nil, err
+	}
+	unlock := h.lockLifecycle(ws.Metadata.UUID)
+	defer unlock()
+	ws, err = h.store.Get(ws.Metadata.UUID)
+	if err != nil {
+		return nil, mapCatalogErr(err)
 	}
 	if err := guardLock(ws, fp); err != nil {
 		return nil, err
@@ -813,7 +819,9 @@ func (h *WorkspaceCatalogHandler) Launch(
 			return nil, connect.NewError(connect.CodeFailedPrecondition,
 				errors.New("workspace: current Sandbox belongs to an AgentRun; stop it before launching the Workspace"))
 		}
-		return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: workspaceToProto(ws)}), nil
+		changes, stopWatching := h.store.Watch()
+		defer stopWatching()
+		return h.waitForSandboxReadyResponse(ctx, ws, changes)
 	}
 	if dispatched || ws.Status.CurrentSandbox != nil {
 		return nil, connect.NewError(connect.CodeInternal,
@@ -823,9 +831,19 @@ func (h *WorkspaceCatalogHandler) Launch(
 	if err != nil {
 		return nil, err
 	}
+	return h.launchNewSandbox(ctx, ws, targetFP, autoSelected)
+}
 
+func (h *WorkspaceCatalogHandler) launchNewSandbox(
+	ctx context.Context,
+	ws workspacecatalog.Workspace,
+	targetFP identity.Fingerprint,
+	autoSelected bool,
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
 	sandboxUID := mintWorkspaceUUID()
 	sandbox := workspaceToSandbox(ws, sandboxUID, targetFP)
+	changes, stopWatching := h.store.Watch()
+	defer stopWatching()
 	if pubErr := h.dispatcher.PublishSandboxEvent(targetFP, sandboxv1.EventType_EVENT_TYPE_ADDED, sandbox); pubErr != nil {
 		return nil, mapSandboxPublishError(pubErr)
 	}
@@ -850,14 +868,66 @@ func (h *WorkspaceCatalogHandler) Launch(
 			"Launched", "",
 			now,
 		)
+		w.Status.SetCondition(
+			workspacecatalog.ConditionReconciled,
+			workspacecatalog.ConditionStatusFalse,
+			"LaunchPending", "",
+			now,
+		)
 		return nil
 	})
 	if err != nil {
 		return nil, mapCatalogErr(err)
 	}
-	return connect.NewResponse(&workspacev1.WorkspaceResponse{
-		Workspace: workspaceToProto(updated),
-	}), nil
+	return h.waitForSandboxReadyResponse(ctx, updated, changes)
+}
+
+func (h *WorkspaceCatalogHandler) waitForSandboxReadyResponse(
+	ctx context.Context,
+	ws workspacecatalog.Workspace,
+	changes <-chan uint64,
+) (*connect.Response[workspacev1.WorkspaceResponse], error) {
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	ready, err := h.waitForSandboxReady(waitCtx, ws.Metadata.UUID, *ws.Status.CurrentSandbox, changes)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&workspacev1.WorkspaceResponse{Workspace: workspaceToProto(ready)}), nil
+}
+
+func (h *WorkspaceCatalogHandler) waitForSandboxReady(
+	ctx context.Context,
+	workspaceUUID string,
+	expected workspacecatalog.SandboxRef,
+	changes <-chan uint64,
+) (workspacecatalog.Workspace, error) {
+	//daft:lint:disable=forloopbound reason="bounded by the 30s caller context; exits on exact running observation, terminal state, binding replacement, catalog error, or deadline"
+	for {
+		ws, err := h.store.Get(workspaceUUID)
+		if err != nil {
+			return workspacecatalog.Workspace{}, mapCatalogErr(err)
+		}
+		current := ws.Status.CurrentSandbox
+		if current == nil {
+			return workspacecatalog.Workspace{}, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("workspace: Sandbox %s terminated before becoming ready", expected.UID))
+		}
+		if current.UID != expected.UID || current.WorkspaceGeneration != expected.WorkspaceGeneration {
+			return workspacecatalog.Workspace{}, connect.NewError(connect.CodeInternal,
+				fmt.Errorf("workspace: Sandbox binding changed while waiting for %s readiness", expected.UID))
+		}
+		if ws.Status.ObservedGeneration == expected.WorkspaceGeneration &&
+			ws.Status.IsTrue(workspacecatalog.ConditionReconciled) {
+			return ws, nil
+		}
+		select {
+		case <-ctx.Done():
+			return workspacecatalog.Workspace{}, connect.NewError(connect.CodeDeadlineExceeded,
+				fmt.Errorf("workspace: timed out waiting for Sandbox %s readiness: %w", expected.UID, ctx.Err()))
+		case <-changes:
+		}
+	}
 }
 
 func launchTarget(

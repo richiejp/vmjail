@@ -464,6 +464,11 @@ Landed:
   reports the exact Sandbox terminal. The bounded wait returns a retryable
   deadline failure without clearing ownership, so delete cannot race an
   asynchronous VM/disk teardown.
+- Public Workspace launch keeps lifecycle operations serialized and returns
+  only after reconciliation observes the exact Sandbox UID and Workspace
+  generation running. Publication, stale `Reconciled` state, and a different
+  binding cannot satisfy readiness; the 30-second deadline retains the binding
+  so a retry waits for the same launch instead of publishing another VM.
 - Exact rejection now removes the stopped retained qcow2 before restoring CAS
   provenance, refuses a running disk, and leaves the protected manifest current
   when disk deletion fails. Relaunch therefore seeds only the restored client

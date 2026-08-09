@@ -328,6 +328,11 @@ func newWorkspaceE2EHarness(t *testing.T) *workspaceE2EHarness {
 	fake := &catalogFakeDispatcher{}
 	catalogStore := workspacecatalog.NewStore(nil)
 	fake.onCall = func(call catalogDispatchCall) {
+		if call.eventType == sandboxv1.EventType_EVENT_TYPE_ADDED {
+			changes, stop := catalogStore.Watch()
+			go acknowledgeCatalogSandboxRunning(catalogStore, call.sandbox, changes, stop)
+			return
+		}
 		if call.eventType != sandboxv1.EventType_EVENT_TYPE_DELETED {
 			return
 		}
@@ -362,6 +367,34 @@ func newWorkspaceE2EHarness(t *testing.T) *workspaceE2EHarness {
 			configDirArg, clientDir,
 			"--name", testE2EWorkspaceName,
 		},
+	}
+}
+
+func acknowledgeCatalogSandboxRunning(
+	store *workspacecatalog.Store,
+	sandbox *sandboxv1.Sandbox,
+	changes <-chan uint64,
+	stop func(),
+) {
+	defer stop()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	//daft:lint:disable=forloopbound reason="test Node acknowledgment is bounded by a one-second timer and the exact Sandbox binding"
+	for {
+		ws, err := store.Get(sandbox.GetSpec().GetWorkspaceUuid())
+		if err == nil && ws.Status.CurrentSandbox != nil && ws.Status.CurrentSandbox.UID == sandbox.GetMetadata().GetUid() {
+			_, _ = store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(current *workspacecatalog.Workspace) error {
+				current.Status.ObservedGeneration = current.Status.CurrentSandbox.WorkspaceGeneration
+				current.Status.SetCondition(workspacecatalog.ConditionReconciled, workspacecatalog.ConditionStatusTrue, "RUNNING", "", time.Now())
+				return nil
+			})
+			return
+		}
+		select {
+		case <-changes:
+		case <-deadline.C:
+			return
+		}
 	}
 }
 
