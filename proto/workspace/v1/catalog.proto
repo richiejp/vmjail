@@ -163,6 +163,19 @@ message WorkspaceStatus {
   uint64 protected_bytes = 8;
   string manifest_digest = 9;
   uint64 manifest_generation = 10;
+  // Last terminal observation survives clearing current_sandbox and an
+  // orchestrator restart. Replaced only by a newer terminal observation.
+  TerminalSandbox last_terminal_sandbox = 11;
+}
+
+message TerminalSandbox {
+  string uid = 1;
+  string node_fingerprint = 2;
+  uint64 workspace_generation = 3;
+  string phase = 4;
+  int32 exit_code = 5;
+  string message = 6;
+  google.protobuf.Timestamp observed_at = 7;
 }
 
 // Lock is the workspace's optional write-lock. Empty

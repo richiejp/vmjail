@@ -104,6 +104,7 @@ type liveSandbox struct {
 	uid      string
 	phase    string
 	exitCode int32
+	message  string
 }
 
 // Executor implements nodectrlclient.SandboxEventHandler. One
@@ -460,6 +461,7 @@ func (e *Executor) LiveSnapshot() []*nodectrlv1.LiveSandbox {
 			Uid:      ls.uid,
 			Phase:    ls.phase,
 			ExitCode: ls.exitCode,
+			Message:  ls.message,
 		})
 		if ls.phase == phaseExited || ls.phase == phaseKilled {
 			drop = append(drop, uid)
@@ -484,7 +486,7 @@ func (e *Executor) LiveSnapshot() []*nodectrlv1.LiveSandbox {
 
 // markPhase records a phase transition for uid. Used by
 // HandleSandboxEvent's lifecycle path to populate the snapshot.
-func (e *Executor) markPhase(uid, phase string, exitCode int32) {
+func (e *Executor) markPhase(uid, phase string, exitCode int32, message string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	ls, ok := e.live[uid]
@@ -494,6 +496,18 @@ func (e *Executor) markPhase(uid, phase string, exitCode int32) {
 	}
 	ls.phase = phase
 	ls.exitCode = exitCode
+	ls.message = message
+}
+
+func terminalMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	runes := []rune(err.Error())
+	if len(runes) > 512 {
+		runes = runes[:512]
+	}
+	return string(runes)
 }
 
 // ProductionAssembler returns an Assembler backed by
@@ -566,11 +580,9 @@ func (e *Executor) HandleSandboxEvent(
 		"daft-sandboxd: sandbox %s spec.workspace=%s image=%s mounts=%d\n",
 		uid, spec.GetWorkspaceUuid(), spec.GetImageRef(), len(spec.GetMounts()))
 
-	e.markPhase(uid, phaseRunning, 0)
-
 	cfg, unlock, err := e.resolveBootConfig(ctx, uid, spec)
 	if err != nil {
-		e.markPhase(uid, phaseKilled, 0)
+		e.markPhase(uid, phaseKilled, 0, terminalMessage(err))
 		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
 	}
 	defer unlock()
@@ -591,11 +603,12 @@ func (e *Executor) HandleSandboxEvent(
 	defer unregisterDiskControl()
 	e.setSandboxPreserver(uid, spec)
 
+	e.markPhase(uid, phaseRunning, 0, "")
 	if err := e.run(ctx, e.stdout, cfg); err != nil {
-		e.markPhase(uid, phaseKilled, 0)
+		e.markPhase(uid, phaseKilled, 0, terminalMessage(err))
 		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
 	}
-	e.markPhase(uid, phaseExited, 0)
+	e.markPhase(uid, phaseExited, 0, "")
 	return nil
 }
 

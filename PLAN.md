@@ -469,6 +469,11 @@ Landed:
   generation running. Publication, stale `Reconciled` state, and a different
   binding cannot satisfy readiness; the 30-second deadline retains the binding
   so a retry waits for the same launch instead of publishing another VM.
+- Terminal Node observations retain the exact Sandbox identity, node,
+  Workspace generation, phase, exit code, bounded diagnostic, and observation
+  time before the live binding is cleared. This last-terminal record is durable
+  across orchestrator restart and exposed through Workspace status, so a failed
+  launch cannot erase the evidence needed to diagnose it.
 - Exact rejection now removes the stopped retained qcow2 before restoring CAS
   provenance, refuses a running disk, and leaves the protected manifest current
   when disk deletion fails. Relaunch therefore seeds only the restored client

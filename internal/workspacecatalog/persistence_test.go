@@ -36,6 +36,11 @@ func TestPersistentStoreRoundTripResetsRuntimeStatus(t *testing.T) {
 	}
 	_, err = store.Update(created.Metadata.UUID, MutateStatus, func(ws *Workspace) error {
 		ws.Status.CurrentSandbox = &SandboxRef{UID: "runtime-only"}
+		ws.Status.LastTerminalSandbox = &TerminalSandbox{
+			UID: "terminal-durable", NodeFingerprint: mustOwner(t),
+			WorkspaceGeneration: ws.Metadata.Generation, Phase: "Killed",
+			ExitCode: 17, Message: "boot failed", ObservedAt: now,
+		}
 		ws.Status.ObservedGeneration = ws.Metadata.Generation
 		ws.Status.Lock.ExpiresAt = now.Add(time.Hour)
 		return nil
@@ -71,6 +76,10 @@ func TestPersistentStoreRoundTripResetsRuntimeStatus(t *testing.T) {
 	}
 	if got.Status.CurrentSandbox != nil || got.Status.ObservedGeneration != 0 || got.Status.Lock.IsHeld() {
 		t.Fatalf("runtime status survived restart: %#v", got.Status)
+	}
+	if got.Status.LastTerminalSandbox == nil || got.Status.LastTerminalSandbox.UID != "terminal-durable" ||
+		got.Status.LastTerminalSandbox.ExitCode != 17 || got.Status.LastTerminalSandbox.Message != "boot failed" {
+		t.Fatalf("terminal diagnostic did not survive restart: %#v", got.Status.LastTerminalSandbox)
 	}
 	if !got.Status.IsTrue(ConditionReady) {
 		t.Fatalf("Ready was not reconstructed: %#v", got.Status.Conditions)

@@ -2703,6 +2703,10 @@ func TestWorkspaceToProtoCarriesLock(t *testing.T) {
 		w.Status.ProtectedBytes = 5
 		w.Status.ManifestDigest = "manifest"
 		w.Status.ManifestGeneration = 3
+		w.Status.LastTerminalSandbox = &workspacecatalog.TerminalSandbox{
+			UID: "terminal", NodeFingerprint: owner, WorkspaceGeneration: 2,
+			Phase: "Killed", ExitCode: 17, Message: "boot failed", ObservedAt: expiry,
+		}
 		w.Status.SetCondition(workspacecatalog.ConditionStorageFrozen, workspacecatalog.ConditionStatusTrue, "ThresholdExceeded", "disk paused", expiry)
 		return nil
 	})
@@ -2724,6 +2728,12 @@ func TestWorkspaceToProtoCarriesLock(t *testing.T) {
 	status := proto.GetStatus()
 	if status.GetDiskUsedBytes() != 7 || status.GetDiskAllowanceBytes() != 20 || status.GetProtectedBytes() != 5 || status.GetManifestDigest() != "manifest" || status.GetManifestGeneration() != 3 || !conditionIsTrue(status, workspacecatalog.ConditionStorageFrozen) {
 		t.Fatalf("storage status = %#v", status)
+	}
+	terminal := status.GetLastTerminalSandbox()
+	if terminal.GetUid() != "terminal" || terminal.GetNodeFingerprint() != owner.String() ||
+		terminal.GetWorkspaceGeneration() != 2 || terminal.GetPhase() != "Killed" ||
+		terminal.GetExitCode() != 17 || terminal.GetMessage() != "boot failed" || !terminal.GetObservedAt().IsValid() {
+		t.Fatalf("terminal status = %#v", terminal)
 	}
 }
 

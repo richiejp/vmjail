@@ -16,9 +16,10 @@ const (
 )
 
 type persistedWorkspace struct {
-	Version  uint32   `json:"version"`
-	Metadata Metadata `json:"metadata"`
-	Spec     Spec     `json:"spec"`
+	Version             uint32           `json:"version"`
+	Metadata            Metadata         `json:"metadata"`
+	Spec                Spec             `json:"spec"`
+	LastTerminalSandbox *TerminalSandbox `json:"last_terminal_sandbox,omitempty"`
 }
 
 type badgerBackend struct {
@@ -27,8 +28,8 @@ type badgerBackend struct {
 }
 
 // Open opens or creates a Badger-backed Workspace store at path. Only the
-// declarative Metadata and Spec are durable; Status is reconstructed and then
-// reconciled from live Nodes after every orchestrator restart.
+// declarative Metadata and Spec plus the last terminal diagnostic are durable;
+// live Status is reconstructed and reconciled from Nodes after every restart.
 func Open(path string, now func() time.Time) (*Store, error) {
 	if path == "" {
 		return nil, errors.New("workspacecatalog: persistence path is empty")
@@ -80,6 +81,7 @@ func (s *Store) load(db *badger.DB) error {
 				return fmt.Errorf("workspacecatalog: invalid %q: %w", item.KeyCopy(nil), err)
 			}
 			ws := Workspace{Metadata: record.Metadata, Spec: record.Spec}
+			ws.Status.LastTerminalSandbox = record.LastTerminalSandbox
 			ws.Status.Missing = missingFields(ws.Spec)
 			ws.Status.Conditions = recomputeConditions(nil, ws.Status.Missing, false, s.now())
 			if _, exists := s.all[ws.Metadata.UUID]; exists {
@@ -117,9 +119,10 @@ func validatePersistedWorkspace(record persistedWorkspace) error {
 
 func (b *badgerBackend) Save(ws Workspace) error {
 	record := persistedWorkspace{
-		Version:  workspaceRecordVersion,
-		Metadata: ws.Metadata,
-		Spec:     ws.Spec,
+		Version:             workspaceRecordVersion,
+		Metadata:            ws.Metadata,
+		Spec:                ws.Spec,
+		LastTerminalSandbox: ws.Status.LastTerminalSandbox,
 	}
 	value, err := json.Marshal(record)
 	if err != nil {

@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,8 +46,9 @@ func readyDispatchedWorkspace(t *testing.T, cat *workspacecatalog.Store, nodeFP 
 	}
 	updated, err := cat.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
 		w.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
-			UID:             testSandboxUID,
-			NodeFingerprint: nodeFP,
+			UID:                 testSandboxUID,
+			NodeFingerprint:     nodeFP,
+			WorkspaceGeneration: w.Metadata.Generation,
 		}
 		w.Status.SetCondition(workspacecatalog.ConditionDispatched,
 			workspacecatalog.ConditionStatusTrue, "Launched", "", now)
@@ -103,7 +105,7 @@ func TestReconcileExitedClearsCurrentSandbox(t *testing.T) {
 	r := New(Config{Catalog: cat, Nodes: nodes, Now: clock})
 
 	r.ReconcileLiveSandboxes(nodeFP, []*nodectrlv1.LiveSandbox{
-		{Uid: testSandboxUID, Phase: phaseExited},
+		{Uid: testSandboxUID, Phase: phaseExited, ExitCode: 17, Message: "guest init failed"},
 	})
 
 	got, _ := cat.Get(testWorkspaceUUID)
@@ -112,6 +114,23 @@ func TestReconcileExitedClearsCurrentSandbox(t *testing.T) {
 	}
 	if got.Status.IsTrue(workspacecatalog.ConditionDispatched) {
 		t.Errorf("Dispatched should be False after Exited; conditions=%+v", got.Status.Conditions)
+	}
+	terminal := got.Status.LastTerminalSandbox
+	if terminal == nil || terminal.UID != testSandboxUID || terminal.NodeFingerprint != nodeFP ||
+		terminal.WorkspaceGeneration != got.Metadata.Generation || terminal.Phase != phaseExited ||
+		terminal.ExitCode != 17 || terminal.Message != "guest init failed" || terminal.ObservedAt.IsZero() {
+		t.Fatalf("terminal observation = %#v", terminal)
+	}
+}
+
+func TestTerminalObservationIsBoundedAndRequiresBinding(t *testing.T) {
+	if got := terminalObservation(nil, phaseKilled, 1, "ignored", time.Now()); got != nil {
+		t.Fatalf("terminal observation without binding = %#v", got)
+	}
+	got := terminalObservation(&workspacecatalog.SandboxRef{UID: testSandboxUID}, phaseKilled, 1,
+		strings.Repeat("x", 600), time.Now())
+	if len([]rune(got.Message)) != 512 {
+		t.Fatalf("terminal observation message length = %d, want 512", len([]rune(got.Message)))
 	}
 }
 
@@ -147,6 +166,10 @@ func TestReconcileMissingTripsThreshold(t *testing.T) {
 	}
 	if got.Status.CurrentSandbox != nil {
 		t.Errorf("CurrentSandbox = %+v, want nil after SandboxLost", got.Status.CurrentSandbox)
+	}
+	if terminal := got.Status.LastTerminalSandbox; terminal == nil || terminal.UID != testSandboxUID ||
+		terminal.Phase != "Unknown" || terminal.Message != reasonSandboxLost {
+		t.Fatalf("lost terminal observation = %#v", terminal)
 	}
 }
 

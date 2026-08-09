@@ -227,16 +227,29 @@ type Spec struct {
 
 // Status is the controller-observed workspace state.
 type Status struct {
-	ObservedGeneration uint64
-	Conditions         []Condition
-	CurrentSandbox     *SandboxRef
-	Missing            []string
-	Lock               Lock
-	DiskUsedBytes      uint64
-	DiskAllowanceBytes uint64
-	ProtectedBytes     uint64
-	ManifestDigest     string
-	ManifestGeneration uint64
+	ObservedGeneration  uint64
+	Conditions          []Condition
+	CurrentSandbox      *SandboxRef
+	Missing             []string
+	Lock                Lock
+	DiskUsedBytes       uint64
+	DiskAllowanceBytes  uint64
+	ProtectedBytes      uint64
+	ManifestDigest      string
+	ManifestGeneration  uint64
+	LastTerminalSandbox *TerminalSandbox
+}
+
+// TerminalSandbox is the last bounded terminal observation for a Workspace.
+// Unlike CurrentSandbox it is durable diagnostic history, not a live binding.
+type TerminalSandbox struct {
+	UID                 string
+	NodeFingerprint     identity.Fingerprint
+	WorkspaceGeneration uint64
+	Phase               string
+	ExitCode            int32
+	Message             string
+	ObservedAt          time.Time
 }
 
 // Condition returns the entry with matching type, or the zero
@@ -753,6 +766,10 @@ func cloneWorkspace(ws Workspace) Workspace {
 	if ws.Status.CurrentSandbox != nil {
 		ref := *ws.Status.CurrentSandbox
 		ws.Status.CurrentSandbox = &ref
+	}
+	if ws.Status.LastTerminalSandbox != nil {
+		terminal := *ws.Status.LastTerminalSandbox
+		ws.Status.LastTerminalSandbox = &terminal
 	}
 	return ws
 }

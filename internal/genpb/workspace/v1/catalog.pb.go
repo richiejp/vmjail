@@ -440,8 +440,11 @@ type WorkspaceStatus struct {
 	ProtectedBytes     uint64 `protobuf:"varint,8,opt,name=protected_bytes,json=protectedBytes,proto3" json:"protected_bytes,omitempty"`
 	ManifestDigest     string `protobuf:"bytes,9,opt,name=manifest_digest,json=manifestDigest,proto3" json:"manifest_digest,omitempty"`
 	ManifestGeneration uint64 `protobuf:"varint,10,opt,name=manifest_generation,json=manifestGeneration,proto3" json:"manifest_generation,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Last terminal observation survives clearing current_sandbox and an
+	// orchestrator restart. Replaced only by a newer terminal observation.
+	LastTerminalSandbox *TerminalSandbox `protobuf:"bytes,11,opt,name=last_terminal_sandbox,json=lastTerminalSandbox,proto3" json:"last_terminal_sandbox,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *WorkspaceStatus) Reset() {
@@ -544,6 +547,105 @@ func (x *WorkspaceStatus) GetManifestGeneration() uint64 {
 	return 0
 }
 
+func (x *WorkspaceStatus) GetLastTerminalSandbox() *TerminalSandbox {
+	if x != nil {
+		return x.LastTerminalSandbox
+	}
+	return nil
+}
+
+type TerminalSandbox struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	Uid                 string                 `protobuf:"bytes,1,opt,name=uid,proto3" json:"uid,omitempty"`
+	NodeFingerprint     string                 `protobuf:"bytes,2,opt,name=node_fingerprint,json=nodeFingerprint,proto3" json:"node_fingerprint,omitempty"`
+	WorkspaceGeneration uint64                 `protobuf:"varint,3,opt,name=workspace_generation,json=workspaceGeneration,proto3" json:"workspace_generation,omitempty"`
+	Phase               string                 `protobuf:"bytes,4,opt,name=phase,proto3" json:"phase,omitempty"`
+	ExitCode            int32                  `protobuf:"varint,5,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	Message             string                 `protobuf:"bytes,6,opt,name=message,proto3" json:"message,omitempty"`
+	ObservedAt          *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *TerminalSandbox) Reset() {
+	*x = TerminalSandbox{}
+	mi := &file_workspace_v1_catalog_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TerminalSandbox) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TerminalSandbox) ProtoMessage() {}
+
+func (x *TerminalSandbox) ProtoReflect() protoreflect.Message {
+	mi := &file_workspace_v1_catalog_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TerminalSandbox.ProtoReflect.Descriptor instead.
+func (*TerminalSandbox) Descriptor() ([]byte, []int) {
+	return file_workspace_v1_catalog_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *TerminalSandbox) GetUid() string {
+	if x != nil {
+		return x.Uid
+	}
+	return ""
+}
+
+func (x *TerminalSandbox) GetNodeFingerprint() string {
+	if x != nil {
+		return x.NodeFingerprint
+	}
+	return ""
+}
+
+func (x *TerminalSandbox) GetWorkspaceGeneration() uint64 {
+	if x != nil {
+		return x.WorkspaceGeneration
+	}
+	return 0
+}
+
+func (x *TerminalSandbox) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *TerminalSandbox) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
+
+func (x *TerminalSandbox) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *TerminalSandbox) GetObservedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return nil
+}
+
 // Lock is the workspace's optional write-lock. Empty
 // owner_fingerprint ⇒ unlocked.
 type Lock struct {
@@ -556,7 +658,7 @@ type Lock struct {
 
 func (x *Lock) Reset() {
 	*x = Lock{}
-	mi := &file_workspace_v1_catalog_proto_msgTypes[4]
+	mi := &file_workspace_v1_catalog_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -568,7 +670,7 @@ func (x *Lock) String() string {
 func (*Lock) ProtoMessage() {}
 
 func (x *Lock) ProtoReflect() protoreflect.Message {
-	mi := &file_workspace_v1_catalog_proto_msgTypes[4]
+	mi := &file_workspace_v1_catalog_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -581,7 +683,7 @@ func (x *Lock) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Lock.ProtoReflect.Descriptor instead.
 func (*Lock) Descriptor() ([]byte, []int) {
-	return file_workspace_v1_catalog_proto_rawDescGZIP(), []int{4}
+	return file_workspace_v1_catalog_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Lock) GetOwnerFingerprint() string {
@@ -636,7 +738,7 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\x12K\n" +
 	"\x10privileged_build\x18\x0e \x01(\v2 .daft.sandbox.v1.PrivilegedBuildR\x0fprivilegedBuild\x12\x1d\n" +
 	"\n" +
-	"disk_bytes\x18\x0f \x01(\x04R\tdiskBytes\"\xe8\x03\n" +
+	"disk_bytes\x18\x0f \x01(\x04R\tdiskBytes\"\xc0\x04\n" +
 	"\x0fWorkspaceStatus\x12/\n" +
 	"\x13observed_generation\x18\x01 \x01(\x04R\x12observedGeneration\x12:\n" +
 	"\n" +
@@ -650,7 +752,17 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\x0fprotected_bytes\x18\b \x01(\x04R\x0eprotectedBytes\x12'\n" +
 	"\x0fmanifest_digest\x18\t \x01(\tR\x0emanifestDigest\x12/\n" +
 	"\x13manifest_generation\x18\n" +
-	" \x01(\x04R\x12manifestGeneration\"n\n" +
+	" \x01(\x04R\x12manifestGeneration\x12V\n" +
+	"\x15last_terminal_sandbox\x18\v \x01(\v2\".daft.workspace.v1.TerminalSandboxR\x13lastTerminalSandbox\"\x8b\x02\n" +
+	"\x0fTerminalSandbox\x12\x10\n" +
+	"\x03uid\x18\x01 \x01(\tR\x03uid\x12)\n" +
+	"\x10node_fingerprint\x18\x02 \x01(\tR\x0fnodeFingerprint\x121\n" +
+	"\x14workspace_generation\x18\x03 \x01(\x04R\x13workspaceGeneration\x12\x14\n" +
+	"\x05phase\x18\x04 \x01(\tR\x05phase\x12\x1b\n" +
+	"\texit_code\x18\x05 \x01(\x05R\bexitCode\x12\x18\n" +
+	"\amessage\x18\x06 \x01(\tR\amessage\x12;\n" +
+	"\vobserved_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"observedAt\"n\n" +
 	"\x04Lock\x12+\n" +
 	"\x11owner_fingerprint\x18\x01 \x01(\tR\x10ownerFingerprint\x129\n" +
 	"\n" +
@@ -668,48 +780,51 @@ func file_workspace_v1_catalog_proto_rawDescGZIP() []byte {
 	return file_workspace_v1_catalog_proto_rawDescData
 }
 
-var file_workspace_v1_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_workspace_v1_catalog_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_workspace_v1_catalog_proto_goTypes = []any{
 	(*Workspace)(nil),               // 0: daft.workspace.v1.Workspace
 	(*WorkspaceMetadata)(nil),       // 1: daft.workspace.v1.WorkspaceMetadata
 	(*WorkspaceSpec)(nil),           // 2: daft.workspace.v1.WorkspaceSpec
 	(*WorkspaceStatus)(nil),         // 3: daft.workspace.v1.WorkspaceStatus
-	(*Lock)(nil),                    // 4: daft.workspace.v1.Lock
-	(*timestamppb.Timestamp)(nil),   // 5: google.protobuf.Timestamp
-	(*v1.Mount)(nil),                // 6: daft.sandbox.v1.Mount
-	(*v1.EnvVar)(nil),               // 7: daft.sandbox.v1.EnvVar
-	(*v1.PortMapping)(nil),          // 8: daft.sandbox.v1.PortMapping
-	(*v1.GpuRequest)(nil),           // 9: daft.sandbox.v1.GpuRequest
-	(v1.Isolation)(0),               // 10: daft.sandbox.v1.Isolation
-	(*v1.NestedVirtualization)(nil), // 11: daft.sandbox.v1.NestedVirtualization
-	(*v1.PrivilegedFuseMounts)(nil), // 12: daft.sandbox.v1.PrivilegedFuseMounts
-	(*v1.PrivilegedBuild)(nil),      // 13: daft.sandbox.v1.PrivilegedBuild
-	(*v1.Condition)(nil),            // 14: daft.sandbox.v1.Condition
-	(*v1.SandboxRef)(nil),           // 15: daft.sandbox.v1.SandboxRef
+	(*TerminalSandbox)(nil),         // 4: daft.workspace.v1.TerminalSandbox
+	(*Lock)(nil),                    // 5: daft.workspace.v1.Lock
+	(*timestamppb.Timestamp)(nil),   // 6: google.protobuf.Timestamp
+	(*v1.Mount)(nil),                // 7: daft.sandbox.v1.Mount
+	(*v1.EnvVar)(nil),               // 8: daft.sandbox.v1.EnvVar
+	(*v1.PortMapping)(nil),          // 9: daft.sandbox.v1.PortMapping
+	(*v1.GpuRequest)(nil),           // 10: daft.sandbox.v1.GpuRequest
+	(v1.Isolation)(0),               // 11: daft.sandbox.v1.Isolation
+	(*v1.NestedVirtualization)(nil), // 12: daft.sandbox.v1.NestedVirtualization
+	(*v1.PrivilegedFuseMounts)(nil), // 13: daft.sandbox.v1.PrivilegedFuseMounts
+	(*v1.PrivilegedBuild)(nil),      // 14: daft.sandbox.v1.PrivilegedBuild
+	(*v1.Condition)(nil),            // 15: daft.sandbox.v1.Condition
+	(*v1.SandboxRef)(nil),           // 16: daft.sandbox.v1.SandboxRef
 }
 var file_workspace_v1_catalog_proto_depIdxs = []int32{
 	1,  // 0: daft.workspace.v1.Workspace.metadata:type_name -> daft.workspace.v1.WorkspaceMetadata
 	2,  // 1: daft.workspace.v1.Workspace.spec:type_name -> daft.workspace.v1.WorkspaceSpec
 	3,  // 2: daft.workspace.v1.Workspace.status:type_name -> daft.workspace.v1.WorkspaceStatus
-	5,  // 3: daft.workspace.v1.WorkspaceMetadata.created_at:type_name -> google.protobuf.Timestamp
-	5,  // 4: daft.workspace.v1.WorkspaceMetadata.updated_at:type_name -> google.protobuf.Timestamp
-	6,  // 5: daft.workspace.v1.WorkspaceSpec.mounts:type_name -> daft.sandbox.v1.Mount
-	7,  // 6: daft.workspace.v1.WorkspaceSpec.env:type_name -> daft.sandbox.v1.EnvVar
-	8,  // 7: daft.workspace.v1.WorkspaceSpec.ports:type_name -> daft.sandbox.v1.PortMapping
-	9,  // 8: daft.workspace.v1.WorkspaceSpec.gpu_request:type_name -> daft.sandbox.v1.GpuRequest
-	10, // 9: daft.workspace.v1.WorkspaceSpec.isolation:type_name -> daft.sandbox.v1.Isolation
-	11, // 10: daft.workspace.v1.WorkspaceSpec.nested_virtualization:type_name -> daft.sandbox.v1.NestedVirtualization
-	12, // 11: daft.workspace.v1.WorkspaceSpec.privileged_fuse_mounts:type_name -> daft.sandbox.v1.PrivilegedFuseMounts
-	13, // 12: daft.workspace.v1.WorkspaceSpec.privileged_build:type_name -> daft.sandbox.v1.PrivilegedBuild
-	14, // 13: daft.workspace.v1.WorkspaceStatus.conditions:type_name -> daft.sandbox.v1.Condition
-	15, // 14: daft.workspace.v1.WorkspaceStatus.current_sandbox:type_name -> daft.sandbox.v1.SandboxRef
-	4,  // 15: daft.workspace.v1.WorkspaceStatus.lock:type_name -> daft.workspace.v1.Lock
-	5,  // 16: daft.workspace.v1.Lock.expires_at:type_name -> google.protobuf.Timestamp
-	17, // [17:17] is the sub-list for method output_type
-	17, // [17:17] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	6,  // 3: daft.workspace.v1.WorkspaceMetadata.created_at:type_name -> google.protobuf.Timestamp
+	6,  // 4: daft.workspace.v1.WorkspaceMetadata.updated_at:type_name -> google.protobuf.Timestamp
+	7,  // 5: daft.workspace.v1.WorkspaceSpec.mounts:type_name -> daft.sandbox.v1.Mount
+	8,  // 6: daft.workspace.v1.WorkspaceSpec.env:type_name -> daft.sandbox.v1.EnvVar
+	9,  // 7: daft.workspace.v1.WorkspaceSpec.ports:type_name -> daft.sandbox.v1.PortMapping
+	10, // 8: daft.workspace.v1.WorkspaceSpec.gpu_request:type_name -> daft.sandbox.v1.GpuRequest
+	11, // 9: daft.workspace.v1.WorkspaceSpec.isolation:type_name -> daft.sandbox.v1.Isolation
+	12, // 10: daft.workspace.v1.WorkspaceSpec.nested_virtualization:type_name -> daft.sandbox.v1.NestedVirtualization
+	13, // 11: daft.workspace.v1.WorkspaceSpec.privileged_fuse_mounts:type_name -> daft.sandbox.v1.PrivilegedFuseMounts
+	14, // 12: daft.workspace.v1.WorkspaceSpec.privileged_build:type_name -> daft.sandbox.v1.PrivilegedBuild
+	15, // 13: daft.workspace.v1.WorkspaceStatus.conditions:type_name -> daft.sandbox.v1.Condition
+	16, // 14: daft.workspace.v1.WorkspaceStatus.current_sandbox:type_name -> daft.sandbox.v1.SandboxRef
+	5,  // 15: daft.workspace.v1.WorkspaceStatus.lock:type_name -> daft.workspace.v1.Lock
+	4,  // 16: daft.workspace.v1.WorkspaceStatus.last_terminal_sandbox:type_name -> daft.workspace.v1.TerminalSandbox
+	6,  // 17: daft.workspace.v1.TerminalSandbox.observed_at:type_name -> google.protobuf.Timestamp
+	6,  // 18: daft.workspace.v1.Lock.expires_at:type_name -> google.protobuf.Timestamp
+	19, // [19:19] is the sub-list for method output_type
+	19, // [19:19] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_workspace_v1_catalog_proto_init() }
@@ -723,7 +838,7 @@ func file_workspace_v1_catalog_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_workspace_v1_catalog_proto_rawDesc), len(file_workspace_v1_catalog_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

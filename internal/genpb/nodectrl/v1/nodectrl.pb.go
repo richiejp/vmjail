@@ -2535,7 +2535,9 @@ type LiveSandbox struct {
 	// a wire-bumped Node can report new states without breaking us.
 	Phase string `protobuf:"bytes,2,opt,name=phase,proto3" json:"phase,omitempty"`
 	// Set once phase is terminal (Exited / Killed).
-	ExitCode      int32 `protobuf:"varint,3,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	ExitCode int32 `protobuf:"varint,3,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	// Bounded terminal diagnostic from the Node. Empty while non-terminal.
+	Message       string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2589,6 +2591,13 @@ func (x *LiveSandbox) GetExitCode() int32 {
 		return x.ExitCode
 	}
 	return 0
+}
+
+func (x *LiveSandbox) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
 }
 
 type HeartbeatResponse struct {
@@ -2985,11 +2994,12 @@ const file_nodectrl_v1_nodectrl_proto_rawDesc = "" +
 	"\x0fprotected_bytes\x18\x05 \x01(\x04R\x0eprotectedBytes\x12'\n" +
 	"\x0fmanifest_digest\x18\x06 \x01(\tR\x0emanifestDigest\x12/\n" +
 	"\x13manifest_generation\x18\a \x01(\x04R\x12manifestGeneration\x12\x16\n" +
-	"\x06frozen\x18\b \x01(\bR\x06frozen\"R\n" +
+	"\x06frozen\x18\b \x01(\bR\x06frozen\"l\n" +
 	"\vLiveSandbox\x12\x10\n" +
 	"\x03uid\x18\x01 \x01(\tR\x03uid\x12\x14\n" +
 	"\x05phase\x18\x02 \x01(\tR\x05phase\x12\x1b\n" +
-	"\texit_code\x18\x03 \x01(\x05R\bexitCode\"H\n" +
+	"\texit_code\x18\x03 \x01(\x05R\bexitCode\x12\x18\n" +
+	"\amessage\x18\x04 \x01(\tR\amessage\"H\n" +
 	"\x11HeartbeatResponse\x123\n" +
 	"\aseen_at\x18\x01 \x01(\v2\x1a.google.protobuf.TimestampR\x06seenAt\"\x12\n" +
 	"\x10ListNodesRequest\"\x9c\x02\n" +

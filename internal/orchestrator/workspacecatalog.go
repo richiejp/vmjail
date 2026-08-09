@@ -1680,17 +1680,30 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 			},
 		},
 		Status: &workspacev1.WorkspaceStatus{
-			ObservedGeneration: ws.Status.ObservedGeneration,
-			Conditions:         conditionsToProto(ws.Status.Conditions),
-			CurrentSandbox:     sandboxRefToProto(ws.Status.CurrentSandbox),
-			Missing:            append([]string(nil), ws.Status.Missing...),
-			Lock:               lockToProto(ws.Status.Lock),
-			DiskUsedBytes:      ws.Status.DiskUsedBytes,
-			DiskAllowanceBytes: ws.Status.DiskAllowanceBytes,
-			ProtectedBytes:     ws.Status.ProtectedBytes,
-			ManifestDigest:     ws.Status.ManifestDigest,
-			ManifestGeneration: ws.Status.ManifestGeneration,
+			ObservedGeneration:  ws.Status.ObservedGeneration,
+			Conditions:          conditionsToProto(ws.Status.Conditions),
+			CurrentSandbox:      sandboxRefToProto(ws.Status.CurrentSandbox),
+			Missing:             append([]string(nil), ws.Status.Missing...),
+			Lock:                lockToProto(ws.Status.Lock),
+			DiskUsedBytes:       ws.Status.DiskUsedBytes,
+			DiskAllowanceBytes:  ws.Status.DiskAllowanceBytes,
+			ProtectedBytes:      ws.Status.ProtectedBytes,
+			ManifestDigest:      ws.Status.ManifestDigest,
+			ManifestGeneration:  ws.Status.ManifestGeneration,
+			LastTerminalSandbox: terminalSandboxToProto(ws.Status.LastTerminalSandbox),
 		},
+	}
+}
+
+func terminalSandboxToProto(terminal *workspacecatalog.TerminalSandbox) *workspacev1.TerminalSandbox {
+	if terminal == nil {
+		return nil
+	}
+	return &workspacev1.TerminalSandbox{
+		Uid: terminal.UID, NodeFingerprint: terminal.NodeFingerprint.String(),
+		WorkspaceGeneration: terminal.WorkspaceGeneration,
+		Phase:               terminal.Phase, ExitCode: terminal.ExitCode, Message: terminal.Message,
+		ObservedAt: timestamppb.New(terminal.ObservedAt),
 	}
 }
 

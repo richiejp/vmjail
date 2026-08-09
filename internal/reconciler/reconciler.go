@@ -194,6 +194,9 @@ func (r *Reconciler) applyPhase(ws workspacecatalog.Workspace, ls *nodectrlv1.Li
 				w.Status.SetCondition(workspacecatalog.ConditionReconciled,
 					workspacecatalog.ConditionStatusTrue, phaseRunning, "", now)
 			case phaseExited, phaseKilled:
+				w.Status.LastTerminalSandbox = terminalObservation(
+					w.Status.CurrentSandbox, ls.GetPhase(), ls.GetExitCode(), ls.GetMessage(), now,
+				)
 				w.Status.CurrentSandbox = nil
 				w.Status.SetCondition(workspacecatalog.ConditionDispatched,
 					workspacecatalog.ConditionStatusFalse, ls.GetPhase(), "", now)
@@ -208,11 +211,35 @@ func (r *Reconciler) applyPhase(ws workspacecatalog.Workspace, ls *nodectrlv1.Li
 func (r *Reconciler) markLost(uuid, reason string, now time.Time) {
 	_, _ = r.catalog.Update(uuid, workspacecatalog.MutateStatus,
 		func(w *workspacecatalog.Workspace) error {
+			w.Status.LastTerminalSandbox = terminalObservation(
+				w.Status.CurrentSandbox, "Unknown", 0, reason, now,
+			)
 			w.Status.CurrentSandbox = nil
 			w.Status.SetCondition(workspacecatalog.ConditionDispatched,
 				workspacecatalog.ConditionStatusFalse, reason, "", now)
 			return nil
 		})
+}
+
+func terminalObservation(
+	current *workspacecatalog.SandboxRef,
+	phase string,
+	exitCode int32,
+	message string,
+	now time.Time,
+) *workspacecatalog.TerminalSandbox {
+	if current == nil {
+		return nil
+	}
+	runes := []rune(message)
+	if len(runes) > 512 {
+		runes = runes[:512]
+	}
+	return &workspacecatalog.TerminalSandbox{
+		UID: current.UID, NodeFingerprint: current.NodeFingerprint,
+		WorkspaceGeneration: current.WorkspaceGeneration,
+		Phase:               phase, ExitCode: exitCode, Message: string(runes), ObservedAt: now,
+	}
 }
 
 // ReconcileBefore is called by Launch/Stop before they read

@@ -487,6 +487,8 @@ message LiveSandbox {
   string phase = 2;
   // Set once phase is terminal (Exited / Killed).
   int32 exit_code = 3;
+  // Bounded terminal diagnostic from the Node. Empty while non-terminal.
+  string message = 4;
 }
 
 message HeartbeatResponse {

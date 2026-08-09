@@ -223,7 +223,7 @@ func TestTerminalSnapshotEntryIgnoresLateDeleteAndDuplicateAdd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e.markPhase(testSandboxID, phaseExited, 0)
+	e.markPhase(testSandboxID, phaseExited, 0, "")
 	if err := e.HandleSandboxEvent(t.Context(), deletedEvent(testSandboxID)); err != nil {
 		t.Fatal(err)
 	}
@@ -1817,8 +1817,18 @@ func TestLiveSnapshotReportsKilledOnRunnerError(t *testing.T) {
 	_ = e.HandleSandboxEvent(t.Context(),
 		addedEvent("sb-live-bad", &sandboxv1.SandboxSpec{}))
 	snap := e.LiveSnapshot()
-	if len(snap) != 1 || snap[0].GetPhase() != "Killed" {
+	if len(snap) != 1 || snap[0].GetPhase() != "Killed" || !strings.Contains(snap[0].GetMessage(), want.Error()) {
 		t.Fatalf("snapshot = %+v, want one Killed entry", snap)
+	}
+}
+
+func TestTerminalMessageIsBounded(t *testing.T) {
+	if got := terminalMessage(nil); got != "" {
+		t.Fatalf("terminalMessage(nil) = %q", got)
+	}
+	got := terminalMessage(errors.New(strings.Repeat("x", 600)))
+	if len([]rune(got)) != 512 {
+		t.Fatalf("terminal message length = %d, want 512", len([]rune(got)))
 	}
 }
 
@@ -1832,7 +1842,7 @@ func TestLiveSnapshotIsSortedByUID(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	for _, uid := range []string{"sb-c", "sb-a", "sb-b"} {
-		e.markPhase(uid, "Running", 0)
+		e.markPhase(uid, "Running", 0, "")
 	}
 	snap := e.LiveSnapshot()
 	if len(snap) != 3 || snap[0].GetUid() != "sb-a" || snap[1].GetUid() != "sb-b" || snap[2].GetUid() != "sb-c" {
