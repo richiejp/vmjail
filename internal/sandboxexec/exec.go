@@ -671,6 +671,12 @@ func (e *Executor) beginSandbox(uid string, cancel context.CancelFunc) bool {
 	}
 	e.running[uid] = cancel
 	e.preserve[uid] = nil
+	// A launch is live as soon as this executor accepts its ADDED event, not
+	// only after image resolution and disk preparation finish. Those finite
+	// operations can span several heartbeats; omitting the uid during that
+	// window makes the orchestrator's absence detector falsely declare the
+	// still-starting Sandbox lost.
+	e.live[uid] = &liveSandbox{uid: uid, phase: phasePending}
 	return true
 }
 

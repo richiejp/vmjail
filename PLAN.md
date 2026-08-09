@@ -486,6 +486,9 @@ Landed:
 - [Reliability bug taxonomy](docs/reliability.md) records the shared failure
   classes and their enforceable guards so reviews search for variants instead
   of treating each regression as an isolated fix.
+- Accepted Sandbox launches enter heartbeat state as `Pending` before image and
+  disk preparation. Slow preparation therefore remains visible to the
+  orchestrator and cannot trip the consecutive-absence `SandboxLost` guard.
 - Exact rejection now removes the stopped retained qcow2 before restoring CAS
   provenance, refuses a running disk, and leaves the protected manifest current
   when disk deletion fails. Relaunch therefore seeds only the restored client

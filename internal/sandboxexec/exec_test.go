@@ -1807,6 +1807,42 @@ func TestLiveSnapshotTracksLifecycle(t *testing.T) {
 	}
 }
 
+// TestLiveSnapshotReportsPendingDuringPreparation pins the launch/liveness
+// handoff: once an ADDED event is accepted, heartbeats must include its uid
+// even while potentially slow image and disk preparation is still running.
+// Otherwise three ordinary heartbeats can make the orchestrator clear the
+// exact binding as "lost" before the VM has had a chance to boot.
+func TestLiveSnapshotReportsPendingDuringPreparation(t *testing.T) {
+	assembling := make(chan struct{})
+	release := make(chan struct{})
+	asm := func(ctx context.Context, _ string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		close(assembling)
+		select {
+		case <-release:
+			return sandbox.Config{}, func() {}, nil
+		case <-ctx.Done():
+			return sandbox.Config{}, nil, ctx.Err()
+		}
+	}
+	e, err := New(Config{Stdout: io.Discard, Runner: noopRunner(), Assembler: asm})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- e.HandleSandboxEvent(t.Context(), addedEvent("sb-preparing", &sandboxv1.SandboxSpec{ImageRef: testImageRef}))
+	}()
+	<-assembling
+	snap := e.LiveSnapshot()
+	if len(snap) != 1 || snap[0].GetUid() != "sb-preparing" || snap[0].GetPhase() != phasePending {
+		t.Fatalf("snapshot = %+v, want sb-preparing Pending", snap)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+}
+
 func TestLiveSnapshotReportsKilledOnRunnerError(t *testing.T) {
 	want := errors.New("synthetic boot failure")
 	failRunner := func(context.Context, io.Writer, sandbox.Config) error { return want }

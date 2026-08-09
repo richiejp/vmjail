@@ -15,6 +15,7 @@ not isolated mistakes. Use these names in reviews and regressions:
 | Unbounded blocking | SSH and subprocess calls could wait forever | Connect/keepalive/request deadlines plus the `commandcontext` and `forloopbound` analyzers |
 | Nested deadline inversion | The CLI's 10-second timeout expired before the server's 30-second acknowledgment bound | Outer deadlines exceed inner deadlines and leave margin for one heartbeat |
 | Completion/drain race | A process test called `Wait` before `StdoutPipe`/`StderrPipe` readers reached EOF | Drain both streams before `Wait`; assert captured data in failures |
+| Accepted-work invisibility | Slow launch preparation was absent from heartbeats and falsely reconciled as lost | Publish a `Pending` liveness record atomically with accepting the launch |
 
 The general invariant is: destructive or ownership-changing state transitions
 follow exact external acknowledgment, preserve enough prior state for recovery,
