@@ -124,7 +124,7 @@ type Store interface {
 	// CloneBundle returns an ephemeral copy-on-write clone of a cached
 	// bundle plus a cleanup that removes it, so a dispatch mutates its
 	// own rootfs instead of the shared per-digest cache.
-	CloneBundle(bundle *imagestore.Bundle) (*imagestore.Bundle, func(), error)
+	CloneBundle(context.Context, *imagestore.Bundle) (*imagestore.Bundle, func(), error)
 	Lock(digest string) (func(), error)
 }
 
@@ -198,7 +198,7 @@ func BuildBundleConfig(
 	if err != nil {
 		return sandbox.Config{}, unlock, fmt.Errorf("sandboxboot: bundle %s: %w", img.Digest, err)
 	}
-	bundle, bundleTeardown, err := lockAndCloneBundle(store, bundle, img.Digest)
+	bundle, bundleTeardown, err := lockAndCloneBundle(ctx, store, bundle, img.Digest)
 	if err != nil {
 		return sandbox.Config{}, unlock, err
 	}
@@ -265,12 +265,12 @@ func credentialBundleOptions(opts BootOptions) ([]imagestore.BundleMount, []stri
 // dispatch mounts and mutates — its host-side provisioning (CA
 // injection) and the guest's rootfs writes (e.g. nix realising a closure
 // into /nix/store) land on the clone, never the shared per-digest cache.
-func lockAndCloneBundle(store Store, bundle *imagestore.Bundle, digest string) (*imagestore.Bundle, func(), error) {
+func lockAndCloneBundle(ctx context.Context, store Store, bundle *imagestore.Bundle, digest string) (*imagestore.Bundle, func(), error) {
 	bundleUnlock, err := store.Lock(digest)
 	if err != nil {
 		return nil, nil, fmt.Errorf("sandboxboot: lock bundle: %w", err)
 	}
-	clone, cloneCleanup, err := store.CloneBundle(bundle)
+	clone, cloneCleanup, err := store.CloneBundle(ctx, bundle)
 	if err != nil {
 		bundleUnlock()
 		return nil, nil, fmt.Errorf("sandboxboot: clone bundle: %w", err)

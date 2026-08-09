@@ -482,6 +482,7 @@ func spawnDaemon(bin string, args, env []string, logPath string) (int, error) {
 	}
 	defer func() { _ = logf.Close() }()
 
+	//daft:lint:disable=commandcontext reason="the detached daemon intentionally outlives this command and is supervised by pid/pgid, Down, probes, and the service log"
 	cmd := exec.Command(bin, args...) //nolint:gosec // G204: dev supervisor, caller-controlled binary.
 	cmd.Env = env
 	cmd.Stdout = logf

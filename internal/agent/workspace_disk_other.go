@@ -19,7 +19,7 @@ func defaultWorkspaceDiskDeps() workspaceDiskDeps {
 		mountXFS:    func(string, string) error { return err() },
 		bindMount:   func(string, string) error { return err() },
 		receiveSeed: func(context.Context, func(context.Context) (net.Conn, error), string) error { return err() },
-		run:         func(string, ...string) error { return err() },
+		run:         func(context.Context, string, ...string) error { return err() },
 		usage:       func(string) (workspacesnapshot.Usage, error) { return workspacesnapshot.Usage{}, err() },
 	}
 }

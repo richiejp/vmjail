@@ -21,6 +21,7 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/assertpure"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/chanconst"
+	"github.com/richiejp/darkaifactory/internal/lint/analyzers/commandcontext"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/forloopbound"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/lintreasons"
 	"github.com/richiejp/darkaifactory/internal/lint/analyzers/maxbytes"
@@ -41,6 +42,7 @@ var analyzers = []*analysis.Analyzer{
 	nolinkname.Analyzer,
 	nodoubleptr.Analyzer,
 	chanconst.Analyzer,
+	commandcontext.Analyzer,
 	maxbytes.Analyzer,
 	forloopbound.Analyzer,
 	tagcatalog.Analyzer,

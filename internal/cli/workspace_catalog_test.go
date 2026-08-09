@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	workspacev1 "github.com/richiejp/darkaifactory/internal/genpb/workspace/v1"
 	"github.com/richiejp/darkaifactory/internal/identity"
@@ -298,6 +300,15 @@ const (
 	testMountRemote = "/workspace/src"
 	testDiskFlag    = "--disk"
 )
+
+func TestWorkspaceClientDefaultTimeoutExceedsServerAcknowledgement(t *testing.T) {
+	var opts workspaceClientOpts
+	cmd := &cobra.Command{}
+	bindWorkspaceClientFlags(cmd, &opts)
+	if opts.timeout != defaultWorkspaceRPCTimeout || opts.timeout <= 30*time.Second {
+		t.Fatalf("workspace timeout = %s, want %s and greater than server bound", opts.timeout, defaultWorkspaceRPCTimeout)
+	}
+}
 
 // workspaceE2EHarness threads the in-process orchestrator + caller
 // identity through the multi-step E2E test below.

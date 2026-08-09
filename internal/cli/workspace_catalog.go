@@ -95,12 +95,18 @@ type workspaceClientOpts struct {
 	uuid         string
 }
 
+// defaultWorkspaceRPCTimeout exceeds the orchestrator's 30-second launch and
+// stop acknowledgment bounds. Keeping the client outside the server deadline
+// preserves the server's diagnostic error instead of racing it with a generic
+// client-side context cancellation; it also covers one heartbeat interval.
+const defaultWorkspaceRPCTimeout = 35 * time.Second
+
 func bindWorkspaceClientFlags(cmd *cobra.Command, opts *workspaceClientOpts) {
 	cmd.Flags().StringVar(&opts.orchestrator, orchestratorFlag, "",
 		"orchestrator URL (https://host:port)")
 	cmd.Flags().StringVar(&opts.configDir, configDirFlag, "",
 		"override the daft client config dir (default: $XDG_CONFIG_HOME/daft/client)")
-	cmd.Flags().DurationVar(&opts.timeout, "timeout", 10*time.Second,
+	cmd.Flags().DurationVar(&opts.timeout, "timeout", defaultWorkspaceRPCTimeout,
 		"overall RPC timeout")
 	cmd.Flags().StringVar(&opts.name, "name", "",
 		"workspace name (default: basename of the current directory)")

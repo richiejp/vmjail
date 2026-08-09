@@ -24,9 +24,10 @@ func TestPipeJobExecSeparatesOutputAndExit(t *testing.T) {
 	errDone := make(chan string, 1)
 	go func() { b, _ := io.ReadAll(p.Stdout()); outDone <- string(b) }()
 	go func() { b, _ := io.ReadAll(p.Stderr()); errDone <- string(b) }()
+	stdout, stderr := <-outDone, <-errDone
 	code, err := p.Wait()
-	if err != nil || code != 6 || <-outDone != "out" || <-errDone != "err" {
-		t.Fatalf("code=%d err=%v", code, err)
+	if err != nil || code != 6 || stdout != "out" || stderr != "err" {
+		t.Fatalf("code=%d err=%v stdout=%q stderr=%q", code, err, stdout, stderr)
 	}
 	if err := p.Cancel(); err != nil {
 		t.Fatalf("Cancel after exit: %v", err)

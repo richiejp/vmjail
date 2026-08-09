@@ -1,6 +1,7 @@
 package imagestore
 
 import (
+	"context"
 	"fmt"
 	"io/fs"
 	"os"
@@ -36,7 +37,7 @@ const clonesDir = "clones"
 // b must be a bundle returned by Bundle (its Path is the cached
 // template). The clone preserves Digest/UID/GID and only redirects
 // Path at the ephemeral copy.
-func (s *Store) CloneBundle(b *Bundle) (*Bundle, func(), error) {
+func (s *Store) CloneBundle(ctx context.Context, b *Bundle) (*Bundle, func(), error) {
 	parent := filepath.Join(s.Root, clonesDir)
 	// #nosec G301 — same rationale as the bundle dir: virtiofsd and the
 	// guest kernel mount traverse this path under possibly-different uids.
@@ -55,7 +56,7 @@ func (s *Store) CloneBundle(b *Bundle) (*Bundle, func(), error) {
 		}
 	}
 	dst := filepath.Join(dir, filepath.Base(b.Path))
-	if err := cloneTree(b.Path, dst); err != nil {
+	if err := cloneTree(ctx, b.Path, dst); err != nil {
 		cleanup()
 		return nil, nil, fmt.Errorf("imagestore: clone bundle %s: %w", b.Digest, err)
 	}
@@ -75,9 +76,9 @@ func (s *Store) CloneBundle(b *Bundle) (*Bundle, func(), error) {
 // gets reflink + hardlink-coalescing + xattrs right out of the box. A
 // follow-up can replace it with a native walk over the FICLONE ioctl
 // (golang.org/x/sys/unix.IoctlFileClone) to drop the process dependency.
-func cloneTree(src, dst string) error {
+func cloneTree(ctx context.Context, src, dst string) error {
 	//nolint:gosec // G204: args are a constant flag set plus store-internal paths, not user input.
-	cmd := exec.Command("cp", "--reflink=always", "-a", src, dst)
+	cmd := exec.CommandContext(ctx, "cp", "--reflink=always", "-a", src, dst)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("cp --reflink=always -a %s %s: %w: %s", src, dst, err, out)
 	}

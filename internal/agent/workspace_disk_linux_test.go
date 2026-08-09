@@ -48,7 +48,7 @@ func TestReadWorkspaceMagic(t *testing.T) {
 	if err := deps.bindMount("/missing-source", filepath.Join(t.TempDir(), "bind")); err == nil {
 		t.Fatal("invalid bind mount succeeded")
 	}
-	if err := deps.run("/missing-xfs-tool"); err == nil {
+	if err := deps.run(t.Context(), "/missing-xfs-tool"); err == nil {
 		t.Fatal("missing tool execution succeeded")
 	}
 }

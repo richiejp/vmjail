@@ -4,6 +4,7 @@ package userns
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // EnvMarker is set on the re-exec'd child so subsequent calls to
@@ -198,6 +200,7 @@ var buildReexecCmd = defaultBuildReexecCmd
 // in the child).
 func defaultBuildReexecCmd(syncFD *os.File) *exec.Cmd {
 	//nolint:gosec // /proc/self/exe is our own binary.
+	//daft:lint:disable=commandcontext reason="the re-exec is the supervised workload itself; waitWithSignalForwarding provides lifetime and liveness control"
 	cmd := exec.Command("/proc/self/exe", os.Args[1:]...)
 	cmd.Env = append(os.Environ(), EnvMarker+"=1")
 	cmd.Stdin = os.Stdin
@@ -276,8 +279,10 @@ func writeIDMap(binary string, pid int, ranges []IDRange) error {
 			strconv.Itoa(r.Size),
 		)
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 	//nolint:gosec // binary is one of the const-vetted helper paths above.
-	cmd := exec.Command(binary, args...)
+	cmd := exec.CommandContext(ctx, binary, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("userns: %s %v: %w: %s",

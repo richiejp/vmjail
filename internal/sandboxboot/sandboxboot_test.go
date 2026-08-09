@@ -68,7 +68,7 @@ func (f *fakeStore) Bundle(ctx context.Context, digest string, opts imagestore.B
 // CloneBundle defaults to identity (return the same bundle, no-op
 // cleanup) so tests that don't care about CoW behave as before; a test
 // can set f.clone to assert the dispatch uses the clone's path.
-func (f *fakeStore) CloneBundle(b *imagestore.Bundle) (*imagestore.Bundle, func(), error) {
+func (f *fakeStore) CloneBundle(_ context.Context, b *imagestore.Bundle) (*imagestore.Bundle, func(), error) {
 	if f.clone != nil {
 		return f.clone(b)
 	}

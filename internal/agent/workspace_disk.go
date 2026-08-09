@@ -25,7 +25,7 @@ type workspaceDiskDeps struct {
 	mountXFS    func(string, string) error
 	bindMount   func(string, string) error
 	receiveSeed func(context.Context, func(context.Context) (net.Conn, error), string) error
-	run         func(string, ...string) error
+	run         func(context.Context, string, ...string) error
 	usage       func(string) (workspacesnapshot.Usage, error)
 }
 
@@ -49,7 +49,7 @@ func applyWorkspaceDisk(
 	}
 	initialize := magic == [4]byte{}
 	if initialize {
-		if err := deps.run("/bin/mkfs.xfs", "-f", "-m", "reflink=1", disk.GetDevice()); err != nil {
+		if err := deps.run(ctx, "/bin/mkfs.xfs", "-f", "-m", "reflink=1", disk.GetDevice()); err != nil {
 			return fmt.Errorf("agent: format workspace XFS: %w", err)
 		}
 	} else if string(magic[:]) != xfsMagicString {
@@ -62,7 +62,7 @@ func applyWorkspaceDisk(
 		if string(magic[:]) != xfsMagicString {
 			return fmt.Errorf("agent: mount new workspace XFS: %w", err)
 		}
-		if repairErr := deps.run("/bin/xfs_repair", disk.GetDevice()); repairErr != nil {
+		if repairErr := deps.run(ctx, "/bin/xfs_repair", disk.GetDevice()); repairErr != nil {
 			return fmt.Errorf("agent: repair workspace XFS after mount failure: %w", repairErr)
 		}
 		if err := deps.mountXFS(disk.GetDevice(), workspaceDiskRoot); err != nil {

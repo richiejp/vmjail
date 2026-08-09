@@ -29,7 +29,7 @@ func startWorkspaceSnapshotListener(ctx context.Context, w io.Writer, cfg *agent
 	go func() {
 		control := workspacesnapshot.Control{
 			Usage: func() (workspacesnapshot.Usage, error) { return deps.usage(workspaceDiskRoot) },
-			Grow:  func() error { return deps.run("/bin/xfs_growfs", workspaceDiskRoot) },
+			Grow:  func() error { return deps.run(ctx, "/bin/xfs_growfs", workspaceDiskRoot) },
 		}
 		if err := workspacesnapshot.Serve(ctx, listener, roots, control); err != nil && ctx.Err() == nil {
 			_, _ = fmt.Fprintf(w, "workspace-snapshot: serve: %v\n", err)

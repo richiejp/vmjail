@@ -42,7 +42,7 @@ func TestApplyWorkspaceDiskFormatsAndMaps(t *testing.T) {
 			_, _ = dial(ctx)
 			return nil
 		},
-		run: func(name string, args ...string) error {
+		run: func(_ context.Context, name string, args ...string) error {
 			commands = append(commands, append([]string{name}, args...))
 			return nil
 		},
@@ -87,7 +87,7 @@ func TestApplyWorkspaceDiskRepairsExistingXFS(t *testing.T) {
 			return nil
 		},
 		bindMount: func(string, string) error { return nil },
-		run: func(name string, args ...string) error {
+		run: func(_ context.Context, name string, args ...string) error {
 			repaired = name == "/bin/xfs_repair" && len(args) == 1 && args[0] == testWorkspaceDevice
 			return nil
 		},
@@ -108,7 +108,7 @@ func TestApplyWorkspaceDiskRejectsUnsafeConfig(t *testing.T) {
 		mkdirAll:  func(string, os.FileMode) error { return nil },
 		mountXFS:  func(string, string) error { return nil },
 		bindMount: func(string, string) error { return nil },
-		run:       func(string, ...string) error { return nil },
+		run:       func(context.Context, string, ...string) error { return nil },
 	}
 	for _, disk := range []*agentv1.GuestConfig_WorkspaceDisk{
 		{Device: "vda"},
@@ -144,14 +144,14 @@ func TestApplyWorkspaceDiskFailurePaths(t *testing.T) {
 		}},
 		{name: "unknown magic", magic: [4]byte{'E', 'X', 'T', '4'}},
 		{name: "format", mutate: func(d *workspaceDiskDeps) {
-			d.run = func(string, ...string) error { return errors.New("format") }
+			d.run = func(context.Context, string, ...string) error { return errors.New("format") }
 		}},
 		{name: "root mkdir", magic: xfsMagic, mutate: func(d *workspaceDiskDeps) {
 			d.mkdirAll = func(string, os.FileMode) error { return errors.New("mkdir") }
 		}},
 		{name: "repair", magic: xfsMagic, mutate: func(d *workspaceDiskDeps) {
 			d.mountXFS = func(string, string) error { return errors.New("mount") }
-			d.run = func(string, ...string) error { return errors.New("repair") }
+			d.run = func(context.Context, string, ...string) error { return errors.New("repair") }
 		}},
 		{name: "remount", magic: xfsMagic, mutate: func(d *workspaceDiskDeps) {
 			d.mountXFS = func(string, string) error { return errors.New("mount") }
@@ -196,7 +196,7 @@ func TestApplyWorkspaceDiskFailurePaths(t *testing.T) {
 				mountXFS:    func(string, string) error { return nil },
 				bindMount:   func(string, string) error { return nil },
 				receiveSeed: func(context.Context, func(context.Context) (net.Conn, error), string) error { return nil },
-				run:         func(string, ...string) error { return nil },
+				run:         func(context.Context, string, ...string) error { return nil },
 			}
 			if tc.mutate != nil {
 				tc.mutate(&deps)

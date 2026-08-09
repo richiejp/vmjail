@@ -20,6 +20,7 @@
 package testtmux
 
 import (
+	"context"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -71,7 +72,11 @@ func New(t *testing.T) *Session {
 	mustRun(t, "tmux", "-S", sock, "new-session", "-d", "-s", name,
 		"-x", paneCols, "-y", paneRows, "dash")
 	//nolint:gosec // G204: sock is t.TempDir-rooted; test-only.
-	t.Cleanup(func() { _ = exec.Command("tmux", "-S", sock, "kill-server").Run() })
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = exec.CommandContext(ctx, "tmux", "-S", sock, "kill-server").Run()
+	})
 
 	s := &Session{t: t, sock: sock, name: name}
 	// PS1 must be set as a shell command — dash doesn't inherit
@@ -109,8 +114,10 @@ func (s *Session) Enter(line string) {
 // past the visible region.
 func (s *Session) Capture() string {
 	s.t.Helper()
+	ctx, cancel := context.WithTimeout(s.t.Context(), 10*time.Second)
+	defer cancel()
 	//nolint:gosec // G204: sock + name are t.TempDir / t.Name; test-only.
-	out, err := exec.Command("tmux", "-S", s.sock, "capture-pane",
+	out, err := exec.CommandContext(ctx, "tmux", "-S", s.sock, "capture-pane",
 		"-t", s.name, "-p", "-S", "-").Output()
 	if err != nil {
 		s.t.Fatalf("tmux capture-pane: %v", err)
@@ -150,8 +157,10 @@ func sanitize(name string) string {
 // dumping CombinedOutput so the tmux diagnostic is visible.
 func mustRun(t *testing.T, prog string, args ...string) {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
 	//nolint:gosec // G204: callers in this package pass constants + t.TempDir / t.Name; test-only.
-	out, err := exec.Command(prog, args...).CombinedOutput()
+	out, err := exec.CommandContext(ctx, prog, args...).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", prog, strings.Join(args, " "), err, out)
 	}

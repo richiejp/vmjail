@@ -474,6 +474,18 @@ Landed:
   time before the live binding is cleared. This last-terminal record is durable
   across orchestrator restart and exposed through Workspace status, so a failed
   launch cannot erase the evidence needed to diagnose it.
+- The custom `commandcontext` analyzer rejects unbounded
+  `os/exec.Command` calls outside tests. Finite image-clone, XFS-tool,
+  user-namespace helper, and test-harness subprocesses now inherit a caller or
+  explicit deadline; only supervised daemons/re-exec workloads carry a
+  reasoned exemption because their intended lifetime is open-ended.
+- Workspace CLI calls use a 35-second outer deadline so the orchestrator's
+  30-second exact launch/stop acknowledgment bounds can return their own
+  diagnostics with one heartbeat of scheduling margin; this fixes the nested
+  deadline inversion exposed by loaded KVM runs.
+- [Reliability bug taxonomy](docs/reliability.md) records the shared failure
+  classes and their enforceable guards so reviews search for variants instead
+  of treating each regression as an isolated fix.
 - Exact rejection now removes the stopped retained qcow2 before restoring CAS
   provenance, refuses a running disk, and leaves the protected manifest current
   when disk deletion fails. Relaunch therefore seeds only the restored client

@@ -733,9 +733,10 @@ are run by `make lint` after `golangci-lint`.
 | 1d | No `unsafe.*` | `forbidigo` + `gosec` G103 |
 | 1e | No `//go:linkname` | `nolinkname` analyzer |
 | 1f | No recursion in our packages | `norecursion` analyzer (call-graph SCCs) |
-| 2 | `for {}` loops require a `//daft:unbounded reason="…"` annotation | `forloopbound` analyzer |
+| 2 | `for {}` loops require a reasoned `//daft:lint:disable=forloopbound` annotation | `forloopbound` analyzer |
 | 3a | Channel buffer sizes must be a typed constant or unbuffered | `chanconst` analyzer |
 | 3b | HTTP request bodies must be wrapped in `http.MaxBytesReader` before being read | `maxbytes` analyzer |
+| 3c | Finite subprocesses must use `exec.CommandContext`; intentionally long-lived supervised processes require a reasoned suppression | `commandcontext` analyzer |
 | 4 | Function length cap | `funlen` (existing config; cap unchanged) |
 | 5 | `internal/assert` exists; assertion arguments are side-effect free and non-trivial | `assertpure` analyzer |
 | 6 | No package-level mutable `var` (sentinel errors + compile-time interface checks excepted) | `gochecknoglobals` |

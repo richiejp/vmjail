@@ -1,6 +1,8 @@
 package imagestore
 
 import (
+	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -8,6 +10,16 @@ import (
 )
 
 const missingCloneDigest = "sha256:nope"
+
+func TestCloneBundleHonorsCanceledContext(t *testing.T) {
+	s := newTestStore(t)
+	tmpl := seedTemplateBundle(t, s)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, _, err := s.CloneBundle(ctx, tmpl); !errors.Is(err, context.Canceled) {
+		t.Fatalf("CloneBundle canceled error = %v", err)
+	}
+}
 
 // requireReflink skips the calling test when the temp filesystem can't
 // reflink, since CloneBundle uses `cp --reflink=always`. Production
@@ -61,7 +73,7 @@ func TestCloneBundleIsolatesWrites(t *testing.T) {
 	s := newTestStore(t)
 	tmpl := seedTemplateBundle(t, s)
 
-	clone, cleanup, err := s.CloneBundle(tmpl)
+	clone, cleanup, err := s.CloneBundle(t.Context(), tmpl)
 	if err != nil {
 		t.Fatalf("CloneBundle: %v", err)
 	}
@@ -120,7 +132,7 @@ func TestCloneBundleCleanupRemovesReadOnlyTree(t *testing.T) {
 	// (like a plain RemoveAll) can't unlink under a 0555 dir.
 	t.Cleanup(func() { _ = os.Chmod(roDir, 0o750) }) //nolint:gosec // G302: dir needs owner rwx so the framework can clean it.
 
-	clone, cleanup, err := s.CloneBundle(tmpl)
+	clone, cleanup, err := s.CloneBundle(t.Context(), tmpl)
 	if err != nil {
 		t.Fatalf("CloneBundle: %v", err)
 	}
@@ -165,7 +177,7 @@ func TestSweepOrphanClonesIsExplicit(t *testing.T) {
 func TestCloneBundleMissingTemplate(t *testing.T) {
 	s := newTestStore(t)
 	bad := &Bundle{Digest: missingCloneDigest, Path: filepath.Join(s.Root, bundlesDir, "absent")}
-	_, _, err := s.CloneBundle(bad)
+	_, _, err := s.CloneBundle(t.Context(), bad)
 	if err == nil {
 		t.Fatal("CloneBundle of a missing template: want error, got nil")
 	}
@@ -177,7 +189,7 @@ func TestCloneBundleRejectsUnusableStoreRoot(t *testing.T) {
 		t.Fatalf("seed unusable root: %v", err)
 	}
 	s := &Store{Root: root}
-	_, _, err := s.CloneBundle(&Bundle{Digest: missingCloneDigest, Path: "/absent"})
+	_, _, err := s.CloneBundle(t.Context(), &Bundle{Digest: missingCloneDigest, Path: "/absent"})
 	if err == nil {
 		t.Fatal("CloneBundle with a file as store root: want error, got nil")
 	}
@@ -193,7 +205,7 @@ func TestCloneBundleRejectsUnwritableClonesDir(t *testing.T) {
 		t.Fatalf("mkdir clones parent: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) }) //nolint:gosec // restore owner access for TempDir cleanup.
-	_, _, err := s.CloneBundle(&Bundle{Digest: missingCloneDigest, Path: "/absent"})
+	_, _, err := s.CloneBundle(t.Context(), &Bundle{Digest: missingCloneDigest, Path: "/absent"})
 	if err == nil {
 		t.Fatal("CloneBundle with an unwritable clones dir: want error, got nil")
 	}

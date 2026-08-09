@@ -20,6 +20,7 @@ package testdaemons
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -420,11 +421,14 @@ func waitForNode(t *testing.T, daftBin, configDir, orchestratorURL string, fp id
 	var lastErr error
 	//daft:lint:disable=forloopbound reason="bounded by deadline via the if-fatal below"
 	for {
-		cmd := exec.Command( //nolint:gosec // test-controlled binary and arguments.
+		ctx, cancel := context.WithDeadline(t.Context(), deadline)
+		cmd := exec.CommandContext(
+			ctx, //nolint:gosec // test-controlled binary and arguments.
 			daftBin, "--config-dir", configDir,
 			"node", "list", "--full", "--orchestrator", orchestratorURL,
 		)
 		out, err := cmd.CombinedOutput()
+		cancel()
 		lastOutput, lastErr = string(out), err
 		if err == nil && strings.Contains(lastOutput, fp.String()) {
 			return
@@ -603,7 +607,7 @@ func ensureBinaries(t *testing.T) binaries {
 			binsErr = fmt.Errorf("MkdirTemp: %w", err)
 			return
 		}
-		root, err := repoRoot()
+		root, err := repoRoot(t.Context())
 		if err != nil {
 			binsErr = err
 			return
@@ -619,7 +623,7 @@ func ensureBinaries(t *testing.T) binaries {
 		for _, tgt := range targets {
 			outPath := filepath.Join(dir, tgt.name)
 			//nolint:gosec // G204: tgt.name + tgt.pkg are package constants; test-only.
-			cmd := exec.Command("go", "build", "-o", outPath, tgt.pkg)
+			cmd := exec.CommandContext(t.Context(), "go", "build", "-o", outPath, tgt.pkg)
 			cmd.Dir = root
 			if out, berr := cmd.CombinedOutput(); berr != nil {
 				binsErr = fmt.Errorf("go build %s: %w\n%s", tgt.name, berr, out)
@@ -648,8 +652,8 @@ func ensureBinaries(t *testing.T) binaries {
 
 // repoRoot returns the absolute path to the module root by
 // asking `go env GOMOD` for the active go.mod path.
-func repoRoot() (string, error) {
-	out, err := exec.Command("go", "env", "GOMOD").Output()
+func repoRoot(ctx context.Context) (string, error) {
+	out, err := exec.CommandContext(ctx, "go", "env", "GOMOD").Output()
 	if err != nil {
 		return "", fmt.Errorf("go env GOMOD: %w", err)
 	}
@@ -759,6 +763,7 @@ func freeLoopbackAddr(t *testing.T) string {
 func startDaemon(t *testing.T, out *outputCapture, extraEnv, scrub []string, prog string, args ...string) *exec.Cmd {
 	t.Helper()
 	//nolint:gosec // G204: prog + args are caller-controlled test-only paths.
+	//daft:lint:disable=commandcontext reason="the daemon intentionally runs for the test lifetime; Cleanup uses bounded SIGTERM/Wait and Pdeathsig prevents leaks"
 	cmd := exec.Command(prog, args...)
 	if len(extraEnv) > 0 || len(scrub) > 0 {
 		base := os.Environ()

@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -26,8 +27,8 @@ func defaultWorkspaceDiskDeps() workspaceDiskDeps {
 			return syscall.Mount(source, target, "", syscall.MS_BIND, "")
 		},
 		receiveSeed: workspacesnapshot.ReceiveSeed,
-		run: func(name string, args ...string) error {
-			output, err := exec.Command(name, args...).CombinedOutput() // #nosec G204 -- executable and arguments are fixed guest policy.
+		run: func(ctx context.Context, name string, args ...string) error {
+			output, err := exec.CommandContext(ctx, name, args...).CombinedOutput() // #nosec G204 -- executable and arguments are fixed guest policy.
 			if err != nil {
 				return fmt.Errorf("%w: %s", err, output)
 			}
