@@ -98,7 +98,7 @@ func Push(ctx context.Context, cfg PushConfig) (PushResult, error) {
 		if err != nil {
 			return PushResult{}, err
 		}
-		manifest, err := workspace.BuildManifest(local, cfg.Store, workspace.BuildOptions{})
+		manifest, err := workspace.BuildManifest(local, cfg.Store, workspace.BuildOptions{SkipPath: skipControlPath})
 		if err != nil {
 			return PushResult{}, fmt.Errorf("workspace push: build manifest for %s: %w", local, err)
 		}
@@ -110,6 +110,19 @@ func Push(ctx context.Context, cfg PushConfig) (PushResult, error) {
 		})
 	}
 	return result, nil
+}
+
+// skipControlPath keeps repository and daft client metadata out of workspace
+// manifests. These trees are control-plane state rather than workload input;
+// including them makes ordinary pushes unexpectedly enormous and can expose
+// local Git objects or client configuration to the sandbox.
+func skipControlPath(rel string) bool {
+	for _, component := range strings.Split(filepath.ToSlash(rel), "/") {
+		if component == ".git" || component == ".daft" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateConfig(cfg PushConfig) error {

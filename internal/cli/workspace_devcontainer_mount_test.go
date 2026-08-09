@@ -8,8 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"connectrpc.com/connect"
+
+	"github.com/richiejp/darkaifactory/internal/identity"
+	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 // projRemote is the derived in-VM folder reused across the register
@@ -143,7 +147,9 @@ func TestRegisterDevcontainerWorkspaceMount(t *testing.T) {
 	var out bytes.Buffer
 
 	m := devcontainerWorkspaceMount{Local: "/home/me/proj", Remote: projRemote}
-	registerDevcontainerWorkspaceMount(context.Background(), c, handleByName("w"), &out, m)
+	if err := registerDevcontainerWorkspaceMount(context.Background(), c, handleByName("w"), &out, m); err != nil {
+		t.Fatalf("register: %v", err)
+	}
 
 	if len(f.addMountTargets) != 1 || f.addMountTargets[0] != projRemote {
 		t.Errorf("AddMount targets = %v, want [%s]", f.addMountTargets, projRemote)
@@ -169,8 +175,10 @@ func TestRegisterDevcontainerWorkspaceMountAlreadyExists(t *testing.T) {
 	c := fakeCatalogClient(t, f)
 	var out bytes.Buffer
 
-	registerDevcontainerWorkspaceMount(context.Background(), c, handleByName("w"), &out,
-		devcontainerWorkspaceMount{Local: "/p", Remote: "/workspaces/p"})
+	if err := registerDevcontainerWorkspaceMount(context.Background(), c, handleByName("w"), &out,
+		devcontainerWorkspaceMount{Local: "/p", Remote: "/workspaces/p"}); err != nil {
+		t.Fatalf("register existing: %v", err)
+	}
 
 	mounts, err := dirLocalMounts()
 	if err != nil {
@@ -182,15 +190,18 @@ func TestRegisterDevcontainerWorkspaceMountAlreadyExists(t *testing.T) {
 }
 
 // TestRegisterDevcontainerWorkspaceMountAddMountError: a non-AlreadyExists
-// AddMount failure warns and records nothing dir-local.
+// AddMount failure is returned and records nothing dir-local.
 func TestRegisterDevcontainerWorkspaceMountAddMountError(t *testing.T) {
 	t.Chdir(t.TempDir())
 	f := &fakeCatalog{addMountErr: connect.NewError(connect.CodeInternal, errors.New("boom"))}
 	c := fakeCatalogClient(t, f)
 	var out bytes.Buffer
 
-	registerDevcontainerWorkspaceMount(context.Background(), c, handleByName("w"), &out,
+	err := registerDevcontainerWorkspaceMount(context.Background(), c, handleByName("w"), &out,
 		devcontainerWorkspaceMount{Local: "/p", Remote: "/workspaces/p"})
+	if err == nil || !strings.Contains(err.Error(), "register workspace mount") {
+		t.Fatalf("register error = %v", err)
+	}
 
 	mounts, err := dirLocalMounts()
 	if err != nil {
@@ -199,14 +210,12 @@ func TestRegisterDevcontainerWorkspaceMountAddMountError(t *testing.T) {
 	if len(mounts) != 0 {
 		t.Errorf("dir-local mounts = %+v, want none on AddMount failure", mounts)
 	}
-	if !strings.Contains(out.String(), "register workspace mount") {
-		t.Errorf("output %q should warn about the failure", out.String())
-	}
 }
 
 // TestRegisterDevcontainerWorkspaceMountDirLocalError: AddMount succeeds
 // but the dir-local write fails (here: ./.daft is a regular file, so the
-// config path can't be created). The failure is warned, not fatal.
+// config path can't be created). The failure is returned and the newly added
+// catalog mount is compensated.
 func TestRegisterDevcontainerWorkspaceMountDirLocalError(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
@@ -218,11 +227,10 @@ func TestRegisterDevcontainerWorkspaceMountDirLocalError(t *testing.T) {
 	c := fakeCatalogClient(t, f)
 	var out bytes.Buffer
 
-	registerDevcontainerWorkspaceMount(context.Background(), c, handleByName("w"), &out,
+	err := registerDevcontainerWorkspaceMount(context.Background(), c, handleByName("w"), &out,
 		devcontainerWorkspaceMount{Local: "/p", Remote: projRemote})
-
-	if !strings.Contains(out.String(), "record workspace mount dir-local") {
-		t.Errorf("output %q should warn about the dir-local failure", out.String())
+	if err == nil || !strings.Contains(err.Error(), "record workspace mount dir-local") {
+		t.Fatalf("register error = %v", err)
 	}
 }
 
@@ -262,10 +270,8 @@ func TestWorkspaceDevcontainerAutoMount(t *testing.T) {
 	}
 }
 
-// TestWorkspaceDevcontainerAutoMountMissingFileWarns: when the host
-// devcontainer.json isn't locally readable, setting the path still
-// succeeds (the orchestrator reads it from pushed content) and the
-// auto-mount is skipped with a warning rather than failing.
+// TestWorkspaceDevcontainerAutoMountMissingFileWarns preserves the advanced
+// case where content was registered from a different host source.
 func TestWorkspaceDevcontainerAutoMountMissingFileWarns(t *testing.T) {
 	rig := newSyncE2ERig(t)
 	const wsName = "dc-missing"
@@ -280,10 +286,10 @@ func TestWorkspaceDevcontainerAutoMountMissingFileWarns(t *testing.T) {
 		commonArgs...,
 	)...)
 	if err != nil {
-		t.Fatalf("devcontainer should still set the path: %v", err)
+		t.Fatalf("devcontainer should still set the server-side path: %v", err)
 	}
 	if !strings.Contains(stderr, "skip auto-mount") {
-		t.Errorf("stderr %q should warn that auto-mount was skipped", stderr)
+		t.Fatalf("stderr = %q, want skip auto-mount warning", stderr)
 	}
 	mounts, err := dirLocalMounts()
 	if err != nil {
@@ -291,6 +297,58 @@ func TestWorkspaceDevcontainerAutoMountMissingFileWarns(t *testing.T) {
 	}
 	if len(mounts) != 0 {
 		t.Errorf("dir-local mounts = %+v, want none when the json is unreadable", mounts)
+	}
+}
+
+func TestWorkspaceDevcontainerRejectsCorruptLocalConfigBeforeRPC(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, ".daft"), []byte("blocked"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := runDaft(t, workspaceCmdName, devcontainerSubName, "--clear")
+	if err == nil {
+		t.Fatal("devcontainer clear succeeded with corrupt local config")
+	}
+}
+
+func TestWorkspaceDevcontainerRestoresLocalPathWhenCatalogMutationFails(t *testing.T) {
+	rig := newSyncE2ERig(t)
+	const wsName = "dc-rollback"
+	commonArgs := []string{orchestratorArg, rig.orchURL, configDirArg, rig.clientDir, nameFlag, wsName}
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, createSubName}, commonArgs...)...); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	workspaces := rig.catalog.List(nil)
+	if len(workspaces) != 1 {
+		t.Fatalf("workspaces = %d, want 1", len(workspaces))
+	}
+	other, err := identity.Generate(identity.RoleClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rig.catalog.Update(workspaces[0].Metadata.UUID, workspacecatalog.MutateStatus, func(ws *workspacecatalog.Workspace) error {
+		ws.Status.Lock = workspacecatalog.Lock{OwnerFingerprint: other.Fingerprint(), ExpiresAt: time.Now().Add(time.Hour)}
+		return nil
+	}); err != nil {
+		t.Fatalf("lock workspace: %v", err)
+	}
+
+	projectDir := t.TempDir()
+	t.Chdir(projectDir)
+	writeDevcontainerJSON(t, filepath.Join(projectDir, ".devcontainer"), `{"image":"x"}`)
+	if _, _, err := runDaft(t, append([]string{workspaceCmdName, devcontainerSubName, dcConventionPath}, commonArgs...)...); err == nil {
+		t.Fatal("devcontainer unexpectedly mutated a workspace locked by another client")
+	}
+	got, err := rig.catalog.Get(workspaces[0].Metadata.UUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.DevcontainerPath != "" {
+		t.Fatalf("server devcontainer path = %q, want rollback to empty", got.Spec.DevcontainerPath)
+	}
+	if localPath, err := dirLocalDevcontainer(); err != nil || localPath != "" {
+		t.Fatalf("local devcontainer path = %q, %v; want rollback to empty", localPath, err)
 	}
 }
 

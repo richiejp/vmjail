@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -153,30 +154,30 @@ func containerWorkspaceFolder(spec *devcontainer.Spec, root string) string {
 // devcontainers anywhere below this layer — the boot path sees an
 // ordinary registered mount.
 //
-// It is best-effort and idempotent: an already-present target (a repeat
-// run, or a mount the user added by hand) is treated as success, and
-// addDirLocalMount upserts by target. Failures are reported to stderr
-// but never roll back the devcontainer path that was just set.
+// An already-present target is idempotent. Every other failure is returned;
+// when this call added the catalog mount but cannot record its local half, it
+// removes the catalog mount again before returning.
 func registerDevcontainerWorkspaceMount(
 	ctx context.Context,
 	c workspacev1connect.WorkspaceCatalogServiceClient,
 	h *workspacev1.WorkspaceHandle,
 	out io.Writer, m devcontainerWorkspaceMount,
-) {
+) error {
 	_, err := c.AddMount(ctx, connect.NewRequest(&workspacev1.AddMountRequest{
 		Handle: h,
 		Mount:  &sandboxv1.Mount{Target: m.Remote},
 	}))
-	switch {
-	case err == nil, connect.CodeOf(err) == connect.CodeAlreadyExists:
-		// Registered now, or already there — either way the mount stands.
-	default:
-		_, _ = fmt.Fprintf(out, "daft workspace devcontainer: register workspace mount %s: %v\n", m.Remote, err)
-		return
+	alreadyExists := connect.CodeOf(err) == connect.CodeAlreadyExists
+	if err != nil && !alreadyExists {
+		return fmt.Errorf("daft workspace devcontainer: register workspace mount %s: %w", m.Remote, err)
 	}
 	if _, err := addDirLocalMount(mountMapping{Local: m.Local, Remote: m.Remote}); err != nil {
-		_, _ = fmt.Fprintf(out, "daft workspace devcontainer: record workspace mount dir-local: %v\n", err)
-		return
+		if alreadyExists {
+			return fmt.Errorf("daft workspace devcontainer: record workspace mount dir-local: %w", err)
+		}
+		_, rollbackErr := c.RemoveMount(ctx, connect.NewRequest(&workspacev1.RemoveMountRequest{Handle: h, Target: m.Remote}))
+		return errors.Join(fmt.Errorf("daft workspace devcontainer: record workspace mount dir-local: %w", err), rollbackErr)
 	}
 	_, _ = fmt.Fprintf(out, "devcontainer workspace mount %s -> %s registered\n", m.Local, m.Remote)
+	return nil
 }

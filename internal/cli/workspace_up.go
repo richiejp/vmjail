@@ -223,17 +223,17 @@ func forwardPortsFromDevcontainer() ([]int, error) {
 // devcontainer.json's absolute host path dir-local, so `daft workspace up`
 // can later read its forwardPorts. Best-effort: a failure is reported but
 // never blocks the `devcontainer` command's orchestrator call.
-func rememberDevcontainerPath(stderr io.Writer, relPath string) {
+func rememberDevcontainerPath(_ io.Writer, relPath string) error {
 	host := ""
 	if relPath != "" {
 		abs, err := filepath.Abs(relPath)
 		if err != nil {
-			_, _ = fmt.Fprintf(stderr, "daft workspace devcontainer: record path: %v\n", err)
-			return
+			return fmt.Errorf("daft workspace devcontainer: record path: %w", err)
 		}
 		host = abs
 	}
 	if err := setDirLocalDevcontainer(host); err != nil {
-		_, _ = fmt.Fprintf(stderr, "daft workspace devcontainer: record path dir-local: %v\n", err)
+		return fmt.Errorf("daft workspace devcontainer: record path dir-local: %w", err)
 	}
+	return nil
 }

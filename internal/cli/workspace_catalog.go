@@ -16,6 +16,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
 	"golang.org/x/net/http2"
+	gproto "google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/richiejp/darkaifactory/internal/daftclient"
@@ -29,6 +30,9 @@ import (
 )
 
 const orchestratorFlag = "orchestrator"
+
+//nolint:gochecknoglobals // Narrow filesystem seam makes the compensating mount transaction deterministic in tests.
+var removeDirLocalMountForCatalog = removeDirLocalMount
 
 //nolint:gochecknoglobals // Narrow transport seam lets CLI tests cover live-resize ordering without a second broker daemon.
 var resizeCatalogWorkspaceDisk = func(ctx context.Context, opts workspaceClientOpts, uuid string, desired uint64) error {
@@ -435,16 +439,16 @@ func newWorkspaceDevcontainerCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			// Record the devcontainer.json's host path dir-local so
-			// `daft workspace up` can re-parse it for forwardPorts (the
-			// orchestrator resolves it node-side and never reports the
-			// ports back). Best-effort: a dir-local write failure must not
-			// block setting the path on the orchestrator.
-			rememberDevcontainerPath(cmd.ErrOrStderr(), path)
-			// Derive the implied workspace mount before the RPC session so
-			// a malformed devcontainer fails loudly here; a read/parse
-			// miss only warns (setting the path must not need the host
-			// json to be locally readable).
+			previousLocalPath, err := dirLocalDevcontainer()
+			if err != nil {
+				return err
+			}
+			if err := rememberDevcontainerPath(cmd.ErrOrStderr(), path); err != nil {
+				return err
+			}
+			// Derive the implied mount before mutating the catalog. A path
+			// selected from this checkout must be readable and valid now;
+			// otherwise accepting it creates a declaration push cannot use.
 			mnt, haveMnt, derr := deriveDevcontainerWorkspaceMount(path)
 			if derr != nil {
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(),
@@ -452,14 +456,25 @@ func newWorkspaceDevcontainerCmd() *cobra.Command {
 			}
 			return runCatalogCmd(cmd, opts, devcontainerSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
+					before, err := c.Get(ctx, connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: h}))
+					if err != nil {
+						_ = setDirLocalDevcontainer(previousLocalPath)
+						return err
+					}
+					previousServerPath := before.Msg.GetWorkspace().GetSpec().GetDevcontainerPath()
 					resp, err := c.SetDevcontainer(ctx, connect.NewRequest(
 						&workspacev1.SetDevcontainerRequest{Handle: h, DevcontainerPath: path},
 					))
 					if err != nil {
-						return err
+						return errors.Join(err, setDirLocalDevcontainer(previousLocalPath))
 					}
 					if haveMnt {
-						registerDevcontainerWorkspaceMount(ctx, c, h, cmd.OutOrStdout(), mnt)
+						if mountErr := registerDevcontainerWorkspaceMount(ctx, c, h, cmd.OutOrStdout(), mnt); mountErr != nil {
+							_, rollbackErr := c.SetDevcontainer(ctx, connect.NewRequest(&workspacev1.SetDevcontainerRequest{
+								Handle: h, DevcontainerPath: previousServerPath,
+							}))
+							return errors.Join(mountErr, rollbackErr, setDirLocalDevcontainer(previousLocalPath))
+						}
 					}
 					return writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace())
 				})
@@ -915,23 +930,42 @@ func newWorkspaceMountRmCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			target := args[0]
+			// Parse the local half before mutating the catalog. A corrupt
+			// client config must not turn a remove into a one-sided update.
+			if _, err := dirLocalMounts(); err != nil {
+				return err
+			}
 			if err := runCatalogCmd(cmd, opts, mountSubName+"."+rmSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
+					before, err := c.Get(ctx, connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: h}))
+					if err != nil {
+						return err
+					}
+					var removed *sandboxv1.Mount
+					for _, candidate := range before.Msg.GetWorkspace().GetSpec().GetMounts() {
+						if candidate.GetTarget() == target {
+							removed, _ = gproto.Clone(candidate).(*sandboxv1.Mount)
+							break
+						}
+					}
 					resp, err := c.RemoveMount(ctx, connect.NewRequest(
 						&workspacev1.RemoveMountRequest{Handle: h, Target: target},
 					))
 					if err != nil {
 						return err
 					}
+					if found, localErr := removeDirLocalMountForCatalog(target); localErr != nil {
+						if removed == nil {
+							return localErr
+						}
+						_, rollbackErr := c.AddMount(ctx, connect.NewRequest(&workspacev1.AddMountRequest{Handle: h, Mount: removed}))
+						return errors.Join(localErr, rollbackErr)
+					} else if found {
+						_, _ = fmt.Fprintf(cmd.OutOrStdout(), "dropped local mapping for %s\n", target)
+					}
 					return writeWorkspaceSummary(cmd.OutOrStdout(), resp.Msg.GetWorkspace())
 				}); err != nil {
 				return err
-			}
-			// Keep the dir-local mapping in step with the spec.
-			if found, err := removeDirLocalMount(target); err != nil {
-				return err
-			} else if found {
-				_, _ = fmt.Fprintf(cmd.OutOrStdout(), "dropped local mapping for %s\n", target)
 			}
 			return nil
 		},

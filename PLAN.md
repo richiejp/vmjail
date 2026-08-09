@@ -89,6 +89,13 @@ configuration and file push, image-backed VM launch, PTY execution, port
 forwarding, file pull, liveness, and reconciliation. `daft cluster up` provides
 a local development cluster.
 
+Workspace push excludes `.git` and `.daft` control trees at any depth. Mount
+mapping add/remove operations preflight local configuration and compensate a
+failed local write, so the catalog declaration and client path mapping cannot
+silently diverge. Devcontainer auto-registration follows the same rule:
+unreadable declarations and catalog/local mount failures fail the command and
+restore the prior declaration instead of being downgraded to warnings.
+
 The in-process egress proxy and DNS path support default-deny networking,
 record/replay, and guest CA injection. Host `/proc`/cgroup sampling and guest
 eBPF gadgets provide bounded resource and build-progress observations; see

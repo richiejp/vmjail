@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -289,14 +290,18 @@ func TestForwardPortsFromDevcontainerErrors(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(dir, "dc.json"), []byte("{not json"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		rememberDevcontainerPath(&bytes.Buffer{}, "dc.json")
+		if err := rememberDevcontainerPath(&bytes.Buffer{}, "dc.json"); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := forwardPortsFromDevcontainer(); err == nil {
 			t.Error("malformed devcontainer.json should error")
 		}
 	})
 	t.Run("missing-file", func(t *testing.T) {
 		t.Chdir(t.TempDir())
-		rememberDevcontainerPath(&bytes.Buffer{}, "ghost.json") // records an abs path that doesn't exist
+		if err := rememberDevcontainerPath(&bytes.Buffer{}, "ghost.json"); err != nil { // records an abs path that doesn't exist
+			t.Fatal(err)
+		}
 		if _, err := forwardPortsFromDevcontainer(); err == nil {
 			t.Error("a recorded-but-missing devcontainer.json should error")
 		}
@@ -341,7 +346,9 @@ func TestForwardPortsFromDevcontainer(t *testing.T) {
 	if err := os.WriteFile(dcPath, []byte(`{"image":"x","forwardPorts":[3000,5173]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	rememberDevcontainerPath(&bytes.Buffer{}, ".devcontainer/devcontainer.json")
+	if err := rememberDevcontainerPath(&bytes.Buffer{}, ".devcontainer/devcontainer.json"); err != nil {
+		t.Fatal(err)
+	}
 
 	ports, err := forwardPortsFromDevcontainer()
 	if err != nil {
@@ -362,14 +369,41 @@ func TestForwardPortsFromDevcontainerNoRecord(t *testing.T) {
 
 func TestRememberDevcontainerPathClears(t *testing.T) {
 	t.Chdir(t.TempDir())
-	rememberDevcontainerPath(&bytes.Buffer{}, ".devcontainer/devcontainer.json")
+	if err := rememberDevcontainerPath(&bytes.Buffer{}, ".devcontainer/devcontainer.json"); err != nil {
+		t.Fatal(err)
+	}
 	if got, _ := dirLocalDevcontainer(); !filepath.IsAbs(got) {
 		t.Errorf("recorded path should be absolute, got %q", got)
 	}
-	rememberDevcontainerPath(&bytes.Buffer{}, "") // clear
+	if err := rememberDevcontainerPath(&bytes.Buffer{}, ""); err != nil { // clear
+		t.Fatal(err)
+	}
 	if got, _ := dirLocalDevcontainer(); got != "" {
 		t.Errorf("empty arg should clear the recorded path, got %q", got)
 	}
+}
+
+func TestRememberDevcontainerPathReturnsLocalStateErrors(t *testing.T) {
+	t.Run("working directory", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		if err := os.Remove(dir); err != nil {
+			t.Fatal(err)
+		}
+		if err := rememberDevcontainerPath(io.Discard, "dc.json"); err == nil {
+			t.Fatal("remember succeeded without a working directory")
+		}
+	})
+	t.Run("config path", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Chdir(dir)
+		if err := os.WriteFile(filepath.Join(dir, ".daft"), []byte("blocked"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := rememberDevcontainerPath(io.Discard, "dc.json"); err == nil {
+			t.Fatal("remember succeeded with a blocked config path")
+		}
+	})
 }
 
 func TestIsAlreadyDispatched(t *testing.T) {

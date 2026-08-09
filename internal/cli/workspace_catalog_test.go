@@ -611,10 +611,13 @@ func TestWriteWorkspaceSummaryWithFullState(t *testing.T) {
 	err := writeWorkspaceSummary(&buf, &workspacev1.Workspace{
 		Metadata: &workspacev1.WorkspaceMetadata{Uuid: testRenderUUID, Name: "ws"},
 		Spec: &workspacev1.WorkspaceSpec{
-			ImageRef: testCatalogImage,
-			Mounts:   []*sandboxv1.Mount{{Target: "/x"}, {Target: "/y", ReadOnly: true}},
-			Env:      []*sandboxv1.EnvVar{{Name: "K"}},
-			Ports:    []*sandboxv1.PortMapping{{ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP}},
+			ImageRef:             testCatalogImage,
+			Mounts:               []*sandboxv1.Mount{{Target: "/x"}, {Target: "/y", ReadOnly: true}},
+			Env:                  []*sandboxv1.EnvVar{{Name: "K"}},
+			Ports:                []*sandboxv1.PortMapping{{ContainerPort: 80, Protocol: sandboxv1.Protocol_PROTOCOL_TCP}},
+			NestedVirtualization: &sandboxv1.NestedVirtualization{Enable: true},
+			PrivilegedFuseMounts: &sandboxv1.PrivilegedFuseMounts{Enable: true},
+			PrivilegedBuild:      &sandboxv1.PrivilegedBuild{Enable: true},
 		},
 		Status: &workspacev1.WorkspaceStatus{
 			Missing: []string{"target"},
@@ -624,7 +627,7 @@ func TestWriteWorkspaceSummaryWithFullState(t *testing.T) {
 		t.Fatalf("writeWorkspaceSummary: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"Missing:", "target", "/x", "/y ro", "K", "80/tcp"} {
+	for _, want := range []string{"Missing:", "target", "/x", "/y ro", "K", "80/tcp", "Nested-virt", "Privileged-FUSE", "Privileged-Build"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary missing %q:\n%s", want, out)
 		}
@@ -638,6 +641,24 @@ func TestWriteWorkspaceListEmpty(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), "NAME") {
 		t.Errorf("empty list should still emit header, got:\n%s", buf.String())
+	}
+}
+
+func TestWriteWorkspaceListPropagatesOutputFailure(t *testing.T) {
+	if err := writeWorkspaceList(failingWriter{}, []*workspacev1.Workspace{{
+		Metadata: &workspacev1.WorkspaceMetadata{Name: "broken"},
+		Spec:     &workspacev1.WorkspaceSpec{},
+	}}); err == nil {
+		t.Fatal("writeWorkspaceList accepted a broken output writer")
+	}
+}
+
+func TestWriteWorkspaceSummaryPropagatesOutputFailure(t *testing.T) {
+	if err := writeWorkspaceSummary(failingWriter{}, &workspacev1.Workspace{
+		Metadata: &workspacev1.WorkspaceMetadata{Name: "broken"},
+		Spec:     &workspacev1.WorkspaceSpec{},
+	}); err == nil {
+		t.Fatal("writeWorkspaceSummary accepted a broken output writer")
 	}
 }
 
@@ -890,6 +911,44 @@ func TestWorkspaceMountMappingRecordsAndRegisters(t *testing.T) {
 	h.run(append([]string{mountSubName, rmSubName, testMountRemote}, h.commonArgs...)...)
 	if mounts, _ := dirLocalMounts(); len(mounts) != 0 {
 		t.Errorf("after rm, dir-local mounts = %+v, want empty", mounts)
+	}
+}
+
+func TestWorkspaceMountRemoveRejectsCorruptLocalConfigBeforeCatalogMutation(t *testing.T) {
+	chdirClean(t)
+	clearOrchestratorEnv(t)
+	local := t.TempDir()
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	h.run(append([]string{mountSubName, local, testMountRemote}, h.commonArgs...)...)
+	writeBadDirLocal(t)
+
+	if _, err := h.runErr(append([]string{mountSubName, rmSubName, testMountRemote}, h.commonArgs...)...); err == nil {
+		t.Fatal("mount rm with corrupt local config succeeded")
+	}
+	workspaces := h.store.List(nil)
+	if len(workspaces) != 1 || len(workspaces[0].Spec.Mounts) != 1 || workspaces[0].Spec.Mounts[0].Target != testMountRemote {
+		t.Fatalf("catalog mounts after rejected remove = %+v, want %s retained", workspaces, testMountRemote)
+	}
+}
+
+func TestWorkspaceMountRemoveRollsCatalogBackAfterLocalWriteFailure(t *testing.T) {
+	chdirClean(t)
+	clearOrchestratorEnv(t)
+	local := t.TempDir()
+	h := newWorkspaceE2EHarness(t)
+	h.run(append([]string{createSubName}, h.commonArgs...)...)
+	h.run(append([]string{mountSubName, local, testMountRemote}, h.commonArgs...)...)
+	previous := removeDirLocalMountForCatalog
+	removeDirLocalMountForCatalog = func(string) (bool, error) { return false, errors.New("injected local write failure") }
+	t.Cleanup(func() { removeDirLocalMountForCatalog = previous })
+
+	if _, err := h.runErr(append([]string{mountSubName, rmSubName, testMountRemote}, h.commonArgs...)...); err == nil {
+		t.Fatal("mount rm unexpectedly ignored local write failure")
+	}
+	workspaces := h.store.List(nil)
+	if len(workspaces) != 1 || len(workspaces[0].Spec.Mounts) != 1 || workspaces[0].Spec.Mounts[0].Target != testMountRemote {
+		t.Fatalf("catalog mounts after compensated remove = %+v, want %s retained", workspaces, testMountRemote)
 	}
 }
 

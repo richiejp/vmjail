@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -231,6 +232,37 @@ func TestPushRejectsInvalidConfigurationAndTargetFailures(t *testing.T) {
 	cfg.Catalog = fakeCatalog{response: workspaceResponse("workspace-id", ""), err: errors.New("get failed")}
 	if _, err := Push(t.Context(), cfg); err == nil {
 		t.Fatal("Push ignored catalog error")
+	}
+}
+
+func TestPushOmitsGitAndDaftControlTrees(t *testing.T) {
+	root := t.TempDir()
+	writeProjectConfig(t, root, `{"mounts":[{"local":".","remote":"/workspace"}]}`)
+	for _, path := range []string{"kept.txt", ".git/objects/secret", ".daft/private", "nested/.git/config"} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(path), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg, _ := validPushConfig(t, root)
+	client := &fakePushClient{}
+	cfg.DialNode = func(context.Context, PushConfig, string, identity.Fingerprint) (workspace.PushClient, func() error, error) {
+		return client, func() error { return nil }, nil
+	}
+	if _, err := Push(t.Context(), cfg); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+	entries := client.manifest.GetManifest().GetEntries()
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		paths = append(paths, entry.GetPath())
+	}
+	if !slices.Contains(paths, "kept.txt") || slices.ContainsFunc(paths, skipControlPath) {
+		t.Fatalf("manifest paths = %v, want kept.txt and no control trees", paths)
 	}
 }
 
