@@ -17,6 +17,7 @@ not isolated mistakes. Use these names in reviews and regressions:
 | Completion/drain race | A process test called `Wait` before `StdoutPipe`/`StderrPipe` readers reached EOF | Drain both streams before `Wait`; assert captured data in failures |
 | Accepted-work invisibility | Slow launch preparation was absent from heartbeats and falsely reconciled as lost | Publish a `Pending` liveness record atomically with accepting the launch |
 | Diagnostic collapse | A real pre-readiness failure was returned as a generic termination after its binding was cleared | Match the durable terminal UID/generation and return its bounded phase, exit code, and message |
+| Split authority | Client push updated CAS while a retained qcow2 remained the relaunch source, producing stale and empty mounts | Refuse running/protected disks; delete recoverable stopped disks before accepting a push |
 
 The general invariant is: destructive or ownership-changing state transitions
 follow exact external acknowledgment, preserve enough prior state for recovery,

@@ -459,6 +459,9 @@ func (s *Server) PutManifest(ctx context.Context, req *connect.Request[workspace
 	if err != nil {
 		return nil, mapStoreError(err)
 	}
+	if err := s.prepareClientPush(ctx, name); err != nil {
+		return nil, err
+	}
 	state, err := s.stageClientManifest(ctx, name, m, missing)
 	if err != nil {
 		code := connect.CodeInvalidArgument
@@ -470,6 +473,49 @@ func (s *Server) PutManifest(ctx context.Context, req *connect.Request[workspace
 	return connect.NewResponse(&workspacev1.PutManifestResponse{
 		MissingDigests: missing, ManifestDigest: state.digest, Generation: state.generation,
 	}), nil
+}
+
+// prepareClientPush resolves the retained-disk/CAS authority conflict before
+// accepting a client manifest. A push cannot update a running disk, and it
+// must never overwrite a stopped disk whose sandbox snapshot is still
+// protected. Once every current snapshot is recoverable, removing the stopped
+// disk is safe and forces the next launch to seed XFS from the newly pushed
+// manifests instead of silently reusing stale bytes.
+func (s *Server) prepareClientPush(ctx context.Context, syncKey string) error {
+	controller := s.workspaceDiskController()
+	if controller == nil || s.index == nil {
+		return nil
+	}
+	workspaceID, _, ok := strings.Cut(syncKey, syncKeySep)
+	if !ok || workspaceID == "" {
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("workspace: invalid workspace sync key"))
+	}
+	status, err := controller.Status(workspaceID)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("workspace: inspect retained disk before push: %w", err))
+	}
+	if status.Running {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			errors.New("workspace: stop the running workspace before push"))
+	}
+	if status.AllowanceBytes == 0 {
+		return nil
+	}
+	indexed, err := s.index.WorkspaceStatus(workspaceID)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, fmt.Errorf("workspace: inspect manifest protection before push: %w", err))
+	}
+	for manifestIndex := range indexed.Manifests {
+		if indexed.Manifests[manifestIndex].Recoverability == casindex.RecoverabilityProtected {
+			return connect.NewError(connect.CodeFailedPrecondition,
+				errors.New("workspace: retained disk has unadopted sandbox changes; pull and acknowledge, reject, or delete them before push"))
+		}
+	}
+	if err := controller.Delete(ctx, workspaceID); err != nil {
+		return connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("workspace: delete recoverable retained disk before push: %w", err))
+	}
+	return nil
 }
 
 // missingDigests returns the deduplicated digests referenced by m

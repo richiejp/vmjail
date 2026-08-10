@@ -493,6 +493,11 @@ Landed:
   Workspace generation and included in the launch error; `workspace status`
   also renders the durable last-terminal diagnostic after the live binding is
   cleared. Stale terminal records are never attributed to a newer launch.
+- Client push and retained-disk authority are mutually exclusive. Push refuses
+  a running disk or any stopped disk with protected sandbox manifests; once all
+  current manifests are recoverable it removes the stopped disk before
+  accepting new client manifests, forcing the next launch to seed every mount
+  from the newly published CAS state instead of reusing stale XFS bytes.
 - Exact rejection now removes the stopped retained qcow2 before restoring CAS
   provenance, refuses a running disk, and leaves the protected manifest current
   when disk deletion fails. Relaunch therefore seeds only the restored client

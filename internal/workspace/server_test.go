@@ -134,6 +134,131 @@ func TestIndexedServerPublishesOnlyCompleteManifestAndRestores(t *testing.T) {
 	}
 }
 
+func TestPutManifestRefusesRetainedProtectedWorkspaceDisk(t *testing.T) {
+	server, index := newIndexedServerForDiskPush(t)
+	controller := &fakeWorkspaceDiskController{status: WorkspaceDiskStatus{AllowanceBytes: 20}}
+	server.SetWorkspaceDiskController(controller)
+	protectedKey := SyncKey("workspace", "/existing")
+	if _, err := server.publishManifest(protectedKey, &workspacev1.Manifest{Version: 1}, casindex.OriginSandbox, casindex.RecoverabilityProtected); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := server.PutManifest(t.Context(), connect.NewRequest(&workspacev1.PutManifestRequest{
+		Workspace: SyncKey("workspace", "/new"), Manifest: &workspacev1.Manifest{Version: 1},
+	}))
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), "unadopted sandbox changes") {
+		t.Fatalf("PutManifest error = %v, want protected-disk refusal", err)
+	}
+	if controller.deleteCalls != 0 {
+		t.Fatalf("Delete calls = %d, want 0", controller.deleteCalls)
+	}
+	status, statusErr := index.WorkspaceStatus("workspace")
+	if statusErr != nil || len(status.Manifests) != 1 || status.Manifests[0].SyncKey != protectedKey {
+		t.Fatalf("protected status = %#v, %v", status, statusErr)
+	}
+}
+
+func TestPutManifestDeletesRecoverableStoppedDiskBeforePublishing(t *testing.T) {
+	server, _ := newIndexedServerForDiskPush(t)
+	controller := &fakeWorkspaceDiskController{status: WorkspaceDiskStatus{AllowanceBytes: 20}}
+	server.SetWorkspaceDiskController(controller)
+	key := SyncKey("workspace", "/work")
+	if _, err := server.publishManifest(key, &workspacev1.Manifest{Version: 1}, casindex.OriginClientUpload, casindex.RecoverabilityRecoverable); err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := server.PutManifest(t.Context(), connect.NewRequest(&workspacev1.PutManifestRequest{
+		Workspace: key, Manifest: &workspacev1.Manifest{Version: 2},
+	}))
+	if err != nil || response.Msg.GetGeneration() != 2 {
+		t.Fatalf("PutManifest = %#v, %v", response, err)
+	}
+	if controller.deleteCalls != 1 {
+		t.Fatalf("Delete calls = %d, want 1", controller.deleteCalls)
+	}
+}
+
+func TestPutManifestRefusesRunningDiskAndDeleteFailure(t *testing.T) {
+	for _, testCase := range []struct {
+		name       string
+		controller *fakeWorkspaceDiskController
+		message    string
+		deletes    int
+	}{
+		{name: "running", controller: &fakeWorkspaceDiskController{status: WorkspaceDiskStatus{AllowanceBytes: 20, Running: true}}, message: "stop the running workspace", deletes: 0},
+		{name: "delete failure", controller: &fakeWorkspaceDiskController{status: WorkspaceDiskStatus{AllowanceBytes: 20}, deleteErr: errors.New("busy")}, message: "delete recoverable retained disk", deletes: 1},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			server, _ := newIndexedServerForDiskPush(t)
+			server.SetWorkspaceDiskController(testCase.controller)
+			_, err := server.PutManifest(t.Context(), connect.NewRequest(&workspacev1.PutManifestRequest{
+				Workspace: SyncKey("workspace", "/work"), Manifest: &workspacev1.Manifest{Version: 1},
+			}))
+			if connect.CodeOf(err) != connect.CodeFailedPrecondition || !strings.Contains(err.Error(), testCase.message) {
+				t.Fatalf("PutManifest error = %v, want %q refusal", err, testCase.message)
+			}
+			if testCase.controller.deleteCalls != testCase.deletes {
+				t.Fatalf("Delete calls = %d, want %d", testCase.controller.deleteCalls, testCase.deletes)
+			}
+		})
+	}
+}
+
+func TestPutManifestDiskPreflightBoundaries(t *testing.T) {
+	t.Run("absent disk", func(t *testing.T) {
+		server, _ := newIndexedServerForDiskPush(t)
+		controller := &fakeWorkspaceDiskController{}
+		server.SetWorkspaceDiskController(controller)
+		response, err := server.PutManifest(t.Context(), connect.NewRequest(&workspacev1.PutManifestRequest{
+			Workspace: SyncKey("workspace", "/work"), Manifest: &workspacev1.Manifest{Version: 1},
+		}))
+		if err != nil || response.Msg.GetGeneration() != 1 || controller.deleteCalls != 0 {
+			t.Fatalf("PutManifest = %#v, %v, deletes %d", response, err, controller.deleteCalls)
+		}
+	})
+
+	t.Run("status failure", func(t *testing.T) {
+		server, _ := newIndexedServerForDiskPush(t)
+		server.SetWorkspaceDiskController(&fakeWorkspaceDiskController{statusErr: errors.New("inspect failed")})
+		_, err := server.PutManifest(t.Context(), connect.NewRequest(&workspacev1.PutManifestRequest{
+			Workspace: SyncKey("workspace", "/work"), Manifest: &workspacev1.Manifest{Version: 1},
+		}))
+		if connect.CodeOf(err) != connect.CodeInternal || !strings.Contains(err.Error(), "inspect retained disk") {
+			t.Fatalf("PutManifest error = %v, want status failure", err)
+		}
+	})
+
+	t.Run("invalid sync key", func(t *testing.T) {
+		server, _ := newIndexedServerForDiskPush(t)
+		server.SetWorkspaceDiskController(&fakeWorkspaceDiskController{})
+		_, err := server.PutManifest(t.Context(), connect.NewRequest(&workspacev1.PutManifestRequest{
+			Workspace: "not-a-sync-key", Manifest: &workspacev1.Manifest{Version: 1},
+		}))
+		if connect.CodeOf(err) != connect.CodeInvalidArgument {
+			t.Fatalf("PutManifest error = %v, want invalid argument", err)
+		}
+	})
+}
+
+func newIndexedServerForDiskPush(t *testing.T) (*Server, *casindex.Index) {
+	t.Helper()
+	root := t.TempDir()
+	store, err := cas.Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := casindex.Open(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	server, err := NewIndexedServer(store, index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server, index
+}
+
 func TestIndexedLiveSnapshotRequiresExactAdoption(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "node-cas")
 	store, err := cas.Open(root)
