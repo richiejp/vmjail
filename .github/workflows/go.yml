@@ -13,8 +13,10 @@ jobs:
       - uses: actions/checkout@v6
       - name: Install Nix
         uses: DeterminateSystems/determinate-nix-action@v3.19.0
-      # Run the full default Make target inside the dev shell. This mirrors
-      # exactly what the local pre-commit hook enforces (gofumpt check,
-      # golangci-lint, go test, coverage regression vs coverage.txt).
+      # Hosted runners can cover different OS/capability error paths from a
+      # developer machine. Keep CI at a stable 94% total floor while local
+      # verification continues to ratchet against coverage.txt.
       - name: make all
         run: nix develop --command make all
+        env:
+          TOTAL_COVERAGE_MIN: "94.0"

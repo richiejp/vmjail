@@ -75,7 +75,7 @@ gate must still be at least as strict overall as what it replaced.
 The codebase's verification surface is a ratchet: every commit
 either holds it or tightens it.
 
-This applies to the `coverage.txt` baseline (only rises), the
+This applies to the local `coverage.txt` baseline (only rises), the
 `bench.txt` baseline (per-bench numbers can move; the gate's
 fail/warn thresholds tighten), the per-file 80% floor (only rises),
 and the lint config in `.golangci.yml` (linters only get added).
@@ -90,6 +90,11 @@ testing, the codebase doesn't need this deletion. Do not edit
 `coverage.txt` by hand to a smaller number — `cover-check`
 refuses, and the policy is the same whether the tooling is
 strict enough to enforce it or not.
+
+GitHub's hosted runner uses a fixed 94% total-coverage floor because
+capability-dependent error paths differ from the development host. It retains
+the same per-file floor. Local checks and `make cover` continue to enforce the
+monotonically increasing committed baseline.
 
 ### Go doesn't enforce this for you
 

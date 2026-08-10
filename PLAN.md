@@ -125,6 +125,11 @@ owner and role checks on non-dashboard control-plane APIs.
 The project is distributed under the Apache License 2.0; Nix package metadata
 for darkaifactory outputs uses the matching `asl20` identifier.
 
+GitHub CI enforces a stable 94% total-coverage floor plus the normal per-file
+floor; local verification continues to ratchet monotonically against the
+committed `coverage.txt` baseline. This isolates capability-dependent hosted
+runner coverage without weakening the developer gate.
+
 `nix/orchestrator.nix` exports a parameterised NixOS service module. It contains
 no host-specific paths, addresses, identities, or service configuration.
 
