@@ -910,6 +910,17 @@ func (h *WorkspaceCatalogHandler) waitForSandboxReady(
 		}
 		current := ws.Status.CurrentSandbox
 		if current == nil {
+			if terminal := ws.Status.LastTerminalSandbox; terminal != nil &&
+				terminal.UID == expected.UID &&
+				terminal.WorkspaceGeneration == expected.WorkspaceGeneration {
+				message := terminal.Message
+				if message == "" {
+					message = "no diagnostic reported"
+				}
+				return workspacecatalog.Workspace{}, connect.NewError(connect.CodeFailedPrecondition,
+					fmt.Errorf("workspace: Sandbox %s terminated before becoming ready: phase=%s exit_code=%d: %s",
+						expected.UID, terminal.Phase, terminal.ExitCode, message))
+			}
 			return workspacecatalog.Workspace{}, connect.NewError(connect.CodeFailedPrecondition,
 				fmt.Errorf("workspace: Sandbox %s terminated before becoming ready", expected.UID))
 		}

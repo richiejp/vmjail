@@ -665,13 +665,16 @@ func TestWriteWorkspaceSummaryWithFullState(t *testing.T) {
 		},
 		Status: &workspacev1.WorkspaceStatus{
 			Missing: []string{"target"},
+			LastTerminalSandbox: &workspacev1.TerminalSandbox{
+				Uid: "failed-sandbox", Phase: "Killed", ExitCode: 17, Message: "disk preparation failed",
+			},
 		},
 	})
 	if err != nil {
 		t.Fatalf("writeWorkspaceSummary: %v", err)
 	}
 	out := buf.String()
-	for _, want := range []string{"Missing:", "target", "/x", "/y ro", "K", "80/tcp", "Nested-virt", "Privileged-FUSE", "Privileged-Build"} {
+	for _, want := range []string{"Missing:", "target", "Last-Sandbox:", "failed-sandbox phase=Killed exit_code=17: disk preparation failed", "/x", "/y ro", "K", "80/tcp", "Nested-virt", "Privileged-FUSE", "Privileged-Build"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("summary missing %q:\n%s", want, out)
 		}

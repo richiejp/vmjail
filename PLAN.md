@@ -489,6 +489,10 @@ Landed:
 - Accepted Sandbox launches enter heartbeat state as `Pending` before image and
   disk preparation. Slow preparation therefore remains visible to the
   orchestrator and cannot trip the consecutive-absence `SandboxLost` guard.
+- A pre-readiness terminal observation is matched by exact Sandbox UID and
+  Workspace generation and included in the launch error; `workspace status`
+  also renders the durable last-terminal diagnostic after the live binding is
+  cleared. Stale terminal records are never attributed to a newer launch.
 - Exact rejection now removes the stopped retained qcow2 before restoring CAS
   provenance, refuses a running disk, and leaves the protected manifest current
   when disk deletion fails. Relaunch therefore seeds only the restored client

@@ -1302,6 +1302,13 @@ func writeWorkspaceSummary(w io.Writer, ws *workspacev1.Workspace) error {
 	if len(status.GetMissing()) > 0 {
 		rows = append(rows, [2]string{"Missing", strings.Join(status.GetMissing(), ", ")})
 	}
+	if terminal := status.GetLastTerminalSandbox(); terminal != nil {
+		diagnostic := fmt.Sprintf("%s phase=%s exit_code=%d", terminal.GetUid(), terminal.GetPhase(), terminal.GetExitCode())
+		if terminal.GetMessage() != "" {
+			diagnostic += ": " + terminal.GetMessage()
+		}
+		rows = append(rows, [2]string{"Last-Sandbox", diagnostic})
+	}
 	rows = append(
 		rows,
 		[2]string{"Mounts", joinMounts(spec.GetMounts())},

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1661,6 +1662,67 @@ func TestLaunchRequiresExactRunningAcknowledgement(t *testing.T) {
 	}
 	if len(fake.calls) != 1 {
 		t.Fatalf("readiness retry published %d Sandboxes, want 1", len(fake.calls))
+	}
+}
+
+func TestWaitForSandboxReadyReportsExactTerminalDiagnostic(t *testing.T) {
+	store := workspacecatalog.NewStore(nil)
+	target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	ws, err := store.Create(workspacecatalog.CreateInput{
+		UUID: "beefbeef-1111-4111-8111-aaaaaaaaaaaa", Name: "terminal-launch",
+		OwnerFingerprint: mustGenerate(t, identity.RoleClient).Fingerprint(),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	expected := workspacecatalog.SandboxRef{UID: "failed-sandbox", NodeFingerprint: target, WorkspaceGeneration: ws.Metadata.Generation}
+	if _, err := store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(current *workspacecatalog.Workspace) error {
+		current.Status.LastTerminalSandbox = &workspacecatalog.TerminalSandbox{
+			UID: expected.UID, NodeFingerprint: target, WorkspaceGeneration: expected.WorkspaceGeneration,
+			Phase: sandboxPhaseKilled, ExitCode: 17, Message: "prepare workspace disk: no space left",
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	handler, err := NewWorkspaceCatalogHandler(store, nil)
+	if err != nil {
+		t.Fatalf("NewWorkspaceCatalogHandler: %v", err)
+	}
+	_, err = handler.waitForSandboxReady(t.Context(), ws.Metadata.UUID, expected, nil)
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition ||
+		!strings.Contains(err.Error(), "phase=Killed exit_code=17: prepare workspace disk: no space left") {
+		t.Fatalf("waitForSandboxReady error = %v, want exact terminal diagnostic", err)
+	}
+}
+
+func TestWaitForSandboxReadyDoesNotReportStaleTerminalDiagnostic(t *testing.T) {
+	store := workspacecatalog.NewStore(nil)
+	target := mustGenerate(t, identity.RoleSandboxHost).Fingerprint()
+	ws, err := store.Create(workspacecatalog.CreateInput{
+		UUID: "feedfeed-1111-4111-8111-aaaaaaaaaaaa", Name: "stale-terminal",
+		OwnerFingerprint: mustGenerate(t, identity.RoleClient).Fingerprint(),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	expected := workspacecatalog.SandboxRef{UID: "new-sandbox", NodeFingerprint: target, WorkspaceGeneration: ws.Metadata.Generation}
+	if _, err := store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(current *workspacecatalog.Workspace) error {
+		current.Status.LastTerminalSandbox = &workspacecatalog.TerminalSandbox{
+			UID: "old-sandbox", NodeFingerprint: target, WorkspaceGeneration: expected.WorkspaceGeneration,
+			Phase: sandboxPhaseKilled, Message: "stale secret diagnostic",
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	handler, err := NewWorkspaceCatalogHandler(store, nil)
+	if err != nil {
+		t.Fatalf("NewWorkspaceCatalogHandler: %v", err)
+	}
+	_, err = handler.waitForSandboxReady(t.Context(), ws.Metadata.UUID, expected, nil)
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || strings.Contains(err.Error(), "stale secret diagnostic") {
+		t.Fatalf("waitForSandboxReady error = %v, want generic exact-launch failure", err)
 	}
 }
 
