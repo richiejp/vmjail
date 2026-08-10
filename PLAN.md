@@ -130,6 +130,9 @@ floor; local verification continues to ratchet monotonically against the
 committed `coverage.txt` baseline. This isolates capability-dependent hosted
 runner coverage without weakening the developer gate.
 
+Nodes retain the 20 GiB default Workspace allowance, with an explicit
+byte-count override used by capacity-constrained test nodes.
+
 `nix/orchestrator.nix` exports a parameterised NixOS service module. It contains
 no host-specific paths, addresses, identities, or service configuration.
 

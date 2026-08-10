@@ -170,6 +170,7 @@ type Executor struct {
 	mountMaterializer         MountMaterializer
 	mountBackingDir           string
 	workspaceDisks            WorkspaceDiskPreparer
+	workspaceDiskDefaultBytes uint64
 	workspaceDiskPollInterval time.Duration
 	newWorkspaceVMController  func(string) (workspaceVMController, error)
 	dialWorkspaceGuest        func(context.Context, string, uint32) (net.Conn, error)
@@ -297,6 +298,9 @@ type Config struct {
 	// WorkspaceDisks enables retained qcow2 disks for dispatched Workspaces.
 	// It requires VsockDir, which also holds the per-Sandbox VMM API socket.
 	WorkspaceDisks WorkspaceDiskPreparer
+	// WorkspaceDiskDefaultBytes overrides the allowance used when a Workspace
+	// spec leaves disk_bytes unset. Zero selects workspacedisk.DefaultDiskBytes.
+	WorkspaceDiskDefaultBytes uint64
 	// WorkspaceDiskPollInterval controls automatic 90%-usage checks. Zero
 	// selects ten seconds; tests may use a longer interval and poll directly.
 	WorkspaceDiskPollInterval time.Duration
@@ -391,6 +395,9 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.WorkspaceDiskPollInterval <= 0 {
 		cfg.WorkspaceDiskPollInterval = defaultWorkspaceDiskPollInterval
 	}
+	if cfg.WorkspaceDiskDefaultBytes == 0 {
+		cfg.WorkspaceDiskDefaultBytes = workspacedisk.DefaultDiskBytes
+	}
 	// A configured build image is only useful if the built result can be
 	// pushed back; pair them at construction so a misconfigured node fails
 	// fast here rather than after wasting a build VM boot at first dispatch.
@@ -414,6 +421,7 @@ func New(cfg Config) (*Executor, error) {
 		mountMaterializer:         cfg.MountMaterializer,
 		mountBackingDir:           cfg.MountBackingDir,
 		workspaceDisks:            cfg.WorkspaceDisks,
+		workspaceDiskDefaultBytes: cfg.WorkspaceDiskDefaultBytes,
 		workspaceDiskPollInterval: cfg.WorkspaceDiskPollInterval,
 		newWorkspaceVMController:  newWorkspaceVMController,
 		dialWorkspaceGuest:        sandbox.DialGuestVsock,
@@ -599,7 +607,7 @@ func (e *Executor) HandleSandboxEvent(
 	unregisterSummary := e.registerSummaryRoute(cfg, uid)
 	defer unregisterSummary()
 	e.registerWorkspaceSnapshotRoutes(cfg, spec)
-	unregisterDiskControl := e.registerWorkspaceDiskControl(ctx, cfg, spec.GetWorkspaceUuid(), uid, workspaceDiskAllowance(spec))
+	unregisterDiskControl := e.registerWorkspaceDiskControl(ctx, cfg, spec.GetWorkspaceUuid(), uid, e.workspaceDiskAllowance(spec))
 	defer unregisterDiskControl()
 	e.setSandboxPreserver(uid, spec)
 
@@ -904,7 +912,7 @@ func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *san
 	if workspaceID == "" {
 		return errors.New("sandboxexec: retained disk requires spec.workspace_uuid")
 	}
-	size := workspaceDiskAllowance(spec)
+	size := e.workspaceDiskAllowance(spec)
 	path, created, err := e.workspaceDisks.Prepare(workspaceID, size)
 	if err != nil {
 		return fmt.Errorf("sandboxexec: prepare workspace disk: %w", err)
@@ -915,10 +923,13 @@ func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *san
 	return nil
 }
 
-func workspaceDiskAllowance(spec *sandboxv1.SandboxSpec) uint64 {
+func (e *Executor) workspaceDiskAllowance(spec *sandboxv1.SandboxSpec) uint64 {
 	size := spec.GetDiskBytes()
 	if size == 0 {
-		return workspacedisk.DefaultDiskBytes
+		if e.workspaceDiskDefaultBytes == 0 {
+			return workspacedisk.DefaultDiskBytes
+		}
+		return e.workspaceDiskDefaultBytes
 	}
 	return size
 }

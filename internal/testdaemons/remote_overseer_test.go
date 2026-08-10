@@ -132,6 +132,7 @@ mkdir -p -- "$1" "$2"
 			}},
 			"target_node_fingerprint": nodeFingerprint,
 			"isolation":               "shared",
+			"disk_bytes":              1 << 30,
 		},
 	})
 	workspace := mapField(t, applied, "workspace")

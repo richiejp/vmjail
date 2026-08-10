@@ -348,7 +348,7 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 	// The proxy is on by default in sandboxd, so tests that don't ask
 	// for it must explicitly opt out — otherwise every cluster would
 	// run default-deny and break workloads that egress directly.
-	sbxEnv := []string{"DAFT_EGRESS_PROXY=0"}
+	sbxEnv := []string{"DAFT_EGRESS_PROXY=0", "DAFT_WORKSPACE_DISK_DEFAULT_BYTES=1073741824"}
 	var proxyURL string
 	if o.egressProxy {
 		proxyURL = "http://" + net.JoinHostPort(
@@ -361,6 +361,7 @@ func NewCluster(t *testing.T, opts ...ClusterOption) *Cluster {
 		cacheDir, offline := resolveEgressCache(artifact, record, t.TempDir)
 		sbxEnv = []string{
 			"DAFT_EGRESS_PROXY=1",
+			"DAFT_WORKSPACE_DISK_DEFAULT_BYTES=1073741824",
 			"DAFT_EGRESS_PROXY_INSECURE_UPSTREAM=1",
 			"DAFT_EGRESS_PROXY_CACHE_DIR=" + cacheDir,
 			"DAFT_EGRESS_PROXY_OFFLINE=" + offline,

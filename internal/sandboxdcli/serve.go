@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -481,6 +482,10 @@ var buildDispatcher = func(
 	if err != nil {
 		return nil, err
 	}
+	diskDefault, err := workspaceDiskDefaultFromEnv()
+	if err != nil {
+		return nil, err
+	}
 	// Default every dispatched VM's observer log under the per-sandbox
 	// state dir, keyed by the orchestrator-assigned uid so
 	// `observer-tail` can find it. Best-effort: a state-dir resolution
@@ -493,25 +498,40 @@ var buildDispatcher = func(
 		observerDir = ""
 	}
 	return sandboxexec.New(sandboxexec.Config{
-		Base:               base,
-		Stdout:             stdout,
-		Assembler:          assembler,
-		Bridger:            bridger,
-		AttachRegistry:     attachRegistry,
-		JobRegistry:        jobRegistry,
-		ObserverRegistry:   observerRegistry,
-		SummaryRegistry:    summaryRegistry,
-		ObserveSummary:     observeSummaryFromEnv(),
-		VsockDir:           vsockDir,
-		NetEnabled:         true,
-		EgressProxy:        egress,
-		MountMaterializer:  materializer,
-		MountBackingDir:    mountBackingDir,
-		WorkspaceDisks:     workspaceDisks,
-		ObserverDir:        observerDir,
-		BuildImageRef:      resolveBuildImageRef(hostedRT),
-		BuildPushTransport: hostedRT,
+		Base:                      base,
+		Stdout:                    stdout,
+		Assembler:                 assembler,
+		Bridger:                   bridger,
+		AttachRegistry:            attachRegistry,
+		JobRegistry:               jobRegistry,
+		ObserverRegistry:          observerRegistry,
+		SummaryRegistry:           summaryRegistry,
+		ObserveSummary:            observeSummaryFromEnv(),
+		VsockDir:                  vsockDir,
+		NetEnabled:                true,
+		EgressProxy:               egress,
+		MountMaterializer:         materializer,
+		MountBackingDir:           mountBackingDir,
+		WorkspaceDisks:            workspaceDisks,
+		WorkspaceDiskDefaultBytes: diskDefault,
+		ObserverDir:               observerDir,
+		BuildImageRef:             resolveBuildImageRef(hostedRT),
+		BuildPushTransport:        hostedRT,
 	})
+}
+
+const envWorkspaceDiskDefaultBytes = "DAFT_WORKSPACE_DISK_DEFAULT_BYTES"
+
+func workspaceDiskDefaultFromEnv() (uint64, error) {
+	raw := os.Getenv(envWorkspaceDiskDefaultBytes)
+	if raw == "" {
+		return workspacedisk.DefaultDiskBytes, nil
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || value == 0 {
+		return 0, fmt.Errorf("daft-sandboxd: %s must be a positive byte count", envWorkspaceDiskDefaultBytes)
+	}
+	return value, nil
 }
 
 // envBuildImageRef names the orchestrator-hosted ref of the static image

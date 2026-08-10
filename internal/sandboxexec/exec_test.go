@@ -754,6 +754,16 @@ func TestApplyWorkspaceDiskDefaultsAndConfiguresVMM(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDiskAllowanceUsesConfiguredDefault(t *testing.T) {
+	e := &Executor{workspaceDiskDefaultBytes: 1 << 30}
+	if got := e.workspaceDiskAllowance(&sandboxv1.SandboxSpec{}); got != 1<<30 {
+		t.Fatalf("default allowance = %d", got)
+	}
+	if got := e.workspaceDiskAllowance(&sandboxv1.SandboxSpec{DiskBytes: 2 << 30}); got != 2<<30 {
+		t.Fatalf("explicit allowance = %d", got)
+	}
+}
+
 func TestConfigureWorkspaceMountsKeepsAbsoluteHostControlMountWritable(t *testing.T) {
 	cfg := sandbox.Config{Shares: []*sandbox.ShareConfig{{Mountpoint: mntData}}}
 	configureWorkspaceMounts(&cfg, testWSUUID, []*sandboxv1.Mount{{Target: mntData, Source: hostWS}}, true, &fakeMaterializer{})
