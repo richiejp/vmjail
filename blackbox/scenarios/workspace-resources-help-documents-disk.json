@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "name": "workspace-resources-help-documents-disk",
+  "steps": [
+    {
+      "name": "resources-help",
+      "argv": ["daft", "workspace", "resources", "--help"],
+      "timeout_seconds": 5,
+      "want_exit": 0,
+      "stdout_contains": ["Set the workspace VM's RAM, retained disk allowance, and/or vCPUs"]
+    }
+  ]
+}

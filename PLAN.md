@@ -125,6 +125,13 @@ owner and role checks on non-dashboard control-plane APIs.
 The project is distributed under the Apache License 2.0; Nix package metadata
 for darkaifactory outputs uses the matching `asl20` identifier.
 
+Source-blind product testing is a distinct verification layer. A tester
+Workspace receives installed public clients, usage instructions, fixtures,
+and sanitised prior symptoms, but never the project checkout. It explores only
+CLI/MCP behaviour and emits bounded executable scenarios plus an append-only
+issue ledger classified as correctness, UX, or performance. A separate
+source-aware workflow promotes confirmed scenarios into the permanent suite.
+
 GitHub CI enforces a stable 94% total-coverage floor plus the normal per-file
 floor; local verification continues to ratchet monotonically against the
 committed `coverage.txt` baseline. This isolates capability-dependent hosted

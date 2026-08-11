@@ -89,6 +89,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newWorkspaceCmd())
 	root.AddCommand(newClusterCmd())
 	root.AddCommand(newGlobalsCmd())
+	root.AddCommand(newBlackboxCmd())
 	// Note: cobra auto-generates a `completion` sub-command for us; we don't
 	// need to register it explicitly. Keeping it auto-generated means it
 	// stays in sync with cobra's supported shells.
