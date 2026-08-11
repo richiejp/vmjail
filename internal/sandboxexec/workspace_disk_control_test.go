@@ -238,6 +238,10 @@ func TestFrozenWorkspaceResizeRequiresExplicitUnfreeze(t *testing.T) {
 	store := &fakeWorkspaceGrowStore{sequence: &sequence}
 	vm := &fakeWorkspaceVM{sequence: &sequence}
 	e := newWorkspaceControlExecutor(store, vm)
+	e.getWorkspaceUsage = func(context.Context, func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error) {
+		sequence = append(sequence, "ready")
+		return workspacesnapshot.Usage{}, nil
+	}
 	e.growWorkspaceGuest = func(context.Context, func(context.Context) (net.Conn, error)) error {
 		sequence = append(sequence, "xfs")
 		return nil
@@ -253,7 +257,7 @@ func TestFrozenWorkspaceResizeRequiresExplicitUnfreeze(t *testing.T) {
 	if err := e.ResizeWorkspaceDisk(t.Context(), testWSUUID, testGrownAllowance); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(sequence, []string{testQCOWGrowStep, "resume", "vmm", "xfs", "pause"}) {
+	if !slices.Equal(sequence, []string{testQCOWGrowStep, "resume", "ready", "vmm", "xfs", "pause"}) {
 		t.Fatalf("frozen resize sequence = %v", sequence)
 	}
 	if !runtime.frozen {
@@ -264,6 +268,70 @@ func TestFrozenWorkspaceResizeRequiresExplicitUnfreeze(t *testing.T) {
 	}
 	if runtime.frozen || vm.resumeCalls != 2 {
 		t.Fatalf("frozen=%v resume calls=%d", runtime.frozen, vm.resumeCalls)
+	}
+}
+
+func TestWorkspaceDiskGrowRetriesTransientGuestControlFailures(t *testing.T) {
+	e := newWorkspaceControlExecutor(nil, &fakeWorkspaceVM{})
+	attempts := 0
+	e.growWorkspaceGuest = func(ctx context.Context, _ func(context.Context) (net.Conn, error)) error {
+		attempts++
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("grow attempt has no deadline")
+		}
+		if attempts < workspaceGuestAttempts {
+			return errors.New("transient vsock failure")
+		}
+		return nil
+	}
+	if err := e.growWorkspaceGuestBounded(t.Context(), testControlVsock); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != workspaceGuestAttempts {
+		t.Fatalf("grow attempts = %d, want %d", attempts, workspaceGuestAttempts)
+	}
+}
+
+func TestWorkspaceDiskGuestControlRetryFailurePaths(t *testing.T) {
+	want := errors.New("guest unavailable")
+	e := newWorkspaceControlExecutor(nil, &fakeWorkspaceVM{})
+	e.growWorkspaceGuest = func(context.Context, func(context.Context) (net.Conn, error)) error { return want }
+	if err := e.growWorkspaceGuestBounded(t.Context(), testControlVsock); !errors.Is(err, want) {
+		t.Fatalf("exhausted grow error = %v", err)
+	}
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := e.growWorkspaceGuestBounded(cancelled, testControlVsock); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled grow error = %v", err)
+	}
+
+	attempts := 0
+	e.getWorkspaceUsage = func(ctx context.Context, _ func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error) {
+		attempts++
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("liveness attempt has no deadline")
+		}
+		if attempts < workspaceGuestAttempts {
+			return workspacesnapshot.Usage{}, want
+		}
+		return workspacesnapshot.Usage{}, nil
+	}
+	if err := e.waitWorkspaceGuestBounded(t.Context(), testControlVsock); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != workspaceGuestAttempts {
+		t.Fatalf("liveness attempts = %d, want %d", attempts, workspaceGuestAttempts)
+	}
+
+	e.getWorkspaceUsage = func(context.Context, func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error) {
+		return workspacesnapshot.Usage{}, want
+	}
+	if err := e.waitWorkspaceGuestBounded(t.Context(), testControlVsock); !errors.Is(err, want) {
+		t.Fatalf("exhausted liveness error = %v", err)
+	}
+	if err := e.waitWorkspaceGuestBounded(cancelled, testControlVsock); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled liveness error = %v", err)
 	}
 }
 
@@ -346,6 +414,9 @@ func TestWorkspaceDiskResizeFailures(t *testing.T) {
 			store := &fakeWorkspaceGrowStore{sequence: &sequence}
 			vm := &fakeWorkspaceVM{sequence: &sequence}
 			e := newWorkspaceControlExecutor(store, vm)
+			e.getWorkspaceUsage = func(context.Context, func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error) {
+				return workspacesnapshot.Usage{}, nil
+			}
 			e.growWorkspaceGuest = func(context.Context, func(context.Context) (net.Conn, error)) error { return nil }
 			e.workspaceDiskControls[testWSUUID] = &workspaceDiskRuntime{
 				workspaceID: testWSUUID, controller: vm, allowance: testDiskAllowance, frozen: tc.frozen,

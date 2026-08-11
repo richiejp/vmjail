@@ -12,9 +12,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
-const DefaultVsockPort uint32 = 9300
+const (
+	DefaultVsockPort      uint32 = 9300
+	controlRequestTimeout        = 10 * time.Second
+)
 
 const (
 	operationUsage = "usage"
@@ -181,6 +185,15 @@ func controlRequest(ctx context.Context, dial func(context.Context) (net.Conn, e
 		return err
 	}
 	defer func() { _ = conn.Close() }()
+	deadline := time.Now().Add(controlRequestTimeout)
+	if callerDeadline, ok := ctx.Deadline(); ok && callerDeadline.Before(deadline) {
+		deadline = callerDeadline
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
+		return err
+	}
+	stopCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopCancel()
 	if err := json.NewEncoder(conn).Encode(request); err != nil {
 		return err
 	}

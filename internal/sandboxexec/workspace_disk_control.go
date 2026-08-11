@@ -19,6 +19,8 @@ const (
 	defaultWorkspaceDiskPollInterval = 10 * time.Second
 	workspaceFreezeNumerator         = 9
 	workspaceFreezeDenominator       = 10
+	workspaceGuestAttemptTimeout     = 5 * time.Second
+	workspaceGuestAttempts           = 3
 )
 
 var (
@@ -268,6 +270,10 @@ func (e *Executor) ResizeWorkspaceDisk(ctx context.Context, workspaceID string, 
 			return fmt.Errorf("sandboxexec: resume VM for XFS grow: %w", err)
 		}
 		_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s resumed\n", workspaceID)
+		if err := e.waitWorkspaceGuestBounded(ctx, runtime.hostSocket); err != nil {
+			return fmt.Errorf("sandboxexec: wait for resumed guest: %w", err)
+		}
+		_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s guest-ready\n", workspaceID)
 	}
 	resizeErr := runtime.controller.ResizeDisk(ctx, workspaceDiskID, desiredSize)
 	if resizeErr != nil {
@@ -277,7 +283,7 @@ func (e *Executor) ResizeWorkspaceDisk(ctx context.Context, workspaceID string, 
 	}
 	var growErr error
 	if resizeErr == nil {
-		growErr = e.growWorkspaceGuest(ctx, e.workspaceDialer(runtime.hostSocket))
+		growErr = e.growWorkspaceGuestBounded(ctx, runtime.hostSocket)
 		if growErr != nil {
 			growErr = fmt.Errorf("sandboxexec: grow guest XFS: %w", growErr)
 		} else {
@@ -296,6 +302,42 @@ func (e *Executor) ResizeWorkspaceDisk(ctx context.Context, workspaceID string, 
 	runtime.allowance = desiredSize
 	runtime.resizeDone = true
 	return nil
+}
+
+// growWorkspaceGuestBounded tolerates a transient vsock interruption while
+// Cloud Hypervisor publishes the resized block device. xfs_growfs is
+// idempotent, so retrying the exact grow request is safe; each attempt and the
+// total operation remain bounded by the caller's deadline.
+func (e *Executor) growWorkspaceGuestBounded(ctx context.Context, hostSocket string) error {
+	var lastErr error
+	for attempt := 0; attempt < workspaceGuestAttempts; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, workspaceGuestAttemptTimeout)
+		lastErr = e.growWorkspaceGuest(attemptCtx, e.workspaceDialer(hostSocket))
+		cancel()
+		if lastErr == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return errors.Join(lastErr, ctx.Err())
+		}
+	}
+	return fmt.Errorf("failed after %d attempts: %w", workspaceGuestAttempts, lastErr)
+}
+
+func (e *Executor) waitWorkspaceGuestBounded(ctx context.Context, hostSocket string) error {
+	var lastErr error
+	for attempt := 0; attempt < workspaceGuestAttempts; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, workspaceGuestAttemptTimeout)
+		_, lastErr = e.getWorkspaceUsage(attemptCtx, e.workspaceDialer(hostSocket))
+		cancel()
+		if lastErr == nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return errors.Join(lastErr, ctx.Err())
+		}
+	}
+	return fmt.Errorf("guest did not become responsive after %d attempts: %w", workspaceGuestAttempts, lastErr)
 }
 
 // UnfreezeWorkspaceDisk resumes a VM after pressure has been resolved. A disk

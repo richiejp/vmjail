@@ -446,7 +446,12 @@ Landed:
 - `workspace resources --disk` now grows an existing retained disk through an
   authenticated exact-manifest Node RPC before committing the catalog change.
   Running disks execute the qcow2, virtio-blk, and guest `xfs_growfs` sequence;
-  stopped disks grow durably in place, and every shrink is rejected.
+  stopped disks grow durably in place, and every shrink is rejected. Guest
+  control I/O has cancellation-aware deadlines, and the idempotent XFS grow is
+  retried with bounded attempts across transient post-resize vsock stalls. A
+  pressure-frozen VM must pass a bounded guest liveness probe after the VMM
+  acknowledges resume before resizing its block device, and is explicitly
+  paused again after the guest grow.
 - A per-CAS Badger index durably records chunk size/access/provenance,
   exact manifest digest/generation references, recoverability, disposition,
   and crash-recoverable deletion queue state. Legacy unindexed chunks migrate

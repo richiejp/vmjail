@@ -493,11 +493,15 @@ func TestStoreGrow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	const grown = 24 << 30
+	// The qcow2 is sparse; this test validates virtual resizing, not the
+	// machine running the test's free-space policy. Keep reservation byte
+	// accounting deterministic even when t.TempDir is a small tmpfs.
+	store.reservationBytes = grown + testDiskBytes
 	path, _, err := store.Prepare(testWorkspaceID, testDiskBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
-	const grown = 24 << 30
 	if err := store.Grow(testWorkspaceID, grown); err != nil {
 		t.Fatal(err)
 	}

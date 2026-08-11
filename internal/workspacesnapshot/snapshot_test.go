@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -259,6 +260,21 @@ func TestUsageAndGrowControl(t *testing.T) {
 	}
 	if !grown {
 		t.Fatal("Grow did not invoke guest control")
+	}
+}
+
+func TestControlRequestHonorsCallerDeadline(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = server.Close() }()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := Grow(ctx, func(context.Context) (net.Conn, error) { return client, nil })
+	if err == nil {
+		t.Fatal("blocked control peer ignored caller deadline")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("blocked control request took %s", elapsed)
 	}
 }
 
