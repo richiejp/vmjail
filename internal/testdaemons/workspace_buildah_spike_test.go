@@ -82,7 +82,7 @@ func TestClusterWorkspaceBuildahSpike(t *testing.T) {
 			"%s workspace create --name %s %s", prefix, wsName, orch,
 		)},
 		{Label: "image", Cmd: fmt.Sprintf(
-			"%s workspace image %s --name %s %s", prefix, ref, wsName, orch,
+			"%s workspace image %s --preserve-command --name %s %s", prefix, ref, wsName, orch,
 		)},
 		{Label: "ctx", Cmd: fmt.Sprintf(
 			"%s workspace mount add /build/ctx --source %s --read-only --name %s %s",

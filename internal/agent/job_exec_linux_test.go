@@ -5,12 +5,24 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestPipeJobExecRejectsStoppedContainer(t *testing.T) {
+	e := &pipeJobExec{
+		newCmd:  func(context.Context, JobExecRequest) *exec.Cmd { return nil },
+		running: func(context.Context) bool { return false },
+	}
+	proc, err := e.Start(t.Context(), JobExecRequest{})
+	if proc != nil || !errors.Is(err, ErrContainerNotRunning) {
+		t.Fatalf("Start = (%v, %v), want (nil, %v)", proc, err, ErrContainerNotRunning)
+	}
+}
 
 func TestPipeJobExecSeparatesOutputAndExit(t *testing.T) {
 	e := &pipeJobExec{newCmd: func(ctx context.Context, _ JobExecRequest) *exec.Cmd {

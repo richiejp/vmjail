@@ -56,7 +56,7 @@ func TestClusterWorkspaceAgainstNixOfficial(t *testing.T) {
 			prefix, wsName, orch,
 		)},
 		{Label: "image", Cmd: fmt.Sprintf(
-			"%s workspace image %s --name %s %s",
+			"%s workspace image %s --preserve-command --name %s %s",
 			prefix, ref, wsName, orch,
 		)},
 		{Label: "mount", Cmd: fmt.Sprintf(

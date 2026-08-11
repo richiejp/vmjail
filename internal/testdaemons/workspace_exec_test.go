@@ -72,15 +72,11 @@ func TestClusterWorkspaceExecAgainstNixImage(t *testing.T) {
 		)},
 	}, 30*time.Second)
 
-	// The nix-shell-image entrypoint runs
-	//     echo daft-nix-shell ready; exec sleep infinity
-	// inside the container, so this string surfaces on sandboxd
-	// stdout (container stdout → agent → vsock → sandboxd)
-	// once the VM has booted and crun has launched the container.
-	// It's the readiness gate before exec — the attach route is
-	// registered earlier, but dialing it before the container is
-	// up would race.
-	c.WaitForSandboxdOutput(t, "daft-nix-shell ready", 60*time.Second)
+	// The direct-image Workspace default replaces the image command with the
+	// image-independent keepalive. The job listener only reports ready after
+	// the container reaches crun's running state, making this the readiness
+	// gate before exec without depending on image Entrypoint output.
+	c.WaitForSandboxdOutput(t, "jobready vsock 9100", 60*time.Second)
 
 	// Drive `daft workspace exec` against the running container.
 	// --tty=false skips the local raw-mode dance (the pane is a

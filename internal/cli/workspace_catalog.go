@@ -378,6 +378,7 @@ func newWorkspaceListCmd() *cobra.Command {
 func newWorkspaceImageCmd() *cobra.Command {
 	var opts workspaceClientOpts
 	var clearRef bool
+	var preserveCommand bool
 	cmd := &cobra.Command{
 		Use:           imageSubName + " [ref]",
 		Short:         "Set the workspace's OCI image reference (or clear it with --clear)",
@@ -391,7 +392,7 @@ func newWorkspaceImageCmd() *cobra.Command {
 			return runCatalogCmd(cmd, opts, imageSubName,
 				func(ctx context.Context, c workspacev1connect.WorkspaceCatalogServiceClient, h *workspacev1.WorkspaceHandle) error {
 					resp, err := c.SetImage(ctx, connect.NewRequest(
-						&workspacev1.SetImageRequest{Handle: h, ImageRef: ref},
+						&workspacev1.SetImageRequest{Handle: h, ImageRef: ref, PreserveImageCommand: preserveCommand},
 					))
 					if err != nil {
 						return err
@@ -401,6 +402,7 @@ func newWorkspaceImageCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&clearRef, "clear", false, "unset the workspace's OCI image reference")
+	cmd.Flags().BoolVar(&preserveCommand, "preserve-command", false, "run the image's Entrypoint and Cmd instead of the Workspace keepalive")
 	bindWorkspaceClientFlags(cmd, &opts)
 	return cmd
 }

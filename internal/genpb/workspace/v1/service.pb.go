@@ -1145,9 +1145,11 @@ type SetImageRequest struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Handle *WorkspaceHandle       `protobuf:"bytes,1,opt,name=handle,proto3" json:"handle,omitempty"`
 	// OCI image reference. Empty clears the field.
-	ImageRef      string `protobuf:"bytes,2,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ImageRef string `protobuf:"bytes,2,opt,name=image_ref,json=imageRef,proto3" json:"image_ref,omitempty"`
+	// Preserve the image command instead of selecting Workspace keepalive.
+	PreserveImageCommand bool `protobuf:"varint,3,opt,name=preserve_image_command,json=preserveImageCommand,proto3" json:"preserve_image_command,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *SetImageRequest) Reset() {
@@ -1192,6 +1194,13 @@ func (x *SetImageRequest) GetImageRef() string {
 		return x.ImageRef
 	}
 	return ""
+}
+
+func (x *SetImageRequest) GetPreserveImageCommand() bool {
+	if x != nil {
+		return x.PreserveImageCommand
+	}
+	return false
 }
 
 type SetDevcontainerRequest struct {
@@ -2242,10 +2251,11 @@ const file_workspace_v1_service_proto_rawDesc = "" +
 	"\x16ApplyWorkspaceResponse\x12:\n" +
 	"\tworkspace\x18\x01 \x01(\v2\x1c.daft.workspace.v1.WorkspaceR\tworkspace\x12\x18\n" +
 	"\achanged\x18\x02 \x01(\bR\achanged\x12\x18\n" +
-	"\acreated\x18\x03 \x01(\bR\acreated\"j\n" +
+	"\acreated\x18\x03 \x01(\bR\acreated\"\xa0\x01\n" +
 	"\x0fSetImageRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12\x1b\n" +
-	"\timage_ref\x18\x02 \x01(\tR\bimageRef\"\x81\x01\n" +
+	"\timage_ref\x18\x02 \x01(\tR\bimageRef\x124\n" +
+	"\x16preserve_image_command\x18\x03 \x01(\bR\x14preserveImageCommand\"\x81\x01\n" +
 	"\x16SetDevcontainerRequest\x12:\n" +
 	"\x06handle\x18\x01 \x01(\v2\".daft.workspace.v1.WorkspaceHandleR\x06handle\x12+\n" +
 	"\x11devcontainer_path\x18\x02 \x01(\tR\x10devcontainerPath\"\x7f\n" +

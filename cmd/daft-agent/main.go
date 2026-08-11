@@ -10,6 +10,7 @@ import (
 	"context"
 	"os"
 	"syscall"
+	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
 )
@@ -20,11 +21,26 @@ import (
 // requires a microVM environment). Both are plain function values
 // (no closure body) so there are no extra statements to cover.
 var (
-	osExit    = os.Exit
-	agentMain = agent.Main
+	osExit             = os.Exit
+	agentMain          = agent.Main
+	containerSleep     = time.Sleep
+	containerKeepalive = func() { runContainerKeepalive(containerSleep) }
 )
 
+const containerKeepaliveFlag = "--container-keepalive"
+
+func runContainerKeepalive(sleep func(time.Duration)) {
+	//daft:lint:disable=forloopbound reason="terminates when crun signals the persistent container process to stop"
+	for {
+		sleep(time.Hour)
+	}
+}
+
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == containerKeepaliveFlag {
+		containerKeepalive()
+		return
+	}
 	osExit(agentMain(context.Background(), os.Stdout, os.Stderr,
 		syscall.SIGINT, syscall.SIGTERM))
 }

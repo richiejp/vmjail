@@ -70,7 +70,7 @@ func TestClusterWorkspaceEgressProxyEnv(t *testing.T) {
 
 	testdaemons.RunWorkspaceSteps(t, s, "J2EGRESS", []testdaemons.WorkspaceStep{
 		{Label: "create", Cmd: fmt.Sprintf("%s workspace create --name %s %s", prefix, wsName, orch)},
-		{Label: "image", Cmd: fmt.Sprintf("%s workspace image %s --name %s %s", prefix, ref, wsName, orch)},
+		{Label: "image", Cmd: fmt.Sprintf("%s workspace image %s --preserve-command --name %s %s", prefix, ref, wsName, orch)},
 		{Label: "mount", Cmd: fmt.Sprintf("%s workspace mount add /workspace --source %s --name %s %s", prefix, mountSrc, wsName, orch)},
 		{Label: "target", Cmd: fmt.Sprintf("%s workspace target %s --name %s %s", prefix, c.SandboxdFP, wsName, orch)},
 		{Label: "launch", Cmd: fmt.Sprintf("%s workspace launch --name %s %s", prefix, wsName, orch)},

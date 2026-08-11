@@ -187,6 +187,11 @@ type GuestConfig struct {
 	// tmpfs-backed home before the container starts and enables the dedicated
 	// secret listener. Empty disables all credential plumbing.
 	CredentialProvider string `protobuf:"bytes,9,opt,name=credential_provider,json=credentialProvider,proto3" json:"credential_provider,omitempty"`
+	// The workload is a persistent development environment. If its container
+	// exits before the VM is stopped, the agent exits instead of reporting a
+	// misleading boot-complete state and remaining reachable without a target
+	// for attach/job requests.
+	ContainerPersistent bool `protobuf:"varint,11,opt,name=container_persistent,json=containerPersistent,proto3" json:"container_persistent,omitempty"`
 	// Retained writable workspace block device. The host removes these targets
 	// from virtiofs only when this block device is attached.
 	WorkspaceDisk *GuestConfig_WorkspaceDisk `protobuf:"bytes,10,opt,name=workspace_disk,json=workspaceDisk,proto3" json:"workspace_disk,omitempty"`
@@ -285,6 +290,13 @@ func (x *GuestConfig) GetCredentialProvider() string {
 		return x.CredentialProvider
 	}
 	return ""
+}
+
+func (x *GuestConfig) GetContainerPersistent() bool {
+	if x != nil {
+		return x.ContainerPersistent
+	}
+	return false
 }
 
 func (x *GuestConfig) GetWorkspaceDisk() *GuestConfig_WorkspaceDisk {
@@ -726,7 +738,7 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\n" +
 	"\x15agent/v1/config.proto\x12\rdaft.agent.v1\"9\n" +
 	"\x12GuestConfigRequest\x12#\n" +
-	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xb1\t\n" +
+	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xe4\t\n" +
 	"\vGuestConfig\x12\x16\n" +
 	"\x06bundle\x18\x01 \x01(\tR\x06bundle\x128\n" +
 	"\x06shares\x18\x02 \x03(\v2 .daft.agent.v1.GuestConfig.ShareR\x06shares\x12K\n" +
@@ -737,7 +749,8 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"netEnabled\x12#\n" +
 	"\rtrace_enabled\x18\a \x01(\bR\ftraceEnabled\x12[\n" +
 	"\x13post_start_commands\x18\b \x03(\v2+.daft.agent.v1.GuestConfig.PostStartCommandR\x11postStartCommands\x12/\n" +
-	"\x13credential_provider\x18\t \x01(\tR\x12credentialProvider\x12O\n" +
+	"\x13credential_provider\x18\t \x01(\tR\x12credentialProvider\x121\n" +
+	"\x14container_persistent\x18\v \x01(\bR\x13containerPersistent\x12O\n" +
 	"\x0eworkspace_disk\x18\n" +
 	" \x01(\v2(.daft.agent.v1.GuestConfig.WorkspaceDiskR\rworkspaceDisk\x1ap\n" +
 	"\x05Share\x12\x10\n" +

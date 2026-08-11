@@ -162,7 +162,7 @@ func TestClusterVirtiofsReadLatency(t *testing.T) {
 
 	testdaemons.RunWorkspaceSteps(t, s, "VFSB", []testdaemons.WorkspaceStep{
 		{Label: "create", Cmd: fmt.Sprintf("%s workspace create --name %s %s", prefix, wsName, orch)},
-		{Label: "image", Cmd: fmt.Sprintf("%s workspace image %s --name %s %s", prefix, ref, wsName, orch)},
+		{Label: "image", Cmd: fmt.Sprintf("%s workspace image %s --preserve-command --name %s %s", prefix, ref, wsName, orch)},
 		{Label: "mount", Cmd: fmt.Sprintf("%s workspace mount add /workspace --source %s --name %s %s", prefix, srcDir, wsName, orch)},
 		{Label: "resources", Cmd: fmt.Sprintf("%s workspace resources --memory 8G --cpus 4 --name %s %s", prefix, wsName, orch)},
 		{Label: "target", Cmd: fmt.Sprintf("%s workspace target %s --name %s %s", prefix, c.SandboxdFP, wsName, orch)},

@@ -1145,6 +1145,11 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 	var postStart [][]string
 	var args []string
 	var cwd string
+	// Every Workspace dispatch is a development-environment lifecycle. An
+	// explicit devcontainer overrideCommand=false may preserve a naturally
+	// long-running image command, but its exit must still end the VM rather
+	// than leave a containerless Sandbox behind.
+	persistent := spec.GetWorkspaceUuid() != "" && !spec.GetPreserveImageCommand()
 	if hasDevcontainer {
 		// Read the devcontainer from the just-materialised content and
 		// overlay the explicit spec on top (explicit wins). The effective
@@ -1175,10 +1180,16 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 			}
 			imageRef = builtRef
 		}
+	} else if persistent {
+		args = sandboxboot.PersistentContainerArgs()
+	}
+	if spec.GetPreserveImageCommand() {
+		args = nil
 	}
 	opts := sandboxboot.BootOptions{
 		Mounts:               mounts,
 		Args:                 args,
+		ContainerPersistent:  persistent,
 		Cwd:                  cwd,
 		Env:                  env,
 		Nested:               spec.GetNestedVirtualization().GetEnable(),
@@ -1194,6 +1205,7 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 		return sandbox.Config{}, nil, func() {}, err
 	}
 	cfg, unlock, aerr := e.assembler(ctx, imageRef, opts)
+	cfg.ContainerPersistent = persistent
 	return cfg, ports, unlock, aerr
 }
 

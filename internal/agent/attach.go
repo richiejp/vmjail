@@ -125,6 +125,11 @@ type attachDeps struct {
 // string so the failure is visible end-to-end.
 var ErrAttachExecUnavailable = errors.New("agent: attach exec unsupported off Linux")
 
+// ErrContainerNotRunning is the stable client-facing error for attach/job
+// requests that race workload shutdown. It deliberately hides crun's internal
+// state-file path, which is an implementation detail rather than a diagnosis.
+var ErrContainerNotRunning = errors.New("agent: container is not running")
+
 type unavailableAttachExec struct{}
 
 func (unavailableAttachExec) Start(context.Context, AttachExecRequest) (AttachProcess, error) {

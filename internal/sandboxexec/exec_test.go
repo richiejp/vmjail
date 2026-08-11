@@ -319,6 +319,36 @@ func TestHandleSandboxEventAssemblerPath(t *testing.T) {
 	}
 }
 
+func TestDirectImageWorkspaceUsesPersistentKeepalive(t *testing.T) {
+	var gotOpts sandboxboot.BootOptions
+	asm := func(_ context.Context, _ string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+		gotOpts = opts
+		return sandbox.Config{Bundle: "/bundles/direct"}, func() {}, nil
+	}
+	var gotCfg sandbox.Config
+	runner := func(_ context.Context, _ io.Writer, cfg sandbox.Config) error {
+		gotCfg = cfg
+		return nil
+	}
+	e, err := New(Config{Stdout: io.Discard, Runner: runner, Assembler: asm})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, ImageRef: testImageRef}
+	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-direct", spec)); err != nil {
+		t.Fatalf("HandleSandboxEvent: %v", err)
+	}
+	if !slices.Equal(gotOpts.Args, sandboxboot.PersistentContainerArgs()) {
+		t.Errorf("assembler args = %q, want keepalive %q", gotOpts.Args, sandboxboot.PersistentContainerArgs())
+	}
+	if !gotOpts.ContainerPersistent {
+		t.Error("assembler options are not persistent")
+	}
+	if !gotCfg.ContainerPersistent {
+		t.Error("runner config is not persistent")
+	}
+}
+
 func TestEnvFromSpec(t *testing.T) {
 	if got := envFromSpec(nil); got != nil {
 		t.Fatalf("envFromSpec(nil) = %v, want nil", got)

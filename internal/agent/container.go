@@ -38,12 +38,15 @@ type ContainerDeps struct {
 // stream is what gives "exec: wait: exit status 1" lines a useful
 // preceding error.
 //
-// A container failure does not bring the agent down — the same as a
-// share failure. The error is reported on w (`container: exec: …`).
-func RunContainer(ctx context.Context, w io.Writer, deps ContainerDeps, bundle string) {
+// The caller decides whether container exit completes the VM or is fatal to a
+// persistent environment. Errors are both reported and returned so lifecycle
+// policy cannot accidentally discard them.
+func RunContainer(ctx context.Context, w io.Writer, deps ContainerDeps, bundle string) error {
 	if err := deps.Exec(ctx, w, bundle); err != nil {
 		writeReport(w, ContainerReportPrefix, "exec: "+err.Error())
+		return err
 	}
+	return nil
 }
 
 // prefixCopy reads r line by line and writes each line to w with prefix

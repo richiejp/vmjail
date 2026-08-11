@@ -13,11 +13,12 @@ import (
 )
 
 type pipeJobExec struct {
-	newCmd func(ctx context.Context, req JobExecRequest) *exec.Cmd
+	newCmd  func(ctx context.Context, req JobExecRequest) *exec.Cmd
+	running func(context.Context) bool
 }
 
 func newDefaultPipeJobExec() *pipeJobExec {
-	return &pipeJobExec{newCmd: defaultJobCmd}
+	return &pipeJobExec{newCmd: defaultJobCmd, running: containerRunning}
 }
 
 func defaultJobCmd(ctx context.Context, req JobExecRequest) *exec.Cmd {
@@ -39,6 +40,9 @@ func defaultJobCmd(ctx context.Context, req JobExecRequest) *exec.Cmd {
 }
 
 func (e *pipeJobExec) Start(ctx context.Context, req JobExecRequest) (JobProcess, error) {
+	if e.running != nil && !e.running(ctx) {
+		return nil, ErrContainerNotRunning
+	}
 	procCtx, cancel := context.WithCancel(ctx)
 	cmd := e.newCmd(procCtx, req)
 	stdout, err := cmd.StdoutPipe()

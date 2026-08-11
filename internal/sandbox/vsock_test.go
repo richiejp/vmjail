@@ -73,12 +73,16 @@ func TestBuildGuestConfigProjectsFeatureToggles(t *testing.T) {
 		Attach:     true,
 	}
 	cfg.CredentialProvider = "codex"
+	cfg.ContainerPersistent = true
 	gc := buildGuestConfig(cfg)
 	if gc.GetCredentialProvider() != "codex" {
 		t.Errorf("credential provider = %q", gc.GetCredentialProvider())
 	}
 	if !gc.GetTraceEnabled() || !gc.GetAttachEnabled() {
 		t.Errorf("toggles = trace %v / attach %v, want both true", gc.GetTraceEnabled(), gc.GetAttachEnabled())
+	}
+	if !gc.GetContainerPersistent() {
+		t.Error("container_persistent = false, want true")
 	}
 	if gc.GetNetEnabled() {
 		t.Errorf("net_enabled = true, want false (Net unset)")

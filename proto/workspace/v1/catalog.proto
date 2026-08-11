@@ -115,6 +115,10 @@ message WorkspaceSpec {
   // Retained XFS workspace-disk allowance in bytes. Zero selects the Node's
   // fixed 20 GiB default. Projected directly onto SandboxSpec.disk_bytes.
   uint64 disk_bytes = 15;
+
+  // Explicitly preserve the image's Entrypoint+Cmd at launch. The default
+  // false selects the persistent Workspace keepalive.
+  bool preserve_image_command = 16;
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.

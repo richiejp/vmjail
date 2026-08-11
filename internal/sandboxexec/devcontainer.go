@@ -160,6 +160,13 @@ func devcontainerArgs(overrideCommand bool) []string {
 	if !overrideCommand {
 		return nil
 	}
+	return workspaceKeepaliveArgs()
+}
+
+// workspaceKeepaliveArgs returns fresh storage because BootOptions may be
+// retained or mutated by assemblers. It is shared by direct-image Workspaces
+// and devcontainers whose default overrideCommand is enabled.
+func workspaceKeepaliveArgs() []string {
 	return []string{devcontainerShell, "-c", devcontainerKeepaliveShell}
 }
 

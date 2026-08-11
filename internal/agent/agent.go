@@ -261,8 +261,17 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	if bundle != "" {
 		awaitGadgetsAttached(ctx, w, osReady, exReady, slReady, ioReady)
 	}
-	runContainer(ctx, w, d, bundle)
+	containerErr := runContainer(ctx, w, d, bundle)
 	bootSpan.End()
+	if cfg.GetContainerPersistent() && bundle != "" {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if containerErr != nil {
+			return fmt.Errorf("agent: persistent container stopped: %w", containerErr)
+		}
+		return errors.New("agent: persistent container exited unexpectedly")
+	}
 
 	// Flush spans before signalling completion so the host has the boot
 	// trace in hand when it tears the VM down on the boot-complete event.
@@ -402,11 +411,11 @@ func resolveBundle(w io.Writer, cfg *agentv1.GuestConfig) string {
 // runContainer crun-runs the resolved bundle, forwarding the container's
 // stdout via ContainerReportPrefix. A "" bundle (no container requested)
 // is silently skipped so a share-only boot keeps working.
-func runContainer(ctx context.Context, w io.Writer, d runDeps, bundle string) {
+func runContainer(ctx context.Context, w io.Writer, d runDeps, bundle string) error {
 	if bundle == "" {
-		return
+		return nil
 	}
-	RunContainer(ctx, w, d.container, bundle)
+	return RunContainer(ctx, w, d.container, bundle)
 }
 
 // tracerShutdownTimeout caps how long Shutdown's final Flush can

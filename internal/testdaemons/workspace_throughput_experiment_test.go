@@ -167,7 +167,7 @@ func runThroughputExperiment(t *testing.T, v throughputVariant) {
 	testdaemons.RunWorkspaceSteps(t, s, "D6C2TP-"+strings.ToUpper(v.label),
 		[]testdaemons.WorkspaceStep{
 			{Label: "create", Cmd: fmt.Sprintf("%s workspace create --name %s %s", prefix, wsName, orch)},
-			{Label: "image", Cmd: fmt.Sprintf("%s workspace image %s --name %s %s", prefix, imageRef, wsName, orch)},
+			{Label: "image", Cmd: fmt.Sprintf("%s workspace image %s --preserve-command --name %s %s", prefix, imageRef, wsName, orch)},
 			{Label: "mount", Cmd: fmt.Sprintf("%s workspace mount add /workspace --source %s --name %s %s", prefix, mountSrc, wsName, orch)},
 			{Label: "target", Cmd: fmt.Sprintf("%s workspace target %s --name %s %s", prefix, c.SandboxdFP, wsName, orch)},
 			{Label: "launch", Cmd: fmt.Sprintf("%s workspace launch --name %s %s", prefix, wsName, orch)},

@@ -117,6 +117,11 @@ message SandboxSpec {
   // Retained XFS workspace-disk allowance in bytes. Zero selects the Node's
   // fixed 20 GiB default. The qcow2 virtual size is the ENOSPC boundary.
   uint64 disk_bytes = 17;
+
+  // Preserve the image's Entrypoint+Cmd instead of replacing it with the
+  // persistent Workspace keepalive. This explicit opt-out is for workloads
+  // whose image command is itself the operation under test.
+  bool preserve_image_command = 18;
 }
 
 message AgentCredential {

@@ -104,6 +104,12 @@ message GuestConfig {
   // secret listener. Empty disables all credential plumbing.
   string credential_provider = 9;
 
+  // The workload is a persistent development environment. If its container
+  // exits before the VM is stopped, the agent exits instead of reporting a
+  // misleading boot-complete state and remaining reachable without a target
+  // for attach/job requests.
+  bool container_persistent = 11;
+
   // Retained writable workspace block device. The host removes these targets
   // from virtiofs only when this block device is attached.
   WorkspaceDisk workspace_disk = 10;

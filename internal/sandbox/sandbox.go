@@ -100,6 +100,10 @@ type Config struct {
 	// VM via virtiofs. Empty (the default) means no container is
 	// run.
 	Bundle string
+	// ContainerPersistent makes an exited workload fatal to the guest agent.
+	// Workspace development environments set this; explicit completion
+	// sandboxes leave it false and use BOOT_COMPLETE as their exit signal.
+	ContainerPersistent bool
 
 	// PostStartCommands are lifecycle commands the in-VM agent runs
 	// inside the container after it has started, in order (the resolved

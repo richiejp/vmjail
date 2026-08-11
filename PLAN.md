@@ -133,6 +133,15 @@ runner coverage without weakening the developer gate.
 Nodes retain the 20 GiB default Workspace allowance, with an explicit
 byte-count override used by capacity-constrained test nodes.
 
+Workspace launches are persistent development environments. Direct-image
+Workspaces use a static keepalive bind-mounted from the guest rather than
+silently inheriting an image command that may exit immediately or assuming the
+image contains a shell; explicit run-to-completion paths continue to preserve
+image entrypoint/command semantics. `workspace image --preserve-command`
+provides the explicit Workspace opt-out for command-driven images.
+The guest treats termination of a persistent workload container as fatal, so a
+Sandbox cannot remain apparently ready after its crun container has disappeared.
+
 `nix/orchestrator.nix` exports a parameterised NixOS service module. It contains
 no host-specific paths, addresses, identities, or service configuration.
 

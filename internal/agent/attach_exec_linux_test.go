@@ -5,6 +5,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -29,6 +30,17 @@ func catSpawner(t *testing.T) func(ctx context.Context, _ AttachExecRequest) *ex
 	}
 	return func(ctx context.Context, _ AttachExecRequest) *exec.Cmd {
 		return exec.CommandContext(ctx, catPath)
+	}
+}
+
+func TestPtyAttachExecRejectsStoppedContainerBeforeOpeningPTY(t *testing.T) {
+	e := &ptyAttachExec{
+		newCmd:  catSpawner(t),
+		running: func(context.Context) bool { return false },
+	}
+	proc, err := e.Start(t.Context(), AttachExecRequest{})
+	if proc != nil || !errors.Is(err, ErrContainerNotRunning) {
+		t.Fatalf("Start = (%v, %v), want (nil, %v)", proc, err, ErrContainerNotRunning)
 	}
 }
 

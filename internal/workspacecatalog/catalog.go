@@ -209,6 +209,8 @@ type Spec struct {
 	// DiskBytes is the retained XFS workspace allowance. Zero selects the
 	// Node's 20 GiB default.
 	DiskBytes uint64
+	// PreserveImageCommand opts out of the persistent Workspace keepalive.
+	PreserveImageCommand bool
 	// NestedVirt grants the workload nested-virtualisation access
 	// (/dev/kvm bind + cgroup device-allow). False ⇒ disabled.
 	// Projected onto SandboxSpec.nested_virtualization at Launch.

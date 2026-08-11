@@ -256,9 +256,12 @@ type WorkspaceSpec struct {
 	PrivilegedBuild *v1.PrivilegedBuild `protobuf:"bytes,14,opt,name=privileged_build,json=privilegedBuild,proto3" json:"privileged_build,omitempty"`
 	// Retained XFS workspace-disk allowance in bytes. Zero selects the Node's
 	// fixed 20 GiB default. Projected directly onto SandboxSpec.disk_bytes.
-	DiskBytes     uint64 `protobuf:"varint,15,opt,name=disk_bytes,json=diskBytes,proto3" json:"disk_bytes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	DiskBytes uint64 `protobuf:"varint,15,opt,name=disk_bytes,json=diskBytes,proto3" json:"disk_bytes,omitempty"`
+	// Explicitly preserve the image's Entrypoint+Cmd at launch. The default
+	// false selects the persistent Workspace keepalive.
+	PreserveImageCommand bool `protobuf:"varint,16,opt,name=preserve_image_command,json=preserveImageCommand,proto3" json:"preserve_image_command,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *WorkspaceSpec) Reset() {
@@ -394,6 +397,13 @@ func (x *WorkspaceSpec) GetDiskBytes() uint64 {
 		return x.DiskBytes
 	}
 	return 0
+}
+
+func (x *WorkspaceSpec) GetPreserveImageCommand() bool {
+	if x != nil {
+		return x.PreserveImageCommand
+	}
+	return false
 }
 
 // WorkspaceStatus is the orchestrator's observed runtime state.
@@ -719,7 +729,7 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xad\x06\n" +
+	"updated_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\xe3\x06\n" +
 	"\rWorkspaceSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12(\n" +
 	"\x10pending_build_id\x18\x02 \x01(\tR\x0ependingBuildId\x12.\n" +
@@ -738,7 +748,8 @@ const file_workspace_v1_catalog_proto_rawDesc = "" +
 	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\x12K\n" +
 	"\x10privileged_build\x18\x0e \x01(\v2 .daft.sandbox.v1.PrivilegedBuildR\x0fprivilegedBuild\x12\x1d\n" +
 	"\n" +
-	"disk_bytes\x18\x0f \x01(\x04R\tdiskBytes\"\xc0\x04\n" +
+	"disk_bytes\x18\x0f \x01(\x04R\tdiskBytes\x124\n" +
+	"\x16preserve_image_command\x18\x10 \x01(\bR\x14preserveImageCommand\"\xc0\x04\n" +
 	"\x0fWorkspaceStatus\x12/\n" +
 	"\x13observed_generation\x18\x01 \x01(\x04R\x12observedGeneration\x12:\n" +
 	"\n" +

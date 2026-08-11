@@ -35,7 +35,17 @@ const (
 	BundlesTag              = "bundles"
 	credentialProviderCodex = "codex"
 	bundleMountTypeBind     = "bind"
+	persistentBinarySource  = "/bin/daft-agent"
+	persistentBinaryTarget  = "/daft-workspace-keepalive"
+	persistentBinaryFlag    = "--container-keepalive"
 )
+
+// PersistentContainerArgs is an image-independent keepalive command. The
+// assembler bind-mounts the guest's static daft-agent at this target, so
+// scratch and distroless images do not need /bin/sh or sleep.
+func PersistentContainerArgs() []string {
+	return []string{persistentBinaryTarget, persistentBinaryFlag}
+}
 
 // workspaceMountTagPrefix prefixes each spec.Mount's virtiofs Tag
 // — distinct from BundlesTag so the agent's share-mount loop
@@ -72,6 +82,9 @@ type BootOptions struct {
 	// static build image instead of baking a per-build image. See
 	// imagestore.BundleOptions.Args.
 	Args []string
+	// ContainerPersistent injects the static guest keepalive executable into
+	// the OCI container. Callers may select it with PersistentContainerArgs.
+	ContainerPersistent bool
 	// Cwd, when non-empty, overrides the image working directory. A
 	// devcontainer uses workspaceFolder so lifecycle and attached commands
 	// start where its tooling expects the project.
@@ -247,6 +260,14 @@ func BuildBundleConfig(
 func credentialBundleOptions(opts BootOptions) ([]imagestore.BundleMount, []string, error) {
 	mounts := bundleMountsFromSpec(opts.Mounts)
 	env := opts.Env
+	if opts.ContainerPersistent {
+		mounts = append(mounts, imagestore.BundleMount{
+			Destination: persistentBinaryTarget,
+			Type:        bundleMountTypeBind,
+			Source:      persistentBinarySource,
+			Options:     []string{"bind", "ro", "nosuid", "nodev"},
+		})
+	}
 	if opts.CredentialProvider == "" {
 		return mounts, env, nil
 	}

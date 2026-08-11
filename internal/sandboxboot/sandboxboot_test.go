@@ -650,6 +650,28 @@ func TestBuildBundleConfigAppliesFixedCodexCredentialHome(t *testing.T) {
 	}
 }
 
+func TestPersistentContainerUsesGuestAgentKeepalive(t *testing.T) {
+	args := PersistentContainerArgs()
+	if len(args) != 2 || args[0] != persistentBinaryTarget || args[1] != persistentBinaryFlag {
+		t.Fatalf("PersistentContainerArgs = %q", args)
+	}
+	args[0] = "mutated"
+	if PersistentContainerArgs()[0] != persistentBinaryTarget {
+		t.Fatal("PersistentContainerArgs returned mutable package storage")
+	}
+	mounts, _, err := credentialBundleOptions(BootOptions{ContainerPersistent: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mounts) != 1 {
+		t.Fatalf("mounts = %+v, want one keepalive mount", mounts)
+	}
+	m := mounts[0]
+	if m.Source != persistentBinarySource || m.Destination != persistentBinaryTarget || m.Type != bundleMountTypeBind {
+		t.Fatalf("keepalive mount = %+v", m)
+	}
+}
+
 // TestBuildBundleConfigRejectsBadMounts covers the validation
 // gate: relative paths, empty paths, and duplicate targets all
 // fail before any store side effect.

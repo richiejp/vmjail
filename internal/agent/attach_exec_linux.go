@@ -44,11 +44,12 @@ func defaultJobDeps() jobDeps {
 // binary like /bin/cat so the PTY plumbing can be exercised
 // without a running container.
 type ptyAttachExec struct {
-	newCmd func(ctx context.Context, req AttachExecRequest) *exec.Cmd
+	newCmd  func(ctx context.Context, req AttachExecRequest) *exec.Cmd
+	running func(context.Context) bool
 }
 
 func newDefaultPtyAttachExec() *ptyAttachExec {
-	return &ptyAttachExec{newCmd: defaultAttachCmd}
+	return &ptyAttachExec{newCmd: defaultAttachCmd, running: containerRunning}
 }
 
 // crunExecSubcommand and defaultAttachShell are split out so the
@@ -109,6 +110,9 @@ func defaultAttachCmd(ctx context.Context, req AttachExecRequest) *exec.Cmd {
 // controlling tty, and returns a ptyAttachProcess wrapping the
 // master fd.
 func (e *ptyAttachExec) Start(ctx context.Context, req AttachExecRequest) (AttachProcess, error) {
+	if e.running != nil && !e.running(ctx) {
+		return nil, ErrContainerNotRunning
+	}
 	master, slave, err := openPtyPair()
 	if err != nil {
 		return nil, fmt.Errorf("agent: open pty: %w", err)

@@ -167,7 +167,11 @@ func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootC
 const workspaceDiskGuestDevice = "/dev/vda"
 
 func buildGuestConfig(cfg Config) *agentv1.GuestConfig {
-	gc := &agentv1.GuestConfig{Bundle: cfg.Bundle, CredentialProvider: cfg.CredentialProvider}
+	gc := &agentv1.GuestConfig{
+		Bundle:              cfg.Bundle,
+		CredentialProvider:  cfg.CredentialProvider,
+		ContainerPersistent: cfg.ContainerPersistent,
+	}
 	if cfg.WorkspaceDisk != nil {
 		gc.WorkspaceDisk = &agentv1.GuestConfig_WorkspaceDisk{Device: workspaceDiskGuestDevice}
 		for _, mount := range cfg.WorkspaceMounts {

@@ -460,9 +460,13 @@ type SandboxSpec struct {
 	AgentCredential *AgentCredential `protobuf:"bytes,16,opt,name=agent_credential,json=agentCredential,proto3" json:"agent_credential,omitempty"`
 	// Retained XFS workspace-disk allowance in bytes. Zero selects the Node's
 	// fixed 20 GiB default. The qcow2 virtual size is the ENOSPC boundary.
-	DiskBytes     uint64 `protobuf:"varint,17,opt,name=disk_bytes,json=diskBytes,proto3" json:"disk_bytes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	DiskBytes uint64 `protobuf:"varint,17,opt,name=disk_bytes,json=diskBytes,proto3" json:"disk_bytes,omitempty"`
+	// Preserve the image's Entrypoint+Cmd instead of replacing it with the
+	// persistent Workspace keepalive. This explicit opt-out is for workloads
+	// whose image command is itself the operation under test.
+	PreserveImageCommand bool `protobuf:"varint,18,opt,name=preserve_image_command,json=preserveImageCommand,proto3" json:"preserve_image_command,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *SandboxSpec) Reset() {
@@ -612,6 +616,13 @@ func (x *SandboxSpec) GetDiskBytes() uint64 {
 		return x.DiskBytes
 	}
 	return 0
+}
+
+func (x *SandboxSpec) GetPreserveImageCommand() bool {
+	if x != nil {
+		return x.PreserveImageCommand
+	}
+	return false
 }
 
 type AgentCredential struct {
@@ -1484,7 +1495,7 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\tworkspace\x18\x02 \x01(\v2\x1d.daft.sandbox.v1.WorkspaceRefR\tworkspace\x129\n" +
 	"\n" +
 	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12I\n" +
-	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xa9\a\n" +
+	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xdf\a\n" +
 	"\vSandboxSpec\x12\x1b\n" +
 	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12.\n" +
 	"\x06mounts\x18\x02 \x03(\v2\x16.daft.sandbox.v1.MountR\x06mounts\x12)\n" +
@@ -1505,7 +1516,8 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\regress_policy\x18\x0f \x01(\v2\x1d.daft.sandbox.v1.EgressPolicyR\fegressPolicy\x12K\n" +
 	"\x10agent_credential\x18\x10 \x01(\v2 .daft.sandbox.v1.AgentCredentialR\x0fagentCredential\x12\x1d\n" +
 	"\n" +
-	"disk_bytes\x18\x11 \x01(\x04R\tdiskBytes\"-\n" +
+	"disk_bytes\x18\x11 \x01(\x04R\tdiskBytes\x124\n" +
+	"\x16preserve_image_command\x18\x12 \x01(\bR\x14preserveImageCommand\"-\n" +
 	"\x0fAgentCredential\x12\x1a\n" +
 	"\bprovider\x18\x01 \x01(\tR\bprovider\"\xcc\x01\n" +
 	"\rSandboxStatus\x12\x14\n" +

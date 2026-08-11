@@ -109,7 +109,9 @@ func TestRunContainerHappyPath(t *testing.T) {
 	f := &fakeContainerDeps{stdout: ContainerReportPrefix + "hi\n"}
 
 	var buf bytes.Buffer
-	RunContainer(t.Context(), &buf, f.toContainerDeps(), testBundlePath)
+	if err := RunContainer(t.Context(), &buf, f.toContainerDeps(), testBundlePath); err != nil {
+		t.Fatalf("RunContainer: %v", err)
+	}
 
 	if f.calls != 1 {
 		t.Fatalf("Exec called %d times, want 1", f.calls)
@@ -126,8 +128,11 @@ func TestRunContainerReportsExecError(t *testing.T) {
 	f := &fakeContainerDeps{err: errors.New("crun bang")}
 
 	var buf bytes.Buffer
-	RunContainer(t.Context(), &buf, f.toContainerDeps(), testBundlePath)
+	err := RunContainer(t.Context(), &buf, f.toContainerDeps(), testBundlePath)
 
+	if err == nil || err.Error() != "crun bang" {
+		t.Fatalf("RunContainer error = %v, want crun bang", err)
+	}
 	if !strings.Contains(buf.String(), ContainerReportPrefix+"exec: crun bang") {
 		t.Errorf("output missing exec error: %q", buf.String())
 	}
@@ -163,6 +168,51 @@ func TestRunWithBundleConfigExecsContainer(t *testing.T) {
 	}
 	if !strings.Contains(buf.String(), ContainerReportPrefix+"from-the-fake") {
 		t.Errorf("container output missing: %q", buf.String())
+	}
+}
+
+func TestRunWithPersistentContainerExitIsFatal(t *testing.T) {
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{
+		Bundle:              testBundlePath,
+		ContainerPersistent: true,
+	}}
+	var buf bytes.Buffer
+	err := runWith(t.Context(), &buf, runDeps{
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       newFakeShareDeps().toShareDeps(),
+		container: ContainerDeps{Exec: func(context.Context, io.Writer, string) error {
+			return nil
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "persistent container exited unexpectedly") {
+		t.Fatalf("runWith error = %v, want unexpected persistent exit", err)
+	}
+	if strings.Contains(buf.String(), Banner) {
+		t.Errorf("false readiness banner emitted: %q", buf.String())
+	}
+	if len(ctrl.events) != 0 {
+		t.Errorf("false readiness events = %v", ctrl.events)
+	}
+}
+
+func TestRunWithPersistentContainerFailureIsFatal(t *testing.T) {
+	want := errors.New("crun failed")
+	ctrl := &fakeControl{cfg: &agentv1.GuestConfig{
+		Bundle:              testBundlePath,
+		ContainerPersistent: true,
+	}}
+	err := runWith(t.Context(), io.Discard, runDeps{
+		openControl: func(context.Context) (controlChannel, error) { return ctrl, nil },
+		share:       newFakeShareDeps().toShareDeps(),
+		container: ContainerDeps{Exec: func(context.Context, io.Writer, string) error {
+			return want
+		}},
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("runWith error = %v, want wrapped %v", err, want)
+	}
+	if len(ctrl.events) != 0 {
+		t.Errorf("false readiness events = %v", ctrl.events)
 	}
 }
 

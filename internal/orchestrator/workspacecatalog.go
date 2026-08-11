@@ -291,9 +291,11 @@ func (h *WorkspaceCatalogHandler) SetImage(
 	req *connect.Request[workspacev1.SetImageRequest],
 ) (*connect.Response[workspacev1.WorkspaceResponse], error) {
 	ref := req.Msg.GetImageRef()
+	preserve := req.Msg.GetPreserveImageCommand()
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
 			w.Spec.ImageRef = ref
+			w.Spec.PreserveImageCommand = preserve
 			return nil
 		})
 }
@@ -1397,16 +1399,17 @@ func (h *WorkspaceCatalogHandler) Release(
 // resource (with metadata + status) via workspaceToSandbox.
 func workspaceToSandboxSpec(ws workspacecatalog.Workspace, nodeFP identity.Fingerprint) *sandboxv1.SandboxSpec {
 	return &sandboxv1.SandboxSpec{
-		ImageRef:         ws.Spec.ImageRef,
-		DevcontainerPath: ws.Spec.DevcontainerPath,
-		WorkspaceUuid:    ws.Metadata.UUID,
-		Node:             &sandboxv1.NodeRef{Fingerprint: nodeFP.String()},
-		Mounts:           mountsToProto(ws.Spec.Mounts),
-		Env:              envToProto(ws.Spec.Env),
-		Ports:            portsToProto(ws.Spec.Ports),
-		MemoryBytes:      ws.Spec.MemoryBytes,
-		CpuCores:         ws.Spec.CPUCores,
-		DiskBytes:        ws.Spec.DiskBytes,
+		ImageRef:             ws.Spec.ImageRef,
+		DevcontainerPath:     ws.Spec.DevcontainerPath,
+		WorkspaceUuid:        ws.Metadata.UUID,
+		Node:                 &sandboxv1.NodeRef{Fingerprint: nodeFP.String()},
+		Mounts:               mountsToProto(ws.Spec.Mounts),
+		Env:                  envToProto(ws.Spec.Env),
+		Ports:                portsToProto(ws.Spec.Ports),
+		MemoryBytes:          ws.Spec.MemoryBytes,
+		CpuCores:             ws.Spec.CPUCores,
+		DiskBytes:            ws.Spec.DiskBytes,
+		PreserveImageCommand: ws.Spec.PreserveImageCommand,
 		NestedVirtualization: &sandboxv1.NestedVirtualization{
 			Enable: ws.Spec.NestedVirt,
 		},
@@ -1451,6 +1454,7 @@ func workspaceSpecFromProto(in *workspacev1.WorkspaceSpec) (workspacecatalog.Spe
 		MemoryBytes:              in.GetMemoryBytes(),
 		CPUCores:                 in.GetCpuCores(),
 		DiskBytes:                in.GetDiskBytes(),
+		PreserveImageCommand:     in.GetPreserveImageCommand(),
 	}
 	if gpu := in.GetGpuRequest(); gpu != nil {
 		out.GpuCount = gpu.GetCount()
@@ -1680,6 +1684,7 @@ func workspaceToProto(ws workspacecatalog.Workspace) *workspacev1.Workspace {
 			MemoryBytes:              ws.Spec.MemoryBytes,
 			CpuCores:                 ws.Spec.CPUCores,
 			DiskBytes:                ws.Spec.DiskBytes,
+			PreserveImageCommand:     ws.Spec.PreserveImageCommand,
 			NestedVirtualization: &sandboxv1.NestedVirtualization{
 				Enable: ws.Spec.NestedVirt,
 			},
