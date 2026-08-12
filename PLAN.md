@@ -131,6 +131,10 @@ and sanitised prior symptoms, but never the project checkout. It explores only
 CLI/MCP behaviour and emits bounded executable scenarios plus an append-only
 issue ledger classified as correctness, UX, or performance. A separate
 source-aware workflow promotes confirmed scenarios into the permanent suite.
+Prior issue context uses a checked, tracker-independent JSONL contract with
+opaque provenance references and only sanitised public symptoms and expected
+behaviour. Testers receive this corpus directly; no issue-tracker integration
+or exporter is part of darkaifactory.
 
 GitHub CI enforces a stable 94% total-coverage floor plus the normal per-file
 floor; local verification continues to ratchet monotonically against the

@@ -17,6 +17,8 @@ import (
 
 const (
 	Executable         = "daft"
+	titleField         = "title"
+	expectedField      = "expected"
 	Version            = 1
 	MaxDocumentBytes   = 1 << 20
 	MaxSteps           = 64
@@ -174,7 +176,7 @@ func (i Issue) Validate() error {
 	if i.Status != "open" {
 		return errors.New("new source-blind issues must have status open")
 	}
-	for label, value := range map[string]string{"title": i.Title, "expected": i.Expected, "observed": i.Observed, "first_seen_version": i.FirstSeenVersion} {
+	for label, value := range map[string]string{titleField: i.Title, expectedField: i.Expected, "observed": i.Observed, "first_seen_version": i.FirstSeenVersion} {
 		if strings.TrimSpace(value) == "" || len(value) > MaxTextBytes {
 			return fmt.Errorf("%s must be non-empty and at most %d bytes", label, MaxTextBytes)
 		}

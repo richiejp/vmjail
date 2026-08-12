@@ -15,12 +15,41 @@ const (
 	blackboxCmdName      = "blackbox"
 	blackboxScenarioName = "scenario"
 	blackboxIssuesName   = "issues"
+	blackboxHistoryName  = "history"
 	blackboxFileFlag     = "--file"
 )
 
 func newBlackboxCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: blackboxCmdName, Short: "Run and validate source-blind product tests"}
-	cmd.AddCommand(newBlackboxScenarioCmd(), newBlackboxIssueCmd())
+	cmd.AddCommand(newBlackboxScenarioCmd(), newBlackboxIssueCmd(), newBlackboxHistoryCmd())
+	return cmd
+}
+
+func newBlackboxHistoryCmd() *cobra.Command {
+	var path string
+	cmd := &cobra.Command{
+		Use:   blackboxHistoryName,
+		Short: "Validate tracker-independent source-blind issue history",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			file, err := os.Open(path) // #nosec G304 -- explicit tester-owned history path.
+			if err != nil {
+				return fmt.Errorf("open issue history: %w", err)
+			}
+			history, decodeErr := blackbox.DecodeHistory(file)
+			closeErr := file.Close()
+			if decodeErr != nil {
+				return decodeErr
+			}
+			if closeErr != nil {
+				return fmt.Errorf("close issue history: %w", closeErr)
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "valid history=%d\n", len(history))
+			return err
+		},
+	}
+	cmd.Flags().StringVar(&path, "file", "", "JSONL issue history")
+	_ = cmd.MarkFlagRequired("file")
 	return cmd
 }
 

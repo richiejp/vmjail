@@ -27,6 +27,22 @@ Validate the issue ledger:
 daft blackbox issues --file issues.jsonl
 ```
 
+`history.jsonl` is the tracker-independent, source-blind regression context.
+It may be assembled from any issue tracker. Records contain only public
+symptoms and expectations; `sources` retain opaque provenance without copying
+diagnoses, source paths, host details, credentials, or private logs. Validate
+it with:
+
+```sh
+daft blackbox history --file history.jsonl
+```
+
+History format:
+
+```json
+{"version":1,"id":"history-example","category":"correctness","title":"Prior failure","status":"resolved","symptom":"A public command returned stale data.","expected":"The command returns current data.","public_surfaces":["workspace status"],"sources":[{"system":"tracker","reference":"issue-123"}]}
+```
+
 Scenario format:
 
 ```json

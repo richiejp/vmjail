@@ -70,7 +70,7 @@ func TestBlackboxScenarioReturnsEvidenceOnAssertionFailure(t *testing.T) {
 func TestBlackboxCommandsReportInvalidFiles(t *testing.T) {
 	root := t.TempDir()
 	missing := filepath.Join(root, "missing")
-	for _, args := range [][]string{{blackboxCmdName, blackboxScenarioName, blackboxFileFlag, missing}, {blackboxCmdName, blackboxIssuesName, blackboxFileFlag, missing}} {
+	for _, args := range [][]string{{blackboxCmdName, blackboxScenarioName, blackboxFileFlag, missing}, {blackboxCmdName, blackboxIssuesName, blackboxFileFlag, missing}, {blackboxCmdName, blackboxHistoryName, blackboxFileFlag, missing}} {
 		if _, _, err := runCmd(t, args...); err == nil {
 			t.Fatalf("%v accepted missing file", args)
 		}
@@ -79,7 +79,7 @@ func TestBlackboxCommandsReportInvalidFiles(t *testing.T) {
 	if err := os.WriteFile(invalid, []byte("{"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	for _, args := range [][]string{{blackboxCmdName, blackboxScenarioName, blackboxFileFlag, invalid}, {blackboxCmdName, blackboxIssuesName, blackboxFileFlag, invalid}} {
+	for _, args := range [][]string{{blackboxCmdName, blackboxScenarioName, blackboxFileFlag, invalid}, {blackboxCmdName, blackboxIssuesName, blackboxFileFlag, invalid}, {blackboxCmdName, blackboxHistoryName, blackboxFileFlag, invalid}} {
 		if _, _, err := runCmd(t, args...); err == nil {
 			t.Fatalf("%v accepted malformed JSON", args)
 		}
@@ -91,5 +91,23 @@ func TestBlackboxCommandsReportInvalidFiles(t *testing.T) {
 	}
 	if _, _, err := runCmd(t, blackboxCmdName, blackboxIssuesName, blackboxFileFlag, validLedger); err == nil {
 		t.Fatal("issue ledger with missing artifacts accepted")
+	}
+}
+
+func TestBlackboxHistoryValidatesTrackerIndependentRecords(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "history.jsonl")
+	record := `{"version":1,"id":"history-help","category":"ux","title":"Help omitted detail","status":"resolved","symptom":"The summary omitted a supported option.","expected":"The summary names the option.","public_surfaces":["workspace resources --help"],"sources":[{"system":"tracker","reference":"issue-123"}]}`
+	if err := os.WriteFile(path, []byte(record+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err := runCmd(t, blackboxCmdName, blackboxHistoryName, blackboxFileFlag, path)
+	if err != nil || stdout != "valid history=1\n" {
+		t.Fatalf("history output = %q, %v", stdout, err)
+	}
+	cmd := newBlackboxHistoryCmd()
+	cmd.SetArgs([]string{blackboxFileFlag, path})
+	cmd.SetOut(errWriter{})
+	if err := cmd.ExecuteContext(t.Context()); err == nil {
+		t.Fatal("history output write error ignored")
 	}
 }
