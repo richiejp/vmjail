@@ -139,6 +139,10 @@ or exporter is part of darkaifactory.
 Resolved source-blind findings remain in the append-only issue ledger with
 their original failed evidence. Command groups reject unknown subcommands,
 and resource help names retained disk allowance.
+Live disk growth establishes a fresh guest-control readiness barrier after the
+VMM resize before invoking XFS growth. Transient guest-control retries are
+spaced and deadline-bound instead of immediately exhausting the retry budget
+during a hybrid-vsock reconnection window.
 
 GitHub CI enforces a stable 94% total-coverage floor plus the normal per-file
 floor; local verification continues to ratchet monotonically against the

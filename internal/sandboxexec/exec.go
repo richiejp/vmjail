@@ -176,6 +176,7 @@ type Executor struct {
 	dialWorkspaceGuest        func(context.Context, string, uint32) (net.Conn, error)
 	getWorkspaceUsage         func(context.Context, func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error)
 	growWorkspaceGuest        func(context.Context, func(context.Context) (net.Conn, error)) error
+	waitWorkspaceGuestRetry   func(context.Context) error
 	// observerDir, when non-empty, is the absolute parent directory
 	// under which each dispatch gets a per-uid host-side observer log
 	// (<observerDir>/<uid>/observer.jsonl). resolveBootConfig defaults
@@ -427,6 +428,7 @@ func New(cfg Config) (*Executor, error) {
 		dialWorkspaceGuest:        sandbox.DialGuestVsock,
 		getWorkspaceUsage:         workspacesnapshot.GetUsage,
 		growWorkspaceGuest:        workspacesnapshot.Grow,
+		waitWorkspaceGuestRetry:   waitWorkspaceGuestRetry,
 		observerDir:               cfg.ObserverDir,
 		buildImageRef:             cfg.BuildImageRef,
 		buildRunner:               cfg.BuildRunner,

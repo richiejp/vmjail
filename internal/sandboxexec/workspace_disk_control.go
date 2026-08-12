@@ -21,6 +21,7 @@ const (
 	workspaceFreezeDenominator       = 10
 	workspaceGuestAttemptTimeout     = 5 * time.Second
 	workspaceGuestAttempts           = 3
+	workspaceGuestRetryInterval      = 100 * time.Millisecond
 )
 
 var (
@@ -280,6 +281,11 @@ func (e *Executor) ResizeWorkspaceDisk(ctx context.Context, workspaceID string, 
 		resizeErr = fmt.Errorf("sandboxexec: resize VMM disk: %w", resizeErr)
 	} else {
 		_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s vmm=%d\n", workspaceID, desiredSize)
+		if err := e.waitWorkspaceGuestBounded(ctx, runtime.hostSocket); err != nil {
+			resizeErr = fmt.Errorf("sandboxexec: wait for guest after VMM disk resize: %w", err)
+		} else {
+			_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s post-resize-ready\n", workspaceID)
+		}
 	}
 	var growErr error
 	if resizeErr == nil {
@@ -320,6 +326,11 @@ func (e *Executor) growWorkspaceGuestBounded(ctx context.Context, hostSocket str
 		if ctx.Err() != nil {
 			return errors.Join(lastErr, ctx.Err())
 		}
+		if attempt+1 < workspaceGuestAttempts {
+			if err := e.waitWorkspaceGuestRetry(ctx); err != nil {
+				return errors.Join(lastErr, err)
+			}
+		}
 	}
 	return fmt.Errorf("failed after %d attempts: %w", workspaceGuestAttempts, lastErr)
 }
@@ -336,8 +347,24 @@ func (e *Executor) waitWorkspaceGuestBounded(ctx context.Context, hostSocket str
 		if ctx.Err() != nil {
 			return errors.Join(lastErr, ctx.Err())
 		}
+		if attempt+1 < workspaceGuestAttempts {
+			if err := e.waitWorkspaceGuestRetry(ctx); err != nil {
+				return errors.Join(lastErr, err)
+			}
+		}
 	}
 	return fmt.Errorf("guest did not become responsive after %d attempts: %w", workspaceGuestAttempts, lastErr)
+}
+
+func waitWorkspaceGuestRetry(ctx context.Context) error {
+	timer := time.NewTimer(workspaceGuestRetryInterval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // UnfreezeWorkspaceDisk resumes a VM after pressure has been resolved. A disk
