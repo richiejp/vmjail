@@ -136,6 +136,10 @@ opaque provenance references and only sanitised public symptoms and expected
 behaviour. Testers receive this corpus directly; no issue-tracker integration
 or exporter is part of darkaifactory.
 
+Resolved source-blind findings remain in the append-only issue ledger with
+their original failed evidence. Command groups reject unknown subcommands,
+and resource help names retained disk allowance.
+
 GitHub CI enforces a stable 94% total-coverage floor plus the normal per-file
 floor; local verification continues to ratchet monotonically against the
 committed `coverage.txt` baseline. This isolates capability-dependent hosted

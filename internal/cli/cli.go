@@ -97,6 +97,13 @@ func NewRootCmd() *cobra.Command {
 	return root
 }
 
+func runCommandGroup(cmd *cobra.Command, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("unknown command %q for %q", args[0], cmd.CommandPath())
+	}
+	return cmd.Help()
+}
+
 // newSandboxCmd returns the `daft sandbox` parent command. Its sub-commands
 // drive sandbox VMs directly (without a Workspace). Each sub-command
 // delegates to internal/sandbox so the CLI layer stays a thin wrapper.

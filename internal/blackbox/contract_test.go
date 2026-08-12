@@ -87,10 +87,13 @@ func TestDecodeIssues(t *testing.T) {
 	if err != nil || len(issues) != 1 {
 		t.Fatalf("issues = %#v, %v", issues, err)
 	}
+	if _, err := DecodeIssues(strings.NewReader(strings.Replace(line, `"status":"open"`, `"status":"resolved"`, 1))); err != nil {
+		t.Fatalf("resolved issue rejected: %v", err)
+	}
 	for _, mutation := range []string{
 		strings.Replace(line, `"ux"`, `"security"`, 1),
 		strings.Replace(line, `"reproduced":2`, `"reproduced":1`, 1),
-		strings.Replace(line, `"status":"open"`, `"status":"closed"`, 1),
+		strings.Replace(line, `"status":"open"`, `"status":"invalid"`, 1),
 		strings.Replace(line, `"runs/one.json"`, `"../one.json"`, 1),
 		strings.Replace(line, `"runs/one.json"`, `"/one.json"`, 1),
 		strings.Replace(line, `"expected":"actionable output"`, `"expected":""`, 1),

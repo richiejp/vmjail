@@ -171,6 +171,26 @@ func TestVersionInvariantNonEmpty(t *testing.T) {
 	}
 }
 
+func TestCommandGroupsRejectUnknownSubcommands(t *testing.T) {
+	for _, group := range []string{workspaceCmdName, authCmdName} {
+		t.Run(group, func(t *testing.T) {
+			stdout, stderr, err := runCmd(t, group, "definitely-not-a-command")
+			if err == nil || stdout != "" || !strings.Contains(stderr, "unknown command") || !strings.Contains(err.Error(), "unknown command") {
+				t.Fatalf("stdout=%q stderr=%q err=%v", stdout, stderr, err)
+			}
+		})
+	}
+}
+
+func TestCommandGroupsWithoutArgumentsShowHelp(t *testing.T) {
+	for _, group := range []string{workspaceCmdName, authCmdName} {
+		stdout, _, err := runCmd(t, group)
+		if err != nil || !strings.Contains(stdout, "Usage:") {
+			t.Fatalf("group=%s stdout=%q err=%v", group, stdout, err)
+		}
+	}
+}
+
 // FuzzExecute exercises the CLI dispatcher with arbitrary argv slices.
 //
 // Go's native fuzzer (go test -fuzz=FuzzExecute) only supports primitive

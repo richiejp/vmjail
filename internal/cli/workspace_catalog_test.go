@@ -737,6 +737,16 @@ func TestWorkspaceResourcesSetsMemoryCPUsAndDisk(t *testing.T) {
 	h.run(append([]string{resourcesSubName, "--memory", "2G", "--cpus", "2", testDiskFlag, "24G"}, h.commonArgs...)...)
 }
 
+func TestWorkspaceResourcesHelpNamesDisk(t *testing.T) {
+	stdout, _, err := runCmd(t, workspaceCmdName, resourcesSubName, "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "RAM, retained disk allowance, and/or vCPUs") {
+		t.Fatalf("resources help omitted disk allowance: %q", stdout)
+	}
+}
+
 func TestWorkspaceResourcesRejectsBadDisk(t *testing.T) {
 	h := newWorkspaceE2EHarness(t)
 	h.run(append([]string{createSubName}, h.commonArgs...)...)

@@ -7,7 +7,9 @@ must not receive the darkaifactory source checkout or implementation logs.
 Explore public workflows as a user would. A suspected problem is valid only
 after two clean reproductions. Classify it as `correctness`, `ux`, or
 `performance`, save each scenario run's JSON output below `runs/`, and append
-one JSON object to `issues.jsonl`. Do not infer implementation causes.
+one JSON object to `issues.jsonl`. Do not infer implementation causes. Set a
+confirmed finding to `resolved` only after its executable scenario passes
+against the fixed client; retain the original failed evidence as provenance.
 
 Run a scenario:
 

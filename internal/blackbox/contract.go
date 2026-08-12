@@ -173,8 +173,8 @@ func (i Issue) Validate() error {
 	if !slices.Contains([]Category{CategoryCorrectness, CategoryUX, CategoryPerformance}, i.Category) {
 		return errors.New("category must be correctness, ux, or performance")
 	}
-	if i.Status != "open" {
-		return errors.New("new source-blind issues must have status open")
+	if i.Status != "open" && i.Status != "resolved" {
+		return errors.New("source-blind issue status must be open or resolved")
 	}
 	for label, value := range map[string]string{titleField: i.Title, expectedField: i.Expected, "observed": i.Observed, "first_seen_version": i.FirstSeenVersion} {
 		if strings.TrimSpace(value) == "" || len(value) > MaxTextBytes {

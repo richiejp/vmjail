@@ -27,6 +27,7 @@ func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   authCmdName,
 		Short: "Manage approved peers (TOFU mTLS trust)",
+		RunE:  runCommandGroup,
 		Long: "daft authenticates orchestrators and sandbox-hosts via mutual TLS\n" +
 			"with TOFU peer pinning. The local identity (Ed25519 keypair +\n" +
 			"self-signed leaf cert) plus the approved-peer set live under\n" +

@@ -544,7 +544,7 @@ func newWorkspaceResourcesCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:           resourcesSubName,
-		Short:         "Set the workspace VM's RAM (--memory 4G) and/or vCPUs (--cpus N)",
+		Short:         "Set the workspace VM's RAM, retained disk allowance, and/or vCPUs",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {

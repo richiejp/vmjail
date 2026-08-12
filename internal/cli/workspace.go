@@ -45,6 +45,7 @@ func newWorkspaceCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   workspaceCmdName,
 		Short: "Serve and fetch content-addressed workspace snapshots",
+		RunE:  runCommandGroup,
 		Long: "A workspace is a content-addressed snapshot of a directory tree —\n" +
 			"manifest plus zstd chunks, sha256-addressed. `daft workspace\n" +
 			"serve` exposes one over mTLS for any approved peer to pull;\n" +
