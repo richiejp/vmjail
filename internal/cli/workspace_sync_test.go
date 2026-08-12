@@ -369,9 +369,14 @@ func TestWorkspaceDeleteRemovesNodeDataAndCatalog(t *testing.T) {
 	}
 	controller := &cliWorkspaceDiskController{}
 	rig.nodeServer.SetWorkspaceDiskController(controller)
-	output, _, err := runDaft(t, append([]string{workspaceCmdName, deleteSubName}, commonArgs...)...)
+	output, diagnostic, err := runDaft(t, append([]string{workspaceCmdName, deleteSubName}, commonArgs...)...)
 	if err != nil || controller.deleteCalls != 1 || !strings.Contains(output, "deleted workspace") {
 		t.Fatalf("workspace delete = %q, %v, calls %d", output, err, controller.deleteCalls)
+	}
+	for _, phase := range []string{"inspecting catalog record", "checking exact Node manifests", "deleting retained Node data", "deleting catalog record"} {
+		if !strings.Contains(diagnostic, phase) {
+			t.Fatalf("workspace delete diagnostics %q do not contain %q", diagnostic, phase)
+		}
 	}
 	if _, _, err := runDaft(t, append([]string{workspaceCmdName, statusSubName}, commonArgs...)...); err == nil {
 		t.Fatal("deleted workspace remains in catalog")

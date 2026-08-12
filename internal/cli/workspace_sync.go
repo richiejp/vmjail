@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
@@ -170,6 +171,10 @@ func newWorkspaceDeleteCmd() *cobra.Command {
 }
 
 func runWorkspaceDelete(cmd *cobra.Command, opts workspaceClientOpts, casDir string, mounts []mountMapping) error {
+	started := time.Now()
+	phase := func(message string) {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "workspace delete [%s]: %s\n", time.Since(started).Round(time.Millisecond), message)
+	}
 	handle, err := opts.resolveHandle()
 	if err != nil {
 		return err
@@ -185,6 +190,7 @@ func runWorkspaceDelete(cmd *cobra.Command, opts workspaceClientOpts, casDir str
 	if err != nil {
 		return err
 	}
+	phase("inspecting catalog record")
 	workspaceResponse, err := catalog.Get(ctx, connect.NewRequest(&workspacev1.GetWorkspaceRequest{Handle: handle}))
 	if err != nil {
 		return fmt.Errorf("daft workspace delete: get workspace: %w", err)
@@ -193,6 +199,7 @@ func runWorkspaceDelete(cmd *cobra.Command, opts workspaceClientOpts, casDir str
 	uuid := resource.GetMetadata().GetUuid()
 	target := resource.GetSpec().GetTargetSandboxFingerprint()
 	if target == "" {
+		phase("deleting catalog record")
 		return deleteWorkspaceCatalog(ctx, cmd.OutOrStdout(), catalog, handle, uuid, resource.GetMetadata().GetGeneration())
 	}
 	nodeFP, err := identity.ParseFingerprint(target)
@@ -208,15 +215,18 @@ func runWorkspaceDelete(cmd *cobra.Command, opts workspaceClientOpts, casDir str
 		return err
 	}
 	defer func() { _ = closeRelay() }()
+	phase("checking exact Node manifests")
 	expected, err := workspaceManifestExpectations(ctx, client, uuid, mounts)
 	if err != nil {
 		return err
 	}
+	phase("deleting retained Node data")
 	if _, err := client.DeleteWorkspaceData(ctx, connect.NewRequest(&workspacev1.DeleteWorkspaceDataRequest{
 		WorkspaceUuid: uuid, ExpectedManifests: expected,
 	})); err != nil {
 		return fmt.Errorf("daft workspace delete: delete Node data: %w", err)
 	}
+	phase("deleting catalog record")
 	return deleteWorkspaceCatalog(ctx, cmd.OutOrStdout(), catalog, handle, uuid, resource.GetMetadata().GetGeneration())
 }
 

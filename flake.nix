@@ -12,7 +12,7 @@
   };
 
   outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachDefaultSystem (system:
+    (flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
         version = pkgs.lib.strings.removeSuffix "\n" (builtins.readFile ./version.txt);
@@ -275,6 +275,77 @@
               mainProgram = "daft";
             };
           };
+
+          # Portable x86_64 Linux distribution. All three executables are
+          # static; daft-sandboxd also embeds its VMM, kernel, initramfs, and
+          # virtiofsd, so extracting this archive does not require Nix.
+          release-archive = pkgs.runCommand "darkaifactory-${version}-linux-${system}" {
+            nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ];
+            meta = with pkgs.lib; {
+              description = "Portable darkaifactory cluster archive";
+              license = licenses.asl20;
+              platforms = [ "x86_64-linux" ];
+            };
+          } ''
+            root=darkaifactory-${version}-linux-x86_64
+            mkdir -p "$root/bin" "$root/systemd" $out
+            cp ${daft}/bin/daft "$root/bin/"
+            cp ${daft-orchestrator}/bin/daft-orchestrator "$root/bin/"
+            cp ${daft-sandboxd}/bin/daft-sandboxd "$root/bin/"
+            cp -R ${./packaging/systemd}/. "$root/systemd/"
+            tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner \
+              -czf "$out/$root.tar.gz" "$root"
+            (cd "$out" && ${pkgs.coreutils}/bin/sha256sum "$root.tar.gz" \
+              > "$root.tar.gz.sha256")
+          '';
+
+          nixos-module-check =
+            let
+              nodeSystem = nixpkgs.lib.nixosSystem {
+                inherit system;
+                modules = [
+                  ./nix/node.nix
+                  {
+                    system.stateVersion = "25.11";
+                    services.darkaifactory-node = {
+                      enable = true;
+                      package = daft-sandboxd;
+                      orchestratorAddress = "https://orchestrator.example:14443";
+                    };
+                  }
+                ];
+              };
+              orchestratorSystem = nixpkgs.lib.nixosSystem {
+                inherit system;
+                modules = [
+                  ./nix/orchestrator.nix
+                  {
+                    system.stateVersion = "25.11";
+                    users.users.darkaifactory = {
+                      isSystemUser = true;
+                      group = "darkaifactory";
+                    };
+                    users.groups.darkaifactory = { };
+                    services.darkaifactory-orchestrator = {
+                      enable = true;
+                      package = daft-orchestrator;
+                      user = "darkaifactory";
+                      controlAddress = "127.0.0.1:14443";
+                      webAddress = "127.0.0.1:18080";
+                      configDir = "/var/lib/darkaifactory-orchestrator";
+                    };
+                  }
+                ];
+              };
+            in
+            pkgs.runCommand "darkaifactory-nixos-module-check" {
+              nodeExecStart = nodeSystem.config.systemd.services.darkaifactory-node.serviceConfig.ExecStart;
+              orchestratorExecStart = orchestratorSystem.config.systemd.services.darkaifactory-orchestrator.serviceConfig.ExecStart;
+            } ''
+              test -n "$nodeExecStart"
+              test -n "$orchestratorExecStart"
+              touch $out
+            '';
 
           # u-root-src exposes the pinned u-root submodule source as a
           # buildable package so `make integration` can `nix build` it
@@ -1284,5 +1355,11 @@
                 image
             '';
         };
-      });
+      })) // {
+        nixosModules = {
+          orchestrator = import ./nix/orchestrator.nix;
+          node = import ./nix/node.nix;
+          default = self.nixosModules.node;
+        };
+      };
 }

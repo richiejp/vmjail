@@ -1,0 +1,23 @@
+[Unit]
+Description=darkaifactory orchestrator
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=darkaifactory
+Group=darkaifactory
+EnvironmentFile=/etc/darkaifactory/orchestrator.env
+ExecStart=/usr/local/lib/darkaifactory/daft-orchestrator serve --addr ${DAFT_CONTROL_ADDRESS} --web-addr ${DAFT_WEB_ADDRESS} --config-dir /var/lib/darkaifactory-orchestrator
+StateDirectory=darkaifactory-orchestrator
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

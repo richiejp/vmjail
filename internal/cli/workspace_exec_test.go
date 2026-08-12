@@ -280,6 +280,84 @@ func TestPumpExecStreamToStdoutReturnsCommandExit(t *testing.T) {
 	}
 }
 
+func TestActivityWriterForwardsAndSignals(t *testing.T) {
+	var output bytes.Buffer
+	activity := make(chan struct{}, 1)
+	written, err := (activityWriter{writer: &output, activity: activity}).Write([]byte("progress"))
+	if err != nil || written != len("progress") || output.String() != "progress" {
+		t.Fatalf("Write = %d, %v, output %q", written, err, output.String())
+	}
+	select {
+	case <-activity:
+	default:
+		t.Fatal("output activity was not reported")
+	}
+}
+
+func TestReportExecSilencePointsToObserver(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	reader, writer := io.Pipe()
+	t.Cleanup(func() { _ = reader.Close() })
+	go reportExecSilence(ctx, writer, "build", make(chan struct{}), time.Millisecond)
+	message := make(chan string, 1)
+	go func() {
+		buf := make([]byte, 512)
+		n, _ := reader.Read(buf)
+		message <- string(buf[:n])
+	}()
+	select {
+	case got := <-message:
+		cancel()
+		_ = writer.Close()
+		if !strings.Contains(got, "still waiting") || !strings.Contains(got, "daft sandbox observe --workspace build") {
+			t.Fatalf("idle message = %q", got)
+		}
+	case <-time.After(time.Second):
+		cancel()
+		_ = writer.Close()
+		t.Fatal("idle message was not emitted")
+	}
+}
+
+func TestReportExecSilenceStopsWithSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		reportExecSilence(ctx, io.Discard, "build", make(chan struct{}), time.Hour)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("idle reporter did not stop with its exec session")
+	}
+}
+
+func TestReportExecSilenceResetsAfterOutput(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reader, writer := io.Pipe()
+	defer func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	}()
+	activity := make(chan struct{}, 1)
+	go reportExecSilence(ctx, writer, "build", activity, 20*time.Millisecond)
+	activity <- struct{}{}
+	message := make(chan struct{}, 1)
+	go func() {
+		buf := make([]byte, 512)
+		_, _ = reader.Read(buf)
+		message <- struct{}{}
+	}()
+	select {
+	case <-message:
+	case <-time.After(time.Second):
+		t.Fatal("idle reporter did not resume after output activity")
+	}
+}
+
 func TestPumpExecSessionHandlesTerminalStatus(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

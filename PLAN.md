@@ -164,6 +164,42 @@ Sandbox cannot remain apparently ready after its crun container has disappeared.
 `nix/orchestrator.nix` exports a parameterised NixOS service module. It contains
 no host-specific paths, addresses, identities, or service configuration.
 
+## Active milestone: reproducible first deployment
+
+Make a first cluster reproducible without access to a maintainer's private
+operations repository. The flake will export parameterised NixOS modules for
+both orchestrator and node services; private repositories need supply only
+host-specific packages, addresses, users, paths, and network dependencies.
+
+Tagged releases will also publish a distro-neutral x86_64 Linux archive. It
+contains the statically linked CLI, orchestrator, and asset-embedded sandbox
+node binaries. The primary README path is deliberately deployment-manager
+agnostic: unpack the archive and start a disposable local cluster. CI will
+exercise the archive on Ubuntu. Hosted CI without `/dev/kvm` can prove
+installation, configuration, identity bootstrap, and bounded fail-fast
+behaviour; a real Ubuntu/KVM host is still required for the VM launch acceptance
+test.
+
+Landed:
+
+- Export and evaluate the reusable node and orchestrator NixOS modules.
+- Build and publish the portable archive and checksums on version tags.
+- Add Ubuntu archive smoke coverage and document the real-KVM verification
+  command.
+- Append a minimal generic first-cluster runbook to the README without rewriting
+  the existing project narrative or requiring Nix/systemd.
+
+Open reliability investigations:
+
+- Explain and reduce the observed 37-second deletion of a small stopped
+  Workspace. The CLI now reports each deletion phase immediately, so a repeat
+  identifies whether manifest inspection, Node data release, or catalog removal
+  owns the delay; a deterministic latency guard awaits that evidence.
+- Reproduce a silent Bun install in a clean sandbox, distinguish workload from
+  platform causes using bounded diagnostics. Non-interactive exec now emits a
+  30-second idle heartbeat that points directly to the existing bounded
+  `sandbox observe` command; root-cause reproduction remains open.
+
 ## Active milestone: overseer-controlled agent runs
 
 The target interaction is: “develop `/project/path` in darkaifactory on a

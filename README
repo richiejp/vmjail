@@ -40,3 +40,28 @@ If you put a frontier LLM in the sandbox and tell it to escape then will it? Pro
 Would it stop some credential stealer or another supply chain attack? It would certainly frustrate it because if nothing else you have just made your dev environment incredibly frustrating and created a bunch of ways to detect it. Again UX is the thing at stake here. It's no good maximising security if the system is not usable; people will just put OpenClaw on a Mac instead.
 
 If you want to use this then there is a human usable CLI surface, but I have no intention of using it at this stage, it's more of a panic button. Presently the best way to use the project is to point your coding agent at it. So yes I use coding agents to create sandboxs with agents inside. In theory the ones outside the sandbox can be relatively dumb and incapable, they can even have a whitelist of actions they are allowed to perform and use an LLM that's actually runnable on mortal hardware.
+
+                       /////////----...----\\\\\\\\\
+                  /////                              \\\\
+              ////       trying darkaifactory          \\\\
+                  \\\\                              /////
+                       \\\\\\\\----...----/////////
+
+Download the Linux x86_64 archive and matching `.sha256` file from the
+[latest release](https://github.com/richiejp/darkaifactory/releases/latest).
+The sandbox host needs KVM, cgroup v2, `newuidmap`/`newgidmap`, and subordinate
+UID/GID ranges. The orchestrator and client do not need KVM.
+
+```sh
+sha256sum -c darkaifactory-<version>-linux-x86_64.tar.gz.sha256
+tar -xzf darkaifactory-<version>-linux-x86_64.tar.gz
+export PATH="$PWD/darkaifactory-<version>-linux-x86_64/bin:$PATH"
+test -r /dev/kvm && test -w /dev/kvm
+test -f /sys/fs/cgroup/cgroup.controllers
+daft cluster up
+daft node list
+```
+
+`daft cluster up` starts a disposable single-machine cluster and approves its
+local identities. Its state is kept in the invoking user's XDG state directory.
+Run `daft cluster down` when finished.

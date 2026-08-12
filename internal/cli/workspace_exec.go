@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/spf13/cobra"
@@ -22,6 +23,8 @@ import (
 // execCopyBufSize is the stdin → Data-frame chunk size. 32 KiB
 // matches the agent-side attach pump and Go's io.Copy default.
 const execCopyBufSize = 32 * 1024
+
+const execSilenceInterval = 30 * time.Second
 
 // workspaceExecOpts gathers `daft workspace exec` flags + positionals.
 type workspaceExecOpts struct {
@@ -187,7 +190,54 @@ func runExecSession(
 			defer func() { oops.Skip("daft workspace exec: restore tty", restore()) }()
 		}
 	}
-	return pumpExecSession(ctx, deps.stdin, deps.stdout, stream, useTTY, deps.terminal)
+	if useTTY {
+		return pumpExecSession(ctx, deps.stdin, deps.stdout, stream, true, deps.terminal)
+	}
+	activity := make(chan struct{}, 1)
+	trackedOutput := activityWriter{writer: deps.stdout, activity: activity}
+	idleCtx, stopIdle := context.WithCancel(ctx)
+	defer stopIdle()
+	go reportExecSilence(idleCtx, stderr, opts.workspace, activity, execSilenceInterval)
+	return pumpExecSession(ctx, deps.stdin, trackedOutput, stream, false, deps.terminal)
+}
+
+type activityWriter struct {
+	writer   io.Writer
+	activity chan<- struct{}
+}
+
+func (w activityWriter) Write(data []byte) (int, error) {
+	written, err := w.writer.Write(data)
+	select {
+	case w.activity <- struct{}{}:
+	default:
+	}
+	return written, err
+}
+
+func reportExecSilence(ctx context.Context, stderr io.Writer, workspace string, activity <-chan struct{}, interval time.Duration) {
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	//daft:lint:disable=forloopbound reason="bounded by exec-session context cancellation"
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-activity:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(interval)
+		case <-timer.C:
+			_, _ = fmt.Fprintf(stderr,
+				"daft workspace exec: still waiting for %q after %s without output; inspect activity with `daft sandbox observe --workspace %s`\n",
+				workspace, interval, workspace)
+			timer.Reset(interval)
+		}
+	}
 }
 
 // buildExecHello assembles the initial AttachHello. When useTTY

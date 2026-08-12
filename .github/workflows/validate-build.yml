@@ -27,3 +27,7 @@ jobs:
         run: nix flake check -L
       - name: Smoke-test daft binary
         run: nix build && result/bin/daft version
+      - name: Smoke-test portable archive on Ubuntu
+        run: |
+          nix build .#release-archive -o result-release
+          scripts/smoke-release.sh result-release/*.tar.gz
