@@ -27,12 +27,22 @@ func startWorkspaceSnapshotListener(ctx context.Context, w io.Writer, cfg *agent
 		return
 	}
 	go func() {
-		control := workspacesnapshot.Control{
-			Usage: func() (workspacesnapshot.Usage, error) { return deps.usage(workspaceDiskRoot) },
-			Grow:  func() error { return deps.run(ctx, "/bin/xfs_growfs", workspaceDiskRoot) },
-		}
+		control := workspaceSnapshotControl(w, deps)
 		if err := workspacesnapshot.Serve(ctx, listener, roots, control); err != nil && ctx.Err() == nil {
 			_, _ = fmt.Fprintf(w, "workspace-snapshot: serve: %v\n", err)
 		}
 	}()
+}
+
+func workspaceSnapshotControl(w io.Writer, deps workspaceDiskDeps) workspacesnapshot.Control {
+	return workspacesnapshot.Control{
+		Usage: func() (workspacesnapshot.Usage, error) { return deps.usage(workspaceDiskRoot) },
+		Grow: func(requestCtx context.Context) error {
+			err := runXFSgrowTraced(requestCtx, deps.run, workspaceDiskRoot)
+			if err != nil {
+				_, _ = fmt.Fprintf(w, "workspace-disk: XFS grow diagnostic: %v\n", err)
+			}
+			return err
+		},
+	}
 }

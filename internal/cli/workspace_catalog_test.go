@@ -742,7 +742,8 @@ func TestWorkspaceResourcesHelpNamesDisk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(stdout, "RAM, retained disk allowance, and/or vCPUs") {
+	if !strings.Contains(stdout, "RAM, retained disk allowance, and/or vCPUs") ||
+		!strings.Contains(stdout, "guest-kernel xfs-grow trace") {
 		t.Fatalf("resources help omitted disk allowance: %q", stdout)
 	}
 }

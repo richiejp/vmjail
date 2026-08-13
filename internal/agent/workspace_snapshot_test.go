@@ -69,3 +69,18 @@ func TestWorkspaceSnapshotListenerReportsServeError(t *testing.T) {
 		t.Fatalf("report = %q", got)
 	}
 }
+
+func TestWorkspaceSnapshotControl(t *testing.T) {
+	want := workspacesnapshot.Usage{Total: 10, Used: 8, Available: 2}
+	var report bytes.Buffer
+	control := workspaceSnapshotControl(&report, workspaceDiskDeps{
+		usage: func(string) (workspacesnapshot.Usage, error) { return want, nil },
+		run:   func(context.Context, string, ...string) error { return errors.New("grow failure") },
+	})
+	if got, err := control.Usage(); err != nil || got != want {
+		t.Fatalf("usage = %#v, %v", got, err)
+	}
+	if err := control.Grow(t.Context()); err == nil || !strings.Contains(report.String(), "XFS grow diagnostic") {
+		t.Fatalf("grow = %v, report = %q", err, report.String())
+	}
+}

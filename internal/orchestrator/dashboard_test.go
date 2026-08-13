@@ -93,7 +93,7 @@ func TestDashboardWorkspaceNodeSandboxDetails(t *testing.T) {
 	}
 	handler := dashboardHandler(nodes, workspaces)
 	for path, contains := range map[string]string{
-		"/workspaces/workspace-one":      "sha256:manifest",
+		"/workspaces/workspace-one":      "daft sandbox observe project",
 		"/nodes/" + fingerprint.String(): "node-one",
 	} {
 		response := httptest.NewRecorder()

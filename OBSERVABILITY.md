@@ -8,6 +8,12 @@
 
 ## TL;DR for agents
 
+Every `daft workspace exec` announces both diagnostic commands. A silent
+non-interactive exec also prints a bounded guest-activity snapshot every 30
+seconds, and a failed exec prints a final snapshot. `daft workspace status`
+and each dashboard Workspace page repeat the two entry points, so callers do
+not need to know this document exists first.
+
 1. A sandbox launched with `sandbox.Config.ObserverLogPath` set has an
    in-process observer that samples its cloud-hypervisor PID, cgroup, and
    sandbox network counters at 1 Hz into a JSON-lines file. Orchestrated
@@ -20,6 +26,28 @@
 3. `daft sandbox observe [workspace]` renders the latest guest-side eBPF
    build-progress summary. Open, exec, sleep, and I/O gadgets are landed;
    the [Roadmap](#roadmap) tracks additional detail and refined heuristics.
+4. Platform filesystem operations use the same guest-kernel hook. A failed or
+   timed-out `daft workspace resources --disk <size> [workspace]` returns a
+   bounded `xfs-grow` trace covering the ioctl boundary, XFS transactions and
+   buffers, and block request issue/completion. The guest console records
+   the same diagnostic. Run the ordinary operation again to collect it; no
+   shell or extra package inside the workload container is required.
+
+## Guest-kernel trace profiles
+
+`internal/agent/runXFSgrowTraced` is the reference hook for instrumenting a
+privileged guest operation. It mounts tracefs, creates an isolated trace
+instance, enables an allowlisted profile, runs the operation with a deadline,
+then stops and reads the ring buffer through a hard byte limit. Unsupported
+events are skipped, tracing failure never changes a successful operation into
+a failure, and no caller can provide arbitrary tracefs paths or event names.
+
+This pattern is intentional public-product behaviour, even though the first
+profile is attached automatically rather than selected by a separate command:
+normal users trigger it through `workspace resources`, receive the evidence in
+the command failure, and are told about it by command help. New platform-owned
+guest operations should add a small named allowlist at this hook instead of
+shipping general-purpose privileged tracing tools into workload containers.
 
 ## Why this exists
 

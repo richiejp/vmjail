@@ -45,16 +45,18 @@ func newSandboxObserveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "observe [workspace]",
 		Short: "Print a running sandbox's build-progress summary",
-		Long: "Renders the per-sandbox build-progress summary for a workspace's\n" +
+		Long: "Guest/workload diagnostics. Renders the per-sandbox build-progress summary for a workspace's\n" +
 			"running sandbox, via the orchestrator's ObserveSummary RPC. The\n" +
-			"summary is the always-on gadgets' live aggregate (today: open-snoop\n" +
-			"file-open activity) plus a coarse stuck/slow flag — a quick probe\n" +
+			"summary aggregates exec, file-open, sleep, and file/socket I/O eBPF\n" +
+			"activity plus coarse stuck/slow flags — a quick probe\n" +
 			"of whether an in-sandbox build is making progress or has hung.\n\n" +
 			"Prints the current snapshot once and exits; --follow re-renders on\n" +
 			"an interval. The workspace may be omitted when run from a workspace\n" +
 			"dir (./.daft/config.json name, else the cwd basename).\n\n" +
-			"For the raw per-event trace, drill down with\n" +
-			"`daft sandbox observer-tail`. See OBSERVABILITY.md.",
+			"For host/VM CPU, memory, VMM I/O, cgroup, and aggregate network\n" +
+			"samples, use `daft sandbox observer-tail`. Neither view currently\n" +
+			"provides syscall stacks, per-flow network detail, or TCP retransmits.\n" +
+			"See OBSERVABILITY.md.",
 		Args:          cobra.MaximumNArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

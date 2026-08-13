@@ -543,8 +543,11 @@ func newWorkspaceResourcesCmd() *cobra.Command {
 		cpus    uint32
 	)
 	cmd := &cobra.Command{
-		Use:           resourcesSubName,
-		Short:         "Set the workspace VM's RAM, retained disk allowance, and/or vCPUs",
+		Use:   resourcesSubName,
+		Short: "Set the workspace VM's RAM, retained disk allowance, and/or vCPUs",
+		Long: "Set the workspace VM's RAM, retained disk allowance, and/or vCPUs.\n\n" +
+			"A failed or timed-out live disk grow includes a bounded guest-kernel xfs-grow trace " +
+			"(ioctl, XFS, and block-I/O events) without requiring tools in the workload image.",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -1296,6 +1299,7 @@ func writeWorkspaceSummary(w io.Writer, ws *workspacev1.Workspace) error {
 		{"Image", emptyOrDash(spec.GetImageRef())},
 		{"Target", emptyOrDash(spec.GetTargetSandboxFingerprint())},
 		{"Sandbox", emptyOrDash(status.GetCurrentSandbox().GetUid())},
+		{"Diagnostics", fmt.Sprintf("daft sandbox observe %s (guest activity); daft sandbox observer-tail --follow=false %s (host VM/resources)", md.GetName(), md.GetName())},
 	}
 	if editPending(md, status) {
 		rows = append(rows, [2]string{"Edit", fmt.Sprintf("pending (gen %d, observed %d)",

@@ -83,7 +83,7 @@ func TestPullRoundTrip(t *testing.T) {
 	client, server := net.Pipe()
 	go func() {
 		defer func() { _ = server.Close() }()
-		_ = serveOne(server, map[string]string{testDirectory: source}, Control{})
+		_ = serveOne(t.Context(), server, map[string]string{testDirectory: source}, Control{})
 	}()
 	destination := filepath.Join(t.TempDir(), "snapshot")
 	err := Pull(t.Context(), func(context.Context) (net.Conn, error) { return client, nil }, testDirectory, destination)
@@ -146,7 +146,7 @@ func TestPullReportsDialError(t *testing.T) {
 func TestServeOneRejectsUnknownDirectory(t *testing.T) {
 	client, server := net.Pipe()
 	done := make(chan error, 1)
-	go func() { done <- serveOne(server, nil, Control{}) }()
+	go func() { done <- serveOne(t.Context(), server, nil, Control{}) }()
 	if _, err := io.WriteString(client, `{"directory":"mounts/0"}`); err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestServeOneReportsRequestRootAndWriterErrors(t *testing.T) {
 	t.Run("request", func(t *testing.T) {
 		client, server := net.Pipe()
 		done := make(chan error, 1)
-		go func() { done <- serveOne(server, nil, Control{}) }()
+		go func() { done <- serveOne(t.Context(), server, nil, Control{}) }()
 		if _, err := io.WriteString(client, "not-json\n"); err != nil {
 			t.Fatal(err)
 		}
@@ -173,7 +173,7 @@ func TestServeOneReportsRequestRootAndWriterErrors(t *testing.T) {
 		client, server := net.Pipe()
 		done := make(chan error, 1)
 		go func() {
-			done <- serveOne(server, map[string]string{testDirectory: filepath.Join(t.TempDir(), "missing")}, Control{})
+			done <- serveOne(t.Context(), server, map[string]string{testDirectory: filepath.Join(t.TempDir(), "missing")}, Control{})
 		}()
 		if _, err := io.WriteString(client, `{"directory":"mounts/0"}`); err != nil {
 			t.Fatal(err)
@@ -190,7 +190,7 @@ func TestServeOneReportsRequestRootAndWriterErrors(t *testing.T) {
 		}
 		client, server := net.Pipe()
 		done := make(chan error, 1)
-		go func() { done <- serveOne(server, map[string]string{testDirectory: source}, Control{}) }()
+		go func() { done <- serveOne(t.Context(), server, map[string]string{testDirectory: source}, Control{}) }()
 		if _, err := io.WriteString(client, `{"directory":"mounts/0"}`); err != nil {
 			t.Fatal(err)
 		}
@@ -210,7 +210,7 @@ func TestServeOneReportsUnreadableTree(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) }) // #nosec G302 -- restore traversal for TempDir cleanup.
 	client, server := net.Pipe()
 	done := make(chan error, 1)
-	go func() { done <- serveOne(server, map[string]string{testDirectory: source}, Control{}) }()
+	go func() { done <- serveOne(t.Context(), server, map[string]string{testDirectory: source}, Control{}) }()
 	if _, err := io.WriteString(client, `{"directory":"mounts/0"}`); err != nil {
 		t.Fatal(err)
 	}
@@ -241,13 +241,13 @@ func TestUsageAndGrowControl(t *testing.T) {
 	grown := false
 	control := Control{
 		Usage: func() (Usage, error) { return want, nil },
-		Grow:  func() error { grown = true; return nil },
+		Grow:  func(context.Context) error { grown = true; return nil },
 	}
-	dial := func(context.Context) (net.Conn, error) {
+	dial := func(ctx context.Context) (net.Conn, error) {
 		client, server := net.Pipe()
 		go func() {
 			defer func() { _ = server.Close() }()
-			_ = serveOne(server, nil, control)
+			_ = serveOne(ctx, server, nil, control)
 		}()
 		return client, nil
 	}
@@ -287,14 +287,14 @@ func TestControlReportsGuestAndProtocolErrors(t *testing.T) {
 		{name: "usage unavailable", request: Request{Operation: operationUsage}},
 		{name: "usage failure", request: Request{Operation: operationUsage}, control: Control{Usage: func() (Usage, error) { return Usage{}, errors.New("statfs failed") }}},
 		{name: "grow unavailable", request: Request{Operation: operationGrow}},
-		{name: "grow failure", request: Request{Operation: operationGrow}, control: Control{Grow: func() error { return errors.New("xfs grow failed") }}},
+		{name: "grow failure", request: Request{Operation: operationGrow}, control: Control{Grow: func(context.Context) error { return errors.New("xfs grow failed") }}},
 		{name: "unknown", request: Request{Operation: "erase"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, server := net.Pipe()
 			go func() {
 				defer func() { _ = server.Close() }()
-				_ = serveOne(server, nil, tc.control)
+				_ = serveOne(t.Context(), server, nil, tc.control)
 			}()
 			defer func() { _ = client.Close() }()
 			if err := json.NewEncoder(client).Encode(tc.request); err != nil {
@@ -332,11 +332,11 @@ func TestControlClientFailurePaths(t *testing.T) {
 		t.Fatal("empty usage response accepted")
 	}
 
-	serverErrorDial := func(context.Context) (net.Conn, error) {
+	serverErrorDial := func(ctx context.Context) (net.Conn, error) {
 		client, server := net.Pipe()
 		go func() {
 			defer func() { _ = server.Close() }()
-			_ = serveOne(server, nil, Control{})
+			_ = serveOne(ctx, server, nil, Control{})
 		}()
 		return client, nil
 	}

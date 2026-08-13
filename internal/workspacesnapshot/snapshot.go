@@ -18,6 +18,7 @@ import (
 const (
 	DefaultVsockPort      uint32 = 9300
 	controlRequestTimeout        = 10 * time.Second
+	guestGrowTimeout             = 4 * time.Second
 )
 
 const (
@@ -44,7 +45,7 @@ type Usage struct {
 // service behavior.
 type Control struct {
 	Usage func() (Usage, error)
-	Grow  func() error
+	Grow  func(context.Context) error
 }
 
 type response struct {
@@ -72,17 +73,28 @@ func Serve(ctx context.Context, listener net.Listener, roots map[string]string, 
 		}
 		go func() {
 			defer func() { _ = conn.Close() }()
-			_ = serveOne(conn, roots, ctl)
+			_ = serveOne(ctx, conn, roots, ctl)
 		}()
 	}
 }
 
-func serveOne(conn net.Conn, roots map[string]string, control Control) error {
+func serveOne(ctx context.Context, conn net.Conn, roots map[string]string, control Control) error {
 	var request Request
 	if err := json.NewDecoder(io.LimitReader(conn, 4096)).Decode(&request); err != nil {
 		return err
 	}
-	switch request.Operation {
+	if request.Operation != "" {
+		return serveControl(ctx, conn, request.Operation, control)
+	}
+	root, ok := roots[request.Directory]
+	if !ok {
+		return fmt.Errorf("unknown workspace directory %q", request.Directory)
+	}
+	return serveSnapshot(conn, root)
+}
+
+func serveControl(ctx context.Context, conn net.Conn, operation string, control Control) error {
+	switch operation {
 	case operationUsage:
 		if control.Usage == nil {
 			return json.NewEncoder(conn).Encode(response{Error: "workspace usage unavailable"})
@@ -96,7 +108,9 @@ func serveOne(conn net.Conn, roots map[string]string, control Control) error {
 		if control.Grow == nil {
 			return json.NewEncoder(conn).Encode(response{Error: "workspace grow unavailable"})
 		}
-		if err := control.Grow(); err != nil {
+		growCtx, cancel := context.WithTimeout(ctx, guestGrowTimeout)
+		defer cancel()
+		if err := control.Grow(growCtx); err != nil {
 			return json.NewEncoder(conn).Encode(response{Error: err.Error()})
 		}
 		return json.NewEncoder(conn).Encode(response{})
@@ -104,10 +118,10 @@ func serveOne(conn net.Conn, roots map[string]string, control Control) error {
 	default:
 		return json.NewEncoder(conn).Encode(response{Error: "unknown workspace operation"})
 	}
-	root, ok := roots[request.Directory]
-	if !ok {
-		return fmt.Errorf("unknown workspace directory %q", request.Directory)
-	}
+	return nil
+}
+
+func serveSnapshot(conn net.Conn, root string) error {
 	tw := tar.NewWriter(conn)
 	rootHandle, err := os.OpenRoot(root)
 	if err != nil {

@@ -85,6 +85,7 @@ type fakeReader struct {
 	observerSummary  ObserverSummary
 	observerErr      error
 	observerTail     ObserverTail
+	observerTailErr  error
 	tailUUID         string
 	tailBytes        int
 	tailLines        int
@@ -148,7 +149,7 @@ func (f *fakeReader) ObserveSummary(context.Context, string) (ObserverSummary, e
 
 func (f *fakeReader) ObserverTail(_ context.Context, uuid string, maxBytes, maxLines int) (ObserverTail, error) {
 	f.tailUUID, f.tailBytes, f.tailLines = uuid, maxBytes, maxLines
-	return f.observerTail, f.observerErr
+	return f.observerTail, f.observerTailErr
 }
 
 func TestAgentProfileListIsSortedAndOmitsCredentialProfileName(t *testing.T) {
@@ -336,7 +337,7 @@ func TestToolsAreExactlyTheBoundedReadSurface(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list tools: %v", err)
 	}
-	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, observerSummaryTool, observerTailTool, workspaceApplyTool, workspaceRejectTool, workspaceDeleteTool, workspaceGetTool, workspaceLaunchTool, workspaceListTool, workspacePushTool, workspaceStatusTool, workspaceStopTool, workspaceStorageTool, workspaceUnfreezeTool, workspaceValidateTool}
+	wantNames := []string{agentCancelTool, agentEventsTool, agentProfileListTool, agentResultTool, agentStartTool, agentStatusTool, nodeAuthorizeTool, nodeListTool, nodeStatusTool, nodeRevokeTool, observerSummaryTool, observerTailTool, workspaceApplyTool, workspaceRejectTool, workspaceDeleteTool, workspaceDiagnosticTool, workspaceGetTool, workspaceLaunchTool, workspaceListTool, workspacePushTool, workspaceStatusTool, workspaceStopTool, workspaceStorageTool, workspaceUnfreezeTool, workspaceValidateTool}
 	if len(result.Tools) != len(wantNames) {
 		t.Fatalf("got %d tools, want %d", len(result.Tools), len(wantNames))
 	}
@@ -467,6 +468,54 @@ func TestObserverSummaryIsStructuredAndOwnershipScoped(t *testing.T) {
 	})
 	if err != nil || !result.IsError {
 		t.Fatalf("read error result = %#v, err = %v; want tool error", result, err)
+	}
+}
+
+func TestWorkspaceDiagnosticsCombinesBothObservationLayers(t *testing.T) {
+	summary := progress.Summary{TakenAtUnixMs: 1234}
+	reader := &fakeReader{
+		observerSummary: ObserverSummary{Available: true, Summary: &summary},
+		observerTail:    ObserverTail{Data: "{\"cpu\":1}\n", Bytes: 10, Lines: 1},
+	}
+	output := requireMap(t, callTool(t, connectClient(t, reader), workspaceDiagnosticTool, map[string]any{
+		uuidKey: mcpTestWorkspace, "max_bytes": 1024, "max_lines": 10,
+	}).StructuredContent)
+	if requireMap(t, output["guest_activity"])["available"] != true {
+		t.Fatalf("guest activity = %#v", output)
+	}
+	if requireMap(t, output["host_vm_resources"])["data"] != "{\"cpu\":1}\n" {
+		t.Fatalf("host resources = %#v", output)
+	}
+	if len(requireSlice(t, output["coverage"])) != 2 || len(requireSlice(t, output["blind_spots"])) != 2 {
+		t.Fatalf("diagnostic scope = %#v", output)
+	}
+}
+
+func TestWorkspaceDiagnosticsRejectsInvalidAndUnavailableLayers(t *testing.T) {
+	for _, testCase := range []struct {
+		name        string
+		reader      *fakeReader
+		args        map[string]any
+		schemaError bool
+	}{
+		{name: "missing UUID", reader: &fakeReader{}, args: map[string]any{}, schemaError: true},
+		{name: "guest unavailable", reader: &fakeReader{observerErr: errors.New("guest offline")}, args: map[string]any{uuidKey: mcpTestWorkspace}},
+		{name: "host unavailable", reader: &fakeReader{observerTailErr: errors.New("host offline")}, args: map[string]any{uuidKey: mcpTestWorkspace}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			result, err := connectClient(t, testCase.reader).CallTool(t.Context(), &mcp.CallToolParams{
+				Name: workspaceDiagnosticTool, Arguments: testCase.args,
+			})
+			if testCase.schemaError {
+				if err == nil || result != nil {
+					t.Fatalf("result = %#v, err = %v; want schema error", result, err)
+				}
+				return
+			}
+			if err != nil || !result.IsError {
+				t.Fatalf("result = %#v, err = %v; want tool error", result, err)
+			}
+		})
 	}
 }
 
@@ -641,7 +690,7 @@ func TestObserverTailAppliesDefaultsAndBounds(t *testing.T) {
 			}
 		})
 	}
-	result, err := connectClient(t, &fakeReader{observerErr: errors.New("offline")}).CallTool(t.Context(), &mcp.CallToolParams{
+	result, err := connectClient(t, &fakeReader{observerTailErr: errors.New("offline")}).CallTool(t.Context(), &mcp.CallToolParams{
 		Name: observerTailTool, Arguments: map[string]any{uuidKey: mcpTestWorkspace},
 	})
 	if err != nil || !result.IsError {

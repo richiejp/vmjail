@@ -54,30 +54,31 @@ const (
 )
 
 const (
-	nodeListTool          = "node_list"
-	nodeStatusTool        = "node_registration_status"
-	nodeAuthorizeTool     = "node_authorize"
-	nodeRevokeTool        = "node_revoke"
-	workspaceGetTool      = "workspace_get"
-	workspaceListTool     = "workspace_list"
-	workspaceApplyTool    = "workspace_apply"
-	workspacePushTool     = "workspace_push"
-	workspaceValidateTool = "workspace_validate"
-	workspaceStatusTool   = "workspace_status"
-	workspaceLaunchTool   = "workspace_launch"
-	workspaceStopTool     = "workspace_stop"
-	workspaceStorageTool  = "workspace_storage_status"
-	workspaceRejectTool   = "workspace_changes_reject"
-	workspaceUnfreezeTool = "workspace_unfreeze"
-	workspaceDeleteTool   = "workspace_delete"
-	agentProfileListTool  = "agent_profile_list"
-	agentStartTool        = "agent_start"
-	agentStatusTool       = "agent_status"
-	agentEventsTool       = "agent_events"
-	agentCancelTool       = "agent_cancel"
-	agentResultTool       = "agent_result"
-	observerSummaryTool   = "sandbox_observer_summary"
-	observerTailTool      = "sandbox_observer_tail"
+	nodeListTool            = "node_list"
+	nodeStatusTool          = "node_registration_status"
+	nodeAuthorizeTool       = "node_authorize"
+	nodeRevokeTool          = "node_revoke"
+	workspaceGetTool        = "workspace_get"
+	workspaceListTool       = "workspace_list"
+	workspaceApplyTool      = "workspace_apply"
+	workspacePushTool       = "workspace_push"
+	workspaceValidateTool   = "workspace_validate"
+	workspaceStatusTool     = "workspace_status"
+	workspaceLaunchTool     = "workspace_launch"
+	workspaceStopTool       = "workspace_stop"
+	workspaceStorageTool    = "workspace_storage_status"
+	workspaceRejectTool     = "workspace_changes_reject"
+	workspaceUnfreezeTool   = "workspace_unfreeze"
+	workspaceDeleteTool     = "workspace_delete"
+	agentProfileListTool    = "agent_profile_list"
+	agentStartTool          = "agent_start"
+	agentStatusTool         = "agent_status"
+	agentEventsTool         = "agent_events"
+	agentCancelTool         = "agent_cancel"
+	agentResultTool         = "agent_result"
+	observerSummaryTool     = "sandbox_observer_summary"
+	observerTailTool        = "sandbox_observer_tail"
+	workspaceDiagnosticTool = "workspace_diagnostics"
 )
 
 type Reader interface {
@@ -223,6 +224,13 @@ type ObserverTail struct {
 	Bytes     int    `json:"bytes"`
 	Lines     int    `json:"lines"`
 	Truncated bool   `json:"truncated"`
+}
+
+type WorkspaceDiagnostics struct {
+	Summary    ObserverSummary `json:"guest_activity"`
+	HostTail   ObserverTail    `json:"host_vm_resources"`
+	Coverage   []string        `json:"coverage"`
+	BlindSpots []string        `json:"blind_spots"`
 }
 
 type listNodesOutput struct {
@@ -400,6 +408,7 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 	addAgentRunTools(server, annotations, reader, profiles)
 	addObserverSummaryTool(server, annotations, reader)
 	addObserverTailTool(server, annotations, reader)
+	addWorkspaceDiagnosticTool(server, annotations, reader)
 	mcp.AddTool(server, &mcp.Tool{Name: nodeListTool, Description: "List a bounded, cursor-resumable page of live daft Nodes visible to the orchestrator.", Annotations: annotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input listInput) (*mcp.CallToolResult, listNodesOutput, error) {
 			nodes, next, truncated, err := readPage(ctx, reader.ListNodes, input, func(node Node) string { return node.Fingerprint })
@@ -445,6 +454,32 @@ func NewWithProfiles(reader Reader, profiles []agentprofile.Entry, version strin
 		})
 	addWorkspaceTools(server, annotations, reader)
 	return server, nil
+}
+
+func addWorkspaceDiagnosticTool(server *mcp.Server, annotations *mcp.ToolAnnotations, reader Reader) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        workspaceDiagnosticTool,
+		Description: "Get one bounded diagnostic bundle: guest workload activity plus host VM/resource samples, with explicit coverage and blind spots.",
+		Annotations: annotations,
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, input observerTailInput) (*mcp.CallToolResult, WorkspaceDiagnostics, error) {
+		maxBytes, maxLines, err := observerTailLimits(input)
+		if err != nil {
+			return nil, WorkspaceDiagnostics{}, err
+		}
+		summary, err := reader.ObserveSummary(ctx, input.UUID)
+		if err != nil {
+			return nil, WorkspaceDiagnostics{}, fmt.Errorf("diagnose guest workload: %w", err)
+		}
+		tail, err := reader.ObserverTail(ctx, input.UUID, maxBytes, maxLines)
+		if err != nil {
+			return nil, WorkspaceDiagnostics{}, fmt.Errorf("diagnose host VM: %w", err)
+		}
+		return nil, WorkspaceDiagnostics{
+			Summary: summary, HostTail: tail,
+			Coverage:   []string{"guest exec/file-open/sleep/file-and-socket-I/O activity", "host VM CPU/memory/VMM-I/O/cgroup/aggregate-network samples"},
+			BlindSpots: []string{"syscall stacks and kernel wait channels", "per-flow network detail and TCP retransmits"},
+		}, nil
+	})
 }
 
 func addObserverSummaryTool(server *mcp.Server, annotations *mcp.ToolAnnotations, reader Reader) {

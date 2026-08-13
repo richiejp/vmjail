@@ -19,6 +19,8 @@ import (
 // dial path is stubbed so the value is never resolved.
 const testOrchURL = "https://x"
 
+const testExecWorkspace = "build"
+
 // fakeExecStream is an in-process bidi stream stub: tests push
 // frames into recvCh and inspect anything the CLI sends via sent.
 type fakeExecStream struct {
@@ -294,11 +296,23 @@ func TestActivityWriterForwardsAndSignals(t *testing.T) {
 	}
 }
 
+func TestActivityWriterPreservesWriteErrorWithPendingSignal(t *testing.T) {
+	activity := make(chan struct{}, 1)
+	activity <- struct{}{}
+	written, err := (activityWriter{writer: failingWriter{}, activity: activity}).Write([]byte("progress"))
+	if written != 0 || !errors.Is(err, errFail) {
+		t.Fatalf("Write = %d, %v", written, err)
+	}
+	if len(activity) != 1 {
+		t.Fatalf("pending activity signals = %d, want 1", len(activity))
+	}
+}
+
 func TestReportExecSilencePointsToObserver(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	reader, writer := io.Pipe()
 	t.Cleanup(func() { _ = reader.Close() })
-	go reportExecSilence(ctx, writer, "build", make(chan struct{}), time.Millisecond)
+	go reportExecSilence(ctx, writer, workspaceExecOpts{workspace: testExecWorkspace}, make(chan struct{}), time.Millisecond, nil)
 	message := make(chan string, 1)
 	go func() {
 		buf := make([]byte, 512)
@@ -309,7 +323,7 @@ func TestReportExecSilencePointsToObserver(t *testing.T) {
 	case got := <-message:
 		cancel()
 		_ = writer.Close()
-		if !strings.Contains(got, "still waiting") || !strings.Contains(got, "daft sandbox observe --workspace build") {
+		if !strings.Contains(got, "still waiting") || !strings.Contains(got, "daft sandbox observe build") {
 			t.Fatalf("idle message = %q", got)
 		}
 	case <-time.After(time.Second):
@@ -319,12 +333,43 @@ func TestReportExecSilencePointsToObserver(t *testing.T) {
 	}
 }
 
+func TestReportExecSilenceIncludesBoundedSnapshot(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reader, writer := io.Pipe()
+	defer func() {
+		_ = reader.Close()
+		_ = writer.Close()
+	}()
+	go reportExecSilence(ctx, writer, workspaceExecOpts{workspace: testExecWorkspace}, make(chan struct{}), time.Millisecond,
+		func(context.Context, workspaceExecOpts) (string, error) { return "exec-snoop: bun\n", nil })
+	buf := make([]byte, 1024)
+	result := make(chan string, 1)
+	go func() {
+		n, _ := reader.Read(buf)
+		result <- string(buf[:n])
+	}()
+	select {
+	case got := <-result:
+		if !strings.Contains(got, "still waiting") {
+			t.Fatalf("idle output = %q", got)
+		}
+		second := make([]byte, 1024)
+		n, err := reader.Read(second)
+		if err != nil || !strings.Contains(string(second[:n]), "exec-snoop: bun") {
+			t.Fatalf("snapshot = %q, %v", string(second[:n]), err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle diagnostic was not emitted")
+	}
+}
+
 func TestReportExecSilenceStopsWithSession(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	done := make(chan struct{})
 	go func() {
-		reportExecSilence(ctx, io.Discard, "build", make(chan struct{}), time.Hour)
+		reportExecSilence(ctx, io.Discard, workspaceExecOpts{workspace: testExecWorkspace}, make(chan struct{}), time.Hour, nil)
 		close(done)
 	}()
 	select {
@@ -343,7 +388,7 @@ func TestReportExecSilenceResetsAfterOutput(t *testing.T) {
 		_ = writer.Close()
 	}()
 	activity := make(chan struct{}, 1)
-	go reportExecSilence(ctx, writer, "build", activity, 20*time.Millisecond)
+	go reportExecSilence(ctx, writer, workspaceExecOpts{workspace: testExecWorkspace}, activity, 20*time.Millisecond, nil)
 	activity <- struct{}{}
 	message := make(chan struct{}, 1)
 	go func() {
@@ -355,6 +400,48 @@ func TestReportExecSilenceResetsAfterOutput(t *testing.T) {
 	case <-message:
 	case <-time.After(time.Second):
 		t.Fatal("idle reporter did not resume after output activity")
+	}
+}
+
+func TestWriteExecDiagnosticSnapshotIsBoundedAndReportsFailure(t *testing.T) {
+	var output bytes.Buffer
+	writeExecDiagnosticSnapshot(t.Context(), &output, workspaceExecOpts{workspace: testExecWorkspace},
+		func(context.Context, workspaceExecOpts) (string, error) {
+			return strings.Repeat("x", execDiagnosticBytes+1), errors.New("observer offline")
+		})
+	got := output.String()
+	if !strings.Contains(got, "bounded guest activity snapshot") || !strings.Contains(got, "[diagnostic truncated]") ||
+		!strings.Contains(got, "diagnostic snapshot unavailable: observer offline") {
+		t.Fatalf("diagnostic output = %q", got)
+	}
+}
+
+func TestWriteExecDiagnosticSnapshotHandlesAbsentAndShortDiagnostics(t *testing.T) {
+	var output bytes.Buffer
+	writeExecDiagnosticSnapshot(t.Context(), &output, workspaceExecOpts{}, nil)
+	if output.Len() != 0 {
+		t.Fatalf("nil diagnostic output = %q", output.String())
+	}
+	writeExecDiagnosticSnapshot(t.Context(), &output, workspaceExecOpts{},
+		func(context.Context, workspaceExecOpts) (string, error) { return "healthy\n", nil })
+	if got := output.String(); !strings.Contains(got, "healthy") || strings.Contains(got, "truncated") || strings.Contains(got, "unavailable") {
+		t.Fatalf("short diagnostic output = %q", got)
+	}
+}
+
+func TestObserveExecDiagnosticMapsWorkspaceAndOutput(t *testing.T) {
+	wantErr := errors.New("partial observation")
+	got, err := observeExecDiagnostic(t.Context(), workspaceExecOpts{
+		orchestrator: testOrchURL, configDir: "/config", workspace: testExecWorkspace,
+	}, func(_ context.Context, output io.Writer, opts observeOpts) error {
+		if opts.orchestrator != testOrchURL || opts.configDir != "/config" || opts.workspace != testExecWorkspace {
+			t.Fatalf("observe options = %#v", opts)
+		}
+		_, _ = io.WriteString(output, "summary")
+		return wantErr
+	})
+	if got != "summary" || !errors.Is(err, wantErr) {
+		t.Fatalf("diagnostic = %q, %v", got, err)
 	}
 }
 
@@ -430,6 +517,36 @@ func TestRunWorkspaceExecNoTTYSkipsWinsizeAndRaw(t *testing.T) {
 	case <-errCh:
 	case <-time.After(2 * time.Second):
 		t.Fatal("session did not exit")
+	}
+}
+
+func TestRunWorkspaceExecFailurePrintsDiscoveryAndSnapshot(t *testing.T) {
+	stream := newFakeExecStream()
+	stream.recvCh <- &workspacev1.AttachFrame{Body: &workspacev1.AttachFrame_Exit{
+		Exit: &workspacev1.AttachExit{Code: 2, Error: "failed"},
+	}}
+	var diagnostics bytes.Buffer
+	deps := execDeps{
+		dialOrchestrator: stubDialOrch,
+		openStream: func(context.Context, workspacev1connect.WorkspaceCatalogServiceClient) execClientStream {
+			return stream
+		},
+		stdin: bytes.NewReader(nil), stdout: io.Discard,
+		terminal: newFakeExecTerminal(false, 0, 0),
+		diagnostic: func(context.Context, workspaceExecOpts) (string, error) {
+			return "summary: workload sleeping\n", nil
+		},
+	}
+	err := runWorkspaceExecWith(t.Context(), io.Discard, &diagnostics,
+		workspaceExecOpts{orchestrator: testOrchURL, workspace: testExecWorkspace}, deps)
+	if err == nil {
+		t.Fatal("failed command returned nil")
+	}
+	got := diagnostics.String()
+	for _, want := range []string{"diagnostics:", "sandbox observe build", "observer-tail --follow=false build", "summary: workload sleeping"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("diagnostics %q do not contain %q", got, want)
+		}
 	}
 }
 

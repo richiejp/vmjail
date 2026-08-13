@@ -31,7 +31,7 @@ func newSandboxObserverTailCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "observer-tail [workspace]",
 		Short: "Stream a running sandbox's host-side observer log",
-		Long: "Streams the per-sandbox Tier-1 observer trace (newline-delimited\n" +
+		Long: "Host/VM diagnostics. Streams the per-sandbox Tier-1 observer trace (newline-delimited\n" +
 			"JSON: cpu/memory/io/cgroup/net samples) for a workspace's running\n" +
 			"sandbox, via the orchestrator's ObserverTail RPC. With --follow\n" +
 			"(default) it stays open and prints new samples as the observer\n" +
@@ -39,7 +39,9 @@ func newSandboxObserverTailCmd() *cobra.Command {
 			"current log once and exits.\n\n" +
 			"The workspace may be omitted when ./.daft/config.json sets a name\n" +
 			"(or to fall back to basename of the cwd).\n\n" +
-			"The observer log is described in OBSERVABILITY.md.",
+			"Use `daft sandbox observe` for guest workload exec, file-open, sleep,\n" +
+			"and I/O activity. This host trace has aggregate network counters, not\n" +
+			"per-flow detail or TCP retransmits. See OBSERVABILITY.md.",
 		Args:          cobra.MaximumNArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -25,6 +26,11 @@ import (
 const execCopyBufSize = 32 * 1024
 
 const execSilenceInterval = 30 * time.Second
+
+const (
+	execDiagnosticTimeout = 5 * time.Second
+	execDiagnosticBytes   = 8 << 10
+)
 
 // workspaceExecOpts gathers `daft workspace exec` flags + positionals.
 type workspaceExecOpts struct {
@@ -116,6 +122,7 @@ type execDeps struct {
 	stdin            io.Reader
 	stdout           io.Writer
 	terminal         execTerminal
+	diagnostic       func(context.Context, workspaceExecOpts) (string, error)
 }
 
 func defaultExecDeps() execDeps {
@@ -127,7 +134,22 @@ func defaultExecDeps() execDeps {
 		stdin:    os.Stdin,
 		stdout:   os.Stdout,
 		terminal: defaultExecTerminal(),
+		diagnostic: func(ctx context.Context, opts workspaceExecOpts) (string, error) {
+			return observeExecDiagnostic(ctx, opts, runObserve)
+		},
 	}
+}
+
+func observeExecDiagnostic(
+	ctx context.Context,
+	opts workspaceExecOpts,
+	run func(context.Context, io.Writer, observeOpts) error,
+) (string, error) {
+	var output bytes.Buffer
+	err := run(ctx, &output, observeOpts{
+		orchestrator: opts.orchestrator, configDir: opts.configDir, workspace: opts.workspace,
+	})
+	return output.String(), err
 }
 
 func runWorkspaceExec(ctx context.Context, stdout, stderr io.Writer, opts workspaceExecOpts) error {
@@ -190,6 +212,9 @@ func runExecSession(
 			defer func() { oops.Skip("daft workspace exec: restore tty", restore()) }()
 		}
 	}
+	_, _ = fmt.Fprintf(stderr,
+		"daft workspace exec: diagnostics: `daft sandbox observe %s` (guest activity), `daft sandbox observer-tail --follow=false %s` (host VM/resources)\n",
+		opts.workspace, opts.workspace)
 	if useTTY {
 		return pumpExecSession(ctx, deps.stdin, deps.stdout, stream, true, deps.terminal)
 	}
@@ -197,8 +222,12 @@ func runExecSession(
 	trackedOutput := activityWriter{writer: deps.stdout, activity: activity}
 	idleCtx, stopIdle := context.WithCancel(ctx)
 	defer stopIdle()
-	go reportExecSilence(idleCtx, stderr, opts.workspace, activity, execSilenceInterval)
-	return pumpExecSession(ctx, deps.stdin, trackedOutput, stream, false, deps.terminal)
+	go reportExecSilence(idleCtx, stderr, opts, activity, execSilenceInterval, deps.diagnostic)
+	err = pumpExecSession(ctx, deps.stdin, trackedOutput, stream, false, deps.terminal)
+	if err != nil {
+		writeExecDiagnosticSnapshot(ctx, stderr, opts, deps.diagnostic)
+	}
+	return err
 }
 
 type activityWriter struct {
@@ -215,7 +244,14 @@ func (w activityWriter) Write(data []byte) (int, error) {
 	return written, err
 }
 
-func reportExecSilence(ctx context.Context, stderr io.Writer, workspace string, activity <-chan struct{}, interval time.Duration) {
+func reportExecSilence(
+	ctx context.Context,
+	stderr io.Writer,
+	opts workspaceExecOpts,
+	activity <-chan struct{},
+	interval time.Duration,
+	diagnostic func(context.Context, workspaceExecOpts) (string, error),
+) {
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
 	//daft:lint:disable=forloopbound reason="bounded by exec-session context cancellation"
@@ -233,10 +269,34 @@ func reportExecSilence(ctx context.Context, stderr io.Writer, workspace string, 
 			timer.Reset(interval)
 		case <-timer.C:
 			_, _ = fmt.Fprintf(stderr,
-				"daft workspace exec: still waiting for %q after %s without output; inspect activity with `daft sandbox observe --workspace %s`\n",
-				workspace, interval, workspace)
+				"daft workspace exec: still waiting for %q after %s without output; inspecting guest activity (`daft sandbox observe %s`)\n",
+				opts.workspace, interval, opts.workspace)
+			writeExecDiagnosticSnapshot(ctx, stderr, opts, diagnostic)
 			timer.Reset(interval)
 		}
+	}
+}
+
+func writeExecDiagnosticSnapshot(
+	ctx context.Context,
+	stderr io.Writer,
+	opts workspaceExecOpts,
+	diagnostic func(context.Context, workspaceExecOpts) (string, error),
+) {
+	if diagnostic == nil {
+		return
+	}
+	diagnosticCtx, cancel := context.WithTimeout(ctx, execDiagnosticTimeout)
+	defer cancel()
+	snapshot, err := diagnostic(diagnosticCtx, opts)
+	if len(snapshot) > execDiagnosticBytes {
+		snapshot = snapshot[:execDiagnosticBytes] + "\n[diagnostic truncated]\n"
+	}
+	if snapshot != "" {
+		_, _ = fmt.Fprintf(stderr, "daft workspace exec: bounded guest activity snapshot:\n%s", snapshot)
+	}
+	if err != nil {
+		_, _ = fmt.Fprintf(stderr, "daft workspace exec: diagnostic snapshot unavailable: %v\n", err)
 	}
 }
 

@@ -200,6 +200,21 @@ Open reliability investigations:
   30-second idle heartbeat that points directly to the existing bounded
   `sandbox observe` command; root-cause reproduction remains open.
 
+Active observability UX work:
+
+- Make the two observation layers visible from normal Workspace status, exec
+  startup, command help, and trusted MCP rather than requiring prior knowledge
+  of specialist subcommands.
+- Attach a bounded guest activity snapshot to silent non-interactive exec
+  heartbeats and failed exec results. Interactive terminals receive only the
+  one-line startup discovery hint, not periodic output; every automated
+  diagnostic remains deadline- and size-bounded.
+- Instrument guest XFS growth at the privileged guest-agent boundary with an
+  isolated, allowlisted, byte-bounded tracefs profile. Failed and timed-out
+  grows return ioctl, XFS transaction/buffer, and virtio block evidence to
+  the ordinary `workspace resources` caller and mirror it to the guest console;
+  use the same named-profile hook for future platform guest operations.
+
 ## Active milestone: overseer-controlled agent runs
 
 The target interaction is: “develop `/project/path` in darkaifactory on a
