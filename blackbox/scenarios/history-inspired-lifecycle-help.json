@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "name": "history-inspired-lifecycle-help",
+  "steps": [
+    {
+      "name": "reject-help-requires-stopped-workspace",
+      "argv": ["daft", "workspace", "changes", "reject", "--help"],
+      "timeout_seconds": 5,
+      "want_exit": 0,
+      "stdout_contains": ["Reject", "stop"]
+    },
+    {
+      "name": "observe-help-distinguishes-stale-data",
+      "argv": ["daft", "sandbox", "observe", "--help"],
+      "timeout_seconds": 5,
+      "want_exit": 0,
+      "stdout_contains": ["Guest/workload diagnostics", "stale"]
+    },
+    {
+      "name": "stop-help-exposes-deadline",
+      "argv": ["daft", "workspace", "stop", "--help"],
+      "timeout_seconds": 5,
+      "want_exit": 0,
+      "stdout_contains": ["Stop the running workspace", "--timeout"]
+    }
+  ]
+}

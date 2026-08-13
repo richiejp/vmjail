@@ -116,6 +116,7 @@ func newSandboxCmd() *cobra.Command {
 		Long: "Sandbox sub-commands boot, inspect, and tear down sandbox VMs on the\n" +
 			"configured Node. The microVM stack and protocol details are\n" +
 			"described in ARCHITECTURE.md.",
+		RunE: runCommandGroup,
 	}
 	cmd.AddCommand(newSandboxHelloCmd())
 	cmd.AddCommand(newSandboxObserverTailCmd())
@@ -133,6 +134,7 @@ func newNodeCmd() *cobra.Command {
 		Long: "Node sub-commands operate on the host-control plane: listing\n" +
 			"registered sandboxd processes, inspecting their advertised\n" +
 			"resources, and (later) draining or evicting them.",
+		RunE: runCommandGroup,
 	}
 	cmd.AddCommand(newNodeListCmd())
 	return cmd

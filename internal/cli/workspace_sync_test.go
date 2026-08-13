@@ -589,6 +589,16 @@ func TestRequireObservedSyncTargetRejectsStaleMaterialization(t *testing.T) {
 	}
 }
 
+func TestRequireStoppedForReject(t *testing.T) {
+	if err := requireStoppedForReject(syncTarget{}); err != nil {
+		t.Fatalf("stopped workspace rejected: %v", err)
+	}
+	err := requireStoppedForReject(syncTarget{active: true})
+	if err == nil || !strings.Contains(err.Error(), "stop the workspace") {
+		t.Fatalf("running workspace error = %v, want stop-first instruction", err)
+	}
+}
+
 // erroringWorkspaceService fails PutManifest + GetManifest so the
 // push/pull RPC-error branches of syncMounts can be exercised.
 type erroringWorkspaceService struct {

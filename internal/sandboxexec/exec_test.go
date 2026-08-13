@@ -162,6 +162,23 @@ func TestDeleteKeepsWorkspaceRunningWhenPreserveFails(t *testing.T) {
 	}
 }
 
+func TestDeletePreserveHasBudgetInsideAcknowledgmentDeadline(t *testing.T) {
+	e := &Executor{
+		running: map[string]context.CancelFunc{testSandboxID: func() {}},
+		preserve: map[string]func(context.Context) error{testSandboxID: func(ctx context.Context) error {
+			deadline, ok := ctx.Deadline()
+			if !ok || time.Until(deadline) > workspacePreserveTimeout || time.Until(deadline) >= 30*time.Second {
+				return fmt.Errorf("invalid preserve deadline: %v", deadline)
+			}
+			return nil
+		}},
+		live: map[string]*liveSandbox{}, deleted: map[string]time.Time{},
+	}
+	if err := e.deleteSandbox(t.Context(), testSandboxID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDeleteBeforeAddedPreventsBootAndIsIdempotent(t *testing.T) {
 	calls := 0
 	e, err := New(Config{Stdout: io.Discard, Runner: func(context.Context, io.Writer, sandbox.Config) error {

@@ -265,6 +265,17 @@ func TestFrozenDiskControlsDoNotRefreshPausedGuestManifest(t *testing.T) {
 	}
 }
 
+func TestRejectWorkspaceChangesFailsFastWhileRunning(t *testing.T) {
+	rig := newStorageClientRig(t)
+	rig.catalog.resource.Status = &workspacev1.WorkspaceStatus{
+		CurrentSandbox: &sandboxv1.SandboxRef{Uid: "running"},
+	}
+	_, err := rig.client.RejectWorkspaceChanges(t.Context(), rig.catalog.resource.GetMetadata().GetUuid())
+	if connect.CodeOf(err) != connect.CodeFailedPrecondition || rig.node.rejectCalls != 0 {
+		t.Fatalf("RejectWorkspaceChanges = %v, calls=%d", err, rig.node.rejectCalls)
+	}
+}
+
 func TestDeleteWorkspaceWithoutTargetSkipsNode(t *testing.T) {
 	rig := newStorageClientRig(t)
 	rig.catalog.resource.Spec.TargetSandboxFingerprint = ""

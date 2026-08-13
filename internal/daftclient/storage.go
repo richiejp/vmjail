@@ -93,6 +93,10 @@ func (c *Client) RejectWorkspaceChanges(ctx context.Context, uuid string) ([]Man
 	if err != nil {
 		return nil, err
 	}
+	if current := resource.GetStatus().GetCurrentSandbox(); current != nil && current.GetUid() != "" {
+		return nil, connect.NewError(connect.CodeFailedPrecondition,
+			errors.New("daft: stop the workspace before rejecting changes"))
+	}
 	client, closeRelay, err := c.dialWorkspaceNode(ctx, resource.GetMetadata().GetUuid(), node)
 	if err != nil {
 		return nil, err

@@ -172,9 +172,22 @@ func TestVersionInvariantNonEmpty(t *testing.T) {
 }
 
 func TestCommandGroupsRejectUnknownSubcommands(t *testing.T) {
-	for _, group := range []string{workspaceCmdName, authCmdName} {
-		t.Run(group, func(t *testing.T) {
-			stdout, stderr, err := runCmd(t, group, "definitely-not-a-command")
+	groups := [][]string{
+		{workspaceCmdName},
+		{authCmdName},
+		{"sandbox"},
+		{"node"},
+		{clusterCmdName},
+		{blackboxCmdName},
+		{workspaceCmdName, changesSubName},
+		{workspaceCmdName, storageSubName},
+		{workspaceCmdName, envSubName},
+		{workspaceCmdName, portSubName},
+	}
+	for _, group := range groups {
+		name := strings.Join(group, "-")
+		t.Run(name, func(t *testing.T) {
+			stdout, stderr, err := runCmd(t, append(group, "definitely-not-a-command")...)
 			if err == nil || stdout != "" || !strings.Contains(stderr, "unknown command") || !strings.Contains(err.Error(), "unknown command") {
 				t.Fatalf("stdout=%q stderr=%q err=%v", stdout, stderr, err)
 			}

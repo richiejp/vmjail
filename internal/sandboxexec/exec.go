@@ -663,6 +663,7 @@ func resetWorkspaceSnapshotDestination(destination string) error {
 const (
 	maxPendingSandboxDeletes = 256
 	pendingSandboxDeleteTTL  = time.Minute
+	workspacePreserveTimeout = 20 * time.Second
 )
 
 func (e *Executor) beginSandbox(uid string, cancel context.CancelFunc) bool {
@@ -705,7 +706,11 @@ func (e *Executor) deleteSandbox(ctx context.Context, uid string) error {
 		preserve := e.preserve[uid]
 		e.mu.Unlock()
 		if preserve != nil {
-			preserveCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			// Leave a strict response budget for cancellation, VM teardown, the
+			// next heartbeat, and the orchestrator's acknowledgment. Matching
+			// the outer 30s deadline made a completed snapshot indistinguishable
+			// from a lost delete event at the client.
+			preserveCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), workspacePreserveTimeout)
 			err := preserve(preserveCtx)
 			stop()
 			if err != nil {

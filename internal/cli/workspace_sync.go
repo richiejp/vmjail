@@ -91,17 +91,20 @@ func newWorkspacePullCatalogCmd() *cobra.Command {
 }
 
 func newWorkspaceChangesCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: changesSubName, Short: "Manage unadopted sandbox workspace changes"}
+	cmd := &cobra.Command{Use: changesSubName, Short: "Manage unadopted sandbox workspace changes", RunE: runCommandGroup}
 	var opts workspaceClientOpts
 	var casDir string
 	reject := &cobra.Command{
-		Use: "reject", Short: "Reject exact unadopted sandbox manifests", Args: cobra.NoArgs, SilenceErrors: true,
+		Use: "reject", Short: "Reject exact unadopted sandbox manifests",
+		Long: "Reject exact unadopted sandbox manifests and restore the last client state.\n" +
+			"The workspace must be stopped first; a running workspace fails immediately instead of waiting for a guest snapshot.",
+		Args: cobra.NoArgs, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			mounts, err := dirLocalMounts()
 			if err != nil {
 				return err
 			}
-			return runNodeWorkspaceRPC(cmd, opts, casDir, "changes.reject", func(
+			return runNodeWorkspaceRPC(cmd, opts, casDir, "changes.reject", requireStoppedForReject, func(
 				ctx context.Context, client workspacev1connect.WorkspaceServiceClient, uuid string,
 			) error {
 				return rejectWorkspaceChanges(ctx, cmd.OutOrStdout(), client, uuid, mounts)
@@ -115,7 +118,7 @@ func newWorkspaceChangesCmd() *cobra.Command {
 }
 
 func newWorkspaceStorageCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: storageSubName, Short: "Inspect the target node's workspace CAS"}
+	cmd := &cobra.Command{Use: storageSubName, Short: "Inspect the target node's workspace CAS", RunE: runCommandGroup}
 	cmd.AddCommand(newWorkspaceStorageStatusCmd(), newWorkspaceStoragePruneCmd())
 	return cmd
 }
@@ -127,7 +130,7 @@ func newWorkspaceUnfreezeCmd() *cobra.Command {
 		Use: unfreezeSubName, Short: "Explicitly resume a storage-frozen workspace after remediation",
 		Args: cobra.NoArgs, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runNodeWorkspaceRPC(cmd, opts, casDir, unfreezeSubName, func(
+			return runNodeWorkspaceRPC(cmd, opts, casDir, unfreezeSubName, nil, func(
 				ctx context.Context, client workspacev1connect.WorkspaceServiceClient, uuid string,
 			) error {
 				expected, err := workspaceDiskManifestExpectations(ctx, client, uuid)
@@ -253,7 +256,7 @@ func newWorkspaceStorageStatusCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use: "status", Short: "Show bounded target-node CAS accounting", Args: cobra.NoArgs, SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return runNodeWorkspaceRPC(cmd, opts, casDir, "storage.status", func(
+			return runNodeWorkspaceRPC(cmd, opts, casDir, "storage.status", nil, func(
 				ctx context.Context, client workspacev1connect.WorkspaceServiceClient, uuid string,
 			) error {
 				disk, err := client.GetWorkspaceDiskStatus(ctx, connect.NewRequest(&workspacev1.GetWorkspaceDiskStatusRequest{WorkspaceUuid: uuid}))
@@ -284,7 +287,7 @@ func newWorkspaceStoragePruneCmd() *cobra.Command {
 			if !dryRun {
 				return errors.New("daft workspace storage prune: --dry-run is required")
 			}
-			return runNodeWorkspaceRPC(cmd, opts, casDir, "storage.prune", func(
+			return runNodeWorkspaceRPC(cmd, opts, casDir, "storage.prune", nil, func(
 				ctx context.Context, client workspacev1connect.WorkspaceServiceClient, _ string,
 			) error {
 				response, err := client.PruneStorage(ctx, connect.NewRequest(&workspacev1.PruneStorageRequest{DryRun: true, MaxCandidates: maxCandidates}))
@@ -395,6 +398,7 @@ func runNodeWorkspaceRPC(
 	cmd *cobra.Command,
 	opts workspaceClientOpts,
 	casDir, verb string,
+	preflight func(syncTarget) error,
 	run func(context.Context, workspacev1connect.WorkspaceServiceClient, string) error,
 ) error {
 	handle, err := opts.resolveHandle()
@@ -412,21 +416,33 @@ func runNodeWorkspaceRPC(
 	if err != nil {
 		return err
 	}
-	uuid, nodeFP, err := resolveSyncTarget(ctx, catalog, handle)
+	target, err := resolveSyncTargetDetails(ctx, catalog, handle)
 	if err != nil {
 		return err
+	}
+	if preflight != nil {
+		if err := preflight(target); err != nil {
+			return err
+		}
 	}
 	clientContext, err := openClientCtx(opts.configDir, casDir, opts.orchestrator)
 	if err != nil {
 		return err
 	}
-	client, closeRelay, err := dialNodeWorkspaceService(ctx, clientContext, orchestrator, uuid, nodeFP, tracer)
+	client, closeRelay, err := dialNodeWorkspaceService(ctx, clientContext, orchestrator, target.uuid, target.nodeFP, tracer)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = closeRelay() }()
-	if err := run(ctx, client, uuid); err != nil {
+	if err := run(ctx, client, target.uuid); err != nil {
 		return fmt.Errorf("daft workspace %s: %w", verb, err)
+	}
+	return nil
+}
+
+func requireStoppedForReject(target syncTarget) error {
+	if target.active {
+		return errors.New("daft workspace changes reject: stop the workspace before rejecting changes")
 	}
 	return nil
 }

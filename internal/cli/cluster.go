@@ -35,6 +35,7 @@ func newClusterCmd() *cobra.Command {
 			"or --config-dir flag. `down` stops it. The same box that runs the\n" +
 			"orchestrator usually runs sandboxes too, so this is the standard\n" +
 			"way to bring the control plane up locally.",
+		RunE: runCommandGroup,
 	}
 	cmd.AddCommand(newClusterUpCmd())
 	cmd.AddCommand(newClusterDownCmd())

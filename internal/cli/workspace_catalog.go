@@ -989,6 +989,7 @@ func newWorkspaceEnvCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   envSubName,
 		Short: "Manage workspace environment variables (add | rm)",
+		RunE:  runCommandGroup,
 	}
 	cmd.AddCommand(newWorkspaceEnvAddCmd())
 	cmd.AddCommand(newWorkspaceEnvRmCmd())
@@ -1059,6 +1060,7 @@ func newWorkspacePortCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   portSubName,
 		Short: "Manage workspace port mappings (add | rm)",
+		RunE:  runCommandGroup,
 	}
 	cmd.AddCommand(newWorkspacePortAddCmd())
 	cmd.AddCommand(newWorkspacePortRmCmd())

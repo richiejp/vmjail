@@ -127,6 +127,20 @@ func TestRenderObserveSummaryStalled(t *testing.T) {
 	}
 }
 
+func TestRenderObserveSummaryStaleDoesNotClaimStall(t *testing.T) {
+	raw := mustMarshalSummary(t, progress.Summary{
+		TakenAtUnixMs: observeFixedNow.Add(-11 * time.Second).UnixMilli(),
+		Opensnoop:     &progress.Opensnoop{Total: 7, LastEventAgeMs: 11_000},
+	})
+	out, err := renderObserveSummary(observeFixedNow, "ws", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "historical activity, not current liveness") || strings.Contains(out, "possibly stalled") {
+		t.Fatalf("stale summary made a live claim: %q", out)
+	}
+}
+
 func TestRenderObserveSummaryStarting(t *testing.T) {
 	raw := mustMarshalSummary(t, progress.Summary{
 		TakenAtUnixMs: observeFixedNow.UnixMilli(),

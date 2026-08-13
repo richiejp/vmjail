@@ -263,7 +263,7 @@ func TestFrozenWorkspaceResizeRequiresExplicitUnfreeze(t *testing.T) {
 	if err := e.ResizeWorkspaceDisk(t.Context(), testWSUUID, testGrownAllowance); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(sequence, []string{testQCOWGrowStep, "resume", "ready", testVMMResizeStep, "ready", testXFSGrowStep, "pause"}) {
+	if !slices.Equal(sequence, []string{testQCOWGrowStep, "resume", "ready", testVMMResizeStep, testXFSGrowStep, "pause"}) {
 		t.Fatalf("frozen resize sequence = %v", sequence)
 	}
 	if !runtime.frozen {
@@ -298,18 +298,15 @@ func TestWorkspaceDiskGrowRetriesTransientGuestControlFailures(t *testing.T) {
 	}
 }
 
-func TestWorkspaceDiskResizeWaitsForGuestAfterVMMChange(t *testing.T) {
+func TestWorkspaceDiskResizeUsesGrowAsPostVMMReadinessBarrier(t *testing.T) {
 	sequence := []string{}
 	store := &fakeWorkspaceGrowStore{sequence: &sequence}
 	vm := &fakeWorkspaceVM{sequence: &sequence}
 	e := newWorkspaceControlExecutor(store, vm)
-	readyCalls := 0
-	e.getWorkspaceUsage = func(context.Context, func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error) {
-		readyCalls++
-		sequence = append(sequence, "post-resize-ready")
-		return workspacesnapshot.Usage{}, nil
-	}
-	e.growWorkspaceGuest = func(context.Context, func(context.Context) (net.Conn, error)) error {
+	e.growWorkspaceGuest = func(ctx context.Context, _ func(context.Context) (net.Conn, error)) error {
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("post-resize grow has no readiness deadline")
+		}
 		sequence = append(sequence, testXFSGrowStep)
 		return nil
 	}
@@ -319,8 +316,8 @@ func TestWorkspaceDiskResizeWaitsForGuestAfterVMMChange(t *testing.T) {
 	if err := e.ResizeWorkspaceDisk(t.Context(), testWSUUID, testGrownAllowance); err != nil {
 		t.Fatal(err)
 	}
-	if readyCalls != 1 || !slices.Equal(sequence, []string{testQCOWGrowStep, testVMMResizeStep, "post-resize-ready", testXFSGrowStep}) {
-		t.Fatalf("ready calls=%d sequence=%v", readyCalls, sequence)
+	if !slices.Equal(sequence, []string{testQCOWGrowStep, testVMMResizeStep, testXFSGrowStep}) {
+		t.Fatalf("sequence=%v", sequence)
 	}
 }
 
@@ -451,11 +448,6 @@ func TestWorkspaceDiskResizeFailures(t *testing.T) {
 		{name: "qcow2", mutate: func(store *fakeWorkspaceGrowStore, _ *fakeWorkspaceVM, _ *Executor) { store.err = want }},
 		{name: "VMM", mutate: func(_ *fakeWorkspaceGrowStore, vm *fakeWorkspaceVM, _ *Executor) { vm.resizeErr = want }},
 		{name: "VMM frozen", frozen: true, mutate: func(_ *fakeWorkspaceGrowStore, vm *fakeWorkspaceVM, _ *Executor) { vm.resizeErr = want }},
-		{name: "post-resize readiness", mutate: func(_ *fakeWorkspaceGrowStore, _ *fakeWorkspaceVM, e *Executor) {
-			e.getWorkspaceUsage = func(context.Context, func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error) {
-				return workspacesnapshot.Usage{}, want
-			}
-		}},
 		{name: "resume", frozen: true, mutate: func(_ *fakeWorkspaceGrowStore, vm *fakeWorkspaceVM, _ *Executor) { vm.resumeErr = want }},
 		{name: "XFS", mutate: func(_ *fakeWorkspaceGrowStore, _ *fakeWorkspaceVM, e *Executor) {
 			e.growWorkspaceGuest = func(context.Context, func(context.Context) (net.Conn, error)) error { return want }

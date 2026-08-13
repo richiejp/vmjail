@@ -281,14 +281,13 @@ func (e *Executor) ResizeWorkspaceDisk(ctx context.Context, workspaceID string, 
 		resizeErr = fmt.Errorf("sandboxexec: resize VMM disk: %w", resizeErr)
 	} else {
 		_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s vmm=%d\n", workspaceID, desiredSize)
-		if err := e.waitWorkspaceGuestBounded(ctx, runtime.hostSocket); err != nil {
-			resizeErr = fmt.Errorf("sandboxexec: wait for guest after VMM disk resize: %w", err)
-		} else {
-			_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s post-resize-ready\n", workspaceID)
-		}
 	}
 	var growErr error
 	if resizeErr == nil {
+		// Grow is itself the post-resize guest readiness barrier. A separate
+		// usage probe here consumed one hybrid-vsock stream and consistently
+		// stranded the immediately following grow stream. The grow helper has
+		// bounded per-attempt deadlines and safely retries idempotent xfs_growfs.
 		growErr = e.growWorkspaceGuestBounded(ctx, runtime.hostSocket)
 		if growErr != nil {
 			growErr = fmt.Errorf("sandboxexec: grow guest XFS: %w", growErr)
@@ -342,7 +341,12 @@ func (e *Executor) waitWorkspaceGuestBounded(ctx context.Context, hostSocket str
 		_, lastErr = e.getWorkspaceUsage(attemptCtx, e.workspaceDialer(hostSocket))
 		cancel()
 		if lastErr == nil {
-			return nil
+			// The hybrid-vsock transport tears each one-request stream down
+			// asynchronously. Opening the grow stream in the same scheduling
+			// instant can race that teardown and wedge every subsequent dial.
+			// Give the bounded readiness stream time to close before its caller
+			// starts the next control operation.
+			return e.waitWorkspaceGuestRetry(ctx)
 		}
 		if ctx.Err() != nil {
 			return errors.Join(lastErr, ctx.Err())

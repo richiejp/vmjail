@@ -20,7 +20,7 @@ const (
 )
 
 func newBlackboxCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: blackboxCmdName, Short: "Run and validate source-blind product tests"}
+	cmd := &cobra.Command{Use: blackboxCmdName, Short: "Run and validate source-blind product tests", RunE: runCommandGroup}
 	cmd.AddCommand(newBlackboxScenarioCmd(), newBlackboxIssueCmd(), newBlackboxHistoryCmd())
 	return cmd
 }

@@ -49,7 +49,8 @@ func newSandboxObserveCmd() *cobra.Command {
 			"running sandbox, via the orchestrator's ObserveSummary RPC. The\n" +
 			"summary aggregates exec, file-open, sleep, and file/socket I/O eBPF\n" +
 			"activity plus coarse stuck/slow flags — a quick probe\n" +
-			"of whether an in-sandbox build is making progress or has hung.\n\n" +
+			"of whether an in-sandbox build is making progress or has hung. A stale\n" +
+			"snapshot is explicitly historical and makes no claim about current liveness.\n\n" +
 			"Prints the current snapshot once and exits; --follow re-renders on\n" +
 			"an interval. The workspace may be omitted when run from a workspace\n" +
 			"dir (./.daft/config.json name, else the cwd basename).\n\n" +
@@ -185,7 +186,7 @@ func renderObserveSummary(now time.Time, workspace string, raw []byte) (string, 
 		return b.String(), nil
 	}
 	if s.Opensnoop != nil {
-		writeOpensnoop(&b, *s.Opensnoop)
+		writeOpensnoop(&b, *s.Opensnoop, snapAge > observeStaleThreshold)
 	}
 	if s.ExecSnoop != nil {
 		writeExecsnoop(&b, *s.ExecSnoop)
@@ -280,13 +281,13 @@ func writeTopMillis(b *strings.Builder, title string, items []progress.Counted) 
 // writeOpensnoop renders the open-snoop section: the liveness headline
 // (total / rate / last-open age + a coarse status), then the bounded
 // heavy-hitter rankings.
-func writeOpensnoop(b *strings.Builder, op progress.Opensnoop) {
+func writeOpensnoop(b *strings.Builder, op progress.Opensnoop, snapshotStale bool) {
 	b.WriteString("\nopen-snoop (file opens)\n")
 	fmt.Fprintf(b, "  opens total : %d\n", op.Total)
 	fmt.Fprintf(b, "  failed opens: %d\n", op.Errors)
 	fmt.Fprintf(b, "  open rate   : %.1f/s\n", op.OpenatRate)
 	fmt.Fprintf(b, "  last open   : %s\n", lastOpenAge(op.LastEventAgeMs))
-	fmt.Fprintf(b, "  status      : %s\n", opensnoopStatus(op))
+	fmt.Fprintf(b, "  status      : %s\n", opensnoopStatus(op, snapshotStale))
 
 	writeTopN(b, "top processes", op.TopComms)
 	writeTopN(b, "top directories", op.TopDirs)
@@ -297,7 +298,10 @@ func writeOpensnoop(b *strings.Builder, op progress.Opensnoop) {
 // opensnoopStatus is the coarse build-health verdict (6d will refine):
 // no opens yet → starting; a frozen Total past the threshold → possibly
 // stalled; otherwise active.
-func opensnoopStatus(op progress.Opensnoop) string {
+func opensnoopStatus(op progress.Opensnoop, snapshotStale bool) string {
+	if snapshotStale {
+		return "unknown — snapshot is stale; this is historical activity, not current liveness"
+	}
 	if op.LastEventAgeMs < 0 {
 		return "starting (no file opens observed yet)"
 	}

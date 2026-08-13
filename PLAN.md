@@ -214,6 +214,18 @@ Active observability UX work:
   grows return ioctl, XFS transaction/buffer, and virtio block evidence to
   the ordinary `workspace resources` caller and mirror it to the guest console;
   use the same named-profile hook for future platform guest operations.
+- Do not derive a live stall verdict from a stale guest summary: stale samples
+  are labelled historical with current liveness unknown. Rejecting changes on
+  a running Workspace fails immediately with a stop-first instruction rather
+  than blocking on a guest snapshot. Node-side stop preservation uses a strict
+  inner deadline, leaving time for teardown acknowledgment inside the public
+  RPC deadline. The idempotent, retry-bounded XFS grow request itself is the
+  post-VMM-resize guest readiness barrier; a separate probe consumed a
+  hybrid-vsock stream and could strand the immediately following grow stream.
+
+Source-blind regression guards now cover every pure CLI command group, including
+nested Workspace groups: arbitrary child names fail nonzero instead of printing
+help and appearing to succeed.
 
 ## Active milestone: overseer-controlled agent runs
 
