@@ -227,6 +227,11 @@ Source-blind regression guards now cover every pure CLI command group, including
 nested Workspace groups: arbitrary child names fail nonzero instead of printing
 help and appearing to succeed.
 
+The real user-namespace smoke test waits boundedly for `newuidmap` and
+`newgidmap` to populate the already-visible child process. This preserves the
+real namespace assertion without racing the parent-side map setup on busy CI
+runners.
+
 ## Active milestone: overseer-controlled agent runs
 
 The target interaction is: “develop `/project/path` in darkaifactory on a

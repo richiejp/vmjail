@@ -91,8 +91,12 @@ func TestReexecRealLandsInUserNSMappedFromSubID(t *testing.T) {
 	// generation deeper to find the actual userns inhabitant.
 	childPID := waitForChild(t, cmd.Process.Pid)
 
-	uidMap := readMapFile(t, fmt.Sprintf("/proc/%d/uid_map", childPID))
-	gidMap := readMapFile(t, fmt.Sprintf("/proc/%d/gid_map", childPID))
+	// The child is visible in /proc before parentReexecRun finishes writing
+	// either map. A one-shot read therefore races newuidmap/newgidmap on a busy
+	// host and may observe a valid but transient empty file. Wait for the state
+	// this smoke test actually requires, under the same finite setup budget.
+	uidMap := waitForMapEntries(t, fmt.Sprintf("/proc/%d/uid_map", childPID), 2)
+	gidMap := waitForMapEntries(t, fmt.Sprintf("/proc/%d/gid_map", childPID), 2)
 	if len(uidMap) < 2 {
 		t.Errorf("uid_map has %d entries, want ≥2:\n%v\nstderr=%q",
 			len(uidMap), uidMap, stderr.String())
@@ -118,12 +122,11 @@ type mapEntry struct{ inside, outside, count int }
 // readMapFile parses every entry of a uid_map/gid_map file.
 // A real (non-disabled) re-exec populates at least two: one
 // for the calling uid → ns 0, and one for the subuid range.
-func readMapFile(t *testing.T, path string) []mapEntry {
-	t.Helper()
-	//nolint:gosec // path is constructed from a child pid we just spawned.
+func readMap(path string) ([]mapEntry, error) {
+	//nolint:gosec // caller constructs path from a child pid it spawned.
 	f, err := os.Open(path)
 	if err != nil {
-		t.Fatalf("open %s: %v", path, err)
+		return nil, err
 	}
 	defer func() { _ = f.Close() }()
 	var out []mapEntry
@@ -139,9 +142,27 @@ func readMapFile(t *testing.T, path string) []mapEntry {
 		out = append(out, mapEntry{inside, outside, count})
 	}
 	if err := scanner.Err(); err != nil {
-		t.Fatalf("scan %s: %v", path, err)
+		return nil, err
 	}
-	return out
+	return out, nil
+}
+
+func waitForMapEntries(t *testing.T, path string, minimum int) []mapEntry {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last []mapEntry
+	var lastErr error
+	//daft:lint:disable=forloopbound reason="bounded by deadline + t.Fatalf below"
+	for {
+		last, lastErr = readMap(path)
+		if lastErr == nil && len(last) >= minimum {
+			return last
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s has %d entries after 2s, want ≥%d: %v", path, len(last), minimum, lastErr)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // haveNewIDMap returns true if at least one of the candidate
