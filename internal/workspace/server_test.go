@@ -801,10 +801,17 @@ func TestWorkspaceDiskControlRPCsValidateExactManifestSet(t *testing.T) {
 	}
 	controller := &fakeWorkspaceDiskController{status: WorkspaceDiskStatus{
 		UsedBytes: 9, AvailableBytes: 11, AllowanceBytes: 20, Frozen: true, Running: true,
+		ReservationCapacityBytes: 100, ReservationReservedBytes: 80, ReservationAvailableBytes: 15,
+		Reservations: []WorkspaceDiskReservation{{WorkspaceUUID: "large", VirtualBytes: 60, AllocatedBytes: 6, ModifiedAtUnix: 7}},
 	}}
+	for range maxDiskReservations {
+		controller.status.Reservations = append(controller.status.Reservations, WorkspaceDiskReservation{WorkspaceUUID: "bounded"})
+	}
 	server.SetWorkspaceDiskController(controller)
 	status, err := server.GetWorkspaceDiskStatus(t.Context(), connect.NewRequest(&workspacev1.GetWorkspaceDiskStatusRequest{WorkspaceUuid: uuid}))
-	if err != nil || status.Msg.GetUsedBytes() != 9 || !status.Msg.GetFrozen() || !status.Msg.GetRunning() || len(status.Msg.GetCurrentManifests()) != 2 {
+	if err != nil || status.Msg.GetUsedBytes() != 9 || !status.Msg.GetFrozen() || !status.Msg.GetRunning() || len(status.Msg.GetCurrentManifests()) != 2 ||
+		status.Msg.GetReservationCapacityBytes() != 100 || status.Msg.GetReservationReservedBytes() != 80 ||
+		status.Msg.GetReservationAvailableBytes() != 15 || len(status.Msg.GetReservations()) != maxDiskReservations || status.Msg.GetReservations()[0].GetWorkspaceUuid() != "large" {
 		t.Fatalf("disk status = %#v, %v", status, err)
 	}
 	expected := make([]*workspacev1.ManifestExpectation, 0, len(states))

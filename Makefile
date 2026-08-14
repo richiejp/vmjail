@@ -49,9 +49,10 @@ check-agent-tools:
 # verify is the full gate set used by the pre-commit hook. `dev`
 # builds every real artefact (Go binaries + VM toolchain + initramfs +
 # bundle) so a broken full build fails the commit, not just CI. Active
-# fuzzing runs with a tight 1s/target budget — enough to catch a
-# crash that's deterministic from the seed corpus, not enough to
-# delay commits significantly. Manual / nightly fuzzing uses
+# fuzzing runs with a deterministic 1000-execution/target budget. A duration
+# budget can expire while Go is coordinating workers and intermittently return
+# `context deadline exceeded`, despite a healthy target; an execution budget
+# keeps the commit gate both fast and reproducible. Manual / nightly fuzzing uses
 # `make fuzz` (default 30s/target).
 #
 # verify does NOT run `nix flake check` — that builds our Go binaries
@@ -59,13 +60,13 @@ check-agent-tools:
 # the `go build`/Make recipes `dev` uses), which is the slow cold
 # build. That gate lives in the pre-push hook + CI instead.
 verify: check dev integration bench-check
-	@FUZZ_TIME=1s scripts/fuzz.sh
+	@FUZZ_TIME=1000x scripts/fuzz.sh
 
 help:
 	@echo "Targets:"
 	@echo "  all         - build the project + run the fast check gates (default)"
 	@echo "  check       - fmt + submodule-revs + deployment skill + lint + unit tests + coverage gate"
-	@echo "  verify      - check + integration + bench + 1s fuzz sweep (pre-commit gate)"
+	@echo "  verify      - check + integration + bench + deterministic fuzz sweep (pre-commit gate)"
 	@echo "  fmt         - format Go code with gofumpt"
 	@echo "  check-fmt   - fail if anything is unformatted"
 	@echo "  lint        - run golangci-lint"

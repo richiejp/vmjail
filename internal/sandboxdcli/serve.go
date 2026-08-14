@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -195,12 +196,35 @@ type workspaceDiskExecutor interface {
 }
 
 func (c *nodeWorkspaceDiskControl) Status(workspaceID string) (workspace.WorkspaceDiskStatus, error) {
+	reservations, err := c.store.Reservations()
+	if err != nil {
+		return workspace.WorkspaceDiskStatus{}, err
+	}
+	pool := workspace.WorkspaceDiskStatus{
+		ReservationCapacityBytes:  reservations.CapacityBytes,
+		ReservationReservedBytes:  reservations.ReservedBytes,
+		ReservationAvailableBytes: reservations.AvailableBytes,
+	}
+	for _, item := range reservations.Reservations {
+		pool.Reservations = append(pool.Reservations, workspace.WorkspaceDiskReservation{
+			WorkspaceUUID: item.WorkspaceID, VirtualBytes: item.VirtualBytes,
+			AllocatedBytes: item.AllocatedBytes, ModifiedAtUnix: item.ModifiedAt.Unix(),
+		})
+	}
+	slices.SortFunc(pool.Reservations, func(left, right workspace.WorkspaceDiskReservation) int {
+		if left.VirtualBytes > right.VirtualBytes {
+			return -1
+		}
+		if left.VirtualBytes < right.VirtualBytes {
+			return 1
+		}
+		return strings.Compare(left.WorkspaceUUID, right.WorkspaceUUID)
+	})
 	status, err := c.executor.WorkspaceDiskStatus(workspaceID)
 	if err == nil {
-		return workspace.WorkspaceDiskStatus{
-			UsedBytes: status.Usage.Used, AvailableBytes: status.Usage.Available,
-			AllowanceBytes: status.Allowance, Frozen: status.Frozen, Running: true,
-		}, nil
+		pool.UsedBytes, pool.AvailableBytes = status.Usage.Used, status.Usage.Available
+		pool.AllowanceBytes, pool.Frozen, pool.Running = status.Allowance, status.Frozen, true
+		return pool, nil
 	}
 	if !errors.Is(err, sandboxexec.ErrWorkspaceDiskNotRunning) {
 		return workspace.WorkspaceDiskStatus{}, err
@@ -209,7 +233,8 @@ func (c *nodeWorkspaceDiskControl) Status(workspaceID string) (workspace.Workspa
 	if sizeErr != nil {
 		return workspace.WorkspaceDiskStatus{}, sizeErr
 	}
-	return workspace.WorkspaceDiskStatus{AllowanceBytes: size, Running: false}, nil
+	pool.AllowanceBytes = size
+	return pool, nil
 }
 
 func (c *nodeWorkspaceDiskControl) Unfreeze(ctx context.Context, workspaceID string) error {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 const (
@@ -35,6 +36,7 @@ type Store struct {
 	remove           func(string) error
 	syncRoot         func(string) error
 	stat             func(string) (fs.FileInfo, error)
+	readDir          func(string) ([]os.DirEntry, error)
 	removeAll        func(string) error
 	openMarker       func(string, int, fs.FileMode) (syncCloser, error)
 	statfs           func(string, *syscall.Statfs_t) error
@@ -52,6 +54,26 @@ type syncCloser interface {
 	Close() error
 }
 
+// Reservation describes one retained workspace disk. VirtualBytes is the
+// admission reservation; AllocatedBytes is the host blocks currently consumed
+// by the sparse qcow2 file. The store deliberately does not infer whether the
+// data is safe to delete.
+type Reservation struct {
+	WorkspaceID    string
+	VirtualBytes   uint64
+	AllocatedBytes uint64
+	ModifiedAt     time.Time
+}
+
+// ReservationStatus is an authoritative, coherent snapshot of the durable
+// workspace-disk pool.
+type ReservationStatus struct {
+	CapacityBytes  uint64
+	ReservedBytes  uint64
+	AvailableBytes uint64
+	Reservations   []Reservation
+}
+
 // OpenStore prepares root and performs the one-way legacy writable-virtiofs
 // migration. legacyMountRoot is deleted without import exactly once; pass an
 // empty string only when the caller has no legacy layout.
@@ -65,7 +87,7 @@ func newStore() *Store {
 			return os.CreateTemp(dir, pattern)
 		},
 		link: os.Link, remove: os.Remove, syncRoot: syncDir,
-		stat: os.Stat, removeAll: os.RemoveAll,
+		stat: os.Stat, readDir: os.ReadDir, removeAll: os.RemoveAll,
 		openMarker: func(name string, flag int, perm fs.FileMode) (syncCloser, error) {
 			return os.OpenFile(name, flag, perm) // #nosec G304 -- name is beneath the validated root.
 		},
@@ -131,7 +153,8 @@ func (s *Store) Prepare(workspaceID string, virtualSize uint64) (path string, cr
 		return "", false, err
 	}
 	if err := s.checkReservation(virtualSize); err != nil {
-		return "", false, err
+		return "", false, fmt.Errorf("%w; inspect retained reservations with %q", err,
+			"daft workspace storage status --uuid "+workspaceID)
 	}
 
 	tmp, err := s.create(s.root, ".create-*.qcow2")
@@ -261,7 +284,8 @@ func (s *Store) Grow(workspaceID string, virtualSize uint64) error {
 	}
 	if virtualSize > current {
 		if err := s.checkReservation(virtualSize - current); err != nil {
-			return err
+			return fmt.Errorf("%w; inspect retained reservations with %q", err,
+				"daft workspace storage status --uuid "+workspaceID)
 		}
 	}
 	file, err := os.OpenFile(path, os.O_RDWR, 0) // #nosec G304 -- path is beneath the validated store root.
@@ -296,6 +320,56 @@ func (s *Store) UnderPressure() bool {
 	return available < s.reservationBytes/10
 }
 
+// Reservations reports all retained images without assigning lifecycle or
+// recoverability semantics that only the orchestrator catalog can know.
+func (s *Store) Reservations() (ReservationStatus, error) {
+	if s == nil || s.root == "" {
+		return ReservationStatus{}, errors.New("workspacedisk: nil store")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entries, err := s.readDir(s.root)
+	if err != nil {
+		return ReservationStatus{}, fmt.Errorf("workspacedisk: list retained images: %w", err)
+	}
+	status := ReservationStatus{CapacityBytes: s.reservationBytes}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), diskSuffix) {
+			continue
+		}
+		path := filepath.Join(s.root, entry.Name())
+		virtual, sizeErr := VirtualSize(path)
+		if sizeErr != nil {
+			return ReservationStatus{}, sizeErr
+		}
+		info, statErr := entry.Info()
+		if statErr != nil {
+			return ReservationStatus{}, fmt.Errorf("workspacedisk: stat retained image: %w", statErr)
+		}
+		var allocated uint64
+		if native, ok := info.Sys().(*syscall.Stat_t); ok && native.Blocks > 0 {
+			allocated = uint64(native.Blocks) * 512 // #nosec G115 -- positive filesystem block count.
+		}
+		status.Reservations = append(status.Reservations, Reservation{
+			WorkspaceID: strings.TrimSuffix(entry.Name(), diskSuffix), VirtualBytes: virtual,
+			AllocatedBytes: allocated, ModifiedAt: info.ModTime(),
+		})
+		if ^uint64(0)-status.ReservedBytes < virtual {
+			return ReservationStatus{}, fmt.Errorf("%w: retained sizes overflow", ErrReservationExceeded)
+		}
+		status.ReservedBytes += virtual
+	}
+	var stat syscall.Statfs_t
+	if err := s.statfs(s.root, &stat); err != nil {
+		return ReservationStatus{}, fmt.Errorf("workspacedisk: inspect durable storage: %w", err)
+	}
+	status.AvailableBytes, err = filesystemAvailable(stat)
+	if err != nil {
+		return ReservationStatus{}, err
+	}
+	return status, nil
+}
+
 func filesystemAvailable(stat syscall.Statfs_t) (uint64, error) {
 	if stat.Bsize <= 0 {
 		return 0, errors.New("workspacedisk: invalid durable filesystem block size")
@@ -319,7 +393,7 @@ func (s *Store) checkReservation(additional uint64) error {
 }
 
 func (s *Store) reservedBytes() (uint64, error) {
-	entries, err := os.ReadDir(s.root)
+	entries, err := s.readDir(s.root)
 	if err != nil {
 		return 0, fmt.Errorf("workspacedisk: list retained images: %w", err)
 	}

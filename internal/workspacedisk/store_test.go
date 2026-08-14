@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -68,6 +69,18 @@ func TestStorePrepareAndReuse(t *testing.T) {
 	}
 }
 
+func TestReservationFailureProvidesInspectionCommand(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.reservationBytes = testDiskBytes - 1
+	_, _, err = store.Prepare(testWorkspaceID, testDiskBytes)
+	if !errors.Is(err, ErrReservationExceeded) || !strings.Contains(err.Error(), "daft workspace storage status --uuid "+testWorkspaceID) {
+		t.Fatalf("reservation diagnostic = %v", err)
+	}
+}
+
 func TestStoreSizeAndDeleteAreDurableAndIdempotent(t *testing.T) {
 	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
 	if err != nil {
@@ -91,6 +104,59 @@ func TestStoreSizeAndDeleteAreDurableAndIdempotent(t *testing.T) {
 	}
 	if err := store.Delete(testWorkspaceID); err != nil {
 		t.Fatalf("idempotent Delete: %v", err)
+	}
+}
+
+func TestStoreReservationsReportsVirtualAndAllocatedBytes(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Prepare(testWorkspaceID, testDiskBytes); err != nil {
+		t.Fatal(err)
+	}
+	status, err := store.Reservations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.CapacityBytes == 0 || status.AvailableBytes == 0 {
+		t.Fatalf("pool status = %#v", status)
+	}
+	if status.ReservedBytes != testDiskBytes || len(status.Reservations) != 1 {
+		t.Fatalf("reservations = %#v", status)
+	}
+	got := status.Reservations[0]
+	if got.WorkspaceID != testWorkspaceID || got.VirtualBytes != testDiskBytes || got.AllocatedBytes == 0 || got.ModifiedAt.IsZero() {
+		t.Fatalf("reservation = %#v", got)
+	}
+	var nilStore *Store
+	if _, err := nilStore.Reservations(); err == nil {
+		t.Fatal("nil store Reservations succeeded")
+	}
+	store.statfs = func(string, *syscall.Statfs_t) error { return errors.New("statfs failed") }
+	if _, err := store.Reservations(); err == nil || !strings.Contains(err.Error(), "statfs failed") {
+		t.Fatalf("statfs error = %v", err)
+	}
+	store.statfs = func(string, *syscall.Statfs_t) error { return nil }
+	if _, err := store.Reservations(); err == nil || !strings.Contains(err.Error(), "block size") {
+		t.Fatalf("invalid filesystem geometry = %v", err)
+	}
+	store.readDir = func(string) ([]os.DirEntry, error) { return nil, errors.New("list failed") }
+	if _, err := store.Reservations(); err == nil || !strings.Contains(err.Error(), "list failed") {
+		t.Fatalf("directory listing error = %v", err)
+	}
+}
+
+func TestStoreReservationsRejectsCorruptRetainedImage(t *testing.T) {
+	store, err := OpenStore(filepath.Join(t.TempDir(), "disks"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(store.root, testWorkspaceID+diskSuffix), []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Reservations(); err == nil {
+		t.Fatal("corrupt retained image accepted")
 	}
 }
 

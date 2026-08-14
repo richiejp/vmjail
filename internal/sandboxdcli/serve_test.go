@@ -65,6 +65,14 @@ func TestNodeWorkspaceDiskControlRunningAndRetainedStates(t *testing.T) {
 	if _, _, err := store.Prepare(workspaceID, initialDiskBytes); err != nil {
 		t.Fatal(err)
 	}
+	for id, size := range map[string]uint64{
+		"00000000-0000-4000-8000-000000000002": initialDiskBytes * 2,
+		"00000000-0000-4000-8000-000000000003": initialDiskBytes,
+	} {
+		if _, _, err := store.Prepare(id, size); err != nil {
+			t.Fatal(err)
+		}
+	}
 	executor := &fakeWorkspaceDiskExecutor{status: sandboxexec.WorkspaceDiskStatus{
 		Usage: workspacesnapshot.Usage{Used: 7, Available: 13}, Allowance: 20, Frozen: true,
 	}}
@@ -73,7 +81,9 @@ func TestNodeWorkspaceDiskControlRunningAndRetainedStates(t *testing.T) {
 		t.Fatalf("running resize = %v, desired %d", err, executor.resized)
 	}
 	status, err := control.Status(workspaceID)
-	if err != nil || !status.Running || status.UsedBytes != 7 || !status.Frozen {
+	if err != nil || !status.Running || status.UsedBytes != 7 || !status.Frozen ||
+		status.ReservationReservedBytes != initialDiskBytes*4 || len(status.Reservations) != 3 ||
+		status.Reservations[0].WorkspaceUUID != "00000000-0000-4000-8000-000000000002" || status.Reservations[0].AllocatedBytes == 0 {
 		t.Fatalf("running status = %#v, %v", status, err)
 	}
 	if err := control.Delete(t.Context(), workspaceID); err == nil {
@@ -99,6 +109,13 @@ func TestNodeWorkspaceDiskControlRunningAndRetainedStates(t *testing.T) {
 	}
 	if size, exists, err := store.Size(workspaceID); err != nil || exists || size != 0 {
 		t.Fatalf("deleted retained size = %d, %t, %v", size, exists, err)
+	}
+}
+
+func TestNodeWorkspaceDiskControlRequiresStore(t *testing.T) {
+	control := &nodeWorkspaceDiskControl{executor: &fakeWorkspaceDiskExecutor{}}
+	if _, err := control.Status("workspace"); err == nil {
+		t.Fatal("Status without store succeeded")
 	}
 }
 

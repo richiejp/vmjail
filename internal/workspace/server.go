@@ -48,11 +48,22 @@ type Server struct {
 }
 
 type WorkspaceDiskStatus struct {
-	UsedBytes      uint64
-	AvailableBytes uint64
-	AllowanceBytes uint64
-	Frozen         bool
-	Running        bool
+	UsedBytes                 uint64
+	AvailableBytes            uint64
+	AllowanceBytes            uint64
+	Frozen                    bool
+	Running                   bool
+	ReservationCapacityBytes  uint64
+	ReservationReservedBytes  uint64
+	ReservationAvailableBytes uint64
+	Reservations              []WorkspaceDiskReservation
+}
+
+type WorkspaceDiskReservation struct {
+	WorkspaceUUID  string
+	VirtualBytes   uint64
+	AllocatedBytes uint64
+	ModifiedAtUnix int64
 }
 
 type WorkspaceDiskController interface {
@@ -66,6 +77,7 @@ const (
 	defaultPruneCandidates = 50
 	maxPruneCandidates     = 200
 	maxMetadataFileBytes   = 1 << 20
+	maxDiskReservations    = 20
 )
 
 type boundedMetadataWriter struct {
@@ -829,6 +841,15 @@ func (s *Server) workspaceDiskStatusResponse(uuid string, status WorkspaceDiskSt
 	response := &workspacev1.GetWorkspaceDiskStatusResponse{
 		WorkspaceUuid: uuid, UsedBytes: status.UsedBytes, AvailableBytes: status.AvailableBytes,
 		AllowanceBytes: status.AllowanceBytes, Frozen: status.Frozen, Running: status.Running,
+		ReservationCapacityBytes:  status.ReservationCapacityBytes,
+		ReservationReservedBytes:  status.ReservationReservedBytes,
+		ReservationAvailableBytes: status.ReservationAvailableBytes,
+	}
+	for _, reservation := range status.Reservations[:min(len(status.Reservations), maxDiskReservations)] {
+		response.Reservations = append(response.Reservations, &workspacev1.WorkspaceDiskReservation{
+			WorkspaceUuid: reservation.WorkspaceUUID, VirtualBytes: reservation.VirtualBytes,
+			AllocatedBytes: reservation.AllocatedBytes, ModifiedAtUnix: reservation.ModifiedAtUnix,
+		})
 	}
 	if s.index == nil {
 		return response, nil

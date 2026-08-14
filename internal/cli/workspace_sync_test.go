@@ -665,7 +665,12 @@ func TestRejectWorkspaceChangesBranchesAndStorageFormatting(t *testing.T) {
 		t.Fatalf("no-prior rejection = %q, %v", output.String(), err)
 	}
 	output.Reset()
-	if err := writeWorkspaceStorageStatus(&output, &workspacev1.GetWorkspaceDiskStatusResponse{UsedBytes: 3, ProtectedBytes: 2}, &workspacev1.GetStorageStatusResponse{UsageBytes: 7, HardBytes: 10}); err != nil || !strings.Contains(output.String(), "disk_used=3") || !strings.Contains(output.String(), "usage=7") {
+	if err := writeWorkspaceStorageStatus(&output, &workspacev1.GetWorkspaceDiskStatusResponse{
+		UsedBytes: 3, ProtectedBytes: 2, ReservationReservedBytes: 20, ReservationCapacityBytes: 30,
+		ReservationAvailableBytes: 10, Reservations: []*workspacev1.WorkspaceDiskReservation{{WorkspaceUuid: "disk-id", VirtualBytes: 20, AllocatedBytes: 2, ModifiedAtUnix: 4}},
+	}, &workspacev1.GetStorageStatusResponse{UsageBytes: 7, HardBytes: 10}); err != nil ||
+		!strings.Contains(output.String(), "disk_used=3") || !strings.Contains(output.String(), "usage=7") ||
+		!strings.Contains(output.String(), "disk_pool_reserved=20") || !strings.Contains(output.String(), `cleanup="daft workspace delete --uuid disk-id"`) {
 		t.Fatalf("status output = %q, %v", output.String(), err)
 	}
 	output.Reset()

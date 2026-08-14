@@ -381,6 +381,13 @@ func writeWorkspaceStorageStatus(out io.Writer, disk *workspacev1.GetWorkspaceDi
 	_, err := fmt.Fprintf(out, "usage=%d protected=%d recoverable=%d queued=%d chunks=%d hard=%d soft=%d target=%d expiry_seconds=%d\n",
 		status.GetUsageBytes(), status.GetProtectedBytes(), status.GetRecoverableBytes(), status.GetQueuedBytes(), status.GetChunkCount(),
 		status.GetHardBytes(), status.GetSoftBytes(), status.GetTargetBytes(), status.GetExpirySeconds())
+	_, _ = fmt.Fprintf(out, "disk_pool_reserved=%d disk_pool_capacity=%d disk_pool_available=%d retained_disks=%d\n",
+		disk.GetReservationReservedBytes(), disk.GetReservationCapacityBytes(), disk.GetReservationAvailableBytes(), len(disk.GetReservations()))
+	for _, reservation := range disk.GetReservations() {
+		_, _ = fmt.Fprintf(out, "retained_workspace=%s reserved=%d allocated=%d modified_at=%d cleanup=%q\n",
+			reservation.GetWorkspaceUuid(), reservation.GetVirtualBytes(), reservation.GetAllocatedBytes(),
+			reservation.GetModifiedAtUnix(), "daft workspace delete --uuid "+reservation.GetWorkspaceUuid())
+	}
 	return err
 }
 

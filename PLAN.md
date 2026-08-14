@@ -583,6 +583,11 @@ Landed:
   and live growth that cannot fit. Under host pressure, the bounded disk
   monitor freezes actively growing sandboxes by recent growth rate, breaking
   ties largest-first, while leaving idle sandboxes available.
+- Storage status also reports this separate retained-disk pool: total virtual
+  reservation, sparse host allocation, filesystem availability, and a bounded
+  largest-first list of retained workspace IDs and modification times. It does
+  not guess that stopped or unknown data is disposable; reclamation continues
+  through explicit generation-checked workspace deletion.
 - Retained-disk unit tests use a small explicit virtual allowance while
   separately testing the 20 GiB default projection and reservation rejection.
   Their result no longer depends on the test host having 20 GiB free.
@@ -590,6 +595,9 @@ Landed:
   helpers bound graceful subprocess cleanup and force-kill hung streaming
   clients instead of silently spending transport-timeout minutes after a test
   has already passed; slow cases are measured and fixed rather than removed.
+- The commit-gate fuzz sweep uses a fixed execution count rather than a wall
+  clock duration. This avoids Go worker-shutdown deadline races while retaining
+  a small deterministic budget; manual and nightly fuzzing remain duration-based.
 - Finite blocking operations must carry an explicit deadline or inherit an
   earlier one. Intentionally long-lived VM, registration, observation, and
   interactive-session contexts instead require cancellation plus observable
