@@ -44,6 +44,10 @@ if env "${common_env[@]}" DAFT_BLACKBOX_UNRESTRICTED=1 DAFT_BLACKBOX_LIVE=1 \
 	"$repo_root/scripts/blackbox-agent.sh" >/dev/null 2>&1; then
 	echo "blackbox-agent accepted live mode without explicit client config" >&2; exit 1
 fi
+if env "${common_env[@]}" DAFT_BLACKBOX_UNRESTRICTED=1 DAFT_BLACKBOX_LIVE=1 \
+	DAFT_CONFIG_DIR="$tmp/config" "$repo_root/scripts/blackbox-agent.sh" >/dev/null 2>&1; then
+	echo "blackbox-agent accepted live mode without explicit orchestrator" >&2; exit 1
+fi
 out="$tmp/out"
 env "${common_env[@]}" DAFT_BLACKBOX_UNRESTRICTED=1 DAFT_BLACKBOX_OUTPUT="$out" \
 	DAFT_BLACKBOX_TIMEOUT_SECONDS=5 "$repo_root/scripts/blackbox-agent.sh" >/dev/null
@@ -59,4 +63,8 @@ grep -q -- '--model gpt-5.6-terra --sandbox danger-full-access' "$out/results/co
 grep -q 'all 20 goals attempted' "$out/prompt.md"
 grep -q 'headed or headless' "$out/prompt.md"
 grep -q 'isolated local cluster built from the current checkout' "$out/prompt.md"
+grep -q 'Never invoke cluster up or cluster' "$out/prompt.md"
+grep -q 'root-global flag' "$out/prompt.md"
+grep -q -- '--orchestrator https://127.0.0.1:24443' "$out/prompt.md"
+grep -q 'positional address 127.0.0.1:24443' "$out/prompt.md"
 echo 'blackbox-agent script tests: OK'

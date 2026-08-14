@@ -95,5 +95,7 @@ explicit mode switch and client identity:
 
 ```sh
 DAFT_BLACKBOX_UNRESTRICTED=1 DAFT_BLACKBOX_LIVE=1 \
-  DAFT_CONFIG_DIR=/explicit/client scripts/blackbox-agent.sh
+  DAFT_CONFIG_DIR=/explicit/client \
+  DAFT_BLACKBOX_ORCHESTRATOR=https://explicit.example:14443 \
+  scripts/blackbox-agent.sh
 ```

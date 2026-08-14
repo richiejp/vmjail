@@ -51,8 +51,11 @@ if [[ "$live_cluster" == "1" ]]; then
 	config_dir=${DAFT_CONFIG_DIR:-}
 	[[ -n "$config_dir" ]] || { echo "blackbox-agent: live mode requires an explicit DAFT_CONFIG_DIR" >&2; exit 2; }
 	[[ -d "$config_dir" ]] || { echo "blackbox-agent: client config not found: $config_dir" >&2; exit 2; }
+	orchestrator_url=${DAFT_BLACKBOX_ORCHESTRATOR:-}
+	[[ -n "$orchestrator_url" ]] || { echo "blackbox-agent: live mode requires an explicit DAFT_BLACKBOX_ORCHESTRATOR" >&2; exit 2; }
+	ping_endpoint=${orchestrator_url#https://}
 	cluster_description="the explicitly requested live cluster"
-	dashboard_description="the explicitly supplied live dashboard, if any"
+	dashboard_description=${DAFT_BLACKBOX_DASHBOARD:-"not supplied; record dashboard goals as blocked"}
 	ln -s "$config_dir" "$public_root/client-config"
 else
 	cluster_state="$output_root/cluster"
@@ -70,6 +73,8 @@ else
 		--web-addr "$cluster_web_addr" --egress-proxy \
 		--orchestrator-bin "$bin_dir/daft-orchestrator" --sandboxd-bin "$bin_dir/daft-sandboxd"
 	ln -s "$cluster_state/client" "$public_root/client-config"
+	orchestrator_url="https://$cluster_addr"
+	ping_endpoint="$cluster_addr"
 	dashboard_description="http://$cluster_web_addr"
 fi
 
@@ -81,7 +86,18 @@ public docs, fixtures, and ${cluster_description}. Do not inspect the darkaifact
 source checkout, Git history, implementation logs, Codex session files, or the
 contents of the client identity directory. Invoke the client as:
 
-  ./bin/daft ... --config-dir ./client-config
+  ./bin/daft <command> <subcommand> ... --config-dir ./client-config
+
+The cluster is already running and ready. Never invoke cluster up or cluster
+down, and do not inspect its host processes. --config-dir is a flag on remote
+client subcommands such as workspace, sandbox, node, image, and ping; it is not
+a root-global flag and commands such as version and blackbox do not accept it.
+Consult the exact subcommand's --help before concluding that a public operation
+is unavailable. For every remote workspace, sandbox, node, or image operation,
+pass both --orchestrator ${orchestrator_url} and --config-dir ./client-config.
+For the ping command only, use the positional address ${ping_endpoint} plus
+--config-dir ./client-config. These are the only campaign endpoints: do not
+infer, scan for, start, or substitute another control plane.
 
 You have unrestricted host networking and shell access because Codex itself is
 not the security boundary. Run untrusted project commands only inside
