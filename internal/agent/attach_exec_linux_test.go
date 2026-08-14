@@ -321,6 +321,11 @@ func TestDefaultAttachCmdBuildsCrunArgs(t *testing.T) {
 			want: []string{ContainerRuntime, crunExecSubcommand, ContainerID, defaultAttachShell, "-l"},
 		},
 		{
+			name: "empty-command-uses-discovered-shell",
+			req:  AttachExecRequest{TTY: true, Shell: testDashShell},
+			want: []string{ContainerRuntime, crunExecSubcommand, ContainerID, testDashShell, "-l"},
+		},
+		{
 			name: "env-forwarded-before-container-id",
 			req:  AttachExecRequest{Command: []string{testRunCommand, "x"}, Env: []string{"https_proxy=http://p", testEnvAssignment}},
 			want: []string{

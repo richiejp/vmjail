@@ -247,6 +247,20 @@ virtio-serial/console transport remains part of the
 milestone only after its guest ownership and process-lifecycle semantics are
 specified and tested.
 
+`daft cluster up --web-addr <loopback-host:port>` enables the same dashboard
+on a disposable local cluster and reports its HTTP URL, providing a
+one-command target for browser and source-blind terminal acceptance tests.
+Real Chromium acceptance found and now guards two portability boundaries: the
+guest discovers an executable login shell from the OCI environment/rootfs
+instead of assuming `/bin/sh`, and the terminal frame relies on CSP
+`frame-ancestors` rather than an `X-Frame-Options` value that rejects its
+deliberately opaque sandbox origin. Because CSP `'self'` matches no network
+URL inside that opaque frame, its policy names only the exact embedded asset
+URLs and the exact Workspace WebSocket URL; it does not grant general access
+to the dashboard origin or host network. The parent dashboard permits only
+same-origin frames; its previous implicit `frame-src 'none'` was caught by the
+real browser acceptance test.
+
 The xterm browser dependency is optional and reproducible: an exact 6.0.0
 version and Bun integrity lock are committed; Bun's trusted dependency list is
 empty and lifecycle scripts are disabled in config and on the command line.

@@ -24,6 +24,7 @@ const (
 	testExecUser      = "1000:2000"
 	testEnvAssignment = "A=B"
 	testRunCommand    = "run"
+	testDashShell     = "/bin/dash"
 )
 
 func TestReadContainerProcess(t *testing.T) {
@@ -41,8 +42,9 @@ func TestReadContainerProcess(t *testing.T) {
 
 	// Env + a non-root user resolve together; the user renders as uid:gid.
 	okDir := t.TempDir()
-	writeConfigJSON(t, okDir, `{"process":{"env":["A=1","B=2"],"user":{"uid":1000,"gid":2000}}}`)
-	if p := readContainerProcess(io.Discard, okDir); !slices.Equal(p.Env, []string{"A=1", "B=2"}) || p.User != testExecUser {
+	writeContainerExecutable(t, okDir, testDashShell)
+	writeConfigJSON(t, okDir, `{"process":{"env":["A=1","B=2"],"cwd":"/workspace","user":{"uid":1000,"gid":2000}}}`)
+	if p := readContainerProcess(io.Discard, okDir); !slices.Equal(p.Env, []string{"A=1", "B=2"}) || p.User != testExecUser || p.Cwd != "/workspace" || p.Shell != testDashShell {
 		t.Fatalf("valid config: proc = %+v, want env [A=1 B=2] user 1000:2000", p)
 	}
 
@@ -62,6 +64,32 @@ func TestReadContainerProcess(t *testing.T) {
 	}
 	if !strings.Contains(badW.String(), "parse container process") {
 		t.Errorf("malformed config not reported: %q", badW.String())
+	}
+}
+
+func writeContainerExecutable(t *testing.T, bundle, path string) {
+	t.Helper()
+	hostPath := filepath.Join(bundle, "rootfs", strings.TrimPrefix(path, "/"))
+	if err := os.MkdirAll(filepath.Dir(hostPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hostPath, []byte("fixture"), 0o755); err != nil { //nolint:gosec // executable test fixture.
+		t.Fatal(err)
+	}
+}
+
+func TestResolveContainerShellPrefersDeclaredExecutable(t *testing.T) {
+	bundle := t.TempDir()
+	writeContainerExecutable(t, bundle, "/custom/shell")
+	writeContainerExecutable(t, bundle, "/bin/sh")
+	if got := resolveContainerShell(bundle, []string{"SHELL=/custom/shell"}); got != "/custom/shell" {
+		t.Fatalf("declared shell = %q", got)
+	}
+	if got := resolveContainerShell(bundle, []string{"SHELL=../../host"}); got != "/bin/sh" {
+		t.Fatalf("unsafe declared shell fallback = %q", got)
+	}
+	if got := resolveContainerShell(t.TempDir(), nil); got != "" {
+		t.Fatalf("missing shell = %q", got)
 	}
 }
 

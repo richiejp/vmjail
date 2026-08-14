@@ -189,7 +189,7 @@ func dashboardSameOrigin(r *http.Request) bool {
 	if err != nil || origin.Scheme == "" || origin.Host == "" {
 		return false
 	}
-	return (origin.Scheme == "http" || origin.Scheme == "https") && origin.Host == r.Host
+	return (origin.Scheme == dashboardHTTPScheme || origin.Scheme == dashboardHTTPSScheme) && origin.Host == r.Host
 }
 
 func (a *dashboardAuth) rateLimited(client string, now time.Time) bool {

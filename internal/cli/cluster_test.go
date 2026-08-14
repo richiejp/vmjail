@@ -11,6 +11,8 @@ import (
 	"github.com/richiejp/darkaifactory/internal/localcluster"
 )
 
+const testClusterWebAddr = "127.0.0.1:18080"
+
 // stubClusterUp swaps the clusterUp seam to return a fixed handle (no real
 // daemons), restoring it on cleanup.
 func stubClusterUp(t *testing.T) {
@@ -46,6 +48,25 @@ func TestClusterUpShellEmitsEnv(t *testing.T) {
 	}
 	if !strings.Contains(out, "DAFT_CLUSTER_URL=") {
 		t.Errorf("`up --shell` should print eval-able env lines, got:\n%s", out)
+	}
+}
+
+func TestClusterUpPassesDashboardAddress(t *testing.T) {
+	previous := clusterUp
+	clusterUp = func(_ context.Context, config localcluster.Config) (*localcluster.Cluster, error) {
+		if config.WebAddr != testClusterWebAddr {
+			t.Fatalf("WebAddr = %q", config.WebAddr)
+		}
+		return &localcluster.Cluster{WebAddr: config.WebAddr}, nil
+	}
+	t.Cleanup(func() { clusterUp = previous })
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	out, _, err := runCmd(t, clusterCmdName, "up", "--web-addr", testClusterWebAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "http://127.0.0.1:18080") {
+		t.Fatalf("summary = %q", out)
 	}
 }
 
@@ -150,13 +171,14 @@ func TestPrintClusterSummary(t *testing.T) {
 	var buf bytes.Buffer
 	printClusterSummary(&buf, &localcluster.Cluster{
 		URL:       testClusterURL,
+		WebAddr:   testClusterWebAddr,
 		SandboxFP: testSandboxFP,
 		StateDir:  testStateDir,
 	})
 	out := buf.String()
 	// Human summary: shows where the cluster is and that the client finds it
 	// automatically — and must NOT emit the eval-able env lines (that's --shell).
-	for _, want := range []string{testClusterURL, testStateDir, "automatically"} {
+	for _, want := range []string{testClusterURL, "http://127.0.0.1:18080", testStateDir, "automatically"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("printClusterSummary missing %q, got:\n%s", want, out)
 		}
@@ -170,6 +192,7 @@ func TestPrintClusterEnv(t *testing.T) {
 	var buf bytes.Buffer
 	printClusterEnv(&buf, &localcluster.Cluster{
 		URL:             testClusterURL,
+		WebAddr:         testClusterWebAddr,
 		ClientConfigDir: testClusterClientDir,
 		SandboxFP:       testSandboxFP,
 		OrchestratorFP:  testOrchFP,
@@ -178,6 +201,7 @@ func TestPrintClusterEnv(t *testing.T) {
 	out := buf.String()
 	for _, want := range []string{
 		"DAFT_CLUSTER_URL=https://127.0.0.1:8443",
+		"DAFT_CLUSTER_WEB_URL=http://127.0.0.1:18080",
 		"DAFT_CLUSTER_CLIENT_DIR=/state/client",
 		"DAFT_CLUSTER_SANDBOX_FP=sha256:abc",
 		"DAFT_CLUSTER_ORCH_FP=sha256:def",

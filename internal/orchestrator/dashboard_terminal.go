@@ -70,17 +70,35 @@ func newDashboardTerminalPage() *template.Template {
 }
 
 func (t *dashboardTerminal) servePage(w http.ResponseWriter, r *http.Request) {
-	if _, err := t.resolve(r.PathValue("uuid")); err != nil {
+	uuid := r.PathValue("uuid")
+	if _, err := t.resolve(uuid); err != nil {
 		http.Error(w, err.Error(), http.StatusPreconditionFailed)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self'; img-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'")
-	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	w.Header().Set("Content-Security-Policy", terminalPageCSP(r, uuid))
+	// CSP frame-ancestors is the frame policy. X-Frame-Options SAMEORIGIN
+	// rejects this intentionally opaque-origin sandboxed iframe in Chromium.
+	w.Header().Del("X-Frame-Options")
 	if err := newDashboardTerminalPage().Execute(w, nil); err != nil {
 		http.Error(w, "render terminal", http.StatusInternalServerError)
 	}
+}
+
+func terminalPageCSP(r *http.Request, uuid string) string {
+	httpScheme, wsScheme := dashboardHTTPScheme, dashboardWSScheme
+	if r.TLS != nil {
+		httpScheme, wsScheme = dashboardHTTPSScheme, dashboardWSSScheme
+	}
+	origin := httpScheme + "://" + r.Host
+	socket := wsScheme + "://" + r.Host + "/terminal/" + url.PathEscape(uuid) + "/socket"
+	// The iframe intentionally has an opaque origin. Explicit URLs let it load
+	// only its immutable assets and its exact Workspace socket; 'self' would
+	// match no network URL in an opaque-origin document.
+	return "default-src 'none'; script-src " + origin + "/assets/xterm.js " + origin + "/assets/terminal.js; " +
+		"style-src 'unsafe-inline' " + origin + "/assets/xterm.css; connect-src " + socket + "; " +
+		"img-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors " + origin + "; form-action 'none'"
 }
 
 func (t *dashboardTerminal) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +129,7 @@ func validateTerminalWebSocketOrigin(_ *websocket.Config, r *http.Request) error
 		return nil
 	}
 	parsed, err := url.Parse(origin)
-	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || !strings.EqualFold(parsed.Host, r.Host) {
+	if err != nil || (parsed.Scheme != dashboardHTTPScheme && parsed.Scheme != dashboardHTTPSScheme) || !strings.EqualFold(parsed.Host, r.Host) {
 		return errors.New("dashboard terminal: websocket origin is not this dashboard")
 	}
 	return nil

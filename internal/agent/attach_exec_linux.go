@@ -93,7 +93,11 @@ func defaultAttachCmd(ctx context.Context, req AttachExecRequest) *exec.Cmd {
 	}
 	argv = append(argv, ContainerID)
 	if len(req.Command) == 0 {
-		argv = append(argv, defaultAttachShell, "-l")
+		shell := req.Shell
+		if shell == "" {
+			shell = defaultAttachShell
+		}
+		argv = append(argv, shell, "-l")
 	} else {
 		argv = append(argv, req.Command...)
 	}

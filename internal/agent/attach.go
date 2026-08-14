@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"google.golang.org/protobuf/proto"
 
@@ -99,6 +100,9 @@ type AttachExecRequest struct {
 	User string
 	// Cwd is the container process working directory from config.json.
 	Cwd string
+	// Shell is an executable shell discovered in the container rootfs.
+	// Empty retains the historical /bin/sh fallback.
+	Shell string
 }
 
 // containerProcess is the per-container exec context read once from the
@@ -106,9 +110,10 @@ type AttachExecRequest struct {
 // Bundling them keeps the listener-chain signatures from sprouting a second
 // parallel parameter.
 type containerProcess struct {
-	Env  []string
-	User string
-	Cwd  string
+	Env   []string
+	User  string
+	Cwd   string
+	Shell string
 }
 
 // attachDeps factors the side-effect surfaces of the attach
@@ -187,7 +192,29 @@ func readContainerProcess(w io.Writer, bundle string) containerProcess {
 	if spec.Process.User.UID != 0 || spec.Process.User.GID != 0 {
 		user = fmt.Sprintf("%d:%d", spec.Process.User.UID, spec.Process.User.GID)
 	}
-	return containerProcess{Env: spec.Process.Env, User: user, Cwd: spec.Process.Cwd}
+	return containerProcess{Env: spec.Process.Env, User: user, Cwd: spec.Process.Cwd, Shell: resolveContainerShell(bundle, spec.Process.Env)}
+}
+
+func resolveContainerShell(bundle string, env []string) string {
+	candidates := make([]string, 0, 6)
+	for _, assignment := range env {
+		if shell, ok := strings.CutPrefix(assignment, "SHELL="); ok {
+			candidates = append(candidates, shell)
+			break
+		}
+	}
+	candidates = append(candidates, "/bin/sh", "/bin/bash", "/bin/dash", "/bin/ash", "/busybox/sh")
+	rootfs := filepath.Join(bundle, "rootfs")
+	for _, candidate := range candidates {
+		if !filepath.IsAbs(candidate) || filepath.Clean(candidate) != candidate {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(rootfs, strings.TrimPrefix(candidate, "/")))
+		if err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0 {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // runAttachListener vsock-listens on port and serves each accepted
@@ -253,6 +280,8 @@ func handleAttach(ctx context.Context, w io.Writer, conn net.Conn, exec ExecAtta
 		Rows:    hello.GetRows(),
 		Env:     proc.Env,
 		User:    proc.User,
+		Cwd:     proc.Cwd,
+		Shell:   proc.Shell,
 	}
 	pumpAttachProcess(ctx, w, conn, exec, req)
 }

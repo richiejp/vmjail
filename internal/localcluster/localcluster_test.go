@@ -333,6 +333,13 @@ func TestUpRejectsEmptyStateDir(t *testing.T) {
 	}
 }
 
+func TestResolvePreservesDashboardAddress(t *testing.T) {
+	resolved, err := (Config{StateDir: t.TempDir(), WebAddr: "127.0.0.1:18080"}).resolve()
+	if err != nil || resolved.webAddr != "127.0.0.1:18080" {
+		t.Fatalf("resolved web address = %q, %v", resolved.webAddr, err)
+	}
+}
+
 func TestDownNoPidfileIsNoError(t *testing.T) {
 	if err := Down(t.TempDir(), false); err != nil {
 		t.Errorf("Down on empty dir: %v", err)

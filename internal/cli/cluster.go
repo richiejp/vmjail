@@ -47,6 +47,7 @@ func newClusterUpCmd() *cobra.Command {
 	var (
 		stateDir     string
 		addr         string
+		webAddr      string
 		orchBin      string
 		sbxBin       string
 		egressProxy  bool
@@ -76,6 +77,7 @@ func newClusterUpCmd() *cobra.Command {
 			c, err := clusterUp(cmd.Context(), localcluster.Config{
 				StateDir:        stateDir,
 				Addr:            addr,
+				WebAddr:         webAddr,
 				OrchestratorBin: orchBin,
 				SandboxdBin:     sbxBin,
 				EgressProxy:     egressProxy,
@@ -94,6 +96,8 @@ func newClusterUpCmd() *cobra.Command {
 			"(default: $XDG_STATE_HOME/daft/cluster)")
 	cmd.Flags().StringVar(&addr, "addr", localcluster.DefaultAddr,
 		"orchestrator TCP listen address (host:port; port must be concrete)")
+	cmd.Flags().StringVar(&webAddr, "web-addr", "",
+		"optional loopback dashboard listen address (host:port; port must be concrete)")
 	cmd.Flags().StringVar(&orchBin, "orchestrator-bin", "",
 		"path to daft-orchestrator (default: sibling of this binary, else PATH)")
 	cmd.Flags().StringVar(&sbxBin, "sandboxd-bin", "",
@@ -169,12 +173,20 @@ func printClusterSummary(w io.Writer, c *localcluster.Cluster) {
 	_, _ = fmt.Fprintf(w,
 		"daft cluster up\n"+
 			"  orchestrator: %s\n"+
+			"  dashboard:    %s\n"+
 			"  sandbox-host: %s\n"+
 			"  state:        %s\n\n"+
 			"The daft client uses this cluster automatically — no env vars, no flags:\n"+
 			"  daft workspace create --name <name>\n\n"+
 			"Stop it with: daft cluster down\n",
-		c.URL, c.SandboxFP, c.StateDir)
+		c.URL, dashboardURL(c.WebAddr), c.SandboxFP, c.StateDir)
+}
+
+func dashboardURL(addr string) string {
+	if addr == "" {
+		return "disabled"
+	}
+	return "http://" + addr
 }
 
 // printClusterEnv writes the shell-eval-able handle lines a caller
@@ -182,9 +194,10 @@ func printClusterSummary(w io.Writer, c *localcluster.Cluster) {
 func printClusterEnv(w io.Writer, c *localcluster.Cluster) {
 	_, _ = fmt.Fprintf(w,
 		"DAFT_CLUSTER_URL=%s\n"+
+			"DAFT_CLUSTER_WEB_URL=%s\n"+
 			"DAFT_CLUSTER_CLIENT_DIR=%s\n"+
 			"DAFT_CLUSTER_SANDBOX_FP=%s\n"+
 			"DAFT_CLUSTER_ORCH_FP=%s\n"+
 			"DAFT_CLUSTER_STATE=%s\n",
-		c.URL, c.ClientConfigDir, c.SandboxFP, c.OrchestratorFP, c.StateDir)
+		c.URL, dashboardURL(c.WebAddr), c.ClientConfigDir, c.SandboxFP, c.OrchestratorFP, c.StateDir)
 }

@@ -353,8 +353,14 @@ func TestDashboardTerminalHTTPWebSocketRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = response.Body.Close()
-	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Security-Policy") == "" || response.Header.Get("X-Frame-Options") != "SAMEORIGIN" {
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Security-Policy") == "" || response.Header.Get("X-Frame-Options") != "" {
 		t.Fatalf("terminal page status=%d headers=%v", response.StatusCode, response.Header)
+	}
+	csp := response.Header.Get("Content-Security-Policy")
+	for _, want := range []string{server.URL + "/assets/xterm.js", server.URL + "/assets/terminal.js", "ws://" + strings.TrimPrefix(server.URL, "http://") + "/terminal/browser/socket"} {
+		if !strings.Contains(csp, want) {
+			t.Fatalf("terminal CSP %q does not contain %q", csp, want)
+		}
 	}
 	asset, err := http.Get(server.URL + "/assets/xterm.css") //nolint:noctx // bounded local httptest request.
 	if err != nil {

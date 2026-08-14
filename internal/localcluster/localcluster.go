@@ -89,6 +89,9 @@ type Config struct {
 	StateDir string
 	// Addr is the orchestrator's listen address (default DefaultAddr).
 	Addr string
+	// WebAddr optionally enables the orchestrator's plain-HTTP dashboard.
+	// It should remain loopback-only for a disposable local cluster.
+	WebAddr string
 	// OrchestratorBin / SandboxdBin override the daemon binaries.
 	// Empty means "sibling of the running executable, else PATH".
 	OrchestratorBin, SandboxdBin string
@@ -114,6 +117,7 @@ type Cluster struct {
 	OrchestratorFP  string
 	SandboxFP       string
 	Addr            string
+	WebAddr         string
 	StateDir        string
 	PIDs            []int
 }
@@ -125,6 +129,7 @@ type clusterFile struct {
 	OrchestratorFP  string `json:"orchestrator_fp"`
 	SandboxFP       string `json:"sandbox_fp"`
 	Addr            string `json:"addr"`
+	WebAddr         string `json:"web_addr,omitempty"`
 	PIDs            []int  `json:"pids"`
 	StateDir        string `json:"state_dir"`
 }
@@ -225,6 +230,14 @@ func Up(ctx context.Context, cfg Config) (*Cluster, error) {
 	if err := ensureAddrFree(r.addr); err != nil {
 		return nil, err
 	}
+	if r.webAddr != "" {
+		if r.webAddr == r.addr {
+			return nil, errors.New("localcluster: dashboard and control-plane addresses must differ")
+		}
+		if err := ensureAddrFree(r.webAddr); err != nil {
+			return nil, fmt.Errorf("localcluster: dashboard: %w", err)
+		}
+	}
 
 	var started []int
 	bail := func(e error) (*Cluster, error) {
@@ -234,8 +247,12 @@ func Up(ctx context.Context, cfg Config) (*Cluster, error) {
 		return nil, e
 	}
 
+	orchestratorArgs := []string{"serve", "--addr", r.addr, "--config-dir", info.OrchDir}
+	if r.webAddr != "" {
+		orchestratorArgs = append(orchestratorArgs, "--web-addr", r.webAddr)
+	}
 	if err := launchDaemon(r.progress, &started, "orchestrator", r.orchBin,
-		[]string{"serve", "--addr", r.addr, "--config-dir", info.OrchDir},
+		orchestratorArgs,
 		r.baseEnv, filepath.Join(logsDir, "orchestrator.log"),
 		func() error { return waitOrchestratorReady(ctx, url, info.ClientDir, r.timeout) }); err != nil {
 		return bail(err)
@@ -258,6 +275,7 @@ func Up(ctx context.Context, cfg Config) (*Cluster, error) {
 		OrchestratorFP:  info.OrchestratorFP,
 		SandboxFP:       info.SandboxFP,
 		Addr:            r.addr,
+		WebAddr:         r.webAddr,
 		StateDir:        cfg.StateDir,
 		PIDs:            started,
 	}
@@ -271,6 +289,7 @@ func Up(ctx context.Context, cfg Config) (*Cluster, error) {
 // resolvedConfig is Config with defaults applied and binaries located.
 type resolvedConfig struct {
 	addr     string
+	webAddr  string
 	timeout  time.Duration
 	progress io.Writer
 	baseEnv  []string
@@ -287,6 +306,7 @@ func (cfg Config) resolve() (resolvedConfig, error) {
 	}
 	r := resolvedConfig{
 		addr:     cfg.Addr,
+		webAddr:  cfg.WebAddr,
 		timeout:  cfg.ReadyTimeout,
 		progress: cfg.Progress,
 		baseEnv:  cfg.Env,
@@ -421,7 +441,7 @@ func Load(stateDir string) (*Cluster, error) {
 	return &Cluster{
 		URL: f.URL, ClientConfigDir: f.ClientConfigDir,
 		OrchestratorFP: f.OrchestratorFP, SandboxFP: f.SandboxFP,
-		Addr: f.Addr, StateDir: f.StateDir, PIDs: f.PIDs,
+		Addr: f.Addr, WebAddr: f.WebAddr, StateDir: f.StateDir, PIDs: f.PIDs,
 	}, nil
 }
 
@@ -643,7 +663,7 @@ func writeInfo(stateDir string, c *Cluster) error {
 	data, err := json.MarshalIndent(clusterFile{
 		URL: c.URL, ClientConfigDir: c.ClientConfigDir,
 		OrchestratorFP: c.OrchestratorFP, SandboxFP: c.SandboxFP,
-		Addr: c.Addr, PIDs: c.PIDs, StateDir: c.StateDir,
+		Addr: c.Addr, WebAddr: c.WebAddr, PIDs: c.PIDs, StateDir: c.StateDir,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("localcluster: marshal cluster.json: %w", err)
