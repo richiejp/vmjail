@@ -227,6 +227,44 @@ Source-blind regression guards now cover every pure CLI command group, including
 nested Workspace groups: arbitrary child names fail nonzero instead of printing
 help and appearing to succeed.
 
+## Active milestone: live Workspace terminal
+
+Add a bounded, interactive terminal to each running Workspace's dashboard page
+so a user can take over an agent harness without leaving the browser. Preserve
+the existing separation between the guest boot console and a container PTY:
+Cloud Hypervisor's current virtio console carries kernel and guest-agent
+diagnostics, while interactive exec already has a framed data/resize/exit path
+over vsock. A dedicated virtio-console path must attach to the intended
+container process and must not silently replace that existing PTY path or mix
+user input with boot logs.
+
+The first browser slice exposes the proven Workspace attach semantics over
+an authenticated, deadline- and size-bounded WebSocket, including resize,
+disconnect and exit status, with a 15-second browser heartbeat and 45-second
+dead-peer deadline. It is accurately labelled as a new container PTY shell,
+not attachment to an existing detached AgentRun. A dedicated
+virtio-serial/console transport remains part of the
+milestone only after its guest ownership and process-lifecycle semantics are
+specified and tested.
+
+The xterm browser dependency is optional and reproducible: an exact 6.0.0
+version and Bun integrity lock are committed; Bun's trusted dependency list is
+empty and lifecycle scripts are disabled in config and on the command line.
+The update script refuses an ordinary host invocation and verifies the SHA-512
+of every copied embedded asset before accepting an update. Build or extract
+third-party browser assets inside a darkaifactory
+Sandbox, not on a trusted host. Serve the terminal with a restrictive CSP and
+the usual cross-origin, MIME-sniffing, framing, referrer, and permissions
+headers. Because CSP cannot prevent compromised same-origin code from using
+the dashboard's own authenticated APIs, isolate terminal assets and their
+short-lived, Workspace-scoped connection capability from general dashboard
+control endpoints before considering the dependency boundary complete.
+
+Acceptance includes protocol unit tests, real-KVM PTY data/resize/exit tests,
+browser reconnect and lifecycle tests, and a bounded source-blind browser pass
+informed by the tracker-independent issue history. Any browser automation gap
+will be recorded explicitly rather than replaced by source-aware testing.
+
 The real user-namespace smoke test waits boundedly for `newuidmap` and
 `newgidmap` to populate the already-visible child process. This preserves the
 real namespace assertion without racing the parent-side map setup on busy CI

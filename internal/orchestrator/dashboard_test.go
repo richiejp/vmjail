@@ -49,7 +49,7 @@ func TestDashboardGroupsActiveInactiveDisconnectedAndUnassigned(t *testing.T) {
 func TestDashboardHTTPJSONHTMLAndHealth(t *testing.T) {
 	nodes := nodectrl.NewRegistry(nil)
 	workspaces := workspacecatalog.NewStore(nil)
-	handler := dashboardHandler(nodes, workspaces)
+	handler := dashboardHandler(nodes, workspaces, nil, nil)
 
 	jsonResponse := httptest.NewRecorder()
 	handler.ServeHTTP(jsonResponse, httptest.NewRequest(http.MethodGet, "/v1/status", http.NoBody))
@@ -91,7 +91,7 @@ func TestDashboardWorkspaceNodeSandboxDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := dashboardHandler(nodes, workspaces)
+	handler := dashboardHandler(nodes, workspaces, nil, nil)
 	for path, contains := range map[string]string{
 		"/workspaces/workspace-one":      "daft sandbox observe project",
 		"/nodes/" + fingerprint.String(): "node-one",
@@ -149,7 +149,7 @@ func TestDashboardDetailsIncludeSafeAgentRunAndDisconnectedNode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := dashboardHandler(nodectrl.NewRegistry(nil), workspaces, runs)
+	handler := dashboardHandler(nodectrl.NewRegistry(nil), workspaces, runs, nil)
 	page := httptest.NewRecorder()
 	handler.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/workspaces/workspace-two", http.NoBody))
 	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "run-one") || strings.Contains(page.Body.String(), "must not render") {
@@ -165,7 +165,7 @@ func TestDashboardDetailsIncludeSafeAgentRunAndDisconnectedNode(t *testing.T) {
 func TestDashboardEventsReadyAndChange(t *testing.T) {
 	nodes := nodectrl.NewRegistry(nil)
 	workspaces := workspacecatalog.NewStore(nil)
-	handler := dashboardHandler(nodes, workspaces)
+	handler := dashboardHandler(nodes, workspaces, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	writer := newDashboardEventWriter()
@@ -189,7 +189,7 @@ func TestDashboardEventsReadyAndChange(t *testing.T) {
 }
 
 func TestDashboardEventsRejectUnsupportedWriterAndStopCanceledRequest(t *testing.T) {
-	handler := dashboardHandler(nodectrl.NewRegistry(nil), workspacecatalog.NewStore(nil))
+	handler := dashboardHandler(nodectrl.NewRegistry(nil), workspacecatalog.NewStore(nil), nil, nil)
 	unsupported := &dashboardFailingWriter{header: make(http.Header)}
 	handler.ServeHTTP(unsupported, httptest.NewRequest(http.MethodGet, "/events", http.NoBody))
 	ctx, cancel := context.WithCancel(context.Background())
@@ -215,7 +215,7 @@ func TestDashboardEventsReportAgentRunChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := dashboardHandler(nodectrl.NewRegistry(nil), workspacecatalog.NewStore(nil), runs)
+	handler := dashboardHandler(nodectrl.NewRegistry(nil), workspacecatalog.NewStore(nil), runs, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	writer := newDashboardEventWriter()
@@ -294,7 +294,7 @@ func TestDashboardRenderingHandlesZeroTimestampAndWriteFailure(t *testing.T) {
 	if err := newDashboardPage().Execute(io.Discard, status); err != nil {
 		t.Fatalf("render zero timestamp: %v", err)
 	}
-	dashboardHandler(nodectrl.NewRegistry(nil), workspacecatalog.NewStore(nil)).ServeHTTP(
+	dashboardHandler(nodectrl.NewRegistry(nil), workspacecatalog.NewStore(nil), nil, nil).ServeHTTP(
 		&dashboardFailingWriter{header: make(http.Header)},
 		httptest.NewRequest(http.MethodGet, "/", http.NoBody),
 	)

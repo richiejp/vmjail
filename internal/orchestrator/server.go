@@ -291,7 +291,7 @@ func New(cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	web, err := dashboardServerFromConfig(cfg, nodeReg, workspaceCat)
+	web, err := dashboardServerFromConfig(cfg, nodeReg, workspaceCat, resolveAttachBridger(cfg, sandboxCtrl))
 	if err != nil {
 		return nil, err
 	}
@@ -318,8 +318,8 @@ func newControlServer(cfg Config, handler http.Handler) (*mtls.Server, error) {
 	})
 }
 
-func dashboardServerFromConfig(cfg Config, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store) (*http.Server, error) {
-	return newDashboardServer(cfg.WebAddr, cfg.WebPasswordHash, cfg.WebAuthn, nodes, workspaces, cfg.AgentRunCatalog)
+func dashboardServerFromConfig(cfg Config, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store, bridger WorkspaceAttachBridger) (*http.Server, error) {
+	return newDashboardServer(cfg.WebAddr, cfg.WebPasswordHash, cfg.WebAuthn, nodes, workspaces, cfg.AgentRunCatalog, bridger)
 }
 
 func resolveReaper(reaper *trace.IngressReaper, tracer *trace.Tracer) *trace.IngressReaper {
@@ -329,11 +329,11 @@ func resolveReaper(reaper *trace.IngressReaper, tracer *trace.Tracer) *trace.Ing
 	return reaper
 }
 
-func newDashboardServer(addr string, passwordHash []byte, webAuthnConfig *DashboardWebAuthnConfig, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store, runs *agentruncatalog.Store) (*http.Server, error) {
+func newDashboardServer(addr string, passwordHash []byte, webAuthnConfig *DashboardWebAuthnConfig, nodes *nodectrl.Registry, workspaces *workspacecatalog.Store, runs *agentruncatalog.Store, bridger WorkspaceAttachBridger) (*http.Server, error) {
 	if addr == "" {
 		return nil, nil //nolint:nilnil // A nil server means the optional listener is disabled.
 	}
-	handler := dashboardHandler(nodes, workspaces, runs)
+	handler := dashboardHandler(nodes, workspaces, runs, &dashboardTerminal{workspaces: workspaces, bridger: bridger})
 	if len(passwordHash) > 0 || webAuthnConfig != nil {
 		auth := newDashboardAuth(passwordHash)
 		if webAuthnConfig != nil {
@@ -348,6 +348,7 @@ func newDashboardServer(addr string, passwordHash []byte, webAuthnConfig *Dashbo
 		}
 		handler = auth.wrap(handler)
 	}
+	handler = withDashboardSecurityHeaders(handler)
 	return &http.Server{Addr: addr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}, nil
 }
 

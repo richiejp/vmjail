@@ -494,14 +494,14 @@ func TestDashboardWebAuthnServerBootstrapRules(t *testing.T) {
 		RPID: dashboardTestHost, RPOrigins: []string{"https://" + dashboardTestHost},
 		StatePath: filepath.Join(t.TempDir(), "state.json"),
 	}
-	if _, err := newDashboardServer("127.0.0.1:0", nil, &config, nodes, workspaces, nil); err == nil {
+	if _, err := newDashboardServer("127.0.0.1:0", nil, &config, nodes, workspaces, nil, nil); err == nil {
 		t.Fatal("expected empty passwordless bootstrap rejection")
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
-	if server, err := newDashboardServer("127.0.0.1:0", hash, &config, nodes, workspaces, nil); err != nil || server == nil {
+	if server, err := newDashboardServer("127.0.0.1:0", hash, &config, nodes, workspaces, nil, nil); err != nil || server == nil {
 		t.Fatalf("password bootstrap server = %#v, %v", server, err)
 	}
 	store, err := openDashboardWebAuthnStore(config.StatePath)
@@ -511,10 +511,10 @@ func TestDashboardWebAuthnServerBootstrapRules(t *testing.T) {
 	if err := store.addCredential(webauthn.Credential{ID: []byte("key")}); err != nil {
 		t.Fatalf("add credential: %v", err)
 	}
-	if server, err := newDashboardServer("127.0.0.1:0", nil, &config, nodes, workspaces, nil); err != nil || server == nil {
+	if server, err := newDashboardServer("127.0.0.1:0", nil, &config, nodes, workspaces, nil, nil); err != nil || server == nil {
 		t.Fatalf("passwordless existing-key server = %#v, %v", server, err)
 	}
-	if server, err := newDashboardServer("", nil, &config, nodes, workspaces, nil); err != nil || server != nil {
+	if server, err := newDashboardServer("", nil, &config, nodes, workspaces, nil, nil); err != nil || server != nil {
 		t.Fatalf("disabled dashboard server = %#v, %v", server, err)
 	}
 }

@@ -46,14 +46,11 @@ type dashboardStatus struct {
 	Unassigned     []dashboardWorkspace `json:"unassigned_workspaces"`
 }
 
-func dashboardHandler(nodes *nodectrl.Registry, workspaces *workspacecatalog.Store, runStores ...*agentruncatalog.Store) http.Handler {
+func dashboardHandler(nodes *nodectrl.Registry, workspaces *workspacecatalog.Store, runs *agentruncatalog.Store, terminal *dashboardTerminal) http.Handler {
 	mux := http.NewServeMux()
 	page := newDashboardPage()
-	var runs *agentruncatalog.Store
-	if len(runStores) > 0 {
-		runs = runStores[0]
-	}
 	status := func() dashboardStatus { return buildDashboardStatus(nodes, workspaces, time.Now().UTC()) }
+	registerDashboardAssetRoutes(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeDashboardJSON(w, map[string]string{"status": "ok"})
 	})
@@ -61,6 +58,7 @@ func dashboardHandler(nodes *nodectrl.Registry, workspaces *workspacecatalog.Sto
 		writeDashboardJSON(w, status())
 	})
 	registerDashboardDetailRoutes(mux, nodes, workspaces, runs)
+	registerDashboardTerminalRoutes(mux, terminal)
 	mux.HandleFunc("GET /events", func(w http.ResponseWriter, r *http.Request) {
 		serveDashboardEvents(w, r, nodes, workspaces, runs)
 	})
