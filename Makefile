@@ -45,6 +45,8 @@ check-deploy-skill:
 check-agent-tools:
 	@sh -n scripts/go-nav.sh
 	@scripts/test-go-nav.sh
+	@sh -n scripts/blackbox-agent.sh scripts/test-blackbox-agent.sh
+	@scripts/test-blackbox-agent.sh
 
 # verify is the full gate set used by the pre-commit hook. `dev`
 # builds every real artefact (Go binaries + VM toolchain + initramfs +

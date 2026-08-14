@@ -75,3 +75,16 @@ host paths, source paths, or unbounded command output into evidence.
 the deterministic scenario files, its goals deliberately do not prescribe
 commands. Agents may vary the supplied `workspaces/` fixtures or substitute a
 real project. Only human-interface feature goals constrain the interface.
+
+Run the complete exploratory campaign from a trusted client host with:
+
+```sh
+DAFT_BLACKBOX_UNRESTRICTED=1 scripts/blackbox-agent.sh
+```
+
+The explicit opt-in disables Codex's own shell and network sandbox so the
+tester can reach the local/VPN control plane. The launcher gives it a temporary
+source-blind copy of only the public CLI, documentation, goals, and fixtures;
+darkaifactory remains the isolation boundary for untrusted workloads. By
+default the Terra campaign attempts all 20 goals within two hours and records
+at most ten confirmed issues in the reported temporary output directory.
