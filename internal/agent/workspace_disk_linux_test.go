@@ -3,13 +3,40 @@
 package agent
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func TestRunWorkspaceDiskCommand(t *testing.T) {
+	if err := runWorkspaceDiskCommand(t.Context(), "/bin/sh", "-c", "exit 0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runWorkspaceDiskCommand(t.Context(), "/bin/sh", "-c", "echo failed; exit 7"); err == nil || !strings.Contains(err.Error(), "failed") {
+		t.Fatalf("failure = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	err := runWorkspaceDiskCommand(ctx, "/proc/self/exe", "-test.run=TestWorkspaceCommandSleepHelper", "--", "workspace-sleep-helper")
+	if err == nil || !strings.Contains(err.Error(), "process diagnostic") || !strings.Contains(err.Error(), "State:") {
+		t.Fatalf("timeout diagnostic = %v", err)
+	}
+	if got := workspaceProcessDiagnostic(-1); !strings.Contains(got, "no such file") {
+		t.Fatalf("missing process diagnostic = %q", got)
+	}
+}
+
+func TestWorkspaceCommandSleepHelper(t *testing.T) {
+	if len(os.Args) == 0 || os.Args[len(os.Args)-1] != "workspace-sleep-helper" {
+		return
+	}
+	time.Sleep(10 * time.Second)
+}
 
 type noStatFileInfo struct{}
 
@@ -39,7 +66,7 @@ func TestReadWorkspaceMagic(t *testing.T) {
 		t.Fatal("short device accepted")
 	}
 	deps := defaultWorkspaceDiskDeps()
-	if deps.readMagic == nil || deps.mountXFS == nil || deps.bindMount == nil || deps.run == nil {
+	if deps.readMagic == nil || deps.mountXFS == nil || deps.bindMount == nil || deps.run == nil || deps.capacity == nil {
 		t.Fatal("default workspace disk dependencies incomplete")
 	}
 	if err := deps.mountXFS("/missing-device", filepath.Join(t.TempDir(), "mount")); err == nil {
@@ -50,6 +77,17 @@ func TestReadWorkspaceMagic(t *testing.T) {
 	}
 	if err := deps.run(t.Context(), "/missing-xfs-tool"); err == nil {
 		t.Fatal("missing tool execution succeeded")
+	}
+	if _, err := deps.capacity("/dev/missing-block-device"); err == nil {
+		t.Fatal("missing block capacity succeeded")
+	}
+	if got, err := parseWorkspaceDiskSectors([]byte("8\n")); err != nil || got != 4096 {
+		t.Fatalf("parse capacity = %d, %v", got, err)
+	}
+	for _, input := range []string{"invalid", "18446744073709551615"} {
+		if _, err := parseWorkspaceDiskSectors([]byte(input)); err == nil {
+			t.Fatalf("capacity %q accepted", input)
+		}
 	}
 }
 

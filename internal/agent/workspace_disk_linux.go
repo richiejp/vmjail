@@ -3,13 +3,18 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
@@ -27,15 +32,85 @@ func defaultWorkspaceDiskDeps() workspaceDiskDeps {
 			return syscall.Mount(source, target, "", syscall.MS_BIND, "")
 		},
 		receiveSeed: workspacesnapshot.ReceiveSeed,
-		run: func(ctx context.Context, name string, args ...string) error {
-			output, err := exec.CommandContext(ctx, name, args...).CombinedOutput() // #nosec G204 -- executable and arguments are fixed guest policy.
-			if err != nil {
-				return fmt.Errorf("%w: %s", err, output)
-			}
-			return nil
-		},
-		usage: workspaceDiskUsage,
+		run:         runWorkspaceDiskCommand,
+		usage:       workspaceDiskUsage,
+		capacity:    workspaceDiskCapacity,
 	}
+}
+
+func runWorkspaceDiskCommand(ctx context.Context, name string, args ...string) error {
+	//daft:lint:disable=commandcontext reason="manual cancellation snapshots /proc before a bounded kill and wait"
+	cmd := exec.Command(name, args...) // #nosec G204 -- executable and arguments are fixed guest policy.
+	var output bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &output, &output
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			return fmt.Errorf("%w: %s", err, output.Bytes())
+		}
+		return nil
+	case <-ctx.Done():
+		diagnostic := workspaceProcessDiagnostic(cmd.Process.Pid)
+		_ = cmd.Process.Kill()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+		}
+		return fmt.Errorf("%w\nprocess diagnostic (before kill):\n%s", ctx.Err(), diagnostic)
+	}
+}
+
+func workspaceProcessDiagnostic(pid int) string {
+	root := "/proc/" + strconv.Itoa(pid)
+	var report strings.Builder
+	fmt.Fprintf(&report, "pid=%d\n", pid)
+	for _, name := range []string{"status", "wchan", "syscall", "stack"} {
+		// #nosec G304 -- root is a numeric process ID and name comes from the fixed diagnostic allowlist above.
+		data, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			fmt.Fprintf(&report, "%s: %v\n", name, err)
+			continue
+		}
+		if name == "status" {
+			for _, line := range strings.Split(string(data), "\n") {
+				if strings.HasPrefix(line, "Name:") || strings.HasPrefix(line, "State:") || strings.HasPrefix(line, "PPid:") || strings.HasPrefix(line, "Threads:") {
+					fmt.Fprintln(&report, line)
+				}
+			}
+			continue
+		}
+		const diagnosticLimit = 2048
+		if len(data) > diagnosticLimit {
+			data = data[:diagnosticLimit]
+		}
+		fmt.Fprintf(&report, "%s: %s\n", name, strings.TrimSpace(string(data)))
+	}
+	return strings.TrimSpace(report.String())
+}
+
+func workspaceDiskCapacity(device string) (uint64, error) {
+	data, err := os.ReadFile(filepath.Join(string(filepath.Separator), "sys", "class", "block", filepath.Base(device), "size"))
+	if err != nil {
+		return 0, fmt.Errorf("read block capacity: %w", err)
+	}
+	return parseWorkspaceDiskSectors(data)
+}
+
+func parseWorkspaceDiskSectors(data []byte) (uint64, error) {
+	raw := strings.TrimSpace(string(data))
+	sectors, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse block capacity %q: %w", raw, err)
+	}
+	if sectors > ^uint64(0)/512 {
+		return 0, fmt.Errorf("block capacity %q overflows bytes", raw)
+	}
+	return sectors * 512, nil
 }
 
 func workspaceDiskUsage(path string) (workspacesnapshot.Usage, error) {

@@ -238,10 +238,12 @@ func TestPullReportsRequestWriteError(t *testing.T) {
 
 func TestUsageAndGrowControl(t *testing.T) {
 	want := Usage{Total: 100, Used: 91, Available: 8}
+	wantCapacity := uint64(4096)
 	grown := false
 	control := Control{
-		Usage: func() (Usage, error) { return want, nil },
-		Grow:  func(context.Context) error { grown = true; return nil },
+		Usage:    func() (Usage, error) { return want, nil },
+		Capacity: func() (uint64, error) { return wantCapacity, nil },
+		Grow:     func(context.Context) error { grown = true; return nil },
 	}
 	dial := func(ctx context.Context) (net.Conn, error) {
 		client, server := net.Pipe()
@@ -254,6 +256,10 @@ func TestUsageAndGrowControl(t *testing.T) {
 	got, err := GetUsage(t.Context(), dial)
 	if err != nil || got != want {
 		t.Fatalf("GetUsage = %#v, %v; want %#v", got, err, want)
+	}
+	capacity, err := GetCapacity(t.Context(), dial)
+	if err != nil || capacity != wantCapacity {
+		t.Fatalf("GetCapacity = %d, %v; want %d", capacity, err, wantCapacity)
 	}
 	if err := Grow(t.Context(), dial); err != nil {
 		t.Fatal(err)
@@ -288,6 +294,8 @@ func TestControlReportsGuestAndProtocolErrors(t *testing.T) {
 		{name: "usage failure", request: Request{Operation: operationUsage}, control: Control{Usage: func() (Usage, error) { return Usage{}, errors.New("statfs failed") }}},
 		{name: "grow unavailable", request: Request{Operation: operationGrow}},
 		{name: "grow failure", request: Request{Operation: operationGrow}, control: Control{Grow: func(context.Context) error { return errors.New("xfs grow failed") }}},
+		{name: "capacity unavailable", request: Request{Operation: operationCapacity}},
+		{name: "capacity failure", request: Request{Operation: operationCapacity}, control: Control{Capacity: func() (uint64, error) { return 0, errors.New("capacity failed") }}},
 		{name: "unknown", request: Request{Operation: "erase"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -316,6 +324,9 @@ func TestControlClientFailurePaths(t *testing.T) {
 	dial := func(context.Context) (net.Conn, error) { return nil, dialErr }
 	if _, err := GetUsage(t.Context(), dial); !errors.Is(err, dialErr) {
 		t.Fatalf("GetUsage error = %v", err)
+	}
+	if _, err := GetCapacity(t.Context(), dial); !errors.Is(err, dialErr) {
+		t.Fatalf("GetCapacity error = %v", err)
 	}
 	if err := Grow(t.Context(), dial); !errors.Is(err, dialErr) {
 		t.Fatalf("Grow error = %v", err)
@@ -368,6 +379,19 @@ func TestControlClientFailurePaths(t *testing.T) {
 	}
 	if err := Grow(t.Context(), closedDial); err == nil {
 		t.Fatal("closed request connection accepted")
+	}
+}
+
+func TestGetCapacityRejectsEmptyResponse(t *testing.T) {
+	client, server := net.Pipe()
+	go func() {
+		defer func() { _ = server.Close() }()
+		var request Request
+		_ = json.NewDecoder(server).Decode(&request)
+		_ = json.NewEncoder(server).Encode(response{})
+	}()
+	if _, err := GetCapacity(t.Context(), func(context.Context) (net.Conn, error) { return client, nil }); err == nil {
+		t.Fatal("empty capacity response accepted")
 	}
 }
 

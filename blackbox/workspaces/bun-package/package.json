@@ -1,0 +1,10 @@
+{
+  "name": "daft-blackbox-bun-package",
+  "private": true,
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "is-number": "7.0.0"
+  }
+}

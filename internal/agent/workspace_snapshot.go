@@ -27,16 +27,17 @@ func startWorkspaceSnapshotListener(ctx context.Context, w io.Writer, cfg *agent
 		return
 	}
 	go func() {
-		control := workspaceSnapshotControl(w, deps)
+		control := workspaceSnapshotControl(w, deps, disk.GetDevice())
 		if err := workspacesnapshot.Serve(ctx, listener, roots, control); err != nil && ctx.Err() == nil {
 			_, _ = fmt.Fprintf(w, "workspace-snapshot: serve: %v\n", err)
 		}
 	}()
 }
 
-func workspaceSnapshotControl(w io.Writer, deps workspaceDiskDeps) workspacesnapshot.Control {
+func workspaceSnapshotControl(w io.Writer, deps workspaceDiskDeps, device string) workspacesnapshot.Control {
 	return workspacesnapshot.Control{
-		Usage: func() (workspacesnapshot.Usage, error) { return deps.usage(workspaceDiskRoot) },
+		Usage:    func() (workspacesnapshot.Usage, error) { return deps.usage(workspaceDiskRoot) },
+		Capacity: func() (uint64, error) { return deps.capacity(device) },
 		Grow: func(requestCtx context.Context) error {
 			err := runXFSgrowTraced(requestCtx, deps.run, workspaceDiskRoot)
 			if err != nil {

@@ -21,6 +21,8 @@ const (
 	workspaceFreezeDenominator       = 10
 	workspaceGuestAttemptTimeout     = 5 * time.Second
 	workspaceGuestAttempts           = 3
+	workspaceCapacityAttempts        = 20
+	workspaceCapacityAttemptTimeout  = time.Second
 	workspaceGuestRetryInterval      = 100 * time.Millisecond
 )
 
@@ -282,12 +284,20 @@ func (e *Executor) ResizeWorkspaceDisk(ctx context.Context, workspaceID string, 
 	} else {
 		_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s vmm=%d\n", workspaceID, desiredSize)
 	}
-	var growErr error
+	var capacityErr error
 	if resizeErr == nil {
-		// Grow is itself the post-resize guest readiness barrier. A separate
-		// usage probe here consumed one hybrid-vsock stream and consistently
-		// stranded the immediately following grow stream. The grow helper has
-		// bounded per-attempt deadlines and safely retries idempotent xfs_growfs.
+		capacityErr = e.waitWorkspaceCapacityBounded(ctx, runtime.hostSocket, desiredSize)
+		if capacityErr != nil {
+			capacityErr = fmt.Errorf("sandboxexec: wait for guest block capacity: %w", capacityErr)
+		} else {
+			_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s capacity=%d\n", workspaceID, desiredSize)
+		}
+	}
+	var growErr error
+	if resizeErr == nil && capacityErr == nil {
+		// The capacity barrier proves the guest block layer has published the
+		// new size. xfs_growfs must not be used as that probe: when invoked
+		// during the transition it can block until its short guest deadline.
 		growErr = e.growWorkspaceGuestBounded(ctx, runtime.hostSocket)
 		if growErr != nil {
 			growErr = fmt.Errorf("sandboxexec: grow guest XFS: %w", growErr)
@@ -297,16 +307,41 @@ func (e *Executor) ResizeWorkspaceDisk(ctx context.Context, workspaceID string, 
 	}
 	if wasFrozen {
 		if pauseErr := runtime.controller.Pause(ctx); pauseErr != nil {
-			return errors.Join(resizeErr, growErr, fmt.Errorf("sandboxexec: re-freeze VM after XFS grow: %w", pauseErr))
+			return errors.Join(resizeErr, capacityErr, growErr, fmt.Errorf("sandboxexec: re-freeze VM after XFS grow: %w", pauseErr))
 		}
 		_, _ = fmt.Fprintf(e.stdout, "workspace-disk: resize %s re-frozen\n", workspaceID)
 	}
-	if err := errors.Join(resizeErr, growErr); err != nil {
+	if err := errors.Join(resizeErr, capacityErr, growErr); err != nil {
 		return err
 	}
 	runtime.allowance = desiredSize
 	runtime.resizeDone = true
 	return nil
+}
+
+func (e *Executor) waitWorkspaceCapacityBounded(ctx context.Context, hostSocket string, desired uint64) error {
+	var lastCapacity uint64
+	var lastErr error
+	for attempt := 0; attempt < workspaceCapacityAttempts; attempt++ {
+		attemptCtx, cancel := context.WithTimeout(ctx, workspaceCapacityAttemptTimeout)
+		lastCapacity, lastErr = e.getWorkspaceCapacity(attemptCtx, e.workspaceDialer(hostSocket))
+		cancel()
+		if lastErr == nil && lastCapacity >= desired {
+			return e.waitWorkspaceGuestRetry(ctx)
+		}
+		if ctx.Err() != nil {
+			return errors.Join(lastErr, ctx.Err())
+		}
+		if attempt+1 < workspaceCapacityAttempts {
+			if err := e.waitWorkspaceGuestRetry(ctx); err != nil {
+				return errors.Join(lastErr, err)
+			}
+		}
+	}
+	if lastErr != nil {
+		return fmt.Errorf("guest capacity unavailable after %d attempts: %w", workspaceCapacityAttempts, lastErr)
+	}
+	return fmt.Errorf("guest capacity=%d did not reach requested=%d after %d attempts", lastCapacity, desired, workspaceCapacityAttempts)
 }
 
 // growWorkspaceGuestBounded tolerates a transient vsock interruption while

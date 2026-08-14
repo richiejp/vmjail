@@ -21,6 +21,7 @@ const (
 	testControlAPI      = "/run/daft/test.api.sock"
 	testQCOWGrowStep    = "qcow2"
 	testVMMResizeStep   = "vmm"
+	testCapacityStep    = "capacity"
 	testXFSGrowStep     = "xfs"
 )
 
@@ -176,6 +177,12 @@ func newWorkspaceControlExecutor(store WorkspaceDiskPreparer, vm workspaceVMCont
 		getWorkspaceUsage: func(context.Context, func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error) {
 			return workspacesnapshot.Usage{}, nil
 		},
+		getWorkspaceCapacity: func(context.Context, func(context.Context) (net.Conn, error)) (uint64, error) {
+			if fake, ok := vm.(*fakeWorkspaceVM); ok && fake.sequence != nil {
+				*fake.sequence = append(*fake.sequence, testCapacityStep)
+			}
+			return testGrownAllowance, nil
+		},
 		waitWorkspaceGuestRetry: func(context.Context) error { return nil },
 		workspaceDiskControls:   map[string]*workspaceDiskRuntime{},
 	}
@@ -226,7 +233,7 @@ func TestWorkspaceDiskResizeOrdering(t *testing.T) {
 	if err := e.ResizeWorkspaceDisk(t.Context(), testWSUUID, testGrownAllowance); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(sequence, []string{testQCOWGrowStep, testVMMResizeStep, testXFSGrowStep}) {
+	if !slices.Equal(sequence, []string{testQCOWGrowStep, testVMMResizeStep, testCapacityStep, testXFSGrowStep}) {
 		t.Fatalf("resize sequence = %v", sequence)
 	}
 	status, err := e.WorkspaceDiskStatus(testWSUUID)
@@ -263,7 +270,7 @@ func TestFrozenWorkspaceResizeRequiresExplicitUnfreeze(t *testing.T) {
 	if err := e.ResizeWorkspaceDisk(t.Context(), testWSUUID, testGrownAllowance); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(sequence, []string{testQCOWGrowStep, "resume", "ready", testVMMResizeStep, testXFSGrowStep, "pause"}) {
+	if !slices.Equal(sequence, []string{testQCOWGrowStep, "resume", "ready", testVMMResizeStep, testCapacityStep, testXFSGrowStep, "pause"}) {
 		t.Fatalf("frozen resize sequence = %v", sequence)
 	}
 	if !runtime.frozen {
@@ -298,7 +305,7 @@ func TestWorkspaceDiskGrowRetriesTransientGuestControlFailures(t *testing.T) {
 	}
 }
 
-func TestWorkspaceDiskResizeUsesGrowAsPostVMMReadinessBarrier(t *testing.T) {
+func TestWorkspaceDiskResizeWaitsForCapacityBeforeGrow(t *testing.T) {
 	sequence := []string{}
 	store := &fakeWorkspaceGrowStore{sequence: &sequence}
 	vm := &fakeWorkspaceVM{sequence: &sequence}
@@ -316,7 +323,7 @@ func TestWorkspaceDiskResizeUsesGrowAsPostVMMReadinessBarrier(t *testing.T) {
 	if err := e.ResizeWorkspaceDisk(t.Context(), testWSUUID, testGrownAllowance); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(sequence, []string{testQCOWGrowStep, testVMMResizeStep, testXFSGrowStep}) {
+	if !slices.Equal(sequence, []string{testQCOWGrowStep, testVMMResizeStep, testCapacityStep, testXFSGrowStep}) {
 		t.Fatalf("sequence=%v", sequence)
 	}
 }
@@ -329,6 +336,32 @@ func TestWorkspaceGuestRetryHonoursCancellation(t *testing.T) {
 	}
 	if err := waitWorkspaceGuestRetry(t.Context()); err != nil {
 		t.Fatalf("retry wait = %v", err)
+	}
+}
+
+func TestWorkspaceCapacityBarrierFailurePaths(t *testing.T) {
+	want := errors.New("capacity unavailable")
+	e := newWorkspaceControlExecutor(nil, &fakeWorkspaceVM{})
+	e.getWorkspaceCapacity = func(context.Context, func(context.Context) (net.Conn, error)) (uint64, error) {
+		return 0, nil
+	}
+	if err := e.waitWorkspaceCapacityBounded(t.Context(), testControlVsock, testGrownAllowance); err == nil {
+		t.Fatal("undersized guest capacity accepted")
+	}
+
+	e.getWorkspaceCapacity = func(context.Context, func(context.Context) (net.Conn, error)) (uint64, error) {
+		return 0, want
+	}
+	e.waitWorkspaceGuestRetry = func(context.Context) error { return context.DeadlineExceeded }
+	if err := e.waitWorkspaceCapacityBounded(t.Context(), testControlVsock, testGrownAllowance); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("capacity retry spacing error = %v", err)
+	}
+
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	e.waitWorkspaceGuestRetry = func(context.Context) error { return nil }
+	if err := e.waitWorkspaceCapacityBounded(cancelled, testControlVsock, testGrownAllowance); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled capacity barrier error = %v", err)
 	}
 }
 
@@ -377,6 +410,24 @@ func TestWorkspaceDiskGuestControlRetryFailurePaths(t *testing.T) {
 	}
 	if err := e.waitWorkspaceGuestBounded(cancelled, testControlVsock); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled liveness error = %v", err)
+	}
+
+	capacityAttempts := 0
+	e.getWorkspaceCapacity = func(ctx context.Context, _ func(context.Context) (net.Conn, error)) (uint64, error) {
+		capacityAttempts++
+		if _, ok := ctx.Deadline(); !ok {
+			t.Fatal("capacity attempt has no deadline")
+		}
+		if capacityAttempts == 1 {
+			return testDiskAllowance, nil
+		}
+		return testGrownAllowance, nil
+	}
+	if err := e.waitWorkspaceCapacityBounded(t.Context(), testControlVsock, testGrownAllowance); err != nil {
+		t.Fatal(err)
+	}
+	if capacityAttempts != 2 {
+		t.Fatalf("capacity attempts = %d, want 2", capacityAttempts)
 	}
 }
 
@@ -448,6 +499,9 @@ func TestWorkspaceDiskResizeFailures(t *testing.T) {
 		{name: "qcow2", mutate: func(store *fakeWorkspaceGrowStore, _ *fakeWorkspaceVM, _ *Executor) { store.err = want }},
 		{name: "VMM", mutate: func(_ *fakeWorkspaceGrowStore, vm *fakeWorkspaceVM, _ *Executor) { vm.resizeErr = want }},
 		{name: "VMM frozen", frozen: true, mutate: func(_ *fakeWorkspaceGrowStore, vm *fakeWorkspaceVM, _ *Executor) { vm.resizeErr = want }},
+		{name: "capacity", mutate: func(_ *fakeWorkspaceGrowStore, _ *fakeWorkspaceVM, e *Executor) {
+			e.getWorkspaceCapacity = func(context.Context, func(context.Context) (net.Conn, error)) (uint64, error) { return 0, want }
+		}},
 		{name: "resume", frozen: true, mutate: func(_ *fakeWorkspaceGrowStore, vm *fakeWorkspaceVM, _ *Executor) { vm.resumeErr = want }},
 		{name: "XFS", mutate: func(_ *fakeWorkspaceGrowStore, _ *fakeWorkspaceVM, e *Executor) {
 			e.growWorkspaceGuest = func(context.Context, func(context.Context) (net.Conn, error)) error { return want }

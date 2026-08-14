@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 const (
@@ -55,7 +56,14 @@ func runXFSgrowTracedWith(ctx context.Context, run func(context.Context, string,
 	select {
 	case err = <-done:
 	case <-ctx.Done():
-		err = ctx.Err()
+		// The command runner snapshots the still-live process after cancellation
+		// and before killing it. Give that bounded diagnostic handoff time to
+		// complete instead of discarding it at the same deadline edge.
+		select {
+		case err = <-done:
+		case <-time.After(time.Second):
+			err = ctx.Err()
+		}
 	}
 	if traceErr != nil {
 		if err != nil {

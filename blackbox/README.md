@@ -70,3 +70,8 @@ Issue format (one compact object per line):
 Finite commands require tight measured deadlines. Performance findings must
 state a repeatable budget in the scenario. Never write credentials, absolute
 host paths, source paths, or unbounded command output into evidence.
+
+[`GOALS.md`](GOALS.md) is the outcome-oriented exploratory catalogue. Unlike
+the deterministic scenario files, its goals deliberately do not prescribe
+commands. Agents may vary the supplied `workspaces/` fixtures or substitute a
+real project. Only human-interface feature goals constrain the interface.

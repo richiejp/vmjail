@@ -37,6 +37,10 @@ func TestRunXFSgrowTraced(t *testing.T) {
 		{name: "trace unavailable failure", start: func() (*kernelTrace, error) { return nil, errors.New("tracefs") }, run: func(context.Context, string, ...string) error { return runErr }, want: "kernel trace unavailable"},
 		{name: "failure with evidence", start: func() (*kernelTrace, error) { return newTrace(t), nil }, run: func(context.Context, string, ...string) error { return runErr }, want: "xfs evidence"},
 		{name: "timeout", ctx: func() context.Context { ctx, cancel := context.WithCancel(t.Context()); cancel(); return ctx }, start: func() (*kernelTrace, error) { return newTrace(t), nil }, run: func(ctx context.Context, _ string, _ ...string) error { <-ctx.Done(); return ctx.Err() }, want: "context canceled"},
+		{name: "timeout diagnostic", ctx: func() context.Context { ctx, cancel := context.WithCancel(t.Context()); cancel(); return ctx }, start: func() (*kernelTrace, error) { return newTrace(t), nil }, run: func(ctx context.Context, _ string, _ ...string) error {
+			<-ctx.Done()
+			return errors.New("process diagnostic")
+		}, want: "process diagnostic"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

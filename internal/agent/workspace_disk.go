@@ -27,6 +27,7 @@ type workspaceDiskDeps struct {
 	receiveSeed func(context.Context, func(context.Context) (net.Conn, error), string) error
 	run         func(context.Context, string, ...string) error
 	usage       func(string) (workspacesnapshot.Usage, error)
+	capacity    func(string) (uint64, error)
 }
 
 func applyWorkspaceDisk(

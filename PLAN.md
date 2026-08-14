@@ -136,13 +136,34 @@ opaque provenance references and only sanitised public symptoms and expected
 behaviour. Testers receive this corpus directly; no issue-tracker integration
 or exporter is part of darkaifactory.
 
+Exploratory product testing uses a separate catalogue of outcome-level goals,
+not command recipes. Twenty initial goals cover networking and replay,
+dependency updates, observability, Workspace synchronisation and recovery,
+image lifecycles, storage pressure, secrets, forwarding, Node loss, and the
+human dashboard/terminal. Small interchangeable project fixtures let agents
+vary the workload while retaining a comparable objective; deterministic
+scenario JSON remains the promotion format for reproduced regressions.
+
 Resolved source-blind findings remain in the append-only issue ledger with
 their original failed evidence. Command groups reject unknown subcommands,
 and resource help names retained disk allowance.
-Live disk growth establishes a fresh guest-control readiness barrier after the
-VMM resize before invoking XFS growth. Transient guest-control retries are
-spaced and deadline-bound instead of immediately exhausting the retry budget
-during a hybrid-vsock reconnection window.
+Live disk growth establishes a fresh guest-control barrier after the VMM
+resize, then waits boundedly until the guest block layer reports the requested
+capacity before invoking XFS growth. Guest liveness alone is insufficient: a
+real-KVM failure reached the resumed guest but invoked `xfs_growfs` before the
+new virtio-blk capacity was visible, timing out three times without an XFS or
+ioctl trace event. Transient guest-control retries remain spaced and
+deadline-bound instead of immediately exhausting the retry budget during a
+hybrid-vsock reconnection window. The apparent remaining stall was a test
+deadlock: the test waited for a guest completion marker after deliberately
+freezing the VM that had to print it. It now observes frozen state through the
+host control plane, resizes and explicitly unfreezes, then requires guest
+completion. Four consecutive corrected real-KVM runs passed, with no evidence
+of a kernel-side XFS hang; the four-second grow deadline remains unchanged.
+Timed-out guest disk utilities now capture their live `/proc` state before
+termination (task state, wait channel, current syscall, bounded kernel stack,
+and thread metadata). This makes the next real-VM reproduction distinguish a
+userspace stall from an earlier kernel syscall or the XFS grow ioctl itself.
 
 GitHub CI enforces a stable 94% total-coverage floor plus the normal per-file
 floor; local verification continues to ratchet monotonically against the

@@ -22,8 +22,9 @@ const (
 )
 
 const (
-	operationUsage = "usage"
-	operationGrow  = "grow"
+	operationUsage    = "usage"
+	operationGrow     = "grow"
+	operationCapacity = "capacity"
 )
 
 type Request struct {
@@ -44,13 +45,15 @@ type Usage struct {
 // Nil functions make that operation unavailable without weakening snapshot
 // service behavior.
 type Control struct {
-	Usage func() (Usage, error)
-	Grow  func(context.Context) error
+	Usage    func() (Usage, error)
+	Capacity func() (uint64, error)
+	Grow     func(context.Context) error
 }
 
 type response struct {
-	Usage *Usage `json:"usage,omitempty"`
-	Error string `json:"error,omitempty"`
+	Usage    *Usage  `json:"usage,omitempty"`
+	Capacity *uint64 `json:"capacity_bytes,omitempty"`
+	Error    string  `json:"error,omitempty"`
 }
 
 func Serve(ctx context.Context, listener net.Listener, roots map[string]string, control ...Control) error {
@@ -114,6 +117,15 @@ func serveControl(ctx context.Context, conn net.Conn, operation string, control 
 			return json.NewEncoder(conn).Encode(response{Error: err.Error()})
 		}
 		return json.NewEncoder(conn).Encode(response{})
+	case operationCapacity:
+		if control.Capacity == nil {
+			return json.NewEncoder(conn).Encode(response{Error: "workspace capacity unavailable"})
+		}
+		capacity, err := control.Capacity()
+		if err != nil {
+			return json.NewEncoder(conn).Encode(response{Error: err.Error()})
+		}
+		return json.NewEncoder(conn).Encode(response{Capacity: &capacity})
 	case "":
 	default:
 		return json.NewEncoder(conn).Encode(response{Error: "unknown workspace operation"})
@@ -191,6 +203,21 @@ func GetUsage(ctx context.Context, dial func(context.Context) (net.Conn, error))
 // device's current size.
 func Grow(ctx context.Context, dial func(context.Context) (net.Conn, error)) error {
 	return controlRequest(ctx, dial, Request{Operation: operationGrow}, nil)
+}
+
+// GetCapacity reads the guest-visible block-device capacity. It is distinct
+// from filesystem usage so a caller can wait for a VMM resize to reach the
+// guest block layer before invoking xfs_growfs.
+func GetCapacity(ctx context.Context, dial func(context.Context) (net.Conn, error)) (uint64, error) {
+	var result uint64
+	err := controlRequest(ctx, dial, Request{Operation: operationCapacity}, func(resp response) error {
+		if resp.Capacity == nil {
+			return errors.New("workspace snapshot: capacity response is empty")
+		}
+		result = *resp.Capacity
+		return nil
+	})
+	return result, err
 }
 
 func controlRequest(ctx context.Context, dial func(context.Context) (net.Conn, error), request Request, consume func(response) error) error {

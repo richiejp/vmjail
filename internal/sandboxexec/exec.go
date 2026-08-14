@@ -175,6 +175,7 @@ type Executor struct {
 	newWorkspaceVMController  func(string) (workspaceVMController, error)
 	dialWorkspaceGuest        func(context.Context, string, uint32) (net.Conn, error)
 	getWorkspaceUsage         func(context.Context, func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error)
+	getWorkspaceCapacity      func(context.Context, func(context.Context) (net.Conn, error)) (uint64, error)
 	growWorkspaceGuest        func(context.Context, func(context.Context) (net.Conn, error)) error
 	waitWorkspaceGuestRetry   func(context.Context) error
 	// observerDir, when non-empty, is the absolute parent directory
@@ -427,6 +428,7 @@ func New(cfg Config) (*Executor, error) {
 		newWorkspaceVMController:  newWorkspaceVMController,
 		dialWorkspaceGuest:        sandbox.DialGuestVsock,
 		getWorkspaceUsage:         workspacesnapshot.GetUsage,
+		getWorkspaceCapacity:      workspacesnapshot.GetCapacity,
 		growWorkspaceGuest:        workspacesnapshot.Grow,
 		waitWorkspaceGuestRetry:   waitWorkspaceGuestRetry,
 		observerDir:               cfg.ObserverDir,

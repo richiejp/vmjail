@@ -175,10 +175,9 @@ func TestClusterWorkspacePushMutatePull(t *testing.T) {
 			"test $(stat -c %s /workspace/fill.bin) -gt 900000000; size_rc=$?; "+
 			"rm /workspace/fill.bin; sync; dd if=/dev/zero of=/workspace/fill.bin bs=1M count=875; "+
 			"refill_rc=$?; sync; echo S4-FILL-$rc-$size_rc-$refill_rc")
-	// The qcow2/XFS allowance is the final boundary: the oversized write must
-	// hit ENOSPC. Recreating a clean 875 MiB filler leaves deterministic XFS
-	// metadata headroom while keeping measured usage above the 90% threshold.
-	waitForFileContains(t, fillProc, fillLog, "S4-FILL-1-0-0", 60*time.Second, paneDump)
+	// The producer may be paused before its shell can report ENOSPC. Observe
+	// freezing from the host control plane first; requiring guest completion
+	// here would deadlock the test against the behavior it is proving.
 	testdaemons.RunWorkspaceSteps(t, s, "S4FREEZE", []testdaemons.WorkspaceStep{{
 		Label: "wait-frozen", Cmd: fmt.Sprintf(
 			"frozen=; for i in $(seq 1 30); do out=$(%s workspace storage status --name %s %s); echo \"$out\"; echo \"$out\" | grep -q 'storage_frozen=true' && frozen=yes && break; sleep 1; done; test \"$frozen\" = yes",
@@ -199,6 +198,9 @@ func TestClusterWorkspacePushMutatePull(t *testing.T) {
 			"%s workspace unfreeze --name %s %s", prefix, wsName, orch,
 		)},
 	}, 60*time.Second)
+	// Once explicitly resumed, the producer must finish the ENOSPC recovery
+	// sequence. The clean 875 MiB filler retains deterministic XFS headroom.
+	waitForFileContains(t, fillProc, fillLog, "S4-FILL-1-0-0", 60*time.Second, paneDump)
 	testdaemons.RunWorkspaceSteps(t, s, "S4RESUMED", []testdaemons.WorkspaceStep{{
 		Label: "status-after-unfreeze", Cmd: fmt.Sprintf(
 			"%s workspace storage status --name %s %s | grep -q 'storage_frozen=false'",
