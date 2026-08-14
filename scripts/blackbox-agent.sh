@@ -13,14 +13,21 @@ codex_bin=${CODEX_BIN:-codex}
 model=${DAFT_BLACKBOX_MODEL:-gpt-5.6-terra}
 campaign_seconds=${DAFT_BLACKBOX_TIMEOUT_SECONDS:-7200}
 max_issues=${DAFT_BLACKBOX_MAX_ISSUES:-10}
-config_dir=${DAFT_CONFIG_DIR:-"${HOME}/.config/daft/client"}
 output_root=${DAFT_BLACKBOX_OUTPUT:-}
+bin_dir=${DAFT_BLACKBOX_BIN_DIR:-"$repo_root/bin"}
+live_cluster=${DAFT_BLACKBOX_LIVE:-0}
 
 [[ "$campaign_seconds" =~ ^[1-9][0-9]*$ ]] || { echo "blackbox-agent: timeout must be positive seconds" >&2; exit 2; }
 [[ "$max_issues" =~ ^[1-9][0-9]*$ ]] || { echo "blackbox-agent: max issues must be positive" >&2; exit 2; }
 command -v "$codex_bin" >/dev/null || { echo "blackbox-agent: Codex executable not found: $codex_bin" >&2; exit 2; }
-[[ -x "$repo_root/bin/daft" ]] || { echo "blackbox-agent: build bin/daft first" >&2; exit 2; }
-[[ -d "$config_dir" ]] || { echo "blackbox-agent: client config not found: $config_dir" >&2; exit 2; }
+[[ "$live_cluster" == "0" || "$live_cluster" == "1" ]] || { echo "blackbox-agent: DAFT_BLACKBOX_LIVE must be 0 or 1" >&2; exit 2; }
+
+if [[ "${DAFT_BLACKBOX_SKIP_BUILD:-}" != "1" ]]; then
+	make -C "$repo_root" dev
+fi
+for binary in daft daft-orchestrator daft-sandboxd; do
+	[[ -x "$bin_dir/$binary" ]] || { echo "blackbox-agent: missing executable: $bin_dir/$binary" >&2; exit 2; }
+done
 
 if [[ -z "$output_root" ]]; then
 	output_root=$(mktemp -d "${TMPDIR:-/tmp}/daft-blackbox-terra.XXXXXX")
@@ -29,16 +36,43 @@ else
 fi
 public_root="$output_root/public"
 mkdir -p "$public_root/bin" "$public_root/docs" "$output_root/results/runs" "$output_root/results/scenarios"
-cp "$repo_root/bin/daft" "$public_root/bin/daft"
+cp "$bin_dir/daft" "$public_root/bin/daft"
 cp -R "$repo_root/blackbox" "$public_root/blackbox"
 cp "$repo_root/README" "$repo_root/OBSERVABILITY.md" "$public_root/docs/"
-ln -s "$config_dir" "$public_root/client-config"
+
+cluster_description="an isolated local cluster built from the current checkout"
+dashboard_description="the isolated dashboard URL printed below"
+if [[ "$live_cluster" == "1" ]]; then
+	config_dir=${DAFT_CONFIG_DIR:-}
+	[[ -n "$config_dir" ]] || { echo "blackbox-agent: live mode requires an explicit DAFT_CONFIG_DIR" >&2; exit 2; }
+	[[ -d "$config_dir" ]] || { echo "blackbox-agent: client config not found: $config_dir" >&2; exit 2; }
+	cluster_description="the explicitly requested live cluster"
+	dashboard_description="the explicitly supplied live dashboard, if any"
+	ln -s "$config_dir" "$public_root/client-config"
+else
+	cluster_state="$output_root/cluster"
+	cluster_addr=${DAFT_BLACKBOX_CLUSTER_ADDR:-127.0.0.1:24443}
+	cluster_web_addr=${DAFT_BLACKBOX_WEB_ADDR:-127.0.0.1:24080}
+	cleanup_cluster() {
+		"$bin_dir/daft" cluster down --state "$cluster_state" >/dev/null 2>&1 || true
+		if [[ -d "$cluster_state/logs" ]]; then
+			cp -R "$cluster_state/logs" "$output_root/results/cluster-logs"
+		fi
+		"$bin_dir/daft" cluster down --state "$cluster_state" --purge >/dev/null 2>&1 || true
+	}
+	trap cleanup_cluster EXIT
+	"$bin_dir/daft" cluster up --state "$cluster_state" --addr "$cluster_addr" \
+		--web-addr "$cluster_web_addr" --egress-proxy \
+		--orchestrator-bin "$bin_dir/daft-orchestrator" --sandboxd-bin "$bin_dir/daft-sandboxd"
+	ln -s "$cluster_state/client" "$public_root/client-config"
+	dashboard_description="http://$cluster_web_addr"
+fi
 
 prompt_file="$output_root/prompt.md"
 cat >"$prompt_file" <<EOF
 You are a source-blind product tester for darkaifactory. Test all 20 numbered
 goals in blackbox/GOALS.md, in order, using only the installed public CLI,
-public docs, fixtures, and the live cluster. Do not inspect the darkaifactory
+public docs, fixtures, and ${cluster_description}. Do not inspect the darkaifactory
 source checkout, Git history, implementation logs, Codex session files, or the
 contents of the client identity directory. Invoke the client as:
 
@@ -49,7 +83,8 @@ not the security boundary. Run untrusted project commands only inside
 darkaifactory sandboxes. Do not weaken TLS, expose credentials, stop host
 services, or mutate unrelated host files. Browser-only goals must drive an
 actual browser, either headed or headless with DevTools/screenshots; do not
-substitute curl. Do not inspect the client-config symlink or its contents.
+substitute curl. The dashboard is ${dashboard_description}. Do not inspect the
+client-config symlink or its contents.
 
 Campaign bounds: ${campaign_seconds}s total, all 20 goals attempted, at most
 ${max_issues} confirmed issues. A confirmed issue requires two clean

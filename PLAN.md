@@ -145,11 +145,13 @@ Exploratory product testing uses a separate catalogue of outcome-level goals,
 not command recipes. Twenty initial goals cover networking and replay,
 dependency updates, observability, Workspace synchronisation and recovery,
 image lifecycles, storage pressure, secrets, forwarding, Node loss, and the
-human dashboard/terminal. A deliberately opt-in trusted-client launcher runs
-the Terra tester outside Codex's shell/network sandbox from a temporary
-source-blind copy of the public corpus. The campaign is bounded by time, all 20
-goal records, and a confirmed-issue ceiling; darkaifactory remains the workload
-isolation boundary. Small interchangeable project fixtures let agents
+human dashboard/terminal. A deliberately opt-in trusted-client launcher builds
+the current checkout, provisions a disposable loopback cluster, and runs the
+Terra tester outside Codex's shell/network sandbox from a temporary source-blind
+copy of the public corpus. Testing an existing deployment is a separate mode
+requiring explicit live-cluster and client-identity inputs. The campaign is
+bounded by time, all 20 goal records, and a confirmed-issue ceiling;
+darkaifactory remains the workload isolation boundary. Small interchangeable project fixtures let agents
 vary the workload while retaining a comparable objective; deterministic
 scenario JSON remains the promotion format for reproduced regressions.
 

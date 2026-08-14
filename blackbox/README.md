@@ -82,9 +82,18 @@ Run the complete exploratory campaign from a trusted client host with:
 DAFT_BLACKBOX_UNRESTRICTED=1 scripts/blackbox-agent.sh
 ```
 
-The explicit opt-in disables Codex's own shell and network sandbox so the
-tester can reach the local/VPN control plane. The launcher gives it a temporary
-source-blind copy of only the public CLI, documentation, goals, and fixtures;
-darkaifactory remains the isolation boundary for untrusted workloads. By
-default the Terra campaign attempts all 20 goals within two hours and records
-at most ten confirmed issues in the reported temporary output directory.
+The explicit opt-in disables Codex's own shell and network sandbox. By default,
+the launcher builds the current checkout, starts a disposable loopback cluster
+with its own identities and dashboard, and gives Terra a temporary source-blind
+copy of only the public CLI, documentation, goals, and fixtures. It always
+stops that cluster and retains its logs with the results; darkaifactory remains
+the isolation boundary for untrusted workloads. The campaign attempts all 20
+goals within two hours and records at most ten confirmed issues.
+
+Testing an existing deployment is intentionally separate and requires both an
+explicit mode switch and client identity:
+
+```sh
+DAFT_BLACKBOX_UNRESTRICTED=1 DAFT_BLACKBOX_LIVE=1 \
+  DAFT_CONFIG_DIR=/explicit/client scripts/blackbox-agent.sh
+```
