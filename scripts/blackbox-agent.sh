@@ -28,6 +28,11 @@ fi
 for binary in daft daft-orchestrator daft-sandboxd; do
 	[[ -x "$bin_dir/$binary" ]] || { echo "blackbox-agent: missing executable: $bin_dir/$binary" >&2; exit 2; }
 done
+export DAFT_CLOUD_HYPERVISOR=${DAFT_CLOUD_HYPERVISOR:-"$bin_dir/cloud-hypervisor/bin/cloud-hypervisor"}
+export DAFT_KERNEL=${DAFT_KERNEL:-"$bin_dir/kernel/bzImage"}
+export DAFT_INITRAMFS=${DAFT_INITRAMFS:-"$bin_dir/initramfs.cpio.gz"}
+export DAFT_VIRTIOFSD=${DAFT_VIRTIOFSD:-"$bin_dir/virtiofsd/bin/virtiofsd"}
+export DAFT_BUNDLE=${DAFT_BUNDLE:-"$bin_dir/hello-bundle"}
 
 if [[ -z "$output_root" ]]; then
 	output_root=$(mktemp -d "${TMPDIR:-/tmp}/daft-blackbox-terra.XXXXXX")
