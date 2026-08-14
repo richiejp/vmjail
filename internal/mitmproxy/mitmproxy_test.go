@@ -99,6 +99,10 @@ func (stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, errFake("stub")
 }
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
 // nonHijackingRecorder is an http.ResponseWriter that deliberately does
 // NOT implement http.Hijacker. httptest's recorder type implements
 // Hijacker on some Go versions and not others; a hand-rolled fake keeps
@@ -451,31 +455,49 @@ func rawProbeStatusLine(t *testing.T, proxyAddr string, certs *CertCache, upstre
 	return strings.TrimRight(respStatus, "\r\n")
 }
 
-// TestProxyRejectsPlainHTTP confirms the small-surface choice:
-// non-CONNECT requests get 405. nix uses HTTPS for the workload the
-// proxy was built to study, so handling plain HTTP would be dead
-// surface.
-func TestProxyRejectsPlainHTTP(t *testing.T) {
+func TestProxyUpgradesPlainHTTP(t *testing.T) {
 	certs, err := NewCertCache()
 	if err != nil {
 		t.Fatalf("NewCertCache: %v", err)
 	}
 	p := New(certs, true, io.Discard)
+	p.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if got := r.URL.String(); got != "https://packages.example/path?q=1" {
+			t.Fatalf("upgraded URL = %q", got)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"X-Upstream": {"yes"}}, Body: io.NopCloser(strings.NewReader("secure")), Request: r}, nil
+	})
+	recorder := httptest.NewRecorder()
+	p.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "http://packages.example/path?q=1", http.NoBody))
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "secure" {
+		t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("X-Daft-Egress-Upgrade"); got != "http-to-https" {
+		t.Fatalf("upgrade header = %q", got)
+	}
 
-	srv := httptest.NewServer(p)
-	t.Cleanup(srv.Close)
+	p.client.Transport = stubRoundTripper{}
+	recorder = httptest.NewRecorder()
+	p.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "http://packages.example/fail", http.NoBody))
+	if recorder.Code != http.StatusBadGateway || !strings.Contains(recorder.Body.String(), "automatic HTTPS upgrade failed") {
+		t.Fatalf("failed upgrade = %d %q", recorder.Code, recorder.Body.String())
+	}
+}
 
-	resp, err := http.Get(srv.URL + "/anything") //nolint:noctx // bounded by srv.Close.
+func TestProxyRejectsCleartextRedirect(t *testing.T) {
+	const redirectHost = "redirect.example"
+	certs, err := NewCertCache()
 	if err != nil {
-		t.Fatalf("Get: %v", err)
+		t.Fatal(err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusMethodNotAllowed {
-		t.Errorf("status = %d, want 405", resp.StatusCode)
+	p := New(certs, false, io.Discard)
+	secure := &http.Request{URL: &url.URL{Scheme: httpsScheme, Host: redirectHost}}
+	if err := p.client.CheckRedirect(secure, nil); err != nil {
+		t.Fatalf("HTTPS redirect rejected: %v", err)
 	}
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(bodyBytes), "only CONNECT") {
-		t.Errorf("body = %q, want substring 'only CONNECT'", bodyBytes)
+	cleartext := &http.Request{URL: &url.URL{Scheme: "http", Host: redirectHost}}
+	if err := p.client.CheckRedirect(cleartext, nil); err == nil || !strings.Contains(err.Error(), "cleartext HTTP denied") {
+		t.Fatalf("cleartext redirect error = %v", err)
 	}
 }
 
@@ -506,6 +528,29 @@ func TestLeafCacheReturnsSameCertForRepeatedHost(t *testing.T) {
 	}
 	if a == d {
 		t.Errorf("cache collision across different hosts; same cert returned")
+	}
+}
+
+func TestLeafCacheRenewsBeforeExpiry(t *testing.T) {
+	originalNow := nowFn
+	t.Cleanup(func() { nowFn = originalNow })
+	current := time.Now()
+	nowFn = func() time.Time { return current }
+	c, err := NewCertCache()
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := c.leafForHost("example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current = current.Add(leafValidity - leafRenewal/2)
+	second, err := c.leafForHost("example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second || !second.Leaf.NotAfter.After(first.Leaf.NotAfter) {
+		t.Fatalf("leaf was not renewed: first=%v second=%v", first.Leaf.NotAfter, second.Leaf.NotAfter)
 	}
 }
 

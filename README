@@ -65,3 +65,6 @@ daft node list
 `daft cluster up` starts a disposable single-machine cluster and approves its
 local identities. Its state is kept in the invoking user's XDG state directory.
 Run `daft cluster down` when finished.
+
+See [sandbox egress](docs/usage/egress.md) for the inspected HTTPS transport,
+automatic cleartext-HTTP upgrade, trust contract, and failure behaviour.

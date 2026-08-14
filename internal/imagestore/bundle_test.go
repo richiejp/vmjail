@@ -508,6 +508,20 @@ func TestDefaultRuntimeOmitsFuse(t *testing.T) {
 	}
 }
 
+func TestCompatibilityCapabilitiesPermitPrivilegeDrop(t *testing.T) {
+	caps := compatibilityCapabilities()
+	for _, want := range []string{capSetUID, capSetGID} {
+		for name, set := range map[string][]string{"bounding": caps.Bounding, "effective": caps.Effective, "permitted": caps.Permitted} {
+			if !slices.Contains(set, want) {
+				t.Errorf("%s capabilities omit %s: %v", name, want, set)
+			}
+		}
+	}
+	if slices.Contains(caps.Effective, capSysAdmin) {
+		t.Fatalf("compatibility capabilities include %s", capSysAdmin)
+	}
+}
+
 // TestBundlePrivilegedFuseGatesFuse proves the
 // BundleOptions.PrivilegedFuseMounts flag is what flips the /dev/fuse
 // bind and CAP_SYS_ADMIN in the emitted config.json: off by default,
@@ -555,7 +569,7 @@ func TestBundlePrivilegedFuseGatesFuse(t *testing.T) {
 // permitted, and never to ambient.
 func TestApplyPrivilegedBuildAddsCaps(t *testing.T) {
 	caps := applyPrivilegedBuild(emptyCapabilities())
-	for _, want := range []string{"CAP_SYS_CHROOT", "CAP_CHOWN", "CAP_SETUID", capSysAdmin} {
+	for _, want := range []string{"CAP_SYS_CHROOT", capChown, capSetUID, capSysAdmin} {
 		for _, set := range [][]string{caps.Bounding, caps.Effective, caps.Permitted} {
 			if !slices.Contains(set, want) {
 				t.Errorf("capability set %v missing %s", set, want)

@@ -103,7 +103,12 @@ staging and publication can therefore only retain conservative references;
 startup repairs those boundedly before cleanup can consider the chunks.
 
 The in-process egress proxy and DNS path support default-deny networking,
-record/replay, and guest CA injection. Host `/proc`/cgroup sampling and guest
+record/replay, and guest CA injection. Cleartext proxy requests are generically
+upgraded to the same HTTPS origin or fail with bounded corrective feedback;
+there are no package- or domain-specific rewrite rules. Per-origin interception
+certificates renew before expiry under the stable Node CA, and ordinary root
+containers retain the narrow identity/filesystem capabilities needed to drop
+privileges to helper users. Host `/proc`/cgroup sampling and guest
 eBPF gadgets provide bounded resource and build-progress observations; see
 [`OBSERVABILITY.md`](OBSERVABILITY.md).
 

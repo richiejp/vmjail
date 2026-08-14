@@ -37,11 +37,12 @@ const (
 	upstreamTimeout = 5 * time.Minute
 	connectOKLine   = "HTTP/1.1 200 OK\r\n\r\n"
 	connectMethod   = "CONNECT"
+	httpsScheme     = "https"
 )
 
-// Proxy implements http.Handler. CONNECT requests are MITM'd; plain
-// HTTP is rejected — nix uses HTTPS for cache.nixos.org and rejecting
-// plain HTTP keeps the surface small.
+// Proxy implements http.Handler. CONNECT requests are MITM'd. Plain HTTP
+// proxy requests are never forwarded in cleartext: they are upgraded to the
+// same authority over HTTPS, or fail with an actionable bounded response.
 type Proxy struct {
 	certs    *CertCache
 	upstream *http.Transport
@@ -77,8 +78,13 @@ func New(certs *CertCache, insecureUpstream bool, logSink io.Writer) *Proxy {
 	return &Proxy{
 		certs:    certs,
 		upstream: tr,
-		client:   &http.Client{Transport: tr},
-		logSink:  logSink,
+		client: &http.Client{Transport: tr, CheckRedirect: func(req *http.Request, _ []*http.Request) error {
+			if req.URL.Scheme != httpsScheme {
+				return fmt.Errorf("darkaifactory: upstream redirect to cleartext HTTP denied")
+			}
+			return nil
+		}},
+		logSink: logSink,
 	}
 }
 
@@ -88,11 +94,43 @@ func (p *Proxy) SetCache(c *httpcache.Cache) { p.cache = c }
 
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != connectMethod {
-		http.Error(w, "daft-mitm-proxy: only CONNECT (HTTPS via proxy) is supported",
-			http.StatusMethodNotAllowed)
+		p.handleHTTPUpgrade(w, r)
 		return
 	}
 	p.handleConnect(w, r)
+}
+
+func (p *Proxy) handleHTTPUpgrade(w http.ResponseWriter, r *http.Request) {
+	upgraded := r.Clone(r.Context())
+	upgraded.RequestURI = ""
+	upgraded.URL.Scheme = httpsScheme
+	if upgraded.URL.Host == "" {
+		upgraded.URL.Host = r.Host
+	}
+	upgraded.Host = upgraded.URL.Host
+	upgraded.Header.Del("Proxy-Connection")
+	start := time.Now()
+	resp, err := p.client.Do(upgraded)
+	if err != nil {
+		p.logLine("%s http://%s%s -> HTTPS-UPGRADE err=%v", r.Method, r.Host, r.URL.RequestURI(), err)
+		w.Header().Set("X-Daft-Egress-Upgrade", "failed")
+		http.Error(w, "darkaifactory: cleartext HTTP egress is denied; automatic HTTPS upgrade failed for this origin", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	for name, values := range resp.Header {
+		for _, value := range values {
+			w.Header().Add(name, value)
+		}
+	}
+	w.Header().Set("X-Daft-Egress-Upgrade", "http-to-https")
+	w.WriteHeader(resp.StatusCode)
+	written, copyErr := io.Copy(w, resp.Body)
+	if copyErr != nil {
+		p.logLine("%s %s -> %d HTTPS-UPGRADE bytes=%d elapsed=%s writeback-err=%v", r.Method, upgraded.URL, resp.StatusCode, written, time.Since(start), copyErr)
+		return
+	}
+	p.logLine("%s %s -> %d HTTPS-UPGRADE bytes=%d elapsed=%s", r.Method, upgraded.URL, resp.StatusCode, written, time.Since(start))
 }
 
 func (p *Proxy) handleConnect(w http.ResponseWriter, r *http.Request) {

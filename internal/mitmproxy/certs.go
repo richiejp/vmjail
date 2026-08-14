@@ -24,7 +24,8 @@ const (
 	// 24h cert would force re-distribution daily. Still a dev/sandbox
 	// CA — see the package doc.
 	caValidity   = 10 * 365 * 24 * time.Hour
-	leafValidity = time.Hour
+	leafValidity = 24 * time.Hour
+	leafRenewal  = time.Hour
 	caCertName   = "ca.pem"
 	caKeyName    = "ca.key"
 	caKeyPerm    = 0o600
@@ -41,6 +42,7 @@ var (
 	rsaGenerateKey = rsa.GenerateKey
 	randomSerialFn = randomSerialDefault
 	createCertFn   = x509.CreateCertificate
+	nowFn          = time.Now
 )
 
 // CertCache holds the proxy's CA and a per-host leaf-cert cache.
@@ -186,7 +188,7 @@ func (c *CertCache) persist(caDir, certPath, keyPath string) error {
 func (c *CertCache) leafForHost(host string) (*tls.Certificate, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if leaf, ok := c.leaves[host]; ok {
+	if leaf, ok := c.leaves[host]; ok && leaf.Leaf != nil && leaf.Leaf.NotAfter.Sub(nowFn()) > leafRenewal {
 		return leaf, nil
 	}
 	key, err := rsaGenerateKey(rand.Reader, keySize)
@@ -200,8 +202,8 @@ func (c *CertCache) leafForHost(host string) (*tls.Certificate, error) {
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: host},
-		NotBefore:    time.Now().Add(-time.Minute),
-		NotAfter:     time.Now().Add(leafValidity),
+		NotBefore:    nowFn().Add(-time.Minute),
+		NotAfter:     nowFn().Add(leafValidity),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
@@ -214,10 +216,14 @@ func (c *CertCache) leafForHost(host string) (*tls.Certificate, error) {
 	if err != nil {
 		return nil, fmt.Errorf("x509.CreateCertificate(leaf %s): %w", host, err)
 	}
+	parsed, err := x509.ParseCertificate(der)
+	if err != nil {
+		return nil, fmt.Errorf("parse leaf %s: %w", host, err)
+	}
 	leaf := &tls.Certificate{
 		Certificate: [][]byte{der, c.caCert.Raw},
 		PrivateKey:  key,
-		Leaf:        nil,
+		Leaf:        parsed,
 	}
 	c.leaves[host] = leaf
 	return leaf, nil

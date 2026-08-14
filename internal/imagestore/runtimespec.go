@@ -170,7 +170,7 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions, rootfs string) (runtim
 	// No nested OCI userns: the container shares sandboxd's userns
 	// (D7 slice 1). See PLAN.md "D7 — rootless storage translation".
 	linux := defaultRuntimeLinuxConfig()
-	caps := emptyCapabilities()
+	caps := compatibilityCapabilities()
 	if opts.Nested {
 		mounts, linux = applyNestedVirt(mounts, linux)
 	}
@@ -203,6 +203,21 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions, rootfs string) (runtim
 		Mounts:   mounts,
 		Linux:    linux,
 	}, nil
+}
+
+// compatibilityCapabilities are the narrow identity/filesystem capabilities
+// expected by ordinary root-run distribution tools. In particular, package
+// managers conventionally drop to an unprivileged helper account and need
+// SETUID/SETGID to do so. The microVM remains the security boundary; withholding
+// these inside it only breaks standard OCI image behavior and encourages unsafe
+// tool-specific workarounds.
+func compatibilityCapabilities() runtimeCapabilities {
+	caps := emptyCapabilities()
+	baseline := []string{capChown, "CAP_DAC_OVERRIDE", "CAP_FOWNER", "CAP_FSETID", capSetGID, capSetUID}
+	caps.Bounding = append(caps.Bounding, baseline...)
+	caps.Effective = append(caps.Effective, baseline...)
+	caps.Permitted = append(caps.Permitted, baseline...)
+	return caps
 }
 
 // applyNestedVirt grants the container nested-virtualisation access:
@@ -278,8 +293,8 @@ func applyPrivilegedFuseMounts(
 //
 //nolint:gochecknoglobals // immutable capability set, parallel to capSysAdmin.
 var buildCapabilities = []string{
-	"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER",
-	"CAP_MKNOD", "CAP_NET_RAW", "CAP_SETGID", "CAP_SETUID",
+	capChown, "CAP_DAC_OVERRIDE", "CAP_FSETID", "CAP_FOWNER",
+	"CAP_MKNOD", "CAP_NET_RAW", capSetGID, capSetUID,
 	"CAP_SETFCAP", "CAP_SETPCAP", "CAP_NET_BIND_SERVICE",
 	"CAP_SYS_CHROOT", "CAP_KILL", "CAP_AUDIT_WRITE", capSysAdmin,
 }
@@ -563,6 +578,9 @@ const (
 	// capSysAdmin is the capability the FUSE mount(2) syscall needs;
 	// it is "the new root" — see the PrivilegedFuseMounts proto doc.
 	capSysAdmin = "CAP_SYS_ADMIN"
+	capChown    = "CAP_CHOWN"
+	capSetGID   = "CAP_SETGID"
+	capSetUID   = "CAP_SETUID"
 )
 
 // defaultRuntimeMounts mirrors contrib/hello-bundle/config.json. Kept
