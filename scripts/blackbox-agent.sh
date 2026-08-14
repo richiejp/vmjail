@@ -28,10 +28,11 @@ else
 	mkdir -p "$output_root"
 fi
 public_root="$output_root/public"
-mkdir -p "$public_root/bin" "$public_root/docs" "$output_root/results"
+mkdir -p "$public_root/bin" "$public_root/docs" "$output_root/results/runs" "$output_root/results/scenarios"
 cp "$repo_root/bin/daft" "$public_root/bin/daft"
 cp -R "$repo_root/blackbox" "$public_root/blackbox"
 cp "$repo_root/README" "$repo_root/OBSERVABILITY.md" "$public_root/docs/"
+ln -s "$config_dir" "$public_root/client-config"
 
 prompt_file="$output_root/prompt.md"
 cat >"$prompt_file" <<EOF
@@ -41,14 +42,14 @@ public docs, fixtures, and the live cluster. Do not inspect the darkaifactory
 source checkout, Git history, implementation logs, Codex session files, or the
 contents of the client identity directory. Invoke the client as:
 
-  ./bin/daft ... --config-dir "$config_dir"
+  ./bin/daft ... --config-dir ./client-config
 
 You have unrestricted host networking and shell access because Codex itself is
 not the security boundary. Run untrusted project commands only inside
 darkaifactory sandboxes. Do not weaken TLS, expose credentials, stop host
-services, or mutate unrelated host files. Browser-only goals must use an actual
-available browser interface; if no browser exists, record that prerequisite as
-blocked rather than substituting curl.
+services, or mutate unrelated host files. Browser-only goals must drive an
+actual browser, either headed or headless with DevTools/screenshots; do not
+substitute curl. Do not inspect the client-config symlink or its contents.
 
 Campaign bounds: ${campaign_seconds}s total, all 20 goals attempted, at most
 ${max_issues} confirmed issues. A confirmed issue requires two clean
