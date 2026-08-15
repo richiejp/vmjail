@@ -28,6 +28,7 @@ const (
 	terminalFrameResize       = byte(1)
 	terminalFrameHeartbeat    = byte(2)
 	terminalFrameExit         = byte(3)
+	terminalFrameRetry        = byte(4)
 )
 
 type dashboardTerminal struct {
@@ -176,7 +177,7 @@ func (t *dashboardTerminal) serveWebSocket(ctx context.Context, ws terminalSocke
 		SandboxUID: sandbox.UID, TTY: true, Cols: cols, Rows: rows,
 	})
 	if err != nil {
-		_ = sendTerminalExit(ws, 1, err.Error())
+		_ = sendTerminalRetry(ws, err.Error())
 		return
 	}
 	defer func() { oops.Skip("dashboard terminal: close attach", session.Close(), net.ErrClosed) }()
@@ -285,6 +286,13 @@ func sendTerminalExit(ws terminalSocket, code int32, reason string) error {
 	binary.BigEndian.PutUint32(frame[1:5], uint32(code)) //nolint:gosec // wire format preserves signed exit-code bits.
 	copy(frame[5:], reason)
 	return ws.Send(frame)
+}
+
+func sendTerminalRetry(ws terminalSocket, reason string) error {
+	if len(reason) > 1024 {
+		reason = reason[:1024]
+	}
+	return ws.Send(append([]byte{terminalFrameRetry}, []byte(reason)...))
 }
 
 var _ http.Handler = (*dashboardTerminal)(nil)

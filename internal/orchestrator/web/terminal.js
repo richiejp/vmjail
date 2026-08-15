@@ -32,36 +32,59 @@
     socket.send(frame);
   }
 
-  const size = dimensions();
-  terminal.resize(size.cols, size.rows);
   const scheme = location.protocol === "https:" ? "wss:" : "ws:";
-  const socket = new WebSocket(scheme + "//" + location.host + location.pathname + "/socket?cols=" + size.cols + "&rows=" + size.rows);
-  socket.binaryType = "arraybuffer";
-  socket.addEventListener("open", function () {
-    status.textContent = "connected";
-    terminal.focus();
-  });
-  socket.addEventListener("message", function (event) {
-    const frame = new Uint8Array(event.data);
-    if (frame[0] === 0) {
-      terminal.write(frame.slice(1));
-    } else if (frame[0] === 3) {
-      const code = new DataView(frame.buffer).getUint32(1);
-      const reason = new TextDecoder().decode(frame.slice(5));
-      terminal.writeln("\r\n[process exited " + code + (reason ? ": " + reason : "") + "]");
-    }
-  });
-  socket.addEventListener("close", function () { status.textContent = "disconnected"; });
-  socket.addEventListener("error", function () { status.textContent = "connection failed"; });
+  let socket;
+  let terminalEnded = false;
+  let retryDelay = 250;
+
+  function connect() {
+    const size = dimensions();
+    terminal.resize(size.cols, size.rows);
+    status.textContent = retryDelay === 250 ? "connecting" : "reconnecting";
+    socket = new WebSocket(scheme + "//" + location.host + location.pathname + "/socket?cols=" + size.cols + "&rows=" + size.rows);
+    socket.binaryType = "arraybuffer";
+    socket.addEventListener("open", function () {
+      retryDelay = 250;
+      status.textContent = "connected";
+      terminal.focus();
+    });
+    socket.addEventListener("message", function (event) {
+      const frame = new Uint8Array(event.data);
+      if (frame[0] === 0) {
+        terminal.write(frame.slice(1));
+      } else if (frame[0] === 3) {
+        terminalEnded = true;
+        const code = new DataView(frame.buffer).getUint32(1);
+        const reason = new TextDecoder().decode(frame.slice(5));
+        terminal.writeln("\r\n[process exited " + code + (reason ? ": " + reason : "") + "]");
+      } else if (frame[0] === 4) {
+        const reason = new TextDecoder().decode(frame.slice(1));
+        terminal.writeln("\r\n[attach unavailable" + (reason ? ": " + reason : "") + "; retrying]");
+      }
+    });
+    socket.addEventListener("close", function () {
+      if (terminalEnded) {
+        status.textContent = "disconnected";
+        return;
+      }
+      status.textContent = "reconnecting";
+      const delay = retryDelay;
+      retryDelay = Math.min(retryDelay * 2, 5000);
+      setTimeout(connect, delay);
+    });
+    socket.addEventListener("error", function () { status.textContent = "connection failed"; });
+  }
+
+  connect();
   terminal.onData(function (data) {
-    if (socket.readyState !== WebSocket.OPEN) return;
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
     const bytes = new TextEncoder().encode(data);
     const frame = new Uint8Array(bytes.length + 1);
     frame.set(bytes, 1);
     socket.send(frame);
   });
-  window.addEventListener("resize", function () { resize(socket); });
+  window.addEventListener("resize", function () { if (socket) resize(socket); });
   setInterval(function () {
-    if (socket.readyState === WebSocket.OPEN) socket.send(new Uint8Array([2]));
+    if (socket && socket.readyState === WebSocket.OPEN) socket.send(new Uint8Array([2]));
   }, 15000);
 }());

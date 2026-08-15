@@ -155,6 +155,11 @@ darkaifactory remains the workload isolation boundary. Small interchangeable pro
 vary the workload while retaining a comparable objective; deterministic
 scenario JSON remains the promotion format for reproduced regressions.
 
+Dashboard terminal attach failures caused by a concurrent Workspace stop or
+Sandbox replacement are recoverable transport events. The browser retries
+them with capped exponential backoff and existing heartbeat liveness, while an
+actual shell exit remains final and never silently creates another shell.
+
 Resolved source-blind findings remain in the append-only issue ledger with
 their original failed evidence. Command groups reject unknown subcommands,
 and resource help names retained disk allowance.
@@ -463,12 +468,13 @@ Stages:
    server-sent events for one-way data and retain existing server-side byte,
    record, and queue limits so slow or disconnected browsers cannot create
    unbounded work.
-4. Add an optional browser terminal. A WebSocket gateway translates browser
+4. **Landed:** the optional browser terminal's WebSocket gateway translates browser
    input, output, resize, and exit frames to the existing authenticated
    `AttachSandbox` stream. It opens a new Workspace process; it must not be
    described as takeover of an existing detached AgentRun. Use a maintained
    terminal emulator rather than implementing escape-sequence handling in
-   application code.
+   application code. Concurrent stop/relaunch transport failures reconnect
+   with bounded backoff; actual process exit remains final.
 5. Package any third-party browser assets as a separate, pinned Nix output.
    Resolve dependencies and build immutable assets inside a monitored
    darkaifactory Sandbox; the orchestrator runtime receives only the resulting

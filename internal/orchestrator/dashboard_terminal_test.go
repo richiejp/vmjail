@@ -187,7 +187,7 @@ func TestDashboardTerminalHTTPGuardsAndBridgeFailure(t *testing.T) {
 	}
 	socket := &fakeTerminalSocket{}
 	terminal.serveWebSocket(context.Background(), socket, workspace, 80, 24)
-	if len(socket.sent) != 1 || socket.sent[0][0] != terminalFrameExit || !strings.Contains(string(socket.sent[0][5:]), "node unavailable") {
+	if len(socket.sent) != 1 || socket.sent[0][0] != terminalFrameRetry || !strings.Contains(string(socket.sent[0][1:]), "node unavailable") {
 		t.Fatalf("bridge failure frames = %q", socket.sent)
 	}
 }
@@ -270,6 +270,9 @@ func TestAttachToBrowserAndExitFrame(t *testing.T) {
 	}
 	if err := sendTerminalExit(&fakeTerminalSocket{err: sendFailure}, 1, "reason"); !errors.Is(err, sendFailure) {
 		t.Fatalf("exit send failure = %v", err)
+	}
+	if err := sendTerminalRetry(&fakeTerminalSocket{err: sendFailure}, strings.Repeat("reason", 300)); !errors.Is(err, sendFailure) {
+		t.Fatalf("retry send failure = %v", err)
 	}
 }
 
@@ -369,6 +372,16 @@ func TestDashboardTerminalHTTPWebSocketRoundTrip(t *testing.T) {
 	_ = asset.Body.Close()
 	if asset.Header.Get("Cross-Origin-Resource-Policy") != "cross-origin" {
 		t.Fatalf("asset headers = %v", asset.Header)
+	}
+	adapter, err := http.Get(server.URL + "/assets/terminal.js") //nolint:noctx // bounded local httptest request.
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapterBody, readErr := io.ReadAll(adapter.Body)
+	_ = adapter.Body.Close()
+	if readErr != nil || !bytes.Contains(adapterBody, []byte("setTimeout(connect, delay)")) ||
+		!bytes.Contains(adapterBody, []byte("terminalEnded = true")) {
+		t.Fatalf("terminal retry adapter missing bounded reconnect/final-exit guards: %v", readErr)
 	}
 
 	serverURL, _ := url.Parse(server.URL)
