@@ -38,6 +38,7 @@ func workspaceSnapshotControl(w io.Writer, deps workspaceDiskDeps, device string
 	return workspacesnapshot.Control{
 		Usage:    func() (workspacesnapshot.Usage, error) { return deps.usage(workspaceDiskRoot) },
 		Capacity: func() (uint64, error) { return deps.capacity(device) },
+		Flush:    func() error { return deps.flush(workspaceDiskRoot) },
 		Grow: func(requestCtx context.Context) error {
 			err := runXFSgrowTraced(requestCtx, deps.run, workspaceDiskRoot)
 			if err != nil {

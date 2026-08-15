@@ -1,8 +1,10 @@
 package sandboxexec
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,6 +28,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandboxnet"
 	"github.com/richiejp/darkaifactory/internal/workspace"
 	"github.com/richiejp/darkaifactory/internal/workspacedisk"
+	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
 
 const (
@@ -857,7 +860,7 @@ func TestRegisterWorkspaceSnapshotRoutes(t *testing.T) {
 		t.Fatalf("routes without disk/vsock = %v", mat.refreshers)
 	}
 	e.registerWorkspaceSnapshotRoutes(sandbox.Config{
-		Vsock: &sandbox.VsockConfig{HostSocket: "/run/daft/test.sock"}, WorkspaceDisk: &sandbox.DiskConfig{Path: "/disk"},
+		Vsock: &sandbox.VsockConfig{HostSocket: "/run/daft/test.sock"}, WorkspaceDisk: &sandbox.DiskConfig{Path: testControlDiskPath},
 	}, spec)
 	key := workspace.SyncKey(testWSUUID, mntWorkspace)
 	if len(mat.refreshers) != 1 || mat.refreshers[key] == nil {
@@ -869,6 +872,45 @@ func TestRegisterWorkspaceSnapshotRoutes(t *testing.T) {
 	}
 	if err := mat.refreshers[key](t.Context(), filepath.Join(blocked, "mount")); err == nil {
 		t.Fatal("snapshot refresh accepted destination below a regular file")
+	}
+}
+
+func TestWorkspaceSnapshotRefreshFlushesBeforePull(t *testing.T) {
+	mat := &fakeMaterializer{}
+	e := &Executor{mountMaterializer: mat}
+	e.registerWorkspaceSnapshotRoutes(sandbox.Config{
+		Vsock:         &sandbox.VsockConfig{HostSocket: filepath.Join(t.TempDir(), "missing.sock")},
+		WorkspaceDisk: &sandbox.DiskConfig{Path: testControlDiskPath},
+	}, &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}}})
+	err := mat.refreshers[workspace.SyncKey(testWSUUID, mntWorkspace)](t.Context(), t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "flush retained workspace disk") {
+		t.Fatalf("refresh error = %v, want flush failure", err)
+	}
+}
+
+func TestWorkspaceSnapshotRefreshFlushesAndPulls(t *testing.T) {
+	mat := &fakeMaterializer{}
+	dials := 0
+	e := &Executor{mountMaterializer: mat, dialWorkspaceGuest: func(context.Context, string, uint32) (net.Conn, error) {
+		dials++
+		client, server := net.Pipe()
+		go func(call int) {
+			defer func() { _ = server.Close() }()
+			var request workspacesnapshot.Request
+			_ = json.NewDecoder(server).Decode(&request)
+			if call == 1 {
+				_, _ = server.Write([]byte("{}\n"))
+				return
+			}
+			_ = tar.NewWriter(server).Close()
+		}(dials)
+		return client, nil
+	}}
+	e.registerWorkspaceSnapshotRoutes(sandbox.Config{
+		Vsock: &sandbox.VsockConfig{HostSocket: "/socket"}, WorkspaceDisk: &sandbox.DiskConfig{Path: testControlDiskPath},
+	}, &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}}})
+	if err := mat.refreshers[workspace.SyncKey(testWSUUID, mntWorkspace)](t.Context(), t.TempDir()); err != nil || dials != 2 {
+		t.Fatalf("refresh = %v, dials=%d", err, dials)
 	}
 }
 

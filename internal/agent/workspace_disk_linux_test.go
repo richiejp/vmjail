@@ -66,8 +66,14 @@ func TestReadWorkspaceMagic(t *testing.T) {
 		t.Fatal("short device accepted")
 	}
 	deps := defaultWorkspaceDiskDeps()
-	if deps.readMagic == nil || deps.mountXFS == nil || deps.bindMount == nil || deps.run == nil || deps.capacity == nil {
+	if deps.readMagic == nil || deps.mountXFS == nil || deps.bindMount == nil || deps.run == nil || deps.capacity == nil || deps.flush == nil {
 		t.Fatal("default workspace disk dependencies incomplete")
+	}
+	if err := deps.flush(t.TempDir()); err != nil {
+		t.Fatalf("flush temporary filesystem: %v", err)
+	}
+	if err := deps.flush(filepath.Join(t.TempDir(), "missing")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("flush missing path = %v", err)
 	}
 	if err := deps.mountXFS("/missing-device", filepath.Join(t.TempDir(), "mount")); err == nil {
 		t.Fatal("invalid XFS mount succeeded")

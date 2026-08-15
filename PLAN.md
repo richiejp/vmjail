@@ -728,6 +728,13 @@ Landed:
   mapping into a protected durable manifest before unregistering it. The
   real-KVM push/mutate/stop/pull acceptance path now also asserts the writable
   mount is XFS and supports reflink cloning.
+- Stop is lossless by contract: before VMM teardown the guest performs a
+  bounded `syncfs` on retained XFS and the Node commits verified protected CAS
+  manifests. Failure of either step refuses teardown. The retained qcow2 is
+  reused after a clean stop and remains the best available recovery source
+  after abrupt Node or host failure; the real-KVM regression deliberately
+  leaves a guest write buffered before stop rather than relying on workload
+  code to call `sync`.
 - The real-KVM XFS round trip now grows a running 512 MiB disk to 1 GiB through
   `workspace resources --disk`, verifies the mounted filesystem expanded, then
   stops and relaunches to prove the retained disk preserves guest mutations. It

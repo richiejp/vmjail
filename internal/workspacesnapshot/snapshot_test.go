@@ -240,10 +240,12 @@ func TestUsageAndGrowControl(t *testing.T) {
 	want := Usage{Total: 100, Used: 91, Available: 8}
 	wantCapacity := uint64(4096)
 	grown := false
+	flushed := false
 	control := Control{
 		Usage:    func() (Usage, error) { return want, nil },
 		Capacity: func() (uint64, error) { return wantCapacity, nil },
 		Grow:     func(context.Context) error { grown = true; return nil },
+		Flush:    func() error { flushed = true; return nil },
 	}
 	dial := func(ctx context.Context) (net.Conn, error) {
 		client, server := net.Pipe()
@@ -266,6 +268,12 @@ func TestUsageAndGrowControl(t *testing.T) {
 	}
 	if !grown {
 		t.Fatal("Grow did not invoke guest control")
+	}
+	if err := Flush(t.Context(), dial); err != nil {
+		t.Fatal(err)
+	}
+	if !flushed {
+		t.Fatal("Flush did not invoke guest control")
 	}
 }
 
@@ -296,6 +304,8 @@ func TestControlReportsGuestAndProtocolErrors(t *testing.T) {
 		{name: "grow failure", request: Request{Operation: operationGrow}, control: Control{Grow: func(context.Context) error { return errors.New("xfs grow failed") }}},
 		{name: "capacity unavailable", request: Request{Operation: operationCapacity}},
 		{name: "capacity failure", request: Request{Operation: operationCapacity}, control: Control{Capacity: func() (uint64, error) { return 0, errors.New("capacity failed") }}},
+		{name: "flush unavailable", request: Request{Operation: operationFlush}},
+		{name: "flush failure", request: Request{Operation: operationFlush}, control: Control{Flush: func() error { return errors.New("syncfs failed") }}},
 		{name: "unknown", request: Request{Operation: "erase"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -331,6 +341,9 @@ func TestControlClientFailurePaths(t *testing.T) {
 	if err := Grow(t.Context(), dial); !errors.Is(err, dialErr) {
 		t.Fatalf("Grow error = %v", err)
 	}
+	if err := Flush(t.Context(), dial); !errors.Is(err, dialErr) {
+		t.Fatalf("Flush error = %v", err)
+	}
 
 	client, server := net.Pipe()
 	go func() {
@@ -356,6 +369,9 @@ func TestControlClientFailurePaths(t *testing.T) {
 	}
 	if err := Grow(t.Context(), serverErrorDial); err == nil {
 		t.Fatal("guest grow error ignored")
+	}
+	if err := Flush(t.Context(), serverErrorDial); err == nil {
+		t.Fatal("guest flush error ignored")
 	}
 
 	malformedDial := func(context.Context) (net.Conn, error) {

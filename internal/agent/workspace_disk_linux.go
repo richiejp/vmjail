@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
+	"golang.org/x/sys/unix"
 )
 
 type workspaceDirectoryPair struct{ source, destination string }
@@ -35,7 +36,21 @@ func defaultWorkspaceDiskDeps() workspaceDiskDeps {
 		run:         runWorkspaceDiskCommand,
 		usage:       workspaceDiskUsage,
 		capacity:    workspaceDiskCapacity,
+		flush:       workspaceDiskFlush,
 	}
+}
+
+func workspaceDiskFlush(path string) error {
+	dir, err := os.Open(path) // #nosec G304 -- path is the fixed guest workspace mount.
+	if err != nil {
+		return err
+	}
+	flushErr := unix.Syncfs(int(dir.Fd()))
+	closeErr := dir.Close()
+	if flushErr != nil {
+		return flushErr
+	}
+	return closeErr
 }
 
 func runWorkspaceDiskCommand(ctx context.Context, name string, args ...string) error {

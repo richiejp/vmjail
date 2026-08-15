@@ -630,6 +630,10 @@ func (e *Executor) registerWorkspaceSnapshotRoutes(cfg sandbox.Config, spec *san
 		return
 	}
 	hostSocket := cfg.Vsock.HostSocket
+	dialGuest := e.dialWorkspaceGuest
+	if dialGuest == nil {
+		dialGuest = sandbox.DialGuestVsock
+	}
 	for i, mount := range spec.GetMounts() {
 		if mount == nil || mount.GetReadOnly() || filepath.IsAbs(mount.GetSource()) {
 			continue
@@ -637,6 +641,15 @@ func (e *Executor) registerWorkspaceSnapshotRoutes(cfg sandbox.Config, spec *san
 		directory := fmt.Sprintf("mounts/%d", i)
 		key := workspace.SyncKey(spec.GetWorkspaceUuid(), mount.GetTarget())
 		refresher.SetLiveMountRefresher(key, func(ctx context.Context, destination string) error {
+			dial := func(ctx context.Context) (net.Conn, error) {
+				return dialGuest(ctx, hostSocket, workspacesnapshot.DefaultVsockPort)
+			}
+			// A verified CAS snapshot protects the contents, while syncfs makes
+			// the retained qcow2 itself safe to reuse after this VM is stopped.
+			// Refuse the pull/stop if either durability boundary cannot be proven.
+			if err := workspacesnapshot.Flush(ctx, dial); err != nil {
+				return fmt.Errorf("sandboxexec: flush retained workspace disk: %w", err)
+			}
 			// Pull extracts a complete snapshot and intentionally refuses to
 			// overwrite entries. The staging tree may still contain the launch
 			// seed or a failed prior attempt, so reset it before every refresh.
@@ -645,9 +658,7 @@ func (e *Executor) registerWorkspaceSnapshotRoutes(cfg sandbox.Config, spec *san
 			if err := resetWorkspaceSnapshotDestination(destination); err != nil {
 				return err
 			}
-			return workspacesnapshot.Pull(ctx, func(ctx context.Context) (net.Conn, error) {
-				return sandbox.DialGuestVsock(ctx, hostSocket, workspacesnapshot.DefaultVsockPort)
-			}, directory, destination)
+			return workspacesnapshot.Pull(ctx, dial, directory, destination)
 		})
 	}
 }

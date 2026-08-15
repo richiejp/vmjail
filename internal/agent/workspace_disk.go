@@ -28,6 +28,7 @@ type workspaceDiskDeps struct {
 	run         func(context.Context, string, ...string) error
 	usage       func(string) (workspacesnapshot.Usage, error)
 	capacity    func(string) (uint64, error)
+	flush       func(string) error
 }
 
 func applyWorkspaceDisk(

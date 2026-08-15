@@ -21,5 +21,7 @@ func defaultWorkspaceDiskDeps() workspaceDiskDeps {
 		receiveSeed: func(context.Context, func(context.Context) (net.Conn, error), string) error { return err() },
 		run:         func(context.Context, string, ...string) error { return err() },
 		usage:       func(string) (workspacesnapshot.Usage, error) { return workspacesnapshot.Usage{}, err() },
+		capacity:    func(string) (uint64, error) { return 0, err() },
+		flush:       func(string) error { return err() },
 	}
 }

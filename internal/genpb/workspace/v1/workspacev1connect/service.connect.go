@@ -242,11 +242,12 @@ type WorkspaceCatalogServiceClient interface {
 	// and offline sandboxes; Unavailable when the sandbox is
 	// momentarily backlogged (the caller may retry).
 	Launch(context.Context, *connect.Request[v1.LaunchRequest]) (*connect.Response[v1.WorkspaceResponse], error)
-	// Stop transitions a RUNNING or FROZEN workspace to STOPPED
-	// and clears current_dispatch_id. For Slice B2c this is
-	// catalog-only — the wire teardown signal to the sandbox-host
-	// lands in a follow-up sub-slice. STOPPED workspaces stay
-	// mutable; a subsequent Launch boots a fresh VM.
+	// Stop snapshots every writable mount into protected CAS state and flushes
+	// the retained XFS disk before tearing down the current Sandbox. Failure to
+	// prove either durability boundary refuses teardown. Only the Node's exact
+	// teardown acknowledgement transitions RUNNING or FROZEN to STOPPED and
+	// clears current_dispatch_id. A subsequent Launch boots a fresh VM reusing
+	// the retained disk, so unadopted Sandbox changes remain present.
 	Stop(context.Context, *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 	// Delete permanently removes a stopped workspace catalog record. The exact
 	// generation guard prevents a stale client deleting a concurrently edited
@@ -771,11 +772,12 @@ type WorkspaceCatalogServiceHandler interface {
 	// and offline sandboxes; Unavailable when the sandbox is
 	// momentarily backlogged (the caller may retry).
 	Launch(context.Context, *connect.Request[v1.LaunchRequest]) (*connect.Response[v1.WorkspaceResponse], error)
-	// Stop transitions a RUNNING or FROZEN workspace to STOPPED
-	// and clears current_dispatch_id. For Slice B2c this is
-	// catalog-only — the wire teardown signal to the sandbox-host
-	// lands in a follow-up sub-slice. STOPPED workspaces stay
-	// mutable; a subsequent Launch boots a fresh VM.
+	// Stop snapshots every writable mount into protected CAS state and flushes
+	// the retained XFS disk before tearing down the current Sandbox. Failure to
+	// prove either durability boundary refuses teardown. Only the Node's exact
+	// teardown acknowledgement transitions RUNNING or FROZEN to STOPPED and
+	// clears current_dispatch_id. A subsequent Launch boots a fresh VM reusing
+	// the retained disk, so unadopted Sandbox changes remain present.
 	Stop(context.Context, *connect.Request[v1.StopRequest]) (*connect.Response[v1.WorkspaceResponse], error)
 	// Delete permanently removes a stopped workspace catalog record. The exact
 	// generation guard prevents a stale client deleting a concurrently edited

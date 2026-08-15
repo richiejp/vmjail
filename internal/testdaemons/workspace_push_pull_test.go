@@ -43,7 +43,9 @@ const (
 // workspace dir. Unlike the other testdaemons workspace tests (which
 // use `mount add --source /abs`, a direct host bind that never touches
 // the CAS), this exercises push → XFS materialisation → mutate → stop-time
-// protected snapshot → pull. It also pins XFS and reflink semantics.
+// protected snapshot → pull. It also pins XFS and reflink semantics. The
+// workload deliberately does not call sync before the first stop: stop owns
+// the durability barrier and must preserve ordinary buffered guest writes.
 func TestClusterWorkspacePushMutatePull(t *testing.T) {
 	imgPath := requireEnvPath(t, "DAFT_NIX_IMAGE",
 		"nix build .#nix-shell-image -o bin/nix-shell-image")
@@ -107,7 +109,6 @@ func TestClusterWorkspacePushMutatePull(t *testing.T) {
 	//   - cat /workspace/in.txt  -> S3 proof (the pushed bytes are in the VM),
 	//   - proves the mount is XFS and supports an explicit reflink clone,
 	//   - writes out.txt          -> the mutation S4 must surface,
-	//   - sync                    -> flush the guest write before stop snapshots,
 	//   - echoes the write's exit -> S4-WROTE-0 success sentinel.
 	execLog := filepath.Join(t.TempDir(), "exec.log")
 	paneDump := func() string { return s.Capture() }
@@ -119,7 +120,7 @@ func TestClusterWorkspacePushMutatePull(t *testing.T) {
 		"cat /workspace/in.txt; test \"$(stat -f -c %T /workspace)\" = xfs && "+
 			"cp --reflink=always /workspace/in.txt /workspace/reflink.txt && "+
 			"echo "+s4XFSSentinel+" && echo "+s4MutatedMarker+
-			" > /workspace/out.txt; rc=$?; sync; echo S4-WROTE-$rc")
+			" > /workspace/out.txt; rc=$?; echo S4-WROTE-$rc")
 	waitForFileContains(t, execProc, execLog, s4PushedMarker, 60*time.Second, paneDump)
 	waitForFileContains(t, execProc, execLog, s4XFSSentinel, 60*time.Second, paneDump)
 	waitForFileContains(t, execProc, execLog, "S4-WROTE-0", 60*time.Second, paneDump)

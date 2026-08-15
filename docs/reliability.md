@@ -18,6 +18,7 @@ not isolated mistakes. Use these names in reviews and regressions:
 | Accepted-work invisibility | Slow launch preparation was absent from heartbeats and falsely reconciled as lost | Publish a `Pending` liveness record atomically with accepting the launch |
 | Diagnostic collapse | A real pre-readiness failure was returned as a generic termination after its binding was cleared | Match the durable terminal UID/generation and return its bounded phase, exit code, and message |
 | Split authority | Client push updated CAS while a retained qcow2 remained the relaunch source, producing stale and empty mounts | Refuse running/protected disks; delete recoverable stopped disks before accepting a push |
+| Acknowledged volatile state | Stop snapshotted readable page-cache contents, then killed the VM before XFS/qcow2 had made those writes durable | Require a bounded guest `syncfs` and verified protected CAS snapshot before acknowledging teardown; refuse stop on either failure |
 
 The general invariant is: destructive or ownership-changing state transitions
 follow exact external acknowledgment, preserve enough prior state for recovery,

@@ -606,7 +606,7 @@ func addWorkspaceTools(server *mcp.Server, readAnnotations *mcp.ToolAnnotations,
 			return nil, getWorkspaceOutput{Workspace: workspace}, err
 		})
 	stopAnnotations := &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: boolPtr(true), IdempotentHint: true, OpenWorldHint: boolPtr(false)}
-	mcp.AddTool(server, &mcp.Tool{Name: workspaceStopTool, Description: "Idempotently stop the current Sandbox of one owned Workspace.", Annotations: stopAnnotations},
+	mcp.AddTool(server, &mcp.Tool{Name: workspaceStopTool, Description: "Idempotently stop the current Sandbox only after writable mounts are durably snapshotted and its retained disk is flushed; preservation failure refuses teardown.", Annotations: stopAnnotations},
 		func(ctx context.Context, _ *mcp.CallToolRequest, input getWorkspaceInput) (*mcp.CallToolResult, getWorkspaceOutput, error) {
 			if input.UUID == "" {
 				return nil, getWorkspaceOutput{}, fmt.Errorf("uuid is required")

@@ -25,6 +25,7 @@ const (
 	operationUsage    = "usage"
 	operationGrow     = "grow"
 	operationCapacity = "capacity"
+	operationFlush    = "flush"
 )
 
 type Request struct {
@@ -48,6 +49,7 @@ type Control struct {
 	Usage    func() (Usage, error)
 	Capacity func() (uint64, error)
 	Grow     func(context.Context) error
+	Flush    func() error
 }
 
 type response struct {
@@ -126,6 +128,14 @@ func serveControl(ctx context.Context, conn net.Conn, operation string, control 
 			return json.NewEncoder(conn).Encode(response{Error: err.Error()})
 		}
 		return json.NewEncoder(conn).Encode(response{Capacity: &capacity})
+	case operationFlush:
+		if control.Flush == nil {
+			return json.NewEncoder(conn).Encode(response{Error: "workspace flush unavailable"})
+		}
+		if err := control.Flush(); err != nil {
+			return json.NewEncoder(conn).Encode(response{Error: err.Error()})
+		}
+		return json.NewEncoder(conn).Encode(response{})
 	case "":
 	default:
 		return json.NewEncoder(conn).Encode(response{Error: "unknown workspace operation"})
@@ -203,6 +213,12 @@ func GetUsage(ctx context.Context, dial func(context.Context) (net.Conn, error))
 // device's current size.
 func Grow(ctx context.Context, dial func(context.Context) (net.Conn, error)) error {
 	return controlRequest(ctx, dial, Request{Operation: operationGrow}, nil)
+}
+
+// Flush asks the guest to make all retained-workspace filesystem writes
+// durable before the host acknowledges a pull or stops its VM.
+func Flush(ctx context.Context, dial func(context.Context) (net.Conn, error)) error {
+	return controlRequest(ctx, dial, Request{Operation: operationFlush}, nil)
 }
 
 // GetCapacity reads the guest-visible block-device capacity. It is distinct

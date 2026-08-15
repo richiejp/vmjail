@@ -1265,8 +1265,10 @@ func newWorkspaceReleaseCmd() *cobra.Command {
 func newWorkspaceStopCmd() *cobra.Command {
 	var opts workspaceClientOpts
 	cmd := &cobra.Command{
-		Use:           stopSubName,
-		Short:         "Stop the running workspace",
+		Use:   stopSubName,
+		Short: "Safely stop the running workspace",
+		Long: "Stop the running workspace only after its writable mounts are snapshotted and the retained disk is flushed. " +
+			"If either durability step cannot be confirmed, stop fails without acknowledging teardown so unadopted changes remain protected.",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
