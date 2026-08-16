@@ -179,6 +179,10 @@ AgentRun teardown also retains the exact Workspace binding until that terminal
 heartbeat arrives. Publishing an asynchronous delete is not itself an
 acknowledgement; a subsequent AgentRun cannot launch against the Workspace
 until the Node has completed preservation and reported the old Sandbox terminal.
+Browser campaign goals receive a small first-party, dependency-free Bun/CDP
+driver. It offers bounded navigation, native mouse/keyboard input, screenshots,
+and a virtual WebAuthn authenticator without Puppeteer, Playwright, or npm
+installation; form actions still originate from the loaded dashboard target.
 
 Live resource commits compare a grow against the Node-reported disk allowance
 when available, rather than blindly substituting the production 20 GiB default

@@ -68,6 +68,7 @@ test -d "$out/results/cluster-logs"
 test ! -e "$out/cluster"
 test -L "$out/public/workspaces"
 test -f "$out/public/workspaces/bun-package/package.json"
+test -x "$out/public/blackbox/browser-driver.js"
 test "$(grep -c '^[0-9]\+\.' "$out/public/blackbox/GOALS.md")" -eq 20
 grep -q '^cluster up .*--egress-proxy' "$tmp/daft.log"
 grep -q '^cluster down .*--purge' "$tmp/daft.log"
@@ -89,4 +90,5 @@ grep -q "Detach it with the toolbox's" "$out/public/CAMPAIGN.md"
 grep -q 'through native' "$out/prompt.md"
 grep -q 'DevTools mouse/keyboard input' "$out/prompt.md"
 grep -q 'Origin: null' "$out/prompt.md"
+grep -q 'dependency-free Bun/CDP driver' "$out/prompt.md"
 echo 'blackbox-agent script tests: OK'

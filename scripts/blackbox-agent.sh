@@ -45,6 +45,7 @@ cp "$bin_dir/daft" "$public_root/bin/daft"
 cp "$repo_root/scripts/blackbox-control.sh" "$public_root/bin/campaign-control"
 cp -R "$repo_root/blackbox" "$public_root/blackbox"
 ln -s "blackbox/workspaces" "$public_root/workspaces"
+chmod +x "$public_root/blackbox/browser-driver.js"
 cp "$repo_root/README" "$repo_root/OBSERVABILITY.md" "$public_root/docs/"
 
 cluster_description="an isolated local cluster built from the current checkout"
@@ -178,6 +179,11 @@ would. Do not invoke form.submit(), requestSubmit(), element.click(), or a
 fetch from Runtime.evaluate: browser automation evaluates those in an opaque
 context that can send \`Origin: null\`, which the dashboard correctly rejects.
 Do not submit a copied form, a file URL, or a different DevTools tab.
+The public \`blackbox/browser-driver.js\` is a dependency-free Bun/CDP driver
+for native mouse, keyboard, screenshot, and virtual-authenticator actions. Run
+Chromium with a loopback remote-debugging port, supply that HTTP endpoint and a
+bounded JSON action array to the driver, and keep every action on the exact
+dashboard page target. Using this supplied driver is permitted for goals 19–20.
 
 Campaign bounds: ${campaign_seconds}s total, all 20 goals attempted, at most
 ${max_issues} confirmed issues. A confirmed issue requires two clean
