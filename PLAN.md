@@ -162,7 +162,10 @@ actual shell exit remains final and never silently creates another shell.
 
 Resolved source-blind findings remain in the append-only issue ledger with
 their original failed evidence. Command groups reject unknown subcommands,
-and resource help names retained disk allowance.
+and resource help names retained disk allowance. Workspace deletion obtains
+its generation-checked manifest set from the Node's durable bounded inventory,
+not the client's potentially incomplete local mount map, so changed stopped
+Workspaces remain safely deletable without weakening stale-write detection.
 Live disk growth establishes a fresh guest-control barrier after the VMM
 resize, then waits boundedly until the guest block layer reports the requested
 capacity before invoking XFS growth. Guest liveness alone is insufficient: a

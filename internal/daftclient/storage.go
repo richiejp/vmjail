@@ -217,7 +217,7 @@ func (c *Client) DeleteWorkspace(ctx context.Context, uuid string) error {
 		if dialErr != nil {
 			return dialErr
 		}
-		expected, expectationErr := currentManifestExpectations(ctx, client, resource)
+		expected, expectationErr := currentDiskManifestExpectations(ctx, client, resource.GetMetadata().GetUuid())
 		if expectationErr == nil {
 			_, expectationErr = client.DeleteWorkspaceData(ctx, connect.NewRequest(&workspacev1.DeleteWorkspaceDataRequest{
 				WorkspaceUuid: resource.GetMetadata().GetUuid(), ExpectedManifests: expected,

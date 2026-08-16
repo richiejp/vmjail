@@ -219,7 +219,7 @@ func runWorkspaceDelete(cmd *cobra.Command, opts workspaceClientOpts, casDir str
 	}
 	defer func() { _ = closeRelay() }()
 	phase("checking exact Node manifests")
-	expected, err := workspaceManifestExpectations(ctx, client, uuid, mounts)
+	expected, err := workspaceDiskManifestExpectations(ctx, client, uuid)
 	if err != nil {
 		return err
 	}
@@ -339,26 +339,6 @@ func rejectWorkspaceChanges(
 		_, _ = fmt.Fprintln(out, "no writable mounts recorded in ./.daft/config.json")
 	}
 	return nil
-}
-
-func workspaceManifestExpectations(
-	ctx context.Context,
-	client workspacev1connect.WorkspaceServiceClient,
-	uuid string,
-	mounts []mountMapping,
-) ([]*workspacev1.ManifestExpectation, error) {
-	expected := make([]*workspacev1.ManifestExpectation, 0, len(mounts))
-	for _, mount := range mounts {
-		key := workspace.SyncKey(uuid, mount.Remote)
-		current, err := client.GetManifest(ctx, connect.NewRequest(&workspacev1.GetManifestRequest{Workspace: key}))
-		if err != nil {
-			return nil, fmt.Errorf("daft workspace: inspect manifest %s: %w", mount.Remote, err)
-		}
-		expected = append(expected, &workspacev1.ManifestExpectation{
-			Workspace: key, ManifestDigest: current.Msg.GetManifestDigest(), Generation: current.Msg.GetGeneration(),
-		})
-	}
-	return expected, nil
 }
 
 func workspaceDiskManifestExpectations(

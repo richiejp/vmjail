@@ -51,18 +51,19 @@ func (h *storageCatalogHandler) Delete(
 
 type storageNodeHandler struct {
 	workspacev1connect.UnimplementedWorkspaceServiceHandler
-	manifests     map[string]*workspacev1.GetManifestResponse
-	rejectCalls   int
-	unfreezeCalls int
-	resizeCalls   int
-	resizeErr     error
-	deleteCalls   int
-	manifestErr   error
-	rejectErr     error
-	diskErr       error
-	storageErr    error
-	unfreezeErr   error
-	deleteErr     error
+	manifests      map[string]*workspacev1.GetManifestResponse
+	rejectCalls    int
+	unfreezeCalls  int
+	resizeCalls    int
+	resizeErr      error
+	deleteCalls    int
+	deleteExpected []*workspacev1.ManifestExpectation
+	manifestErr    error
+	rejectErr      error
+	diskErr        error
+	storageErr     error
+	unfreezeErr    error
+	deleteErr      error
 }
 
 const testSandboxManifestDigest = "sandbox"
@@ -157,13 +158,14 @@ func (h *storageNodeHandler) UnfreezeWorkspaceDisk(
 }
 
 func (h *storageNodeHandler) DeleteWorkspaceData(
-	context.Context,
-	*connect.Request[workspacev1.DeleteWorkspaceDataRequest],
+	_ context.Context,
+	req *connect.Request[workspacev1.DeleteWorkspaceDataRequest],
 ) (*connect.Response[workspacev1.DeleteWorkspaceDataResponse], error) {
 	if h.deleteErr != nil {
 		return nil, h.deleteErr
 	}
 	h.deleteCalls++
+	h.deleteExpected = req.Msg.GetExpectedManifests()
 	return connect.NewResponse(&workspacev1.DeleteWorkspaceDataResponse{}), nil
 }
 
@@ -248,6 +250,9 @@ func TestWorkspaceStorageControlsUseBoundedExactNodeOperations(t *testing.T) {
 	}
 	if err := rig.client.DeleteWorkspace(t.Context(), uuid); err != nil || rig.node.deleteCalls != 1 || rig.catalog.deleteCalls != 1 {
 		t.Fatalf("DeleteWorkspace = %v, node %d, catalog %d", err, rig.node.deleteCalls, rig.catalog.deleteCalls)
+	}
+	if len(rig.node.deleteExpected) != 1 || rig.node.deleteExpected[0].GetManifestDigest() != testSandboxManifestDigest {
+		t.Fatalf("DeleteWorkspace expectations = %#v, want durable Node inventory", rig.node.deleteExpected)
 	}
 }
 
@@ -340,9 +345,11 @@ func TestWorkspaceStorageControlsPropagateNodeAndCatalogFailures(t *testing.T) {
 	if _, err := rig.client.RejectWorkspaceChanges(t.Context(), uuid); connect.CodeOf(err) != connect.CodeUnavailable {
 		t.Fatalf("manifest inspection error = %v", err)
 	}
+	rig.node.diskErr = want
 	if err := rig.client.DeleteWorkspace(t.Context(), uuid); connect.CodeOf(err) != connect.CodeUnavailable {
 		t.Fatalf("delete inspection error = %v", err)
 	}
+	rig.node.diskErr = nil
 	rig.node.manifestErr = nil
 	rig.node.rejectErr = want
 	if _, err := rig.client.RejectWorkspaceChanges(t.Context(), uuid); connect.CodeOf(err) != connect.CodeUnavailable {
