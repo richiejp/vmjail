@@ -163,6 +163,22 @@ asynchronous launches have a bounded readiness-retry contract, and browser
 automation is constrained to the loaded same-origin dashboard tab. Missing
 test infrastructure therefore cannot be misreported as a product failure or
 leave a goal blocked.
+The toolbox supports Go's ordinary CGO-enabled defaults, rather than requiring
+testers to infer a campaign-only build flag. Storage-pressure goals wait through
+two bounded Node usage samples before judging freeze, forwarding goals detach
+and health-check their service before opening a forward, and browser goals use
+native automation input. Script-evaluated form submission is explicitly
+excluded because its opaque browser context produces `Origin: null`, which the
+dashboard must continue to reject.
+Node terminal phases are now teardown acknowledgements: writable Workspace
+mounts are durably preserved and their control routes are unregistered before
+an Exited/Killed heartbeat can clear the orchestrator binding. This closes the
+relaunch race in which a second AgentRun replaced the live-mount registration
+while the preceding run was still committing its stopped snapshot.
+AgentRun teardown also retains the exact Workspace binding until that terminal
+heartbeat arrives. Publishing an asynchronous delete is not itself an
+acknowledgement; a subsequent AgentRun cannot launch against the Workspace
+until the Node has completed preservation and reported the old Sandbox terminal.
 
 Live resource commits compare a grow against the Node-reported disk allowance
 when available, rather than blindly substituting the production 20 GiB default

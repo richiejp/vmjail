@@ -597,28 +597,35 @@ func (e *Executor) HandleSandboxEvent(
 		e.markPhase(uid, phaseKilled, 0, terminalMessage(err))
 		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
 	}
-	defer unlock()
-	defer e.teardownMounts(context.WithoutCancel(ctx), uid, spec)
+	runErr := func() error {
+		defer unlock()
+		// A terminal heartbeat is the Node's teardown acknowledgement. Finish
+		// preserving the Workspace before publishing that phase, otherwise a
+		// fast relaunch can replace the live mount while its predecessor is
+		// still committing the authoritative stopped snapshot.
+		defer e.teardownMounts(context.WithoutCancel(ctx), uid, spec)
 
-	unregisterPorts := e.registerPortRoutes(cfg, spec.GetWorkspaceUuid())
-	defer unregisterPorts()
-	unregisterAttach := e.registerAttachRoute(cfg, uid)
-	defer unregisterAttach()
-	unregisterJob := e.registerJobRoute(cfg, uid)
-	defer unregisterJob()
-	unregisterObserver := e.registerObserverRoute(cfg, uid)
-	defer unregisterObserver()
-	unregisterSummary := e.registerSummaryRoute(cfg, uid)
-	defer unregisterSummary()
-	e.registerWorkspaceSnapshotRoutes(cfg, spec)
-	unregisterDiskControl := e.registerWorkspaceDiskControl(ctx, cfg, spec.GetWorkspaceUuid(), uid, e.workspaceDiskAllowance(spec))
-	defer unregisterDiskControl()
-	e.setSandboxPreserver(uid, spec)
+		unregisterPorts := e.registerPortRoutes(cfg, spec.GetWorkspaceUuid())
+		defer unregisterPorts()
+		unregisterAttach := e.registerAttachRoute(cfg, uid)
+		defer unregisterAttach()
+		unregisterJob := e.registerJobRoute(cfg, uid)
+		defer unregisterJob()
+		unregisterObserver := e.registerObserverRoute(cfg, uid)
+		defer unregisterObserver()
+		unregisterSummary := e.registerSummaryRoute(cfg, uid)
+		defer unregisterSummary()
+		e.registerWorkspaceSnapshotRoutes(cfg, spec)
+		unregisterDiskControl := e.registerWorkspaceDiskControl(ctx, cfg, spec.GetWorkspaceUuid(), uid, e.workspaceDiskAllowance(spec))
+		defer unregisterDiskControl()
+		e.setSandboxPreserver(uid, spec)
 
-	e.markPhase(uid, phaseRunning, 0, "")
-	if err := e.run(ctx, e.stdout, cfg); err != nil {
-		e.markPhase(uid, phaseKilled, 0, terminalMessage(err))
-		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, err))
+		e.markPhase(uid, phaseRunning, 0, "")
+		return e.run(ctx, e.stdout, cfg)
+	}()
+	if runErr != nil {
+		e.markPhase(uid, phaseKilled, 0, terminalMessage(runErr))
+		return trace.RecordError(ctx, fmt.Errorf("sandboxexec: sandbox %s: %w", uid, runErr))
 	}
 	e.markPhase(uid, phaseExited, 0, "")
 	return nil

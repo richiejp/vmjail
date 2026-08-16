@@ -2539,6 +2539,14 @@ func TestStopAgentSandboxClearsOnlyAfterSuccessfulPublish(t *testing.T) {
 	if current, _ := store.Get(ws.Metadata.UUID); current.Status.CurrentSandbox == nil {
 		t.Fatal("failed publish cleared binding")
 	}
+	h.dispatcher = callbackDispatcher{callback: func() error {
+		_, updateErr := store.Update(ws.Metadata.UUID, workspacecatalog.MutateStatus, func(current *workspacecatalog.Workspace) error {
+			current.Status.CurrentSandbox = nil
+			current.Status.SetCondition(workspacecatalog.ConditionDispatched, workspacecatalog.ConditionStatusFalse, "Exited", "", time.Now())
+			return nil
+		})
+		return updateErr
+	}}
 	if err := h.StopAgentSandbox(owner, ws.Metadata.UUID, testAgentSandbox); err != nil {
 		t.Fatal(err)
 	}

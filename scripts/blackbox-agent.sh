@@ -105,7 +105,8 @@ else
 # Disposable campaign resources
 
 - Toolbox image: \`$toolbox_ref\`. It contains \`sh\`, \`bash\`, \`go\`,
-  \`bun\`, \`curl\`, and core utilities. Its configured command prints
+  \`gcc\`, \`bun\`, \`curl\`, and core utilities. Go's normal CGO-enabled
+  defaults therefore work without campaign-specific build flags. Its configured command prints
   \`daft-blackbox-short-command\` and exits; ordinary Workspaces override it
   with their persistent keepalive.
 - New Workspace disks default to $DAFT_WORKSPACE_DISK_DEFAULT_BYTES bytes so
@@ -115,6 +116,10 @@ else
   Workspace's first launch, explicitly run \`workspace resources --disk
   $DAFT_WORKSPACE_DISK_DEFAULT_BYTES\` so the catalog and Node record the same
   non-production allowance.
+  The Node samples disk usage every five seconds. Keep the Sandbox running and
+  poll public storage status for at least two sample periods after crossing 90%
+  before deciding that automatic freeze did not occur. Grow a frozen live
+  Workspace before editing other catalog fields, then explicitly unfreeze it.
 - Canonical project fixtures are available at \`./workspaces\` (also
   \`./blackbox/workspaces\`). Use them instead of inventing replacement
   fixtures on the host.
@@ -122,6 +127,9 @@ else
   exec reports that the container is not running while status still names the
   dispatched Sandbox, retry the same exec with a bounded deadline; this is a
   boot-readiness race, not evidence that the image command was preserved.
+- A service used by a later forwarding command must outlive the exec that
+  starts it. Detach it with the toolbox's \`nohup\`, record its PID/readiness,
+  and use a bounded health poll before opening the forward.
 - Dashboard: $dashboard_description. Password: \`$dashboard_password\`.
   WebAuthn is configured for RP \`localhost\` and can be exercised with a
   browser virtual authenticator after password login and enrollment.
@@ -164,8 +172,12 @@ actual browser, either headed or headless with DevTools/screenshots; do not
 substitute curl. The dashboard is ${dashboard_description}. Do not inspect the
 client-config symlink or its contents. Browser actions must originate in the
 dashboard page itself: select the tab whose URL begins with the exact dashboard
-origin, wait for its load event, and submit its own same-origin form. Do not
-submit a copied form, a file URL, or a different DevTools tab.
+origin and wait for its load event. Drive login and WebAuthn through native
+DevTools mouse/keyboard input (or equivalent WebDriver input), as a human
+would. Do not invoke form.submit(), requestSubmit(), element.click(), or a
+fetch from Runtime.evaluate: browser automation evaluates those in an opaque
+context that can send \`Origin: null\`, which the dashboard correctly rejects.
+Do not submit a copied form, a file URL, or a different DevTools tab.
 
 Campaign bounds: ${campaign_seconds}s total, all 20 goals attempted, at most
 ${max_issues} confirmed issues. A confirmed issue requires two clean

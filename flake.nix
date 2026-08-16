@@ -504,7 +504,7 @@
             name = "daft-blackbox-toolbox";
             tag = "v1";
             contents = with pkgs; [
-              bashInteractive bun cacert coreutils curl dash findutils go
+              bashInteractive bun cacert coreutils curl dash findutils gcc go
               gnugrep gnused
             ];
             config = {

@@ -83,4 +83,10 @@ grep -q 'select the tab whose URL begins with the exact dashboard' "$out/prompt.
 grep -q 'do not set an allowance below this value' "$out/public/CAMPAIGN.md"
 grep -q "Before every" "$out/public/CAMPAIGN.md"
 grep -q 'retry the same exec with a bounded deadline' "$out/public/CAMPAIGN.md"
+grep -q "Go's normal CGO-enabled" "$out/public/CAMPAIGN.md"
+grep -q 'at least two sample periods' "$out/public/CAMPAIGN.md"
+grep -q "Detach it with the toolbox's" "$out/public/CAMPAIGN.md"
+grep -q 'through native' "$out/prompt.md"
+grep -q 'DevTools mouse/keyboard input' "$out/prompt.md"
+grep -q 'Origin: null' "$out/prompt.md"
 echo 'blackbox-agent script tests: OK'

@@ -1270,24 +1270,15 @@ func (h *WorkspaceCatalogHandler) stopAgentSandbox(owner identity.Fingerprint, w
 	if current == nil || current.UID != sandboxUID {
 		return nil
 	}
+	changes, stopWatching := h.store.Watch()
+	defer stopWatching()
 	if err := h.publishSandboxStop(current); err != nil {
 		return err
 	}
-	_, err = h.store.Update(workspaceUUID, workspacecatalog.MutateStatus, func(w *workspacecatalog.Workspace) error {
-		if w.Status.CurrentSandbox == nil || w.Status.CurrentSandbox.UID != sandboxUID {
-			return errSandboxBindingChanged
-		}
-		w.Status.CurrentSandbox = nil
-		w.Status.SetCondition(workspacecatalog.ConditionDispatched, workspacecatalog.ConditionStatusFalse, "Stopped", "", time.Now())
-		return nil
-	})
-	if errors.Is(err, errSandboxBindingChanged) {
-		return nil
-	}
-	if err != nil {
-		return mapCatalogErr(err)
-	}
-	return nil
+	waitCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err = h.waitForSandboxStop(waitCtx, workspaceUUID, sandboxUID, changes)
+	return err
 }
 
 func (h *WorkspaceCatalogHandler) publishSandboxStop(current *workspacecatalog.SandboxRef) error {

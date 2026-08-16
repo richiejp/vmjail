@@ -735,13 +735,15 @@ type fakeMaterializer struct {
 	// seed, when set, populates the freshly-materialised dest dir — used
 	// to drop a devcontainer.json into the workspace content for the
 	// node-side overlay test. Implies mkdir.
-	seed        func(dest string) error
-	liveSet     map[string]string
-	preserved   []string
-	cleared     []string
-	preserveErr error
-	refreshers  map[string]func(context.Context, string) error
-	streamed    []string
+	seed            func(dest string) error
+	liveSet         map[string]string
+	preserved       []string
+	cleared         []string
+	preserveErr     error
+	preserveStarted chan struct{}
+	preserveRelease chan struct{}
+	refreshers      map[string]func(context.Context, string) error
+	streamed        []string
 }
 
 func (f *fakeMaterializer) SetLiveMountRefresher(key string, refresh func(context.Context, string) error) {
@@ -1000,6 +1002,12 @@ func (f *fakeMaterializer) SetLiveMount(key, dir string) {
 
 func (f *fakeMaterializer) PreserveLiveMount(_ context.Context, key string) error {
 	f.preserved = append(f.preserved, key)
+	if f.preserveStarted != nil {
+		close(f.preserveStarted)
+	}
+	if f.preserveRelease != nil {
+		<-f.preserveRelease
+	}
 	return f.preserveErr
 }
 
@@ -1643,6 +1651,44 @@ func TestHandleSandboxEventMaterializesMounts(t *testing.T) {
 	// The backing tree is cleaned up once the dispatch returns.
 	if _, statErr := os.Stat(filepath.Join(backing, "sb-mat")); !os.IsNotExist(statErr) {
 		t.Errorf("backing dir not cleaned up: stat err = %v", statErr)
+	}
+}
+
+func TestHandleSandboxEventPublishesTerminalPhaseAfterMountPreservation(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	materializer := &fakeMaterializer{
+		applied: true, mkdir: true, preserveStarted: started, preserveRelease: release,
+	}
+	executor, err := New(Config{
+		Stdout: io.Discard, Runner: noopRunner(),
+		Assembler: func(context.Context, string, sandboxboot.BootOptions) (sandbox.Config, func(), error) {
+			return sandbox.Config{}, func() {}, nil
+		},
+		MountMaterializer: materializer, MountBackingDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- executor.HandleSandboxEvent(t.Context(), addedEvent("preserve-before-terminal", &sandboxv1.SandboxSpec{
+			ImageRef: testImageRef, WorkspaceUuid: testWSUUID,
+			Mounts: []*sandboxv1.Mount{{Target: mntWorkspace, Source: testWSUUID}},
+		}))
+	}()
+	<-started
+	live := executor.LiveSnapshot()
+	if len(live) != 1 || live[0].GetPhase() != phaseRunning {
+		t.Fatalf("phase during preservation = %#v, want Running", live)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	live = executor.LiveSnapshot()
+	if len(live) != 1 || live[0].GetPhase() != phaseExited {
+		t.Fatalf("phase after preservation = %#v, want Exited", live)
 	}
 }
 
