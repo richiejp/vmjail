@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -236,6 +237,20 @@ func TestUpWritesHandleAndDownStops(t *testing.T) {
 		if waitDead(pid, 3*time.Second) != nil {
 			t.Errorf("pid %d still alive after Down", pid)
 		}
+	}
+}
+
+func TestAppendDashboardAuthArgs(t *testing.T) {
+	got := appendDashboardAuthArgs([]string{daemonServeArg}, Config{
+		WebPasswordFile: "/run/password", WebAuthnRPID: "localhost",
+		WebAuthnOrigins: []string{"http://localhost:18080", "https://dashboard.test"},
+	})
+	want := []string{
+		daemonServeArg, "--web-password-file", "/run/password", "--web-authn-rp-id", "localhost",
+		"--web-authn-origin", "http://localhost:18080", "--web-authn-origin", "https://dashboard.test",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("dashboard args = %q, want %q", got, want)
 	}
 }
 

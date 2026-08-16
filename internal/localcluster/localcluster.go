@@ -71,6 +71,7 @@ const (
 	// defaultReadyTimeout bounds how long Up waits for the orchestrator
 	// to accept and the sandbox-host to register.
 	defaultReadyTimeout = 60 * time.Second
+	daemonServeArg      = "serve"
 
 	orchestratorBinName = "daft-orchestrator"
 	sandboxdBinName     = "daft-sandboxd"
@@ -92,6 +93,11 @@ type Config struct {
 	// WebAddr optionally enables the orchestrator's plain-HTTP dashboard.
 	// It should remain loopback-only for a disposable local cluster.
 	WebAddr string
+	// WebPasswordFile and WebAuthn settings pass the corresponding
+	// dashboard authentication configuration to the orchestrator.
+	WebPasswordFile string
+	WebAuthnRPID    string
+	WebAuthnOrigins []string
 	// OrchestratorBin / SandboxdBin override the daemon binaries.
 	// Empty means "sibling of the running executable, else PATH".
 	OrchestratorBin, SandboxdBin string
@@ -247,10 +253,11 @@ func Up(ctx context.Context, cfg Config) (*Cluster, error) {
 		return nil, e
 	}
 
-	orchestratorArgs := []string{"serve", "--addr", r.addr, "--config-dir", info.OrchDir}
+	orchestratorArgs := []string{daemonServeArg, "--addr", r.addr, "--config-dir", info.OrchDir}
 	if r.webAddr != "" {
 		orchestratorArgs = append(orchestratorArgs, "--web-addr", r.webAddr)
 	}
+	orchestratorArgs = appendDashboardAuthArgs(orchestratorArgs, cfg)
 	if err := launchDaemon(r.progress, &started, "orchestrator", r.orchBin,
 		orchestratorArgs,
 		r.baseEnv, filepath.Join(logsDir, "orchestrator.log"),
@@ -263,7 +270,7 @@ func Up(ctx context.Context, cfg Config) (*Cluster, error) {
 		sbxEnv = append(append([]string{}, r.baseEnv...), "DAFT_EGRESS_PROXY=0")
 	}
 	if err := launchDaemon(r.progress, &started, "sandbox-host", r.sbxBin,
-		[]string{"serve", "--orchestrator", url, "--config-dir", info.SandboxDir},
+		[]string{daemonServeArg, "--orchestrator", url, "--config-dir", info.SandboxDir},
 		sbxEnv, filepath.Join(logsDir, "sandboxd.log"),
 		func() error { return waitSandboxRegistered(ctx, url, info.ClientDir, r.timeout) }); err != nil {
 		return bail(err)
@@ -284,6 +291,19 @@ func Up(ctx context.Context, cfg Config) (*Cluster, error) {
 	}
 	_, _ = fmt.Fprintf(r.progress, "localcluster: ready at %s\n", url)
 	return c, nil
+}
+
+func appendDashboardAuthArgs(args []string, cfg Config) []string {
+	if cfg.WebPasswordFile != "" {
+		args = append(args, "--web-password-file", cfg.WebPasswordFile)
+	}
+	if cfg.WebAuthnRPID != "" {
+		args = append(args, "--web-authn-rp-id", cfg.WebAuthnRPID)
+	}
+	for _, origin := range cfg.WebAuthnOrigins {
+		args = append(args, "--web-authn-origin", origin)
+	}
+	return args
 }
 
 // resolvedConfig is Config with defaults applied and binaries located.

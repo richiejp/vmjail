@@ -45,14 +45,17 @@ func newClusterCmd() *cobra.Command {
 // newClusterUpCmd returns `daft cluster up`.
 func newClusterUpCmd() *cobra.Command {
 	var (
-		stateDir     string
-		addr         string
-		webAddr      string
-		orchBin      string
-		sbxBin       string
-		egressProxy  bool
-		shellEnv     bool
-		readyTimeout time.Duration
+		stateDir        string
+		addr            string
+		webAddr         string
+		webPasswordFile string
+		webAuthnRPID    string
+		webAuthnOrigins []string
+		orchBin         string
+		sbxBin          string
+		egressProxy     bool
+		shellEnv        bool
+		readyTimeout    time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "up",
@@ -78,6 +81,9 @@ func newClusterUpCmd() *cobra.Command {
 				StateDir:        stateDir,
 				Addr:            addr,
 				WebAddr:         webAddr,
+				WebPasswordFile: webPasswordFile,
+				WebAuthnRPID:    webAuthnRPID,
+				WebAuthnOrigins: webAuthnOrigins,
 				OrchestratorBin: orchBin,
 				SandboxdBin:     sbxBin,
 				EgressProxy:     egressProxy,
@@ -98,6 +104,12 @@ func newClusterUpCmd() *cobra.Command {
 		"orchestrator TCP listen address (host:port; port must be concrete)")
 	cmd.Flags().StringVar(&webAddr, "web-addr", "",
 		"optional loopback dashboard listen address (host:port; port must be concrete)")
+	cmd.Flags().StringVar(&webPasswordFile, "web-password-file", "",
+		"bcrypt password hash file protecting the local dashboard")
+	cmd.Flags().StringVar(&webAuthnRPID, "web-authn-rp-id", "",
+		"WebAuthn relying-party domain for the local dashboard")
+	cmd.Flags().StringSliceVar(&webAuthnOrigins, "web-authn-origin", nil,
+		"exact browser origin accepted for local dashboard WebAuthn")
 	cmd.Flags().StringVar(&orchBin, "orchestrator-bin", "",
 		"path to daft-orchestrator (default: sibling of this binary, else PATH)")
 	cmd.Flags().StringVar(&sbxBin, "sandboxd-bin", "",

@@ -54,14 +54,17 @@ func TestClusterUpShellEmitsEnv(t *testing.T) {
 func TestClusterUpPassesDashboardAddress(t *testing.T) {
 	previous := clusterUp
 	clusterUp = func(_ context.Context, config localcluster.Config) (*localcluster.Cluster, error) {
-		if config.WebAddr != testClusterWebAddr {
-			t.Fatalf("WebAddr = %q", config.WebAddr)
+		if config.WebAddr != testClusterWebAddr || config.WebPasswordFile != "/tmp/password" ||
+			config.WebAuthnRPID != "localhost" || len(config.WebAuthnOrigins) != 1 || config.WebAuthnOrigins[0] != "http://localhost:18080" {
+			t.Fatalf("dashboard config = %#v", config)
 		}
 		return &localcluster.Cluster{WebAddr: config.WebAddr}, nil
 	}
 	t.Cleanup(func() { clusterUp = previous })
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	out, _, err := runCmd(t, clusterCmdName, "up", "--web-addr", testClusterWebAddr)
+	out, _, err := runCmd(t, clusterCmdName, "up", "--web-addr", testClusterWebAddr,
+		"--web-password-file", "/tmp/password", "--web-authn-rp-id", "localhost",
+		"--web-authn-origin", "http://localhost:18080")
 	if err != nil {
 		t.Fatal(err)
 	}

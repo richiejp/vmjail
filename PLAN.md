@@ -154,6 +154,11 @@ bounded by time, all 20 goal records, and a confirmed-issue ceiling;
 darkaifactory remains the workload isolation boundary. Small interchangeable project fixtures let agents
 vary the workload while retaining a comparable objective; deterministic
 scenario JSON remains the promotion format for reproduced regressions.
+The disposable campaign provisions every catalogue precondition up front: a
+Nix-built Go/Bun toolbox image in the embedded registry, a bounded small disk,
+password and virtual-WebAuthn login alternatives, a harmless synthetic secret,
+and a narrow Node pause/resume control. Missing test infrastructure therefore
+cannot be misreported as a product failure or leave a goal blocked.
 
 Dashboard terminal attach failures caused by a concurrent Workspace stop or
 Sandbox replacement are recoverable transport events. The browser retries

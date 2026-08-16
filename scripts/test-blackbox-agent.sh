@@ -18,6 +18,14 @@ if [ "$1 $2" = "cluster up" ]; then
 		shift
 	done
 	mkdir -p "$state/client" "$state/logs"
+	printf '%s\n%s\n' "$$" "$$" >"$state/cluster.pid"
+fi
+if [ "$1 $2 $3" = "dashboard password-hash" ]; then
+	cat >/dev/null
+	printf '%s\n' '$2a$10$rEWm4r7F8qv0I5J8dQE7OeVfDQp1u0wEH1fZUwNNQMIfIQK0jZB2G'
+fi
+if [ "$1 $2" = "image push" ]; then
+	printf '%s\n' '127.0.0.1:24443/blackbox-toolbox:v1'
 fi
 if [ "$1 $2" = "cluster down" ]; then
 	while [ "$#" -gt 0 ]; do
@@ -49,7 +57,9 @@ if env "${common_env[@]}" DAFT_BLACKBOX_UNRESTRICTED=1 DAFT_BLACKBOX_LIVE=1 \
 	echo "blackbox-agent accepted live mode without explicit orchestrator" >&2; exit 1
 fi
 out="$tmp/out"
+touch "$tmp/toolbox.tar"
 env "${common_env[@]}" DAFT_BLACKBOX_UNRESTRICTED=1 DAFT_BLACKBOX_OUTPUT="$out" \
+	DAFT_BLACKBOX_TOOLBOX_IMAGE="$tmp/toolbox.tar" \
 	DAFT_BLACKBOX_TIMEOUT_SECONDS=5 "$repo_root/scripts/blackbox-agent.sh" >/dev/null
 test -x "$out/public/bin/daft"
 test -d "$out/results/runs"

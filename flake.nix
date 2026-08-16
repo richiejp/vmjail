@@ -495,6 +495,31 @@
             };
           };
 
+          # Source-blind campaign toolbox. The campaign pushes this tarball
+          # into its disposable orchestrator registry before handing control
+          # to the tester, so runtime availability never depends on an
+          # external mutable tag. Its deliberately short image command serves
+          # both persistent-Workspace and preserve-command lifecycle goals.
+          blackbox-toolbox-image = pkgs.dockerTools.buildLayeredImage {
+            name = "daft-blackbox-toolbox";
+            tag = "v1";
+            contents = with pkgs; [
+              bashInteractive bun cacert coreutils curl dash findutils go
+              gnugrep gnused
+            ];
+            config = {
+              Entrypoint = [
+                "/bin/dash" "-c"
+                "echo daft-blackbox-short-command"
+              ];
+              Env = [
+                "PATH=/bin"
+                "HOME=/tmp"
+                "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+              ];
+            };
+          };
+
           # nix-tooling-image is the D6c.1 hermetic-nix-CLI image.
           # It carries pkgs.nix + python3 + bashInteractive +
           # coreutils + cacert, plus an initialized /nix/var/nix/db

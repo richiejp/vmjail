@@ -88,7 +88,11 @@ with its own identities and dashboard, and gives Terra a temporary source-blind
 copy of only the public CLI, documentation, goals, and fixtures. It always
 stops that cluster and retains its logs with the results; darkaifactory remains
 the isolation boundary for untrusted workloads. The campaign attempts all 20
-goals within two hours and records at most ten confirmed issues.
+goals within two hours and records at most ten confirmed issues. The disposable
+environment also provides an immutable Nix-built Go/Bun toolbox image, a small
+Workspace disk allowance, password and WebAuthn dashboard alternatives, a
+synthetic one-shot secret, and a narrow pause/resume Node fault injector. These
+are test preconditions, not instructions for how to satisfy each outcome.
 
 Testing an existing deployment is intentionally separate and requires both an
 explicit mode switch and client identity:

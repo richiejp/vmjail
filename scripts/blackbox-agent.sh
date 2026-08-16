@@ -42,6 +42,7 @@ fi
 public_root="$output_root/public"
 mkdir -p "$public_root/bin" "$public_root/docs" "$output_root/results/runs" "$output_root/results/scenarios"
 cp "$bin_dir/daft" "$public_root/bin/daft"
+cp "$repo_root/scripts/blackbox-control.sh" "$public_root/bin/campaign-control"
 cp -R "$repo_root/blackbox" "$public_root/blackbox"
 cp "$repo_root/README" "$repo_root/OBSERVABILITY.md" "$public_root/docs/"
 
@@ -61,7 +62,16 @@ else
 	cluster_state="$output_root/cluster"
 	cluster_addr=${DAFT_BLACKBOX_CLUSTER_ADDR:-127.0.0.1:24443}
 	cluster_web_addr=${DAFT_BLACKBOX_WEB_ADDR:-127.0.0.1:24080}
+	dashboard_password=${DAFT_BLACKBOX_DASHBOARD_PASSWORD:-blackbox-password}
+	password_file="$cluster_state/dashboard-password"
+	mkdir -p "$cluster_state"
+	printf '%s\n' "$dashboard_password" | "$bin_dir/daft-orchestrator" dashboard password-hash >"$password_file"
+	chmod 0600 "$password_file"
+	export DAFT_WORKSPACE_DISK_DEFAULT_BYTES=${DAFT_BLACKBOX_DISK_BYTES:-134217728}
 	cleanup_cluster() {
+		if [[ -n "${DAFT_BLACKBOX_NODE_PID:-}" ]]; then
+			kill -CONT "$DAFT_BLACKBOX_NODE_PID" >/dev/null 2>&1 || true
+		fi
 		"$bin_dir/daft" cluster down --state "$cluster_state" >/dev/null 2>&1 || true
 		if [[ -d "$cluster_state/logs" ]]; then
 			cp -R "$cluster_state/logs" "$output_root/results/cluster-logs"
@@ -70,26 +80,58 @@ else
 	}
 	trap cleanup_cluster EXIT
 	"$bin_dir/daft" cluster up --state "$cluster_state" --addr "$cluster_addr" \
-		--web-addr "$cluster_web_addr" --egress-proxy \
+		--web-addr "$cluster_web_addr" --web-password-file "$password_file" \
+		--web-authn-rp-id localhost --web-authn-origin "http://localhost:${cluster_web_addr##*:}" \
+		--egress-proxy \
 		--orchestrator-bin "$bin_dir/daft-orchestrator" --sandboxd-bin "$bin_dir/daft-sandboxd"
 	ln -s "$cluster_state/client" "$public_root/client-config"
+	export DAFT_BLACKBOX_NODE_PID
+	DAFT_BLACKBOX_NODE_PID=$(sed -n '2p' "$cluster_state/cluster.pid")
+	[[ "$DAFT_BLACKBOX_NODE_PID" =~ ^[1-9][0-9]*$ ]] || { echo "blackbox-agent: missing disposable Node PID" >&2; exit 2; }
 	orchestrator_url="https://$cluster_addr"
 	ping_endpoint="$cluster_addr"
-	dashboard_description="http://$cluster_web_addr"
+	dashboard_description="http://localhost:${cluster_web_addr##*:}"
+	toolbox_link=${DAFT_BLACKBOX_TOOLBOX_IMAGE:-}
+	if [[ -z "$toolbox_link" ]]; then
+		toolbox_link="$output_root/blackbox-toolbox-image"
+		nix build "$repo_root#blackbox-toolbox-image" --out-link "$toolbox_link"
+	fi
+	toolbox_ref=$("$bin_dir/daft" image push "$toolbox_link" --repo blackbox-toolbox --tag v1 \
+		--orchestrator "$orchestrator_url" --config-dir "$cluster_state/client")
+	cat >"$public_root/CAMPAIGN.md" <<EOF
+# Disposable campaign resources
+
+- Toolbox image: \`$toolbox_ref\`. It contains \`sh\`, \`bash\`, \`go\`,
+  \`bun\`, \`curl\`, and core utilities. Its configured command prints
+  \`daft-blackbox-short-command\` and exits; ordinary Workspaces override it
+  with their persistent keepalive.
+- New Workspace disks default to $DAFT_WORKSPACE_DISK_DEFAULT_BYTES bytes so
+  storage freeze and live-growth tests remain bounded.
+- Dashboard: $dashboard_description. Password: \`$dashboard_password\`.
+  WebAuthn is configured for RP \`localhost\` and can be exercised with a
+  browser virtual authenticator after password login and enrollment.
+- \`./bin/campaign-control node-pause|node-resume|node-status\` is the only
+  permitted host fault-injection interface. Always resume the Node after the
+  Node-loss scenario.
+- Use a synthetic one-operation value such as \`blackbox-one-shot-secret\`
+  for the secret lifecycle test; it grants no external authority.
+EOF
 fi
 
 prompt_file="$output_root/prompt.md"
 cat >"$prompt_file" <<EOF
 You are a source-blind product tester for darkaifactory. Test all 20 numbered
 goals in blackbox/GOALS.md, in order, using only the installed public CLI,
-public docs, fixtures, and ${cluster_description}. Do not inspect the darkaifactory
+public docs, fixtures, CAMPAIGN.md when present, and ${cluster_description}. Do not inspect the darkaifactory
 source checkout, Git history, implementation logs, Codex session files, or the
 contents of the client identity directory. Invoke the client as:
 
   ./bin/daft <command> <subcommand> ... --config-dir ./client-config
 
 The cluster is already running and ready. Never invoke cluster up or cluster
-down, and do not inspect its host processes. --config-dir is a flag on remote
+down, and do not inspect its host processes. In an isolated campaign, the
+bounded campaign-control command documented in CAMPAIGN.md is permitted only
+for the Node-loss goal. --config-dir is a flag on remote
 client subcommands such as workspace, sandbox, node, image, and ping; it is not
 a root-global flag and commands such as version and blackbox do not accept it.
 Consult the exact subcommand's --help before concluding that a public operation
