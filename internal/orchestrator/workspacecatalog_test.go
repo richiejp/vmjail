@@ -917,6 +917,38 @@ func TestSetResourcesAdvancesOnlyLiveDiskGrowth(t *testing.T) {
 	}
 }
 
+func TestSetResourcesUsesReportedLiveDiskAllowance(t *testing.T) {
+	rig := newWorkspaceCatalogRig(t)
+	created, _ := rig.client.Create(t.Context(), connect.NewRequest(
+		&workspacev1.CreateWorkspaceRequest{Name: "custom-node-default"},
+	))
+	uuid := created.Msg.GetWorkspace().GetMetadata().GetUuid()
+	handle := uuidHandle(uuid)
+	const (
+		reported = uint64(384) << 20
+		grown    = uint64(600) << 20
+	)
+	if _, err := rig.catalog.Update(uuid, workspacecatalog.MutateStatus, func(ws *workspacecatalog.Workspace) error {
+		ws.Status.CurrentSandbox = &workspacecatalog.SandboxRef{
+			UID: testAgentSandbox, WorkspaceGeneration: ws.Metadata.Generation,
+		}
+		ws.Status.DiskAllowanceBytes = reported
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := rig.client.SetResources(t.Context(), connect.NewRequest(
+		&workspacev1.SetResourcesRequest{Handle: handle, DiskBytes: grown},
+	))
+	if err != nil {
+		t.Fatalf("grow from reported Node allowance: %v", err)
+	}
+	if got := resp.Msg.GetWorkspace().GetSpec().GetDiskBytes(); got != grown {
+		t.Fatalf("disk bytes = %d, want %d", got, grown)
+	}
+}
+
 // TestSetNestedVirtualizationRoundTripsAndClears proves the grant
 // toggles on then back off through the wire spec — the field the
 // Launch projection reads onto SandboxSpec.nested_virtualization.

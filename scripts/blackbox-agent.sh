@@ -111,7 +111,10 @@ else
 - New Workspace disks default to $DAFT_WORKSPACE_DISK_DEFAULT_BYTES bytes so
   storage freeze and live-growth tests remain bounded. XFS cannot format a
   smaller disk: do not set an allowance below this value. Reach pressure by
-  filling this disk, then grow it above this value for recovery.
+  filling this disk, then grow it above this value for recovery. Before every
+  Workspace's first launch, explicitly run \`workspace resources --disk
+  $DAFT_WORKSPACE_DISK_DEFAULT_BYTES\` so the catalog and Node record the same
+  non-production allowance.
 - Canonical project fixtures are available at \`./workspaces\` (also
   \`./blackbox/workspaces\`). Use them instead of inventing replacement
   fixtures on the host.

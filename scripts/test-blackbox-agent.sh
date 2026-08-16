@@ -81,5 +81,6 @@ grep -q -- '--orchestrator https://127.0.0.1:24443' "$out/prompt.md"
 grep -q 'positional address 127.0.0.1:24443' "$out/prompt.md"
 grep -q 'select the tab whose URL begins with the exact dashboard' "$out/prompt.md"
 grep -q 'do not set an allowance below this value' "$out/public/CAMPAIGN.md"
+grep -q "Before every" "$out/public/CAMPAIGN.md"
 grep -q 'retry the same exec with a bounded deadline' "$out/public/CAMPAIGN.md"
 echo 'blackbox-agent script tests: OK'

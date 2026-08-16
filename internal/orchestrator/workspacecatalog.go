@@ -343,6 +343,14 @@ func (h *WorkspaceCatalogHandler) SetResources(
 	return h.mutate(req.Header(), req.Msg.GetHandle(),
 		func(w *workspacecatalog.Workspace) error {
 			oldDiskBytes := w.Spec.DiskBytes
+			// A Node may be configured with a non-production default (the
+			// bounded black-box/KVM campaigns do this). Once it has reported a
+			// live allowance, that durable observation is authoritative; using
+			// the catalog's implicit 20 GiB fallback here would reject an
+			// already-successful Node grow as an apparent shrink.
+			if w.Status.CurrentSandbox != nil && w.Status.DiskAllowanceBytes > 0 {
+				oldDiskBytes = w.Status.DiskAllowanceBytes
+			}
 			if oldDiskBytes == 0 {
 				oldDiskBytes = workspacedisk.DefaultDiskBytes
 			}

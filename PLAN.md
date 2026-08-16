@@ -164,6 +164,11 @@ automation is constrained to the loaded same-origin dashboard tab. Missing
 test infrastructure therefore cannot be misreported as a product failure or
 leave a goal blocked.
 
+Live resource commits compare a grow against the Node-reported disk allowance
+when available, rather than blindly substituting the production 20 GiB default
+for an implicit catalog value. This prevents a successfully resized qcow2/XFS
+disk on a bounded custom-default Node from being reported as a rejected shrink.
+
 Dashboard terminal attach failures caused by a concurrent Workspace stop or
 Sandbox replacement are recoverable transport events. The browser retries
 them with capped exponential backoff and existing heartbeat liveness, while an
