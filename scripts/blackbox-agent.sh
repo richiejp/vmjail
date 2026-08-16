@@ -67,7 +67,9 @@ else
 	mkdir -p "$cluster_state"
 	printf '%s\n' "$dashboard_password" | "$bin_dir/daft-orchestrator" dashboard password-hash >"$password_file"
 	chmod 0600 "$password_file"
-	export DAFT_WORKSPACE_DISK_DEFAULT_BYTES=${DAFT_BLACKBOX_DISK_BYTES:-134217728}
+	# XFS refuses filesystems below 300 MiB. Keep the campaign close to that
+	# floor so freeze/grow tests stay fast while exercising a real XFS volume.
+	export DAFT_WORKSPACE_DISK_DEFAULT_BYTES=${DAFT_BLACKBOX_DISK_BYTES:-402653184}
 	cleanup_cluster() {
 		if [[ -n "${DAFT_BLACKBOX_NODE_PID:-}" ]]; then
 			kill -CONT "$DAFT_BLACKBOX_NODE_PID" >/dev/null 2>&1 || true
