@@ -157,8 +157,12 @@ scenario JSON remains the promotion format for reproduced regressions.
 The disposable campaign provisions every catalogue precondition up front: a
 Nix-built Go/Bun toolbox image in the embedded registry, a bounded small disk,
 password and virtual-WebAuthn login alternatives, a harmless synthetic secret,
-and a narrow Node pause/resume control. Missing test infrastructure therefore
-cannot be misreported as a product failure or leave a goal blocked.
+and a narrow Node pause/resume control. Its canonical fixtures are exposed at
+the goal-documented path, the XFS minimum is an explicit lower bound, accepted
+asynchronous launches have a bounded readiness-retry contract, and browser
+automation is constrained to the loaded same-origin dashboard tab. Missing
+test infrastructure therefore cannot be misreported as a product failure or
+leave a goal blocked.
 
 Dashboard terminal attach failures caused by a concurrent Workspace stop or
 Sandbox replacement are recoverable transport events. The browser retries

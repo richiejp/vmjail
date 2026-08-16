@@ -44,6 +44,7 @@ mkdir -p "$public_root/bin" "$public_root/docs" "$output_root/results/runs" "$ou
 cp "$bin_dir/daft" "$public_root/bin/daft"
 cp "$repo_root/scripts/blackbox-control.sh" "$public_root/bin/campaign-control"
 cp -R "$repo_root/blackbox" "$public_root/blackbox"
+ln -s "blackbox/workspaces" "$public_root/workspaces"
 cp "$repo_root/README" "$repo_root/OBSERVABILITY.md" "$public_root/docs/"
 
 cluster_description="an isolated local cluster built from the current checkout"
@@ -108,7 +109,16 @@ else
   \`daft-blackbox-short-command\` and exits; ordinary Workspaces override it
   with their persistent keepalive.
 - New Workspace disks default to $DAFT_WORKSPACE_DISK_DEFAULT_BYTES bytes so
-  storage freeze and live-growth tests remain bounded.
+  storage freeze and live-growth tests remain bounded. XFS cannot format a
+  smaller disk: do not set an allowance below this value. Reach pressure by
+  filling this disk, then grow it above this value for recovery.
+- Canonical project fixtures are available at \`./workspaces\` (also
+  \`./blackbox/workspaces\`). Use them instead of inventing replacement
+  fixtures on the host.
+- A successful Workspace launch is accepted asynchronously. If an immediate
+  exec reports that the container is not running while status still names the
+  dispatched Sandbox, retry the same exec with a bounded deadline; this is a
+  boot-readiness race, not evidence that the image command was preserved.
 - Dashboard: $dashboard_description. Password: \`$dashboard_password\`.
   WebAuthn is configured for RP \`localhost\` and can be exercised with a
   browser virtual authenticator after password login and enrollment.
@@ -149,7 +159,10 @@ darkaifactory sandboxes. Do not weaken TLS, expose credentials, stop host
 services, or mutate unrelated host files. Browser-only goals must drive an
 actual browser, either headed or headless with DevTools/screenshots; do not
 substitute curl. The dashboard is ${dashboard_description}. Do not inspect the
-client-config symlink or its contents.
+client-config symlink or its contents. Browser actions must originate in the
+dashboard page itself: select the tab whose URL begins with the exact dashboard
+origin, wait for its load event, and submit its own same-origin form. Do not
+submit a copied form, a file URL, or a different DevTools tab.
 
 Campaign bounds: ${campaign_seconds}s total, all 20 goals attempted, at most
 ${max_issues} confirmed issues. A confirmed issue requires two clean
