@@ -183,6 +183,13 @@ Browser campaign goals receive a small first-party, dependency-free Bun/CDP
 driver. It offers bounded navigation, native mouse/keyboard input, screenshots,
 and a virtual WebAuthn authenticator without Puppeteer, Playwright, or npm
 installation; form actions still originate from the loaded dashboard target.
+The driver reports only bounded top-level navigation method, URL, and Origin
+metadata so a rejected login can distinguish an opaque automation context from
+a dashboard origin-validation defect without exposing form bodies or secrets.
+The dashboard uses `Referrer-Policy: same-origin`: Chromium turns form POST
+Origins into `null` under `no-referrer`, which made the strict login origin
+check reject every legitimate password submission. Cross-origin referrers
+remain suppressed, while the validator continues to reject opaque origins.
 
 Live resource commits compare a grow against the Node-reported disk allowance
 when available, rather than blindly substituting the production 20 GiB default

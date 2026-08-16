@@ -17,6 +17,10 @@ let nextID = 1;
 const pending = new Map();
 socket.addEventListener("message", (event) => {
   const message = JSON.parse(event.data);
+  if (message.method === "Network.requestWillBeSent" && message.params?.type === "Document") {
+    const request = message.params.request;
+    console.error(JSON.stringify({ method: request.method, url: request.url, origin: request.headers?.Origin ?? "" }));
+  }
   const waiter = pending.get(message.id);
   if (!waiter) return;
   pending.delete(message.id);
@@ -43,6 +47,7 @@ async function click(selector) {
 
 await command("Page.enable");
 await command("Runtime.enable");
+await command("Network.enable");
 for (const action of actions) {
   switch (action.kind) {
     case "navigate":

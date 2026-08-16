@@ -19,7 +19,11 @@ func withDashboardSecurityHeaders(next http.Handler) http.Handler {
 		headers.Set("Cross-Origin-Opener-Policy", "same-origin")
 		headers.Set("Cross-Origin-Resource-Policy", "same-origin")
 		headers.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()")
-		headers.Set("Referrer-Policy", "no-referrer")
+		// Chromium serializes the Origin of an ordinary same-origin HTML form
+		// POST as "null" under no-referrer, making our strict origin check reject
+		// every password login. same-origin still suppresses all cross-origin
+		// referrers while retaining the form's trustworthy local origin.
+		headers.Set("Referrer-Policy", "same-origin")
 		headers.Set("X-Content-Type-Options", "nosniff")
 		headers.Set("X-Frame-Options", "DENY")
 		next.ServeHTTP(w, r)

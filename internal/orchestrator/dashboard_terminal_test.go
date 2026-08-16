@@ -328,6 +328,9 @@ func TestTerminalOriginAndSecurityHeaders(t *testing.T) {
 			t.Errorf("missing %s", header)
 		}
 	}
+	if got := recorder.Header().Get("Referrer-Policy"); got != "same-origin" {
+		t.Errorf("Referrer-Policy = %q, want same-origin for browser login Origin", got)
+	}
 }
 
 //nolint:funlen // one bounded round trip keeps page, assets, handshake, PTY bytes, and bridge metadata in a single acceptance proof.
