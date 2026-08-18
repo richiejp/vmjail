@@ -1,0 +1,47 @@
+digraph workspace_lifecycle {
+  graph [compound=true, fontname="sans-serif", rankdir=TB];
+  node [fontname="sans-serif", shape=box, style="rounded"];
+  edge [fontname="sans-serif", fontsize=10];
+
+  absent [label="Absent"];
+  declared [label="Declared"];
+  unknown [label="Unknown\n(reconciliation required)", color="#b45309"];
+
+  subgraph cluster_execution {
+    label="Sandbox execution";
+    color="#94a3b8";
+    launching [label="Launching"];
+    running [label="Running"];
+    stopping [label="Stopping"];
+    preserving [label="Preserving"];
+  }
+
+  subgraph cluster_retained {
+    label="No current Sandbox binding";
+    color="#94a3b8";
+    retained [label="Retained\nprotected changes possible"];
+    adopted [label="Adopted\nrecoverable"];
+  }
+
+  absent -> declared [label="Create"];
+  declared -> launching [label="Launch"];
+  retained -> launching [label="Relaunch"];
+  adopted -> launching [label="Relaunch"];
+  launching -> running [label="ObserveRunning"];
+  running -> stopping [label="Stop"];
+  stopping -> preserving [label="guest teardown"];
+  preserving -> retained [label="Preserve + ObserveTerminal"];
+  retained -> adopted [label="Adopt exact manifest"];
+  retained -> declared [label="Reject exact generation"];
+  adopted -> declared [label="supersede"];
+  declared -> absent [label="Delete"];
+  retained -> absent [label="Delete"];
+  adopted -> absent [label="Delete"];
+
+  launching -> unknown [label="Node loss", color="#b45309"];
+  running -> unknown [label="Node loss", color="#b45309"];
+  stopping -> unknown [label="Node loss", color="#b45309"];
+  preserving -> unknown [label="Node loss", color="#b45309"];
+  unknown -> retained [label="Recover + inventory"];
+  unknown -> running [label="Reconnect + matching UID"];
+}

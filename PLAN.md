@@ -838,6 +838,25 @@ or deletes the workspace. A stale acknowledgement cannot adopt newer writes.
 - Cache pinning, correctness, invalidation, and hosted cassette completion.
 - DNS and non-HTTP replay policy where real workloads demonstrate a need.
 
+## Active milestone: verifiable architecture model
+
+The architecture is being documented as progressively disclosed, linked state
+ownership and lifecycle views rather than inferred from entry points or broad
+source reads. `ARCHITECTURE.md` is the bounded system-level map; component
+pages under `docs/architecture` define properties, state ownership, child
+views, source, protocol, and test links. A shared glossary keeps those pages
+compact. Authored Graphviz statecharts are explanatory projections, not proof
+artefacts.
+
+The first vertical slice covers Workspace launch, stop, preservation,
+recovery, adoption, rejection, and deletion across the Orchestrator, Node,
+Sandbox, retained disk, and Client. Remaining work is to specify that slice as
+composed asynchronous machines, model-check its safety and liveness properties,
+map model actions to implementation transitions and bounded trace records, and
+then require lower-level refinements to preserve the established abstract
+properties. Documentation checks should enforce bounded pages, valid typed
+links, glossary consistency, and no orphaned architecture nodes.
+
 ## Engineering efficiency milestone (2026-07-21)
 
 Long agent sessions consumed excessive cached-input tokens. Local session
