@@ -1,6 +1,6 @@
 # Workspace lifecycle
 
-This is the first state-machine slice. It describes the abstract lifecycle a
+This is the first end-to-end state-machine slice. It describes the abstract lifecycle a
 caller may rely on; it is not yet a claim of formal implementation refinement.
 The [Graphviz source](diagrams/workspace-lifecycle.dot) is the canonical visual
 projection.
@@ -46,4 +46,5 @@ an old generation, but must not overwrite Client files or protected writes.
 - Missing heartbeat and Node loss: [`internal/reconciler/reconciler.go`](../../internal/reconciler/reconciler.go)
 - Lifecycle end-to-end tests: [`internal/testdaemons`](../../internal/testdaemons/)
 
-Parent: [Workspace](workspace.md). Terms: [Glossary](glossary.md).
+Parent: [Workspace](workspace.md). Children: [Sandbox lifecycle](sandbox-lifecycle.md)
+and [Storage lifecycle](storage-lifecycle.md). Terms: [Glossary](glossary.md).

@@ -1,4 +1,4 @@
-.PHONY: all check check-submodule-revs check-deploy-skill check-agent-tools verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build update-egress-cache proto gen-bpf clean help
+.PHONY: all check check-submodule-revs check-deploy-skill check-agent-tools check-architecture-docs verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build update-egress-cache proto gen-bpf clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -26,7 +26,7 @@ all: build check
 # check is the fast pre-flight: fmt, lint, unit tests, coverage gate.
 # Reproducer corpora under testdata/fuzz/ are replayed automatically
 # by `go test`, so any committed crash surfaces here too.
-check: check-fmt check-submodule-revs check-deploy-skill check-agent-tools lint test cover-check
+check: check-fmt check-submodule-revs check-deploy-skill check-agent-tools check-architecture-docs lint test cover-check
 
 # Keep third_party/submodule-revs.json in sync with `git submodule
 # status` + .gitmodules. The flake reads that file via
@@ -48,6 +48,12 @@ check-agent-tools:
 	@sh -n scripts/blackbox-agent.sh scripts/test-blackbox-agent.sh
 	@scripts/test-blackbox-agent.sh
 
+# Architecture pages are an agent-facing navigation and correctness surface.
+# Keep every component paired with a bounded lifecycle view and reject link or
+# hierarchy drift before it becomes the next agent's false system model.
+check-architecture-docs:
+	@scripts/check-architecture-docs.sh
+
 # verify is the full gate set used by the pre-commit hook. `dev`
 # builds every real artefact (Go binaries + VM toolchain + initramfs +
 # bundle) so a broken full build fails the commit, not just CI. Active
@@ -67,7 +73,7 @@ verify: check dev integration bench-check
 help:
 	@echo "Targets:"
 	@echo "  all         - build the project + run the fast check gates (default)"
-	@echo "  check       - fmt + submodule-revs + deployment skill + lint + unit tests + coverage gate"
+	@echo "  check       - fmt + submodule-revs + agent/docs checks + lint + unit tests + coverage gate"
 	@echo "  verify      - check + integration + bench + deterministic fuzz sweep (pre-commit gate)"
 	@echo "  fmt         - format Go code with gofumpt"
 	@echo "  check-fmt   - fail if anything is unformatted"

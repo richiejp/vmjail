@@ -848,9 +848,15 @@ views, source, protocol, and test links. A shared glossary keeps those pages
 compact. Authored Graphviz statecharts are explanatory projections, not proof
 artefacts.
 
-The first vertical slice covers Workspace launch, stop, preservation,
-recovery, adoption, rejection, and deletion across the Orchestrator, Node,
-Sandbox, retained disk, and Client. Remaining work is to specify that slice as
+The documentation hierarchy now separates responsibility/property pages from
+lifecycle pages for the Cluster, Orchestrator, Client, Node, Workspace,
+Sandbox, and storage. Each lifecycle has a compact authored Graphviz projection
+and explicitly distinguishes current observations from proposed states. The
+fast gate enforces all seven component/lifecycle/diagram triples, local links,
+page reachability, invariant/source sections, and a 750-word page ceiling. The
+first end-to-end vertical slice covers Workspace launch, stop, preservation,
+recovery, adoption, rejection, and deletion across those components. Remaining
+work is to specify that slice as
 composed asynchronous machines, model-check its safety and liveness properties,
 map model actions to implementation transitions and bounded trace records, and
 then require lower-level refinements to preserve the established abstract

@@ -30,18 +30,32 @@ those claims and their required evidence explicit.
 
 - [Cluster](docs/architecture/cluster.md) — component boundaries, concurrent
   state, and trust relationships.
-- [Node](docs/architecture/node.md) — registration, liveness, execution, and
-  disconnection.
-- [Workspace](docs/architecture/workspace.md) — durable declaration,
-  generations, and recoverability.
-- [Workspace lifecycle](docs/architecture/workspace-lifecycle.md) — the first
-  state-machine slice and its current implementation mapping.
+  - [Cluster lifecycle](docs/architecture/cluster-lifecycle.md) — process
+    readiness, request admission, draining, and shutdown.
+  - [Orchestrator](docs/architecture/orchestrator.md) and
+    [lifecycle](docs/architecture/orchestrator-lifecycle.md) — durable
+    control-plane authority and process readiness.
+  - [Client](docs/architecture/client.md) and
+    [lifecycle](docs/architecture/client-lifecycle.md) — trusted local state,
+    identity, trust, and bounded operations.
+  - [Node](docs/architecture/node.md) and
+    [lifecycle](docs/architecture/node-lifecycle.md) — registration,
+    authorisation, liveness, and disconnection.
+  - [Workspace](docs/architecture/workspace.md) and
+    [lifecycle](docs/architecture/workspace-lifecycle.md) — declaration,
+    execution binding, and recoverability.
+    - [Storage](docs/architecture/storage.md) and
+      [lifecycle](docs/architecture/storage-lifecycle.md) — retained disks,
+      manifests, protection, and adoption.
+    - [Sandbox](docs/architecture/sandbox.md) and
+      [lifecycle](docs/architecture/sandbox-lifecycle.md) — one execution of a
+      Workspace generation.
 - [Glossary](docs/architecture/glossary.md) — canonical terms used throughout
   the model.
 - [Detailed resource-model reference](docs/architecture/resource-model-reference.md)
   — older, implementation-level material being split into the layers above.
 
-The diagrams are explanatory projections. They do not yet constitute a proof
+The lifecycle diagrams are explanatory projections. They do not yet constitute a proof
 that the Go implementation refines a formal model. The next modelling step is
 an executable specification of the Workspace lifecycle, followed by trace
 mapping from implementation events to model actions.

@@ -48,5 +48,6 @@ states; they must not be collapsed into successful destruction.
 - Level-triggered reconciliation: [`internal/reconciler`](../../internal/reconciler/)
 - Local development composition: [`internal/localcluster`](../../internal/localcluster/)
 
-Children: [Node](node.md), [Workspace](workspace.md). Parent:
-[Architecture](../../ARCHITECTURE.md).
+Parent: [Architecture](../../ARCHITECTURE.md). Lifecycle:
+[Cluster lifecycle](cluster-lifecycle.md). Children: [Orchestrator](orchestrator.md),
+[Client](client.md), [Node](node.md), and [Workspace](workspace.md).

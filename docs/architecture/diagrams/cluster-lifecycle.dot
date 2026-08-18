@@ -1,0 +1,25 @@
+digraph cluster_lifecycle {
+  graph [fontname="sans-serif", rankdir=LR];
+  node [fontname="sans-serif", shape=box, style="rounded"];
+  edge [fontname="sans-serif", fontsize=10];
+  stopped [label="Stopped"];
+  starting [label="Starting\nvalidate + recover"];
+  listening [label="Listening\nnot sufficient for admission"];
+  accepting [label="Accepting\noperation-relative"];
+  degraded [label="Degraded\nfail affected operations closed", color="#b45309"];
+  draining [label="Draining"];
+  failed [label="Failed\nno admission", color="#b45309"];
+  stopped -> starting [label="Start"];
+  starting -> listening [label="stores + controllers ready"];
+  listening -> accepting [label="Accept preconditions"];
+  accepting -> degraded [label="dependency loss", color="#b45309"];
+  degraded -> accepting [label="reconcile"];
+  listening -> draining [label="shutdown"];
+  accepting -> draining [label="shutdown"];
+  degraded -> draining [label="shutdown"];
+  starting -> failed [label="required startup failure", color="#b45309"];
+  accepting -> failed [label="required invariant failure", color="#b45309"];
+  degraded -> failed [label="unrecoverable", color="#b45309"];
+  failed -> draining [label="retain diagnostics"];
+  draining -> stopped [label="bounded Close"];
+}

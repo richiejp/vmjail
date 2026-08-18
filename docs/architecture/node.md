@@ -4,25 +4,14 @@ A Node is one `daft-sandboxd` process and its durable local state. Its canonical
 identity is its mTLS certificate fingerprint; labels and hostnames are display
 metadata.
 
-## Current observations
+## State ownership
 
 The Orchestrator records authorisation, connection state, registration time,
 last-seen time, advertised resources, and live Sandbox reports. The Node owns
 the physical truth about local VMs, routes, retained disks, and snapshot
-progress. Neither view alone proves the complete Node lifecycle.
-
-```text
-Unknown -> Connecting -> Active -> Suspect -> Disconnected
-              |            ^          |             |
-              v            |          +-------------+
-          Unauthorised -----+             reconnect
-
-Active -> Draining -> Disconnected        proposed explicit path
-```
-
-`Suspect` and `Draining` are architectural states, not current wire enums.
-Today suspicion is inferred from heartbeat age and draining is not a first-class
-protocol operation.
+progress. Neither view alone proves the complete Node lifecycle. Connection,
+authorisation, heartbeat freshness, admission, and local inventory are
+orthogonal dimensions; a single `connected` boolean cannot represent them all.
 
 ## Properties
 
@@ -43,4 +32,5 @@ protocol operation.
 - Sandbox execution: [`internal/sandboxexec`](../../internal/sandboxexec/)
 - Liveness reconciliation: [`internal/reconciler`](../../internal/reconciler/)
 
-Parent: [Cluster](cluster.md). Related: [Workspace lifecycle](workspace-lifecycle.md).
+Parent: [Cluster](cluster.md). Lifecycle: [Node lifecycle](node-lifecycle.md).
+Related: [Workspace lifecycle](workspace-lifecycle.md).

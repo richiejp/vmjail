@@ -39,4 +39,5 @@ present; it does not mean that execution has stopped.
 - Snapshot and manifest publication: [`internal/workspacesnapshot`](../../internal/workspacesnapshot/)
 - CAS provenance and protection: [`internal/casindex`](../../internal/casindex/)
 
-Parent: [Cluster](cluster.md). Child: [Workspace lifecycle](workspace-lifecycle.md).
+Parent: [Cluster](cluster.md). Lifecycle: [Workspace lifecycle](workspace-lifecycle.md).
+Children: [Sandbox](sandbox.md) and [Storage](storage.md).

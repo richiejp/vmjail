@@ -21,6 +21,9 @@ Terms are singular and capitalised when they name a darkaifactory resource.
 | condition | One independently observed status dimension with status, reason, message, and transition time. |
 | reconciliation | Repeated comparison of desired state and observations, followed by an idempotent correction. |
 | fencing | Preventing an old or unreachable actor from being mistaken for the current generation. |
+| accepting | Positively ready to admit a particular operation; not merely listening on a socket. |
+| draining | Refusing new work while bounded in-flight operations reach terminal outcomes. |
+| unknown | Insufficient evidence to assert either a successful or failed terminal state. |
 
 `Ready` is intentionally not a glossary synonym for “stopped”, “healthy”, or
 “safe to mutate”. A command must name and verify the precise conditions it

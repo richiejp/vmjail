@@ -1,0 +1,26 @@
+digraph storage_lifecycle {
+  graph [fontname="sans-serif", rankdir=LR];
+  node [fontname="sans-serif", shape=box, style="rounded"];
+  edge [fontname="sans-serif", fontsize=10];
+  absent [label="Absent"];
+  seeded [label="Seeded\nknown manifest"];
+  modified [label="Modified\nprotected disk"];
+  snapshotting [label="Snapshotting"];
+  protected [label="Published\nprotected manifest"];
+  adopted [label="Adopted\nrecoverable"];
+  rejected [label="Rejected\neligible after revalidation"];
+  frozen [label="Frozen"];
+  absent -> seeded [label="Seed"];
+  seeded -> modified [label="Write"];
+  modified -> snapshotting [label="Snapshot"];
+  snapshotting -> protected [label="verify + Publish"];
+  snapshotting -> modified [label="failure; disk authoritative"];
+  protected -> adopted [label="Materialise + Adopt exact"];
+  protected -> rejected [label="Reject exact"];
+  protected -> absent [label="Workspace Delete"];
+  modified -> frozen [label="pressure"];
+  frozen -> modified [label="Grow + Unfreeze"];
+  seeded -> absent [label="Delete"];
+  adopted -> absent [label="Delete"];
+  rejected -> absent [label="cleanup / Delete"];
+}
