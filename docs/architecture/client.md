@@ -14,7 +14,7 @@ effect.
 
 ## Properties
 
-- Identity and trusted peer configuration are explicit local state.
+- Identity and trusted Orchestrator configuration are explicit local state.
 - Local configuration updates either complete or restore the prior mapping.
 - Push excludes control trees and cannot overwrite protected remote changes.
 - Pull acknowledges only after exact materialisation succeeds.
@@ -25,7 +25,7 @@ effect.
 
 - CLI commands: [`internal/cli`](../../internal/cli/)
 - Typed client operations: [`internal/daftclient`](../../internal/daftclient/)
-- Identity and peer trust: [`internal/identity`](../../internal/identity/)
+- Identity and Orchestrator trust: [`internal/identity`](../../internal/identity/)
 - Local configuration: [`internal/clientconfig`](../../internal/clientconfig/)
 - Trusted MCP projection: [`internal/mcpserver`](../../internal/mcpserver/)
 

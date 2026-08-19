@@ -11,9 +11,10 @@ identity and bounded-operation lifecycle rather than process uptime. See the
 | Action | Required evidence | Result |
 |---|---|---|
 | Initialise | Writable private configuration path | Client identity exists locally |
-| PinPeer | Exact Orchestrator fingerprint is approved | Server identity is trusted |
-| Authorise | Orchestrator grants the Client role | Remote operations may be evaluated |
-| Revoke | Local peer or server role is removed | New authenticated operations fail |
+| TrustOrchestrator | Exact Orchestrator fingerprint is approved | The Client trusts that controller identity |
+| AuthoriseClient | Orchestrator grants the Client role | Remote operations may be evaluated |
+| RevokeOrchestratorTrust | Client removes the trusted Orchestrator identity | The Client refuses new connections to that controller |
+| RevokeClientAuthorisation | Orchestrator removes the Client role | New authenticated operations are rejected |
 
 ## Operation transitions
 
@@ -26,7 +27,7 @@ unconditional mutation. A definitive authenticated response may instead enter
 
 ## Initial invariants to formalise
 
-- Unpinned peers never receive Client credentials or Workspace data.
+- An untrusted Orchestrator never receives Client credentials or Workspace data.
 - `Adopted => ExactManifestMaterialised`.
 - `OutcomeUnknown` is never presented as failed-with-no-side-effect.
 - Local source is not replaced without explicit pull/recovery intent.
@@ -35,7 +36,7 @@ unconditional mutation. A definitive authenticated response may instead enter
 ## Implementation map
 
 - Identity setup: [`internal/cli/auth.go`](../../internal/cli/auth.go)
-- Peer persistence: [`internal/identity`](../../internal/identity/)
+- Orchestrator trust persistence: [`internal/identity`](../../internal/identity/)
 - Workspace operations: [`internal/daftclient`](../../internal/daftclient/)
 - Local compensation tests: [`internal/cli`](../../internal/cli/)
 

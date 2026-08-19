@@ -6,13 +6,16 @@ digraph client_lifecycle {
     label="Identity and trust";
     unconfigured [label="Unconfigured"];
     local [label="Local identity"];
-    pinned [label="Peer pinned"];
-    authorised [label="Authorised"];
-    revoked [label="Revoked"];
+    trusted [label="Orchestrator trusted"];
+    authorised [label="Client authorised"];
+    revoked [label="Client authorisation revoked"];
     unconfigured -> local [label="Initialise"];
-    local -> pinned [label="PinPeer"];
-    pinned -> authorised [label="Authorise"];
-    authorised -> revoked [label="Revoke"];
+    local -> trusted [label="TrustOrchestrator"];
+    trusted -> authorised [label="AuthoriseClient"];
+    trusted -> local [label="RevokeOrchestratorTrust"];
+    authorised -> local [label="RevokeOrchestratorTrust"];
+    authorised -> revoked [label="RevokeClientAuthorisation"];
+    revoked -> trusted [label="AuthoriseClient"];
   }
   subgraph cluster_operation {
     label="One bounded operation";
@@ -28,5 +31,4 @@ digraph client_lifecycle {
     outcome_unknown -> prepared [label="reconcile then safe retry"];
   }
   authorised -> prepared [label="begin operation"];
-  revoked -> local [label="reconfigure trust"];
 }

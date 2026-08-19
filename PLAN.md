@@ -853,6 +853,10 @@ The documentation hierarchy now separates responsibility/property pages from
 lifecycle pages for the Cluster, Orchestrator, Client, Node, Workspace,
 Sandbox, and storage. Each lifecycle has a compact authored Graphviz projection
 and explicitly distinguishes current observations from proposed states. The
+Client lifecycle names its asymmetric trust operations explicitly:
+`TrustOrchestrator` and `RevokeOrchestratorTrust` are Client-local controller
+trust, while `AuthoriseClient` and `RevokeClientAuthorisation` are
+Orchestrator-owned role decisions. The
 fast gate enforces all seven component/lifecycle/source/rendering sets, local links,
 page reachability, invariant/source sections, and a 750-word page ceiling. The
 first end-to-end vertical slice covers Workspace launch, stop, preservation,
