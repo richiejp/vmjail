@@ -4,6 +4,8 @@ This lifecycle describes process readiness and durable authority. `Recovering`,
 `Draining`, and `Failed` are architectural states, not current public enums.
 See the [Graphviz source](diagrams/orchestrator-lifecycle.dot).
 
+![Orchestrator lifecycle statechart](diagrams/orchestrator-lifecycle.svg)
+
 ## Abstract transitions
 
 | Action | Required evidence | Result |

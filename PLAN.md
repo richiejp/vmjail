@@ -845,14 +845,15 @@ ownership and lifecycle views rather than inferred from entry points or broad
 source reads. `ARCHITECTURE.md` is the bounded system-level map; component
 pages under `docs/architecture` define properties, state ownership, child
 views, source, protocol, and test links. A shared glossary keeps those pages
-compact. Authored Graphviz statecharts are explanatory projections, not proof
+compact. Authored Graphviz statecharts and their embedded committed SVG
+renderings are explanatory projections, not proof
 artefacts.
 
 The documentation hierarchy now separates responsibility/property pages from
 lifecycle pages for the Cluster, Orchestrator, Client, Node, Workspace,
 Sandbox, and storage. Each lifecycle has a compact authored Graphviz projection
 and explicitly distinguishes current observations from proposed states. The
-fast gate enforces all seven component/lifecycle/diagram triples, local links,
+fast gate enforces all seven component/lifecycle/source/rendering sets, local links,
 page reachability, invariant/source sections, and a 750-word page ceiling. The
 first end-to-end vertical slice covers Workspace launch, stop, preservation,
 recovery, adoption, rejection, and deletion across those components. Remaining

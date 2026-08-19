@@ -4,6 +4,8 @@ Cluster lifecycle is a derived view over the Orchestrator and its admitted
 components. There is no persisted Cluster resource or current wire enum. The
 [Graphviz source](diagrams/cluster-lifecycle.dot) is the visual projection.
 
+![Cluster lifecycle statechart](diagrams/cluster-lifecycle.svg)
+
 ## Abstract transitions
 
 | Action | Required evidence | Result |

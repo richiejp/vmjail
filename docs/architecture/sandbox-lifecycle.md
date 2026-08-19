@@ -5,6 +5,8 @@ Exited, and Killed observations. The finer states below expose protocol
 boundaries that are presently open-coded. See the
 [Graphviz source](diagrams/sandbox-lifecycle.dot).
 
+![Sandbox lifecycle statechart](diagrams/sandbox-lifecycle.svg)
+
 ## Abstract transitions
 
 | Action | Required evidence | Result |

@@ -15,13 +15,16 @@ for component in "${components[@]}"; do
 	page="$architecture_dir/$component.md"
 	lifecycle="$architecture_dir/$component-lifecycle.md"
 	diagram="$architecture_dir/diagrams/$component-lifecycle.dot"
+	rendered="$architecture_dir/diagrams/$component-lifecycle.svg"
 	[[ -f "$page" ]] || fail "missing component page: $page"
 	[[ -f "$lifecycle" ]] || fail "missing lifecycle page: $lifecycle"
 	[[ -f "$diagram" ]] || fail "missing lifecycle diagram: $diagram"
+	[[ -s "$rendered" ]] || fail "missing rendered lifecycle diagram: $rendered"
 	rg -Fq "Lifecycle:" "$page" || fail "$page does not link its lifecycle"
 	rg -Fq "Initial invariants to formalise" "$lifecycle" || fail "$lifecycle has no invariant section"
 	rg -Fq "Implementation map" "$lifecycle" || fail "$lifecycle has no implementation map"
 	rg -Fq "diagrams/$component-lifecycle.dot" "$lifecycle" || fail "$lifecycle does not link its diagram"
+	rg -Fq "diagrams/$component-lifecycle.svg" "$lifecycle" || fail "$lifecycle does not embed its rendered diagram"
 done
 
 while IFS= read -r page; do

@@ -4,6 +4,8 @@ Storage lifecycle is per manifest generation and retained disk. The
 [Graphviz source](diagrams/storage-lifecycle.dot) is a projection; cleanup
 eligibility remains an independently checked property.
 
+![Workspace storage lifecycle statechart](diagrams/storage-lifecycle.svg)
+
 ## Abstract transitions
 
 | Action | Required evidence | Result |

@@ -5,6 +5,8 @@ freshness, admission, and inventory reconciliation. `Suspect` and `Draining`
 are architectural states, not current wire enums. See the
 [Graphviz source](diagrams/node-lifecycle.dot).
 
+![Node lifecycle statechart](diagrams/node-lifecycle.svg)
+
 ## Abstract transitions
 
 | Action | Required evidence | Result |

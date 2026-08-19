@@ -5,6 +5,8 @@ caller may rely on; it is not yet a claim of formal implementation refinement.
 The [Graphviz source](diagrams/workspace-lifecycle.dot) is the canonical visual
 projection.
 
+![Workspace lifecycle statechart](diagrams/workspace-lifecycle.svg)
+
 ```sh
 dot -Tsvg docs/architecture/diagrams/workspace-lifecycle.dot \
   -o /tmp/workspace-lifecycle.svg

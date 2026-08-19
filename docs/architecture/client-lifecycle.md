@@ -4,6 +4,8 @@ The Client process is normally short-lived, so the useful lifecycle is the
 identity and bounded-operation lifecycle rather than process uptime. See the
 [Graphviz source](diagrams/client-lifecycle.dot).
 
+![Client lifecycle statechart](diagrams/client-lifecycle.svg)
+
 ## Identity transitions
 
 | Action | Required evidence | Result |
