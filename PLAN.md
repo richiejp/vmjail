@@ -857,7 +857,12 @@ fast gate enforces all seven component/lifecycle/source/rendering sets, local li
 page reachability, invariant/source sections, and a 750-word page ceiling. The
 first end-to-end vertical slice covers Workspace launch, stop, preservation,
 recovery, adoption, rejection, and deletion across those components. Remaining
-work is to specify that slice as
+work is informed by the 2026-08-19 conformance review. It found that Node
+admission still collapses inventory, freshness, and connection into
+registration presence; natural-exit preservation and terminal evidence are
+not durable end-to-end facts; and per-VM cgroup application remains
+best-effort despite the fail-closed architecture. The next step is to specify
+that slice as
 composed asynchronous machines, model-check its safety and liveness properties,
 map model actions to implementation transitions and bounded trace records, and
 then require lower-level refinements to preserve the established abstract

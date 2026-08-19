@@ -54,6 +54,8 @@ those claims and their required evidence explicit.
   the model.
 - [Detailed resource-model reference](docs/architecture/resource-model-reference.md)
   — older, implementation-level material being split into the layers above.
+- [Architecture conformance review](docs/architecture/conformance-review-2026-08-19.md)
+  — claim, implementation, and executed-test comparison at commit `6791e4f`.
 
 The lifecycle diagrams are explanatory projections. They do not yet constitute a proof
 that the Go implementation refines a formal model. The next modelling step is

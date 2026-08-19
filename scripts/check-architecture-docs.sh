@@ -46,7 +46,10 @@ for page in "$architecture_dir"/*.md; do
 	case "$base" in
 	resource-model-reference.md) continue ;;
 	esac
-	rg -Fq "($base)" "$repo_root/ARCHITECTURE.md" "$architecture_dir"/*.md || fail "orphan page: $page"
+	if ! rg -Fq "($base)" "$repo_root/ARCHITECTURE.md" "$architecture_dir"/*.md &&
+		! rg -Fq "(docs/architecture/$base)" "$repo_root/ARCHITECTURE.md"; then
+		fail "orphan page: $page"
+	fi
 done
 
 printf 'architecture docs: OK (%d component/lifecycle pairs, %d-word limit)\n' "${#components[@]}" "$max_words"
