@@ -21,6 +21,7 @@ func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   authCmdName,
 		Short: "Manage approved peers (TOFU mTLS trust)",
+		RunE:  runAuthCommandGroup,
 		Long: "daft-sandboxd authenticates peers (the user-host's daft client and\n" +
 			"orchestrators) via mutual TLS with TOFU peer pinning. The local\n" +
 			"identity (Ed25519 keypair + self-signed leaf cert) plus the\n" +
@@ -31,8 +32,15 @@ func newAuthCmd() *cobra.Command {
 	cmd.AddCommand(newAuthShowCmd())
 	cmd.AddCommand(newAuthListCmd())
 	cmd.AddCommand(newAuthApproveCmd())
-	cmd.AddCommand(newAuthRemoveCmd())
+	cmd.AddCommand(newAuthRevokeCmd())
 	return cmd
+}
+
+func runAuthCommandGroup(cmd *cobra.Command, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("unknown command %q for %q", args[0], cmd.CommandPath())
+	}
+	return cmd.Help()
 }
 
 func configDirFromFlag(cmd *cobra.Command) (string, error) {
@@ -149,10 +157,10 @@ func newAuthApproveCmd() *cobra.Command {
 	return cmd
 }
 
-func newAuthRemoveCmd() *cobra.Command {
+func newAuthRevokeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:           "remove <fingerprint>",
-		Short:         "Remove an approved peer",
+		Use:           "revoke <fingerprint>",
+		Short:         "Revoke trust in an approved identity",
 		Args:          cobra.ExactArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -171,7 +179,7 @@ func newAuthRemoveCmd() *cobra.Command {
 			if err := peers.Remove(fp); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", fp)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "revoked %s\n", fp)
 			return err
 		},
 	}

@@ -161,7 +161,7 @@ func TestAuthApproveRejectsUnknownRole(t *testing.T) {
 	}
 }
 
-func TestAuthRemoveRoundTrip(t *testing.T) {
+func TestAuthRevokeRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	id, _ := identity.Generate(identity.RoleClient)
 	fp := id.Fingerprint().String()
@@ -169,31 +169,37 @@ func TestAuthRemoveRoundTrip(t *testing.T) {
 	if _, _, err := runDaft(t, authCmdName, configDirArg, dir, "approve", fp); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	if _, _, err := runDaft(t, authCmdName, configDirArg, dir, "remove", fp); err != nil {
-		t.Fatalf("remove: %v", err)
+	if _, _, err := runDaft(t, authCmdName, configDirArg, dir, "revoke", fp); err != nil {
+		t.Fatalf("revoke: %v", err)
 	}
 	stdout, _, err := runDaft(t, authCmdName, configDirArg, dir, listSubName)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
 	if !strings.Contains(stdout, "no peers approved") {
-		t.Errorf("expected empty list after remove, got %q", stdout)
+		t.Errorf("expected empty list after revoke, got %q", stdout)
 	}
 }
 
-func TestAuthRemoveIsIdempotentForUnknown(t *testing.T) {
+func TestAuthRevokeIsIdempotentForUnknown(t *testing.T) {
 	dir := t.TempDir()
 	id, _ := identity.Generate(identity.RoleClient)
-	if _, _, err := runDaft(t, authCmdName, configDirArg, dir, "remove",
+	if _, _, err := runDaft(t, authCmdName, configDirArg, dir, "revoke",
 		id.Fingerprint().String()); err != nil {
-		t.Errorf("remove of unknown fp = %v, want nil", err)
+		t.Errorf("revoke of unknown fp = %v, want nil", err)
 	}
 }
 
-func TestAuthRemoveRejectsBadFingerprint(t *testing.T) {
+func TestAuthRevokeRejectsBadFingerprint(t *testing.T) {
 	dir := t.TempDir()
-	if _, _, err := runDaft(t, authCmdName, configDirArg, dir, "remove", "not-a-fp"); err == nil {
+	if _, _, err := runDaft(t, authCmdName, configDirArg, dir, "revoke", "not-a-fp"); err == nil {
 		t.Fatal("expected error for malformed fingerprint")
+	}
+}
+
+func TestAuthRemoveVerbIsRejected(t *testing.T) {
+	if _, _, err := runDaft(t, authCmdName, "remove", "unused"); err == nil {
+		t.Fatal("legacy auth remove command unexpectedly succeeded")
 	}
 }
 
@@ -222,7 +228,7 @@ func TestAuthSubcommandsPropagatePeerStoreError(t *testing.T) {
 	cases := [][]string{
 		{authCmdName, configDirArg, dir, listSubName},
 		{authCmdName, configDirArg, dir, "approve", fp},
-		{authCmdName, configDirArg, dir, "remove", fp},
+		{authCmdName, configDirArg, dir, "revoke", fp},
 	}
 	for _, args := range cases {
 		t.Run(strings.Join(args[3:], "_"), func(t *testing.T) {
@@ -316,12 +322,12 @@ func TestAuthApprovePropagatesStdoutWriteError(t *testing.T) {
 	}
 }
 
-func TestAuthRemovePropagatesStdoutWriteError(t *testing.T) {
+func TestAuthRevokePropagatesStdoutWriteError(t *testing.T) {
 	dir := t.TempDir()
 	id, _ := identity.Generate(identity.RoleClient)
 	var errBuf bytes.Buffer
 	if err := executeWith([]string{
-		"auth", configDirArg, dir, "remove",
+		"auth", configDirArg, dir, "revoke",
 		id.Fingerprint().String(),
 	}, failingWriter{}, &errBuf); err == nil {
 		t.Fatal("expected error from failing stdout on remove")

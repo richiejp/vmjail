@@ -95,7 +95,7 @@ func TestAuthApproveRejectsBadRole(t *testing.T) {
 	}
 }
 
-func TestAuthRemoveAfterApprove(t *testing.T) {
+func TestAuthRevokeAfterApprove(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := loadOrGenerateSandboxd(dir); err != nil {
 		t.Fatalf("identity: %v", err)
@@ -108,7 +108,7 @@ func TestAuthRemoveAfterApprove(t *testing.T) {
 	if _, _, err := runSandboxd(t, authCmdName, "approve", fp, "--config-dir", dir); err != nil {
 		t.Fatalf("approve: %v", err)
 	}
-	if _, _, err := runSandboxd(t, authCmdName, "remove", fp, "--config-dir", dir); err != nil {
+	if _, _, err := runSandboxd(t, authCmdName, "revoke", fp, "--config-dir", dir); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	stdout, _, err := runSandboxd(t, authCmdName, listSubName, "--config-dir", dir)
@@ -116,15 +116,21 @@ func TestAuthRemoveAfterApprove(t *testing.T) {
 		t.Fatalf("list: %v", err)
 	}
 	if !strings.Contains(stdout, "no peers approved") {
-		t.Errorf("expected empty after remove, got %q", stdout)
+		t.Errorf("expected empty after revoke, got %q", stdout)
 	}
 }
 
-func TestAuthRemoveRejectsBadFingerprint(t *testing.T) {
+func TestAuthRevokeRejectsBadFingerprint(t *testing.T) {
 	dir := t.TempDir()
-	_, _, err := runSandboxd(t, authCmdName, "remove", "not-a-fingerprint", "--config-dir", dir)
+	_, _, err := runSandboxd(t, authCmdName, "revoke", "not-a-fingerprint", "--config-dir", dir)
 	if err == nil {
 		t.Fatal("expected error for invalid fingerprint")
+	}
+}
+
+func TestAuthRemoveVerbIsRejected(t *testing.T) {
+	if _, _, err := runSandboxd(t, authCmdName, "remove", "unused"); err == nil {
+		t.Fatal("legacy auth remove command unexpectedly succeeded")
 	}
 }
 
@@ -167,8 +173,8 @@ func TestAuthApprovePropagatesPeerStoreError(t *testing.T) {
 	assertCorruptPeerStoreFailsCmd(t, "approve")
 }
 
-func TestAuthRemovePropagatesPeerStoreError(t *testing.T) {
-	assertCorruptPeerStoreFailsCmd(t, "remove")
+func TestAuthRevokePropagatesPeerStoreError(t *testing.T) {
+	assertCorruptPeerStoreFailsCmd(t, "revoke")
 }
 
 // assertCorruptPeerStoreFailsCmd plants a corrupt peers.json and
@@ -256,14 +262,14 @@ func TestAuthListUnlabeledPeer(t *testing.T) {
 	}
 }
 
-func TestAuthRemoveConfigDirError(t *testing.T) {
+func TestAuthRevokeConfigDirError(t *testing.T) {
 	t.Setenv("HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	other, err := identity.Generate(identity.RoleClient)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
-	_, _, err = runSandboxd(t, authCmdName, "remove", other.Fingerprint().String())
+	_, _, err = runSandboxd(t, authCmdName, "revoke", other.Fingerprint().String())
 	if err == nil {
 		t.Fatal("expected error when UserConfigDir is unresolvable")
 	}

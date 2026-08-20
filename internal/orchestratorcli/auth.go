@@ -31,6 +31,7 @@ func newAuthCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   authCmdName,
 		Short: "Manage approved peers (TOFU mTLS trust)",
+		RunE:  runAuthCommandGroup,
 		Long: "daft-orchestrator authenticates peers (the user-host's daft client\n" +
 			"and sandbox-hosts) via mutual TLS with TOFU peer pinning. The local\n" +
 			"identity (Ed25519 keypair + self-signed leaf cert) plus the\n" +
@@ -42,8 +43,15 @@ func newAuthCmd() *cobra.Command {
 	cmd.AddCommand(newAuthShowCmd())
 	cmd.AddCommand(newAuthListCmd())
 	cmd.AddCommand(newAuthApproveCmd())
-	cmd.AddCommand(newAuthRemoveCmd())
+	cmd.AddCommand(newAuthRevokeCmd())
 	return cmd
+}
+
+func runAuthCommandGroup(cmd *cobra.Command, args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("unknown command %q for %q", args[0], cmd.CommandPath())
+	}
+	return cmd.Help()
 }
 
 func authConfigDir(cmd *cobra.Command) (string, error) {
@@ -147,11 +155,17 @@ func newAuthApproveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := peers.Add(identity.Peer{
+			peer := identity.Peer{
 				Fingerprint: fp,
 				Label:       strings.TrimSpace(label),
 				Role:        identity.Role(role),
-			}); err != nil {
+			}
+			if peer.Role == identity.RoleClient {
+				err = peers.AuthoriseClient(peer.Fingerprint, peer.Label)
+			} else {
+				err = peers.Add(peer)
+			}
+			if err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "approved %s\n", fp)
@@ -164,10 +178,10 @@ func newAuthApproveCmd() *cobra.Command {
 	return cmd
 }
 
-func newAuthRemoveCmd() *cobra.Command {
+func newAuthRevokeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:           "remove <fingerprint>",
-		Short:         "Remove an approved peer",
+		Use:           "revoke <fingerprint>",
+		Short:         "Revoke an identity's authorization",
 		Args:          cobra.ExactArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -183,10 +197,16 @@ func newAuthRemoveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := peers.Remove(fp); err != nil {
+			peer, ok := peers.Lookup(fp)
+			if ok && peer.Role == identity.RoleClient {
+				err = peers.RevokeClientAuthorisation(fp)
+			} else {
+				err = peers.Remove(fp)
+			}
+			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", fp)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "revoked %s\n", fp)
 			return err
 		},
 	}

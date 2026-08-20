@@ -36,7 +36,8 @@ unconditional mutation. A definitive authenticated response may instead enter
 ## Implementation map
 
 - Identity setup: [`internal/cli/auth.go`](../../internal/cli/auth.go)
-- Orchestrator trust persistence: [`internal/identity`](../../internal/identity/)
+- Named trust and authorization operations:
+  [`internal/identity/relations.go`](../../internal/identity/relations.go)
 - Workspace operations: [`internal/daftclient`](../../internal/daftclient/)
 - Local compensation tests: [`internal/cli`](../../internal/cli/)
 

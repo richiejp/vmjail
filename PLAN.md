@@ -856,7 +856,10 @@ and explicitly distinguishes current observations from proposed states. The
 Client lifecycle names its asymmetric trust operations explicitly:
 `TrustOrchestrator` and `RevokeOrchestratorTrust` are Client-local controller
 trust, while `AuthoriseClient` and `RevokeClientAuthorisation` are
-Orchestrator-owned role decisions. The
+Orchestrator-owned role decisions. These names are also executable
+`identity.PeerStore` operations wrapping the generic trust-store primitives,
+which gives architecture searches a direct source-code anchor. Public auth
+commands use `revoke`, not the persistence-oriented verb `remove`. The
 fast gate enforces all seven component/lifecycle/source/rendering sets, local links,
 page reachability, invariant/source sections, and a 750-word page ceiling. The
 first end-to-end vertical slice covers Workspace launch, stop, preservation,

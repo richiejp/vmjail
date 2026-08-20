@@ -34,7 +34,7 @@ func newAuthCmd() *cobra.Command {
 			"$XDG_CONFIG_HOME/daft/client/ by default.\n\n" +
 			"Approve a peer with `daft auth approve <fingerprint>` after\n" +
 			"obtaining its fingerprint out-of-band; revoke with `daft auth\n" +
-			"remove <fingerprint>`.",
+			"revoke <fingerprint>`.",
 	}
 	cmd.PersistentFlags().String(configDirFlag, "",
 		"override the daft client config dir (default: $XDG_CONFIG_HOME/daft/client)")
@@ -42,7 +42,7 @@ func newAuthCmd() *cobra.Command {
 	cmd.AddCommand(newAuthShowCmd())
 	cmd.AddCommand(newAuthListCmd())
 	cmd.AddCommand(newAuthApproveCmd())
-	cmd.AddCommand(newAuthRemoveCmd())
+	cmd.AddCommand(newAuthRevokeCmd())
 	return cmd
 }
 
@@ -160,7 +160,12 @@ func newAuthApproveCmd() *cobra.Command {
 				Label:       strings.TrimSpace(label),
 				Role:        identity.Role(role),
 			}
-			if err := peers.Add(peer); err != nil {
+			if peer.Role == identity.RoleOrchestrator {
+				err = peers.TrustOrchestrator(peer.Fingerprint, peer.Label)
+			} else {
+				err = peers.Add(peer)
+			}
+			if err != nil {
 				return err
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(), "approved %s\n", fp)
@@ -173,13 +178,13 @@ func newAuthApproveCmd() *cobra.Command {
 	return cmd
 }
 
-// newAuthRemoveCmd: `daft auth remove <fingerprint>` — deletes a
-// peer entry. Idempotent: removing an unknown fingerprint succeeds
+// newAuthRevokeCmd: `daft auth revoke <fingerprint>` — revokes a
+// trust relationship. Idempotent: revoking an unknown fingerprint succeeds
 // quietly.
-func newAuthRemoveCmd() *cobra.Command {
+func newAuthRevokeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:           "remove <fingerprint>",
-		Short:         "Remove an approved peer",
+		Use:           "revoke <fingerprint>",
+		Short:         "Revoke trust in an approved identity",
 		Args:          cobra.ExactArgs(1),
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -195,10 +200,16 @@ func newAuthRemoveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := peers.Remove(fp); err != nil {
+			peer, ok := peers.Lookup(fp)
+			if ok && peer.Role == identity.RoleOrchestrator {
+				err = peers.RevokeOrchestratorTrust(fp)
+			} else {
+				err = peers.Remove(fp)
+			}
+			if err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed %s\n", fp)
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "revoked %s\n", fp)
 			return err
 		},
 	}

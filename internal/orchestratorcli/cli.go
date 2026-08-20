@@ -1,6 +1,6 @@
 // Package orchestratorcli is the cobra command tree for the
 // daft-orchestrator binary: `serve` (the long-running listener) and
-// `auth` (show / list / approve / remove over the TOFU peer store, for
+// `auth` (show / list / approve / revoke over the TOFU peer store, for
 // bootstrapping trust out-of-band before serve starts).
 package orchestratorcli
 

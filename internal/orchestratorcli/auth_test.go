@@ -61,7 +61,7 @@ func TestAuthShowGeneratesOrchestratorIdentity(t *testing.T) {
 	}
 }
 
-func TestAuthApproveListRemoveRoundTrip(t *testing.T) {
+func TestAuthApproveListRevokeRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	peerFP := showFingerprint(t, t.TempDir()) // a different node's fingerprint
 
@@ -77,9 +77,9 @@ func TestAuthApproveListRemoveRoundTrip(t *testing.T) {
 		t.Errorf("list after approve = %q, want fp+role+label", out)
 	}
 
-	runAuth(t, false, "remove", peerFP, configDirFlag, dir)
+	runAuth(t, false, "revoke", peerFP, configDirFlag, dir)
 	if out := runAuth(t, false, listSubName, configDirFlag, dir); strings.Contains(out, peerFP) {
-		t.Errorf("list after remove still shows peer: %q", out)
+		t.Errorf("list after revoke still shows peer: %q", out)
 	}
 }
 
@@ -92,8 +92,12 @@ func TestAuthApproveRejectsUnknownRole(t *testing.T) {
 	runAuth(t, true, "approve", fp, configDirFlag, t.TempDir(), "--role", "bogus")
 }
 
-func TestAuthRemoveRejectsBadFingerprint(t *testing.T) {
-	runAuth(t, true, "remove", "nope", configDirFlag, t.TempDir())
+func TestAuthRevokeRejectsBadFingerprint(t *testing.T) {
+	runAuth(t, true, "revoke", "nope", configDirFlag, t.TempDir())
+}
+
+func TestAuthRemoveVerbIsRejected(t *testing.T) {
+	runAuth(t, true, "remove", "unused")
 }
 
 // TestAuthShowReportsCorruptIdentity covers show's loadOrGenerate error
@@ -113,7 +117,7 @@ func TestAuthShowReportsCorruptIdentity(t *testing.T) {
 // authConfigDir → resolveConfigDir fails and each subcommand surfaces the
 // error rather than touching disk.
 func TestAuthSubcommandsPropagateConfigDirError(t *testing.T) {
-	// A valid fingerprint so approve/remove get past the arg parse and
+	// A valid fingerprint so approve/revoke get past the arg parse and
 	// reach config-dir resolution. Generated before clearing HOME (it's
 	// in-memory, but order keeps intent clear).
 	gen, err := identity.Generate(identity.RoleClient)
@@ -128,7 +132,7 @@ func TestAuthSubcommandsPropagateConfigDirError(t *testing.T) {
 		{"show"},
 		{listSubName},
 		{"approve", fp},
-		{"remove", fp},
+		{"revoke", fp},
 	} {
 		runAuth(t, true, args...)
 	}
