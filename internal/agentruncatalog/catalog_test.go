@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/dgraph-io/badger/v4"
-	"github.com/richiejp/darkaifactory/internal/controlstore"
 	"github.com/richiejp/darkaifactory/internal/identity"
 )
 
@@ -34,13 +33,19 @@ func testOwner(b byte) identity.Fingerprint {
 	return fp
 }
 
-func openTestStore(t *testing.T) (store *Store, control *controlstore.Store) {
+// openTestDB exercises the catalog against its actual database dependency,
+// including close/reopen persistence, without the deleted control-store wrapper.
+func openTestDB(path string) (*badger.DB, error) {
+	return badger.Open(badger.DefaultOptions(path).WithLogger(nil))
+}
+
+func openTestStore(t *testing.T) (store *Store, control *badger.DB) {
 	t.Helper()
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err = Open(control.DB(), nil)
+	store, err = Open(control, nil)
 	if err != nil {
 		_ = control.Close()
 		t.Fatal(err)
@@ -50,11 +55,11 @@ func openTestStore(t *testing.T) (store *Store, control *controlstore.Store) {
 
 func TestCreateOrGetConvergesPersistsAndRejectsConflicts(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control")
-	control, err := controlstore.Open(path)
+	control, err := openTestDB(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,12 +104,12 @@ func TestCreateOrGetConvergesPersistsAndRejectsConflicts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	control, err = controlstore.Open(path)
+	control, err = openTestDB(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = control.Close() }()
-	reopened, err := Open(control.DB(), nil)
+	reopened, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,12 +127,12 @@ func TestCreateOrGetConvergesPersistsAndRejectsConflicts(t *testing.T) {
 
 func TestRunTransitionsPersistWithEvents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "control")
-	control, err := controlstore.Open(path)
+	control, err := openTestDB(path)
 	if err != nil {
 		t.Fatalf("Open control: %v", err)
 	}
 	now := time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
-	store, err := Open(control.DB(), func() time.Time { return now })
+	store, err := Open(control, func() time.Time { return now })
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -169,7 +174,7 @@ func TestRunTransitionsPersistWithEvents(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	control, err = controlstore.Open(path)
+	control, err = openTestDB(path)
 	if err != nil {
 		t.Fatalf("reopen control: %v", err)
 	}
@@ -178,7 +183,7 @@ func TestRunTransitionsPersistWithEvents(t *testing.T) {
 			t.Errorf("Close reopened: %v", err)
 		}
 	}()
-	reopened, err := Open(control.DB(), nil)
+	reopened, err := Open(control, nil)
 	if err != nil {
 		t.Fatalf("reopen catalog: %v", err)
 	}
@@ -234,7 +239,7 @@ func assertCreatedRun(t *testing.T, run Run) {
 }
 
 func TestRunOwnershipValidationAndOrdering(t *testing.T) {
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +248,7 @@ func TestRunOwnershipValidationAndOrdering(t *testing.T) {
 			t.Errorf("Close: %v", err)
 		}
 	}()
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -281,12 +286,12 @@ func TestRunOwnershipValidationAndOrdering(t *testing.T) {
 }
 
 func TestCreateValidatesAndCopiesCommand(t *testing.T) {
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = control.Close() }()
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,12 +331,12 @@ func TestCreateValidatesAndCopiesCommand(t *testing.T) {
 }
 
 func TestTerminalBoundRunRemainsActiveUntilTeardownCompletes(t *testing.T) {
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = control.Close() }()
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -392,12 +397,12 @@ func TestTeardownMarkerRequiresTerminalBinding(t *testing.T) {
 }
 
 func TestEventHistoryHasStructuralFiveEventBound(t *testing.T) {
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = control.Close() }()
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -438,7 +443,7 @@ func TestEncodeJSON(t *testing.T) {
 }
 
 func TestWritePropagatesBadgerKeyErrors(t *testing.T) {
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -447,7 +452,7 @@ func TestWritePropagatesBadgerKeyErrors(t *testing.T) {
 			t.Errorf("Close: %v", err)
 		}
 	}()
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -475,11 +480,11 @@ func TestCatalogRejectsInvalidOperations(t *testing.T) {
 	if _, err := Open(nil, nil); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Open nil = %v", err)
 	}
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +532,7 @@ func TestCatalogRejectsInvalidOperations(t *testing.T) {
 }
 
 func TestCreateRejectsOversizeID(t *testing.T) {
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -536,7 +541,7 @@ func TestCreateRejectsOversizeID(t *testing.T) {
 			t.Errorf("Close: %v", err)
 		}
 	}()
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -547,7 +552,7 @@ func TestCreateRejectsOversizeID(t *testing.T) {
 }
 
 func TestCreateDetectsRunInsertedAfterLoad(t *testing.T) {
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -556,13 +561,13 @@ func TestCreateDetectsRunInsertedAfterLoad(t *testing.T) {
 			t.Errorf("Close: %v", err)
 		}
 	}()
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	owner := testOwner(1)
 	run := Run{UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner, State: StateQueued, LastEventCursor: 1}
-	if err := control.DB().Update(seedRunAt(testRunUUID, run)); err != nil {
+	if err := control.Update(seedRunAt(testRunUUID, run)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Create(CreateInput{Command: []string{testProfileName}, UUID: testRunUUID, WorkspaceUUID: testWorkspaceUUID, ProfileName: testProfileName, ProfileDigest: testProfileDigest, OwnerFingerprint: owner}); !errors.Is(err, ErrConflict) {
@@ -614,14 +619,14 @@ func TestOpenRejectsCorruptRecords(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+			control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := control.DB().Update(tc.seed); err != nil {
+			if err := control.Update(tc.seed); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := Open(control.DB(), nil); err == nil {
+			if _, err := Open(control, nil); err == nil {
 				t.Fatal("Open corrupt store succeeded")
 			}
 			if err := control.Close(); err != nil {
@@ -632,7 +637,7 @@ func TestOpenRejectsCorruptRecords(t *testing.T) {
 }
 
 func TestEventsRejectCorruptEvent(t *testing.T) {
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -641,7 +646,7 @@ func TestEventsRejectCorruptEvent(t *testing.T) {
 			t.Errorf("Close: %v", err)
 		}
 	}()
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,7 +655,7 @@ func TestEventsRejectCorruptEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := []byte(fmt.Sprintf("%s%s/%020d", eventPrefix, testRunUUID, 1))
-	if err := control.DB().Update(func(txn *badger.Txn) error { return txn.Set(key, []byte("{")) }); err != nil {
+	if err := control.Update(func(txn *badger.Txn) error { return txn.Set(key, []byte("{")) }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Events(owner, testRunUUID, 0, 1); err == nil {
@@ -659,7 +664,7 @@ func TestEventsRejectCorruptEvent(t *testing.T) {
 }
 
 func TestEventsRejectWrongRecordVersion(t *testing.T) {
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +673,7 @@ func TestEventsRejectWrongRecordVersion(t *testing.T) {
 			t.Errorf("Close: %v", err)
 		}
 	}()
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -681,7 +686,7 @@ func TestEventsRejectWrongRecordVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := []byte(fmt.Sprintf("%s%s/%020d", eventPrefix, testRunUUID, 1))
-	if err := control.DB().Update(func(txn *badger.Txn) error { return txn.Set(key, value) }); err != nil {
+	if err := control.Update(func(txn *badger.Txn) error { return txn.Set(key, value) }); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.Events(owner, testRunUUID, 0, 1); err == nil {
@@ -690,11 +695,11 @@ func TestEventsRejectWrongRecordVersion(t *testing.T) {
 }
 
 func TestOpenRejectsMismatchedLastEvent(t *testing.T) {
-	control, err := controlstore.Open(filepath.Join(t.TempDir(), "control"))
+	control, err := openTestDB(filepath.Join(t.TempDir(), "control"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := Open(control.DB(), nil)
+	store, err := Open(control, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -708,10 +713,10 @@ func TestOpenRejectsMismatchedLastEvent(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := []byte(fmt.Sprintf("%s%s/%020d", eventPrefix, testRunUUID, 1))
-	if err := control.DB().Update(func(txn *badger.Txn) error { return txn.Set(key, value) }); err != nil {
+	if err := control.Update(func(txn *badger.Txn) error { return txn.Set(key, value) }); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Open(control.DB(), nil); err == nil {
+	if _, err := Open(control, nil); err == nil {
 		t.Fatal("Open accepted mismatched last event")
 	}
 	if err := control.Close(); err != nil {

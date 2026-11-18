@@ -7,7 +7,6 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/devcontainer"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 // resolve is a test helper: parse+resolve a devcontainer.json body with
@@ -21,7 +20,7 @@ func resolve(t *testing.T, body, localWS string) *devcontainer.Spec {
 	return spec
 }
 
-func TestToWorkspaceSpecImageBased(t *testing.T) {
+func TestToSpecImageBased(t *testing.T) {
 	dc := resolve(t, `{
   "image": "ghcr.io/acme/dev:1",
   "containerEnv": { "PIP_USER": "0", "TOKEN": "" },
@@ -31,31 +30,30 @@ func TestToWorkspaceSpecImageBased(t *testing.T) {
   "forwardPorts": [3000, "8080"]
 }`, "/home/dev/app")
 
-	got, err := ToWorkspaceSpec(dc)
+	got, err := ToSpec(dc)
 	if err != nil {
-		t.Fatalf("ToWorkspaceSpec: %v", err)
+		t.Fatalf("ToSpec: %v", err)
 	}
 
-	want := workspacecatalog.Spec{
+	want := Spec{
 		ImageRef: "ghcr.io/acme/dev:1",
-		Mounts: []workspacecatalog.Mount{
-			// (B) push-CAS: workspace-content mount has an empty Source;
-			// the local /home/dev/app dir is pushed up separately.
-			{Target: "/workspace/app", Source: ""},
+		Mounts: []Mount{
+			// The resolved workspace source is a direct host mount.
+			{Target: "/workspace/app", Source: "/home/dev/app"},
 			// Extra mount keeps its absolute Source (direct host bind).
 			{Target: "/cache", Source: "/host/cache", ReadOnly: true},
 		},
-		Env: []workspacecatalog.EnvVar{
+		Env: []EnvVar{
 			{Name: "PIP_USER", Value: "0"},
 			{Name: "TOKEN", Value: ""},
 		},
-		Ports: []workspacecatalog.PortMapping{
+		Ports: []PortMapping{
 			{ContainerPort: 3000, Protocol: int32(sandboxv1.Protocol_PROTOCOL_TCP)},
 			{ContainerPort: 8080, Protocol: int32(sandboxv1.Protocol_PROTOCOL_TCP)},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ToWorkspaceSpec mismatch\n got: %+v\nwant: %+v", got, want)
+		t.Errorf("ToSpec mismatch\n got: %+v\nwant: %+v", got, want)
 	}
 }
 
@@ -71,9 +69,9 @@ func TestPyTorchCPUBuildProjects(t *testing.T) {
   "workspaceFolder": "/workspace/pytorch"
 }`, "/home/dev/pytorch")
 
-	got, err := ToWorkspaceSpec(dc)
+	got, err := ToSpec(dc)
 	if err != nil {
-		t.Fatalf("ToWorkspaceSpec: %v", err)
+		t.Fatalf("ToSpec: %v", err)
 	}
 	if got.ImageRef != "" {
 		t.Errorf("ImageRef = %q, want empty for a build-based config", got.ImageRef)
@@ -83,7 +81,7 @@ func TestPyTorchCPUBuildProjects(t *testing.T) {
 	}
 }
 
-func TestToWorkspaceSpecErrors(t *testing.T) {
+func TestToSpecErrors(t *testing.T) {
 	tcs := []struct {
 		name string
 		spec *devcontainer.Spec
@@ -94,7 +92,7 @@ func TestToWorkspaceSpecErrors(t *testing.T) {
 	}
 	for _, tc := range tcs {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ToWorkspaceSpec(tc.spec)
+			_, err := ToSpec(tc.spec)
 			if err == nil {
 				t.Fatal("want error")
 			}
@@ -110,7 +108,7 @@ func TestRelativeAndDuplicateMountTargetsRejected(t *testing.T) {
 		Image:  "x",
 		Mounts: []devcontainer.MountSpec{{Target: "relative/path", Source: "/s"}},
 	}
-	if _, err := ToWorkspaceSpec(rel); err == nil {
+	if _, err := ToSpec(rel); err == nil {
 		t.Error("relative mount target: want error")
 	}
 
@@ -119,7 +117,7 @@ func TestRelativeAndDuplicateMountTargetsRejected(t *testing.T) {
 		Workspace: devcontainer.WorkspaceSpec{Mount: &devcontainer.MountSpec{Target: "/w", Source: "/a"}},
 		Mounts:    []devcontainer.MountSpec{{Target: "/w", Source: "/b"}},
 	}
-	if _, err := ToWorkspaceSpec(dup); err == nil {
+	if _, err := ToSpec(dup); err == nil {
 		t.Error("duplicate mount target: want error")
 	}
 }
@@ -127,7 +125,7 @@ func TestRelativeAndDuplicateMountTargetsRejected(t *testing.T) {
 func TestPortRange(t *testing.T) {
 	for _, bad := range []int{0, -1, 70000} {
 		s := &devcontainer.Spec{Image: "x", ForwardPorts: []int{bad}}
-		if _, err := ToWorkspaceSpec(s); err == nil {
+		if _, err := ToSpec(s); err == nil {
 			t.Errorf("port %d: want range error", bad)
 		}
 	}
@@ -136,9 +134,9 @@ func TestPortRange(t *testing.T) {
 // TestNoMountsNoPorts confirms a bare image-only config projects to nil
 // slices (not empty non-nil ones) so it round-trips cleanly.
 func TestNoMountsNoPorts(t *testing.T) {
-	got, err := ToWorkspaceSpec(&devcontainer.Spec{Image: "x"})
+	got, err := ToSpec(&devcontainer.Spec{Image: "x"})
 	if err != nil {
-		t.Fatalf("ToWorkspaceSpec: %v", err)
+		t.Fatalf("ToSpec: %v", err)
 	}
 	if got.Mounts != nil || got.Ports != nil || got.Env != nil {
 		t.Errorf("bare image spec should project nil slices: %+v", got)

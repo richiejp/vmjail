@@ -1,10 +1,8 @@
 package sandboxexec
 
 import (
-	"archive/tar"
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,9 +24,7 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/sandboxnet"
-	"github.com/richiejp/darkaifactory/internal/workspace"
 	"github.com/richiejp/darkaifactory/internal/workspacedisk"
-	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
 
 const (
@@ -128,57 +124,6 @@ func TestDeletedSandboxCancelsExactRunningVM(t *testing.T) {
 	<-stopped
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("ADDED handler error = %v", err)
-	}
-}
-
-func TestDeletePreservesWorkspaceBeforeCancel(t *testing.T) {
-	mat := &fakeMaterializer{}
-	canceled := false
-	e := &Executor{
-		mountMaterializer: mat,
-		running:           map[string]context.CancelFunc{testSandboxID: func() { canceled = true }},
-		preserve:          map[string]func(context.Context) error{},
-		live:              map[string]*liveSandbox{},
-		deleted:           map[string]time.Time{},
-	}
-	e.setSandboxPreserver(testSandboxID, &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}}})
-	if err := e.deleteSandbox(t.Context(), testSandboxID); err != nil {
-		t.Fatal(err)
-	}
-	if !canceled || len(mat.preserved) != 1 || mat.preserved[0] != workspace.SyncKey(testWSUUID, mntWorkspace) {
-		t.Fatalf("canceled=%v preserved=%v", canceled, mat.preserved)
-	}
-}
-
-func TestDeleteKeepsWorkspaceRunningWhenPreserveFails(t *testing.T) {
-	want := errors.New("snapshot failed")
-	canceled := false
-	e := &Executor{
-		running:  map[string]context.CancelFunc{testSandboxID: func() { canceled = true }},
-		preserve: map[string]func(context.Context) error{testSandboxID: func(context.Context) error { return want }},
-		live:     map[string]*liveSandbox{},
-		deleted:  map[string]time.Time{},
-	}
-	err := e.deleteSandbox(t.Context(), testSandboxID)
-	if !errors.Is(err, want) || canceled {
-		t.Fatalf("delete = %v, canceled=%v", err, canceled)
-	}
-}
-
-func TestDeletePreserveHasBudgetInsideAcknowledgmentDeadline(t *testing.T) {
-	e := &Executor{
-		running: map[string]context.CancelFunc{testSandboxID: func() {}},
-		preserve: map[string]func(context.Context) error{testSandboxID: func(ctx context.Context) error {
-			deadline, ok := ctx.Deadline()
-			if !ok || time.Until(deadline) > workspacePreserveTimeout || time.Until(deadline) >= 30*time.Second {
-				return fmt.Errorf("invalid preserve deadline: %v", deadline)
-			}
-			return nil
-		}},
-		live: map[string]*liveSandbox{}, deleted: map[string]time.Time{},
-	}
-	if err := e.deleteSandbox(t.Context(), testSandboxID); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -723,36 +668,6 @@ func TestHandleSandboxEventPropagatesMounts(t *testing.T) {
 	}
 }
 
-// fakeMaterializer records the sync keys it's asked to materialise and
-// optionally creates the dest dir, so tests can assert the executor
-// drives it with the right key and wires the backing dir as the share
-// Source.
-type fakeMaterializer struct {
-	keys    []string
-	applied bool
-	err     error
-	mkdir   bool
-	// seed, when set, populates the freshly-materialised dest dir — used
-	// to drop a devcontainer.json into the workspace content for the
-	// node-side overlay test. Implies mkdir.
-	seed            func(dest string) error
-	liveSet         map[string]string
-	preserved       []string
-	cleared         []string
-	preserveErr     error
-	preserveStarted chan struct{}
-	preserveRelease chan struct{}
-	refreshers      map[string]func(context.Context, string) error
-	streamed        []string
-}
-
-func (f *fakeMaterializer) SetLiveMountRefresher(key string, refresh func(context.Context, string) error) {
-	if f.refreshers == nil {
-		f.refreshers = map[string]func(context.Context, string) error{}
-	}
-	f.refreshers[key] = refresh
-}
-
 type fakeDiskPreparer struct {
 	workspace string
 	size      uint64
@@ -769,8 +684,7 @@ func (f *fakeDiskPreparer) Prepare(workspaceID string, virtualSize uint64) (path
 
 func TestApplyWorkspaceDiskDefaultsAndConfiguresVMM(t *testing.T) {
 	preparer := &fakeDiskPreparer{path: testControlDiskPath}
-	materializer := &fakeMaterializer{}
-	e := &Executor{workspaceDisks: preparer, mountMaterializer: materializer, vsockDir: testVsockDir}
+	e := &Executor{workspaceDisks: preparer, vsockDir: testVsockDir}
 	cfg := sandbox.Config{Shares: []*sandbox.ShareConfig{
 		{Tag: "bundles", Mountpoint: "/bundles"},
 		{Tag: "rw", Mountpoint: mntWorkspace},
@@ -791,18 +705,8 @@ func TestApplyWorkspaceDiskDefaultsAndConfiguresVMM(t *testing.T) {
 	if cfg.APISocket != filepath.Join(testVsockDir, testSandboxID+".api.sock") {
 		t.Errorf("APISocket = %q", cfg.APISocket)
 	}
-	if len(cfg.WorkspaceMounts) != 1 || cfg.WorkspaceMounts[0].Target != mntWorkspace ||
-		cfg.WorkspaceMounts[0].Directory != "mounts/0" || cfg.WorkspaceMounts[0].SeedPort != sandbox.WorkspaceSeedBaseVsockPort {
-		t.Errorf("WorkspaceMounts = %#v", cfg.WorkspaceMounts)
-	}
-	if len(cfg.WorkspaceSeeds) != 1 {
-		t.Fatalf("WorkspaceSeeds = %#v", cfg.WorkspaceSeeds)
-	}
-	if _, err := cfg.WorkspaceSeeds[0].Stream(t.Context(), io.Discard); err != nil || !slices.Equal(materializer.streamed, []string{workspace.SyncKey(testWSUUID, mntWorkspace)}) {
-		t.Fatalf("seed stream = %v, keys %v", err, materializer.streamed)
-	}
-	if len(cfg.Shares) != 2 || cfg.Shares[0].Mountpoint != "/bundles" || cfg.Shares[1].Mountpoint != mntReference {
-		t.Errorf("Shares = %#v, want bundle and read-only reference", cfg.Shares)
+	if len(cfg.WorkspaceMounts) != 0 || len(cfg.WorkspaceSeeds) != 0 || len(cfg.Shares) != 3 {
+		t.Fatalf("retained disk must leave direct shares unchanged: %#v", cfg)
 	}
 }
 
@@ -813,14 +717,6 @@ func TestWorkspaceDiskAllowanceUsesConfiguredDefault(t *testing.T) {
 	}
 	if got := e.workspaceDiskAllowance(&sandboxv1.SandboxSpec{DiskBytes: 2 << 30}); got != 2<<30 {
 		t.Fatalf("explicit allowance = %d", got)
-	}
-}
-
-func TestConfigureWorkspaceMountsKeepsAbsoluteHostControlMountWritable(t *testing.T) {
-	cfg := sandbox.Config{Shares: []*sandbox.ShareConfig{{Mountpoint: mntData}}}
-	configureWorkspaceMounts(&cfg, testWSUUID, []*sandboxv1.Mount{{Target: mntData, Source: hostWS}}, true, &fakeMaterializer{})
-	if len(cfg.WorkspaceMounts) != 0 || cfg.Shares[0].Mountpoint != mntData || cfg.Shares[0].ReadOnly {
-		t.Fatalf("config = %#v", cfg)
 	}
 }
 
@@ -840,179 +736,15 @@ func TestApplyWorkspaceDiskUsesExplicitSizeAndPropagatesErrors(t *testing.T) {
 
 func TestApplyWorkspaceDiskDoesNotSeedRetainedImage(t *testing.T) {
 	preparer := &fakeDiskPreparer{path: testControlDiskPath, retained: true}
-	e := &Executor{workspaceDisks: preparer, mountMaterializer: &fakeMaterializer{}, vsockDir: testVsockDir}
+	e := &Executor{workspaceDisks: preparer, vsockDir: testVsockDir}
 	cfg := sandbox.Config{}
 	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}}}
 	if err := e.applyWorkspaceDisk(&cfg, testSandboxID, spec); err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.WorkspaceMounts) != 1 || cfg.WorkspaceMounts[0].SeedPort != 0 || len(cfg.WorkspaceSeeds) != 0 {
+	if len(cfg.WorkspaceMounts) != 0 || len(cfg.WorkspaceSeeds) != 0 {
 		t.Fatalf("retained disk seed config = mounts %#v seeds %#v", cfg.WorkspaceMounts, cfg.WorkspaceSeeds)
 	}
-}
-
-func TestRegisterWorkspaceSnapshotRoutes(t *testing.T) {
-	mat := &fakeMaterializer{}
-	e := &Executor{mountMaterializer: mat}
-	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{
-		{Target: mntWorkspace}, {Target: mntReference, ReadOnly: true}, {Target: mntData, Source: hostWS}, nil,
-	}}
-	e.registerWorkspaceSnapshotRoutes(sandbox.Config{}, spec)
-	if len(mat.refreshers) != 0 {
-		t.Fatalf("routes without disk/vsock = %v", mat.refreshers)
-	}
-	e.registerWorkspaceSnapshotRoutes(sandbox.Config{
-		Vsock: &sandbox.VsockConfig{HostSocket: "/run/daft/test.sock"}, WorkspaceDisk: &sandbox.DiskConfig{Path: testControlDiskPath},
-	}, spec)
-	key := workspace.SyncKey(testWSUUID, mntWorkspace)
-	if len(mat.refreshers) != 1 || mat.refreshers[key] == nil {
-		t.Fatalf("refreshers = %v", mat.refreshers)
-	}
-	blocked := filepath.Join(t.TempDir(), "blocked")
-	if err := os.WriteFile(blocked, []byte("file"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := mat.refreshers[key](t.Context(), filepath.Join(blocked, "mount")); err == nil {
-		t.Fatal("snapshot refresh accepted destination below a regular file")
-	}
-}
-
-func TestWorkspaceSnapshotRefreshFlushesBeforePull(t *testing.T) {
-	mat := &fakeMaterializer{}
-	e := &Executor{mountMaterializer: mat}
-	e.registerWorkspaceSnapshotRoutes(sandbox.Config{
-		Vsock:         &sandbox.VsockConfig{HostSocket: filepath.Join(t.TempDir(), "missing.sock")},
-		WorkspaceDisk: &sandbox.DiskConfig{Path: testControlDiskPath},
-	}, &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}}})
-	err := mat.refreshers[workspace.SyncKey(testWSUUID, mntWorkspace)](t.Context(), t.TempDir())
-	if err == nil || !strings.Contains(err.Error(), "flush retained workspace disk") {
-		t.Fatalf("refresh error = %v, want flush failure", err)
-	}
-}
-
-func TestWorkspaceSnapshotRefreshFlushesAndPulls(t *testing.T) {
-	mat := &fakeMaterializer{}
-	dials := 0
-	e := &Executor{mountMaterializer: mat, dialWorkspaceGuest: func(context.Context, string, uint32) (net.Conn, error) {
-		dials++
-		client, server := net.Pipe()
-		go func(call int) {
-			defer func() { _ = server.Close() }()
-			var request workspacesnapshot.Request
-			_ = json.NewDecoder(server).Decode(&request)
-			if call == 1 {
-				_, _ = server.Write([]byte("{}\n"))
-				return
-			}
-			_ = tar.NewWriter(server).Close()
-		}(dials)
-		return client, nil
-	}}
-	e.registerWorkspaceSnapshotRoutes(sandbox.Config{
-		Vsock: &sandbox.VsockConfig{HostSocket: "/socket"}, WorkspaceDisk: &sandbox.DiskConfig{Path: testControlDiskPath},
-	}, &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}}})
-	if err := mat.refreshers[workspace.SyncKey(testWSUUID, mntWorkspace)](t.Context(), t.TempDir()); err != nil || dials != 2 {
-		t.Fatalf("refresh = %v, dials=%d", err, dials)
-	}
-}
-
-func TestResetWorkspaceSnapshotDestinationRemovesStaleSeed(t *testing.T) {
-	destination := filepath.Join(t.TempDir(), "mount")
-	stale := filepath.Join(destination, "in.txt")
-	if err := os.MkdirAll(destination, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(stale, []byte("stale"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := resetWorkspaceSnapshotDestination(destination); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale seed stat error = %v, want not exist", err)
-	}
-	if info, err := os.Stat(destination); err != nil || !info.IsDir() {
-		t.Fatalf("destination stat = (%v, %v), want directory", info, err)
-	}
-}
-
-func TestResetWorkspaceSnapshotDestinationReportsCreateError(t *testing.T) {
-	parent := t.TempDir()
-	if err := os.Chmod(parent, 0o500); err != nil { //nolint:gosec // G302: test needs a searchable but non-writable directory.
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) }) //nolint:gosec // G302: restore test temp dir for cleanup.
-	if err := resetWorkspaceSnapshotDestination(filepath.Join(parent, "mount")); err == nil {
-		t.Fatal("reset below read-only parent succeeded")
-	}
-}
-
-func (f *fakeMaterializer) MaterializeMount(_ context.Context, key, dest string) (bool, error) {
-	f.keys = append(f.keys, key)
-	if f.err != nil {
-		return false, f.err
-	}
-	if f.mkdir || f.seed != nil {
-		if err := os.MkdirAll(dest, 0o700); err != nil {
-			return false, err
-		}
-	}
-	if f.seed != nil {
-		if err := f.seed(dest); err != nil {
-			return false, err
-		}
-	}
-	return f.applied, nil
-}
-
-func (f *fakeMaterializer) ReadMountFile(_ context.Context, key, path string) (data []byte, found bool, err error) {
-	if f.err != nil {
-		return nil, false, f.err
-	}
-	if f.seed == nil {
-		return nil, false, nil
-	}
-	dest, err := os.MkdirTemp("", "daft-fake-mount-*")
-	if err != nil {
-		return nil, false, err
-	}
-	if err := f.seed(dest); err != nil {
-		return nil, false, errors.Join(err, os.RemoveAll(dest))
-	}
-	// #nosec G304 — this fake reads only below its newly-created temp root.
-	data, err = os.ReadFile(filepath.Join(dest, filepath.FromSlash(path)))
-	cleanupErr := os.RemoveAll(dest)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, false, cleanupErr
-	}
-	return data, err == nil, errors.Join(err, cleanupErr)
-}
-
-func (f *fakeMaterializer) StreamMount(_ context.Context, key string, _ io.Writer) (bool, error) {
-	f.streamed = append(f.streamed, key)
-	return f.applied, f.err
-}
-
-func (f *fakeMaterializer) SetLiveMount(key, dir string) {
-	if f.liveSet == nil {
-		f.liveSet = map[string]string{}
-	}
-	f.liveSet[key] = dir
-}
-
-func (f *fakeMaterializer) PreserveLiveMount(_ context.Context, key string) error {
-	f.preserved = append(f.preserved, key)
-	if f.preserveStarted != nil {
-		close(f.preserveStarted)
-	}
-	if f.preserveRelease != nil {
-		<-f.preserveRelease
-	}
-	return f.preserveErr
-}
-
-func (f *fakeMaterializer) ClearLiveMount(key string) {
-	f.cleared = append(f.cleared, key)
 }
 
 // TestHandleSandboxEventDevcontainerOverlay pins the node-side slice-2d
@@ -1020,14 +752,14 @@ func (f *fakeMaterializer) ClearLiveMount(key string) {
 // the image the devcontainer names, read from the materialised workspace
 // content, with the workspace's explicit env overlaid on top.
 func TestHandleSandboxEventDevcontainerOverlay(t *testing.T) {
-	mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
+	source := seedWorkspace(t, func(dest string) error {
 		dir := filepath.Join(dest, ".devcontainer")
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
 		}
 		return os.WriteFile(filepath.Join(dir, "devcontainer.json"),
 			[]byte(`{"image":"ghcr.io/acme/dev:1","workspaceFolder":"/workspace","containerEnv":{"FOO":"bar"}}`), 0o644)
-	}}
+	})
 	var gotRef string
 	var gotOpts sandboxboot.BootOptions
 	asm := func(_ context.Context, ref string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
@@ -1036,7 +768,6 @@ func TestHandleSandboxEventDevcontainerOverlay(t *testing.T) {
 	}
 	e, err := New(Config{
 		Stdout: io.Discard, Runner: noopRunner(), Assembler: asm,
-		MountMaterializer: mat, MountBackingDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1044,8 +775,8 @@ func TestHandleSandboxEventDevcontainerOverlay(t *testing.T) {
 	spec := &sandboxv1.SandboxSpec{
 		WorkspaceUuid:    testWSUUID,
 		DevcontainerPath: devcontainerNestedPath,
-		// Empty Source ⇒ CAS-materialised content mount.
-		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}},
+		// Direct host directory containing the devcontainer configuration.
+		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace, Source: source}},
 		Env:    []*sandboxv1.EnvVar{{Name: "OVERRIDE", Value: "ws"}},
 	}
 	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-dc", spec)); err != nil {
@@ -1065,97 +796,14 @@ func TestHandleSandboxEventDevcontainerOverlay(t *testing.T) {
 	}
 }
 
-func TestDiskDevcontainerReadsMetadataWithoutMaterializingHostTree(t *testing.T) {
-	mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
-		dir := filepath.Join(dest, ".devcontainer")
-		if err := os.MkdirAll(dir, 0o750); err != nil {
-			return err
-		}
-		return os.WriteFile(filepath.Join(dir, "devcontainer.json"), []byte(`{"image":"oven/bun:1.2-alpine"}`), 0o600)
-	}}
-	e := &Executor{mountMaterializer: mat, mountBackingDir: t.TempDir()}
-	spec := &sandboxv1.SandboxSpec{
-		WorkspaceUuid: testWSUUID, DevcontainerPath: devcontainerNestedPath,
-		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}},
-	}
-	res, err := e.resolveDevcontainerOverlay(t.Context(), "sandbox", spec,
-		[]sandboxboot.Mount{{Target: mntWorkspace, GuestOnly: true}})
-	if err != nil {
-		t.Fatalf("resolveDevcontainerOverlay: %v", err)
-	}
-	if res.ImageRef != "oven/bun:1.2-alpine" {
-		t.Fatalf("image = %q", res.ImageRef)
-	}
-	if len(mat.keys) != 0 {
-		t.Fatalf("MaterializeMount keys = %v, want none for image metadata", mat.keys)
-	}
-}
-
-func TestDiskDevcontainerMetadataErrorsFailClosed(t *testing.T) {
-	e := &Executor{mountMaterializer: &fakeMaterializer{err: errors.New("CAS unavailable")}, mountBackingDir: t.TempDir()}
-	spec := &sandboxv1.SandboxSpec{
-		WorkspaceUuid: testWSUUID, DevcontainerPath: devcontainerNestedPath,
-		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}},
-	}
-	if _, err := e.resolveDevcontainerOverlay(t.Context(), "sandbox", spec,
-		[]sandboxboot.Mount{{Target: mntWorkspace, GuestOnly: true}}); err == nil || !strings.Contains(err.Error(), "CAS unavailable") {
-		t.Fatalf("CAS read error = %v", err)
-	}
-	spec.DevcontainerPath = "."
-	if _, err := e.resolveDevcontainerOverlay(t.Context(), "sandbox", spec, nil); err == nil {
-		t.Fatal("invalid devcontainer path succeeded")
-	}
-}
-
-func TestDiskBuildDevcontainerCleansUpMaterializationFailures(t *testing.T) {
-	calls := 0
-	mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
-		calls++
-		if calls > 1 {
-			return errors.New("build context unavailable")
-		}
-		dir := filepath.Join(dest, ".devcontainer")
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
-		return os.WriteFile(filepath.Join(dir, "devcontainer.json"), []byte(`{"build":{"dockerfile":"Dockerfile"}}`), 0o600)
-	}}
-	backing := t.TempDir()
-	e := &Executor{mountMaterializer: mat, mountBackingDir: backing}
-	if err := os.MkdirAll(filepath.Dir(e.mountDir("sandbox", 0)), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	spec := &sandboxv1.SandboxSpec{
-		WorkspaceUuid: testWSUUID, DevcontainerPath: devcontainerNestedPath,
-		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}},
-	}
-	if _, err := e.resolveDevcontainerOverlay(t.Context(), "sandbox", spec,
-		[]sandboxboot.Mount{{Target: mntWorkspace, GuestOnly: true}}); err == nil || !strings.Contains(err.Error(), "build context unavailable") {
-		t.Fatalf("materialization error = %v", err)
-	}
-
-	mat.seed = func(dest string) error {
-		dir := filepath.Join(dest, ".devcontainer")
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
-		return os.WriteFile(filepath.Join(dir, "devcontainer.json"), []byte(`{"build":{"dockerfile":"Dockerfile"}}`), 0o600)
-	}
-	e.mountBackingDir = filepath.Join(t.TempDir(), "missing", "backing")
-	if _, err := e.resolveDevcontainerOverlay(t.Context(), "sandbox", spec,
-		[]sandboxboot.Mount{{Target: mntWorkspace, GuestOnly: true}}); err == nil || !strings.Contains(err.Error(), "create devcontainer build context") {
-		t.Fatalf("build context create error = %v", err)
-	}
-}
-
 // TestDevcontainerForwardPortsOverlay pins the port overlay: a
 // devcontainer's forwardPorts are folded into the dispatch's forwards,
 // unioned with the workspace's explicit ports (explicit winning a clash).
 func TestDevcontainerForwardPortsOverlay(t *testing.T) {
-	mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
+	source := seedWorkspace(t, func(dest string) error {
 		return os.WriteFile(filepath.Join(dest, "devcontainer.json"),
 			[]byte(`{"image":"ghcr.io/acme/dev:1","forwardPorts":[3000]}`), 0o644)
-	}}
+	})
 	asm := func(_ context.Context, _ string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
 		return sandbox.Config{}, func() {}, nil
 	}
@@ -1166,7 +814,6 @@ func TestDevcontainerForwardPortsOverlay(t *testing.T) {
 	}
 	e, err := New(Config{
 		Stdout: io.Discard, Runner: runner, Assembler: asm,
-		MountMaterializer: mat, MountBackingDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1174,7 +821,7 @@ func TestDevcontainerForwardPortsOverlay(t *testing.T) {
 	spec := &sandboxv1.SandboxSpec{
 		WorkspaceUuid:    testWSUUID,
 		DevcontainerPath: devcontainerFlatPath,
-		Mounts:           []*sandboxv1.Mount{{Target: mntWorkspace}},
+		Mounts:           []*sandboxv1.Mount{{Target: mntWorkspace, Source: source}},
 		// An explicit workspace port that should survive alongside the
 		// devcontainer's 3000.
 		Ports: []*sandboxv1.PortMapping{{ContainerPort: 8080, Protocol: sandboxv1.Protocol_PROTOCOL_TCP}},
@@ -1198,14 +845,13 @@ func TestDevcontainerForwardPortsOverlay(t *testing.T) {
 // pointing at a file absent from the materialised content fails the
 // dispatch loudly rather than booting something unexpected.
 func TestDevcontainerMissingFileFailsDispatch(t *testing.T) {
-	mat := &fakeMaterializer{applied: true, mkdir: true} // materialises an empty dir
+	source := t.TempDir()
 	asm := func(_ context.Context, _ string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
 		t.Error("assembler must not run when the devcontainer is missing")
 		return sandbox.Config{}, func() {}, nil
 	}
 	e, err := New(Config{
 		Stdout: io.Discard, Runner: noopRunner(), Assembler: asm,
-		MountMaterializer: mat, MountBackingDir: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1213,7 +859,7 @@ func TestDevcontainerMissingFileFailsDispatch(t *testing.T) {
 	spec := &sandboxv1.SandboxSpec{
 		WorkspaceUuid:    testWSUUID,
 		DevcontainerPath: devcontainerNestedPath,
-		Mounts:           []*sandboxv1.Mount{{Target: "/workspace"}},
+		Mounts:           []*sandboxv1.Mount{{Target: mntWorkspace, Source: source}},
 	}
 	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-miss", spec)); err == nil {
 		t.Error("expected dispatch to fail when the devcontainer file is absent")
@@ -1232,16 +878,15 @@ func TestDevcontainerInvalidConfigFailsDispatch(t *testing.T) {
 		{"build-based", `{"build":{"dockerfile":"Dockerfile"}}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
+			source := seedWorkspace(t, func(dest string) error {
 				return os.WriteFile(filepath.Join(dest, "devcontainer.json"), []byte(tc.body), 0o644)
-			}}
+			})
 			asm := func(_ context.Context, _ string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
 				t.Error("assembler must not run for an invalid devcontainer")
 				return sandbox.Config{}, func() {}, nil
 			}
 			e, err := New(Config{
 				Stdout: io.Discard, Runner: noopRunner(), Assembler: asm,
-				MountMaterializer: mat, MountBackingDir: t.TempDir(),
 			})
 			if err != nil {
 				t.Fatalf("New: %v", err)
@@ -1249,7 +894,7 @@ func TestDevcontainerInvalidConfigFailsDispatch(t *testing.T) {
 			spec := &sandboxv1.SandboxSpec{
 				WorkspaceUuid:    testWSUUID,
 				DevcontainerPath: devcontainerFlatPath,
-				Mounts:           []*sandboxv1.Mount{{Target: "/workspace"}},
+				Mounts:           []*sandboxv1.Mount{{Target: mntWorkspace, Source: source}},
 			}
 			if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-bad", spec)); err == nil {
 				t.Error("expected dispatch to fail for an invalid devcontainer")
@@ -1320,19 +965,6 @@ func TestResolveDevcontainerOverlayFromDirectMount(t *testing.T) {
 	}
 	if got.Build == nil || got.Build.dockerfile != "Dockerfile" {
 		t.Fatalf("build resolution = %+v", got.Build)
-	}
-}
-
-func TestNewRejectsMaterializerWithoutBackingDir(t *testing.T) {
-	if _, err := New(Config{Stdout: io.Discard, MountMaterializer: &fakeMaterializer{}}); err == nil {
-		t.Error("expected error for materializer without backing dir")
-	}
-	if _, err := New(Config{
-		Stdout:            io.Discard,
-		MountMaterializer: &fakeMaterializer{},
-		MountBackingDir:   "relative/path",
-	}); err == nil {
-		t.Error("expected error for non-absolute backing dir")
 	}
 }
 
@@ -1581,191 +1213,20 @@ func TestHandleSandboxEventObserverLogBaselineWins(t *testing.T) {
 	}
 }
 
-// TestHandleSandboxEventMaterializesMounts pins the Slice S3 path: each
-// spec mount is materialised from the node CAS into a per-Sandbox
-// backing dir, and that dir — not the mount's logical Source — becomes
-// the virtiofs share's host path. The materializer is keyed by
-// SyncKey(workspace_uuid, target).
-func TestHandleSandboxEventMaterializesMounts(t *testing.T) {
-	var seenOpts sandboxboot.BootOptions
-	asm := func(_ context.Context, _ string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
-		seenOpts = opts
-		return sandbox.Config{}, func() {}, nil
-	}
-	fm := &fakeMaterializer{applied: true, mkdir: true}
-	backing := t.TempDir()
-	e, err := New(Config{
-		Stdout:            io.Discard,
-		Runner:            noopRunner(),
-		Assembler:         asm,
-		MountMaterializer: fm,
-		MountBackingDir:   backing,
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	evt := addedEvent("sb-mat", &sandboxv1.SandboxSpec{
-		ImageRef:      testImageRef,
-		WorkspaceUuid: testWSUUID,
-		Mounts: []*sandboxv1.Mount{
-			{Target: mntWorkspace, Source: testWSUUID},
-			{Target: mntData, Source: testWSUUID, ReadOnly: true},
-		},
-	})
-	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
-		t.Fatalf("HandleSandboxEvent: %v", err)
-	}
-
-	wantKeys := []string{
-		workspace.SyncKey(testWSUUID, mntWorkspace),
-		workspace.SyncKey(testWSUUID, mntData),
-	}
-	if !slices.Equal(fm.keys, wantKeys) {
-		t.Errorf("materializer keys = %v, want %v", fm.keys, wantKeys)
-	}
-	if len(seenOpts.Mounts) != 2 {
-		t.Fatalf("Mounts = %d, want 2", len(seenOpts.Mounts))
-	}
-	want := []sandboxboot.Mount{
-		{Target: mntWorkspace, Source: filepath.Join(backing, "sb-mat", "mnt0")},
-		{Target: mntData, Source: filepath.Join(backing, "sb-mat", "mnt1"), ReadOnly: true},
-	}
-	for i, m := range want {
-		if seenOpts.Mounts[i] != m {
-			t.Errorf("Mounts[%d] = %+v, want %+v", i, seenOpts.Mounts[i], m)
-		}
-	}
-	// The rw mount is registered live (so a pull re-manifests it); the
-	// ro mount is not (the VM can't have changed it). The writable mount is
-	// durably preserved on teardown.
-	if _, ok := fm.liveSet[workspace.SyncKey(testWSUUID, mntWorkspace)]; !ok {
-		t.Error("rw mount not registered live")
-	}
-	if _, ok := fm.liveSet[workspace.SyncKey(testWSUUID, mntData)]; ok {
-		t.Error("ro mount should not be registered live")
-	}
-	if !slices.Contains(fm.preserved, workspace.SyncKey(testWSUUID, mntWorkspace)) {
-		t.Errorf("rw mount not preserved on teardown: %v", fm.preserved)
-	}
-
-	// The backing tree is cleaned up once the dispatch returns.
-	if _, statErr := os.Stat(filepath.Join(backing, "sb-mat")); !os.IsNotExist(statErr) {
-		t.Errorf("backing dir not cleaned up: stat err = %v", statErr)
-	}
-}
-
-func TestHandleSandboxEventPublishesTerminalPhaseAfterMountPreservation(t *testing.T) {
-	started := make(chan struct{})
-	release := make(chan struct{})
-	materializer := &fakeMaterializer{
-		applied: true, mkdir: true, preserveStarted: started, preserveRelease: release,
-	}
-	executor, err := New(Config{
-		Stdout: io.Discard, Runner: noopRunner(),
-		Assembler: func(context.Context, string, sandboxboot.BootOptions) (sandbox.Config, func(), error) {
-			return sandbox.Config{}, func() {}, nil
-		},
-		MountMaterializer: materializer, MountBackingDir: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	done := make(chan error, 1)
-	go func() {
-		done <- executor.HandleSandboxEvent(t.Context(), addedEvent("preserve-before-terminal", &sandboxv1.SandboxSpec{
-			ImageRef: testImageRef, WorkspaceUuid: testWSUUID,
-			Mounts: []*sandboxv1.Mount{{Target: mntWorkspace, Source: testWSUUID}},
-		}))
-	}()
-	<-started
-	live := executor.LiveSnapshot()
-	if len(live) != 1 || live[0].GetPhase() != phaseRunning {
-		t.Fatalf("phase during preservation = %#v, want Running", live)
-	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	live = executor.LiveSnapshot()
-	if len(live) != 1 || live[0].GetPhase() != phaseExited {
-		t.Fatalf("phase after preservation = %#v, want Exited", live)
-	}
-}
-
-func TestHandleSandboxEventStreamsWritableDiskMountWithoutVirtiofs(t *testing.T) {
-	var assembled sandboxboot.BootOptions
-	var launched sandbox.Config
-	assembler := func(_ context.Context, _ string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
-		assembled = opts
-		return sandbox.Config{}, func() {}, nil
-	}
-	materializer := &fakeMaterializer{applied: true}
-	executor, err := New(Config{
-		Stdout: io.Discard, Assembler: assembler,
-		Runner:            func(_ context.Context, _ io.Writer, cfg sandbox.Config) error { launched = cfg; return nil },
-		MountMaterializer: materializer, MountBackingDir: t.TempDir(),
-		WorkspaceDisks: &fakeDiskPreparer{path: testControlDiskPath}, VsockDir: t.TempDir(),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	spec := &sandboxv1.SandboxSpec{
-		ImageRef: testImageRef, WorkspaceUuid: testWSUUID,
-		Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}, {Target: mntReference, ReadOnly: true}},
-	}
-	if err := executor.HandleSandboxEvent(t.Context(), addedEvent("disk-stream", spec)); err != nil {
-		t.Fatal(err)
-	}
-	readOnlyKey := workspace.SyncKey(testWSUUID, mntReference)
-	if !slices.Equal(materializer.keys, []string{readOnlyKey}) {
-		t.Fatalf("materialized keys = %v, want only %q", materializer.keys, readOnlyKey)
-	}
-	if len(assembled.Mounts) != 2 || assembled.Mounts[0].Target != mntWorkspace || !assembled.Mounts[0].GuestOnly ||
-		assembled.Mounts[1].Target != mntReference || !assembled.Mounts[1].ReadOnly {
-		t.Fatalf("virtiofs mounts = %#v", assembled.Mounts)
-	}
-	if len(launched.WorkspaceSeeds) != 1 || len(launched.WorkspaceMounts) != 1 || launched.WorkspaceMounts[0].SeedPort == 0 {
-		t.Fatalf("launched seed config = seeds %#v mounts %#v", launched.WorkspaceSeeds, launched.WorkspaceMounts)
-	}
-}
-
-func TestTeardownKeepsBackingTreeWhenPreservationFails(t *testing.T) {
-	backing := t.TempDir()
-	uid := "preserve-failed"
-	dir := filepath.Join(backing, uid, "mnt0")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	want := errors.New("CAS unavailable")
-	fm := &fakeMaterializer{preserveErr: want}
-	var out bytes.Buffer
-	e := &Executor{stdout: &out, mountMaterializer: fm, mountBackingDir: backing}
-	e.teardownMounts(t.Context(), uid, &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{{Source: testWSUUID, Target: mntWorkspace}}})
-	if _, err := os.Stat(dir); err != nil {
-		t.Fatalf("backing tree was removed after preserve failure: %v", err)
-	}
-	if !strings.Contains(out.String(), want.Error()) {
-		t.Fatalf("teardown output = %q", out.String())
-	}
-}
-
-// TestHandleSandboxEventAbsoluteSourceBypassesMaterializer pins the
+// TestHandleSandboxEventUsesAbsoluteHostSource pins the
 // discriminator: a mount whose Source is an absolute host path is a
 // direct bind (the `mount add --source /abs` form) and must NOT be
 // routed through the CAS materializer, even when one is wired.
-func TestHandleSandboxEventAbsoluteSourceBypassesMaterializer(t *testing.T) {
+func TestHandleSandboxEventUsesAbsoluteHostSource(t *testing.T) {
 	var seenOpts sandboxboot.BootOptions
 	asm := func(_ context.Context, _ string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
 		seenOpts = opts
 		return sandbox.Config{}, func() {}, nil
 	}
-	fm := &fakeMaterializer{applied: true, mkdir: true}
 	e, err := New(Config{
-		Stdout:            io.Discard,
-		Runner:            noopRunner(),
-		Assembler:         asm,
-		MountMaterializer: fm,
-		MountBackingDir:   t.TempDir(),
+		Stdout:    io.Discard,
+		Runner:    noopRunner(),
+		Assembler: asm,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1778,73 +1239,8 @@ func TestHandleSandboxEventAbsoluteSourceBypassesMaterializer(t *testing.T) {
 	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
 		t.Fatalf("HandleSandboxEvent: %v", err)
 	}
-	if len(fm.keys) != 0 {
-		t.Errorf("materializer called for an absolute-source mount: %v", fm.keys)
-	}
 	if len(seenOpts.Mounts) != 1 || seenOpts.Mounts[0].Source != hostWS {
 		t.Errorf("Mounts = %+v, want Source=/host/ws passthrough", seenOpts.Mounts)
-	}
-}
-
-// TestHandleSandboxEventUnpushedMountWarns covers the applied=false
-// branch: an unpushed mount still wires its (empty) backing dir and the
-// executor logs a hint.
-func TestHandleSandboxEventUnpushedMountWarns(t *testing.T) {
-	var buf bytes.Buffer
-	asm := func(_ context.Context, _ string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
-		return sandbox.Config{}, func() {}, nil
-	}
-	e, err := New(Config{
-		Stdout:            &buf,
-		Runner:            noopRunner(),
-		Assembler:         asm,
-		MountMaterializer: &fakeMaterializer{applied: false},
-		MountBackingDir:   t.TempDir(),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	evt := addedEvent("sb-empty", &sandboxv1.SandboxSpec{
-		ImageRef:      testImageRef,
-		WorkspaceUuid: "ws",
-		Mounts:        []*sandboxv1.Mount{{Target: mntWorkspace, Source: "ws"}},
-	})
-	if err := e.HandleSandboxEvent(t.Context(), evt); err != nil {
-		t.Fatalf("HandleSandboxEvent: %v", err)
-	}
-	if !strings.Contains(buf.String(), "no pushed data") {
-		t.Errorf("stdout missing unpushed-mount hint, got:\n%s", buf.String())
-	}
-}
-
-// TestHandleSandboxEventMaterializeErrorFailsDispatch: a materializer
-// error aborts the boot and marks the sandbox Killed.
-func TestHandleSandboxEventMaterializeErrorFailsDispatch(t *testing.T) {
-	asmCalled := false
-	asm := func(_ context.Context, _ string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
-		asmCalled = true
-		return sandbox.Config{}, func() {}, nil
-	}
-	e, err := New(Config{
-		Stdout:            io.Discard,
-		Runner:            noopRunner(),
-		Assembler:         asm,
-		MountMaterializer: &fakeMaterializer{err: errors.New("cas gone")},
-		MountBackingDir:   t.TempDir(),
-	})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	evt := addedEvent("sb-fail", &sandboxv1.SandboxSpec{
-		ImageRef:      testImageRef,
-		WorkspaceUuid: "ws",
-		Mounts:        []*sandboxv1.Mount{{Target: mntWorkspace, Source: "ws"}},
-	})
-	if err := e.HandleSandboxEvent(t.Context(), evt); err == nil {
-		t.Fatal("expected error when materializer fails")
-	}
-	if asmCalled {
-		t.Error("assembler should not run after a materializer error")
 	}
 }
 
@@ -2734,5 +2130,24 @@ func TestRegisterAttachRouteDuplicateLogsAndSkipsRegistration(t *testing.T) {
 	// got a no-op unregister.
 	if _, err := ar.Attach(t.Context(), sandboxgateway.AttachRequest{SandboxUID: "sb-dup"}); err == nil || errors.Is(err, sandboxgateway.ErrAttachNoRoute) {
 		t.Errorf("Attach after duplicate-route dispatch: err = %v; original registration should still be reachable", err)
+	}
+}
+
+// seedWorkspace creates real host content for local devcontainer dispatch tests.
+func seedWorkspace(t *testing.T, seed func(string) error) string {
+	t.Helper()
+	source := t.TempDir()
+	if err := seed(source); err != nil {
+		t.Fatal(err)
+	}
+	return source
+}
+
+func TestResolveMountsRejectsRemoteSources(t *testing.T) {
+	e := &Executor{}
+	for _, mount := range []*sandboxv1.Mount{nil, {Target: mntWorkspace}, {Target: mntWorkspace, Source: "remote-id"}} {
+		if _, err := e.resolveMounts(t.Context(), "vm", &sandboxv1.SandboxSpec{Mounts: []*sandboxv1.Mount{mount}}); err == nil {
+			t.Fatalf("accepted mount without absolute host source: %v", mount)
+		}
 	}
 }

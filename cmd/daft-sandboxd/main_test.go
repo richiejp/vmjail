@@ -174,7 +174,7 @@ func TestMainExitsOnUsernsFailure(t *testing.T) {
 	usernsReexec = func(io.Writer) error { return errors.New("synthetic") }
 	t.Cleanup(func() { usernsReexec = prev })
 
-	code, stderr := runMainCapturingStderr(t, "serve")
+	code, stderr := runMainCapturingStderr(t, "debug", "run")
 	if code != 1 {
 		t.Errorf("osExit code = %d, want 1", code)
 	}
@@ -195,7 +195,7 @@ func TestMainFailsClosedOnSubtreeFailure(t *testing.T) {
 	prepareCgroupSubtree = func() (string, error) { return "", errors.New("synthetic-subtree") }
 	t.Cleanup(func() { prepareCgroupSubtree = prev })
 
-	code, stderr := runMainCapturingStderr(t, "serve")
+	code, stderr := runMainCapturingStderr(t, "debug", "run")
 	if code != 1 {
 		t.Errorf("osExit code = %d, want 1 (fail-closed)", code)
 	}
@@ -218,7 +218,7 @@ func TestMainContinuesWhenCgroupLimitsDisabled(t *testing.T) {
 	prepareCgroupSubtree = func() (string, error) { return "", errors.New("synthetic-subtree") }
 	t.Cleanup(func() { prepareCgroupSubtree = prev })
 
-	code, stderr := runMainCapturingStderr(t, "serve", "--help")
+	code, stderr := runMainCapturingStderr(t, "debug", "run", "--help")
 	if code != 0 {
 		t.Errorf("osExit code = %d, want 0 (opt-out warn-and-continue)", code)
 	}
@@ -238,7 +238,7 @@ func TestMainExitsOnCgroupFailure(t *testing.T) {
 	cgroupReexec = func(io.Writer) error { return errors.New("synthetic-cgroup") }
 	t.Cleanup(func() { cgroupReexec = prev })
 
-	code, stderr := runMainCapturingStderr(t, "serve")
+	code, stderr := runMainCapturingStderr(t, "debug", "run")
 	if code != 1 {
 		t.Errorf("osExit code = %d, want 1", code)
 	}

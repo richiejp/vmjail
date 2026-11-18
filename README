@@ -1,70 +1,47 @@
+vmjail
+======
 
-    da  rk
-       ai
-   fac    tory.▮
+A local Linux microVM sandbox for running an OCI container with explicit
+host-directory mounts and host/guest observability. Cloud Hypervisor supplies
+the VM, virtiofsd serves the shared directories, and a guest helper runs the
+container with crun.
 
-Because the clankers produced slop, because they did not think, but instead produced tokens in order of plausibility, interpolating not creating, some came to decide that the clankers could not be used. Others thought that every line of code should be reviewed, every command checked. Then there were those that gave themselves over to the clankers in wild abandon, drowning their lives in a sloppy sprawl of minimally functional code that eventually imploded under its own weight; often right at the moment their clanker's API was reporting 503. 
+This repository is being reduced from darkaifactory. The distributed control
+plane, web interface, remote client/MCP facade and workspace CAS have been deleted. The remaining Go packages compile and pass the default test suite.
+The replacement local command wiring is still in progress; Go module paths and
+executable names have not yet been renamed.
 
-Finally there were those that said "what if it can be constrained to only produce locally reversible errors?", shortly thereafter every CLI command got a TUI and GUI, every app got an API, CLI and TUI, every C program was rewritten in Rust and every Rust program rewritten in C... every homelab got it's own dashboard and job scheduler, every clanker addicted coder their own clanker... within months new operating systems began to emerge.
+Retained capabilities
+---------------------
 
-A new class of coder emerged who was not really a coder at all, but instead a latent space cowboy, exploring the frontier of computation via the semantic graph encoded by LLMs and only bounded by execution. Life imitated art and the Matrix began to take shape in earnest. Software was solved and yet more energy was consumed by software then ever.
+- Image pulling and OCI bundle preparation.
+- Direct host-directory shares, with optional guest overlays.
+- User namespaces, per-VM cgroups, resource limits and process cleanup.
+- Host resource logs and guest eBPF file IO/process summaries.
+- Guest control over vsock and local VM networking/exec primitives.
 
-                                 /////////----...----\\\\\\\\\
+Writable direct mounts expose the selected host directories to workload writes.
+The VM is the isolation boundary; sharing a directory is an explicit exception
+to filesystem isolation. IO summaries aid debugging but are not a complete
+filesystem audit.
 
-Anyway enough of that, darkaifactory is a sandbox based on Linux microvms that host a minimal Go based userland that launches instrumented containers. It is motivated from the observation that writing software is getting dangerous and opaque (actually, as the name hints, that's not really it, but it's what I'm going with). In fact it has always been opaque to anyone except those who have a very strong grasp of system wide debugging and tracing tools. In modern Linux you have incredible power to instrument and trace every instruction, but realistically very few systems are configured for it and even less people know how to use these tools.
+Development
+-----------
 
-The emergence of AI coding agents has made these tools easier to use in theory, but in practice the LLM doesn't choose to use them on its own and it needs privileged access to the kernel to activate them. Which brings me onto the point that software dev has now taken on a new level of risk.
+The Nix flake and .envrc describe the development toolchain. Existing Makefile
+and deployment targets still need cleanup for local operation. Run the default
+Go tests with go test ./internal/... ./cmd/...; see PLAN.md for validation
+results and outstanding launcher/end-to-end work.
 
-Basically a coding agent gives remote code execution to whatever machine it is running on with whatever privileges the user who started it has. Yes, if you are running a local LLM then it's technically not RCE, but conceptually you are still handing over control to something that may execute any code.
+Documentation
+-------------
 
-This is not necessarily that dangerous if you are watching it like a hawk, but if you want to leave your coding agent running overnight then that is plenty of time for something to go badly wrong. In fact about 20 mins is enough time maybe less.
+- ARCHITECTURE.md: the retained local runtime and component boundaries.
+- OBSERVABILITY.md: host accounting, guest gadgets and diagnostic files.
+- docs/usage/storage-paths.md: local state and cache locations.
+- CONTRIBUTING.md: development and verification rules.
+- PLAN.md: current scope, build status and next steps.
 
-Then there is the simple fact that AI powered supply chain attacks and vulnerabilities are increasing at a rapid pace. Presently this is more worrying than the agent trying to escape its sandbox which typically only happens when you tell it to hack something.
-
-Meanwhile if you want your agent to be able to do something useful then it needs access to various resources. People then tend to run these agents as their login account. Meaning the agent has the same privilges as the user. The agent's own sandbox might remove some bits, but a lot is still there. The agent may also have a security classifier, but it's still only a probabilistic function that depends on the user choosing their words carefully.
-
-So darkaifactory has an allow list of what the agent needs, including what network it can see, what env vars it gets and what files it has access to. These are lifted from the user's host which may be the same machine running the sandboxes or not.
-
-A basic assumption of darkaifactory is that the user works on a laptop where they run their text editor and office software. Meanwhile the agentic workloads run on separate workstations or servers inside sandboxes. The user doesn't execute the code being generated on their desktop machine unless they are building desktop software.
-
-The desktop machine is where the user manages their credentials and downloads code for browsing or signing off on commits. So darkaifactory has a mechanism to transfer workspaces from the user's machine to a sandbox and back again, somewhat like how Mutagen works.
-
-The user can select what credentials are passed to the sandbox, what I/O it has and monitor everything going in and out. All network traffic can be forced through a proxy. Changes to the storage are recorded in CAS or a VM image. Changes intended to be made to the workspace are diffed and only pulled back from the sandbox on request. Allowing the user, or more likely another agent, to check it for suspicious changes.
-
-The workload running inside the microvms runs in a minimal Linux userland with a custom Linux kernel that has only the config required to run the workload container. Except for isolation, guest virtualization and monitoring, fancy features are disabled by default. However you can reconfigure and recompile the kernel with whatever config you want as long as it boots. You can make a custom kernel config for each workspace if you want, recompiling a small kernel config takes relatively little time and boots in less than a second.
-
-Now you may wonder why should you use or trust this sandbox? I don't know; it's an absurd project, I made it because I wanted to do all these crazy things that I knew would create complexity and LLMs let me do it. If you are wondering what the difference with some other project is then possibly nothing consequential, all software converges to the same primitives just pick the one who's maintainer your enemies are most infuriated by. 
-
-If you put a frontier LLM in the sandbox and tell it to escape then will it? Probably, this is the type of project which should warrant more code review, but the question I have to answer first is, is the UX good enough. That's the present state of things; can it be used day to day. Architecturally I have no doubt it can be made as secure as a VM sandbox with a Linux guest possibly can be while doing something useful.
-
-Would it stop some credential stealer or another supply chain attack? It would certainly frustrate it because if nothing else you have just made your dev environment incredibly frustrating and created a bunch of ways to detect it. Again UX is the thing at stake here. It's no good maximising security if the system is not usable; people will just put OpenClaw on a Mac instead.
-
-If you want to use this then there is a human usable CLI surface, but I have no intention of using it at this stage, it's more of a panic button. Presently the best way to use the project is to point your coding agent at it. So yes I use coding agents to create sandboxs with agents inside. In theory the ones outside the sandbox can be relatively dumb and incapable, they can even have a whitelist of actions they are allowed to perform and use an LLM that's actually runnable on mortal hardware.
-
-                       /////////----...----\\\\\\\\\
-                  /////                              \\\\
-              ////       trying darkaifactory          \\\\
-                  \\\\                              /////
-                       \\\\\\\\----...----/////////
-
-Download the Linux x86_64 archive and matching `.sha256` file from the
-[latest release](https://github.com/richiejp/darkaifactory/releases/latest).
-The sandbox host needs KVM, cgroup v2, `newuidmap`/`newgidmap`, and subordinate
-UID/GID ranges. The orchestrator and client do not need KVM.
-
-```sh
-sha256sum -c darkaifactory-<version>-linux-x86_64.tar.gz.sha256
-tar -xzf darkaifactory-<version>-linux-x86_64.tar.gz
-export PATH="$PWD/darkaifactory-<version>-linux-x86_64/bin:$PATH"
-test -r /dev/kvm && test -w /dev/kvm
-test -f /sys/fs/cgroup/cgroup.controllers
-daft cluster up
-daft node list
-```
-
-`daft cluster up` starts a disposable single-machine cluster and approves its
-local identities. Its state is kept in the invoking user's XDG state directory.
-Run `daft cluster down` when finished.
-
-See [sandbox egress](docs/usage/egress.md) for the inspected HTTPS transport,
-automatic cleartext-HTTP upgrade, trust contract, and failure behaviour.
+The earlier analysis and deletion reports under docs/ record the reduction
+process. They describe their audited revisions, not supported remote features.
+Git history retains the original project and its removed documentation.

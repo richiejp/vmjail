@@ -1,39 +1,16 @@
 package devcontainerspec
 
-import "github.com/richiejp/darkaifactory/internal/workspacecatalog"
-
-// Overlay composes a base workspacecatalog.Spec (derived from a
-// devcontainer.json) with the explicit workspace settings the user set
-// directly, and returns the effective Spec. The override wins: a
-// workspace setting always takes precedence over the devcontainer's, per
-// the design that the devcontainer is a base layer the workspace config
-// sits on top of.
-//
-// Per-field rules:
-//   - Scalars (ImageRef, resource sizing, GPU, isolation, the build/
-//     target identifiers): the override value when it is set (non-empty /
-//     non-zero), otherwise the base value. A zero override means "unset"
-//     and falls through to the base — there is no way in the catalog to
-//     explicitly set a field back to zero to mask the base, which matches
-//     how the field-setter RPCs work (you set a value or you don't).
-//   - Repeated keyed collections (Mounts by Target, Env by Name, Ports by
-//     ContainerPort+Protocol): a union, with the override entry winning on
-//     a key collision. Base order is preserved; override-only entries are
-//     appended in their own order. This lets a workspace re-point one
-//     mount or override one env var without restating the whole set.
-//   - Boolean grants (NestedVirt, PrivilegedFuseMounts, PrivilegedBuild): OR. These never
-//     originate from a devcontainer (the base carries them false), so the
-//     union degenerates to "the override decides" while still composing
-//     sensibly if a future base sets one.
-func Overlay(base, override workspacecatalog.Spec) workspacecatalog.Spec {
+// Overlay combines devcontainer defaults with explicit local launch settings.
+// Nonzero scalar overrides win. Mounts, environment variables and ports merge
+// by target, name and port/protocol respectively; overrides replace matching
+// entries while preserving order. Boolean grants combine with OR.
+func Overlay(base, override Spec) Spec {
 	out := base
 	out.ImageRef = overrideString(base.ImageRef, override.ImageRef)
-	out.PendingBuildID = overrideString(base.PendingBuildID, override.PendingBuildID)
-	out.TargetSandboxFingerprint = overrideString(base.TargetSandboxFingerprint, override.TargetSandboxFingerprint)
 
-	out.Mounts = overlayBy(base.Mounts, override.Mounts, func(m workspacecatalog.Mount) string { return m.Target })
-	out.Env = overlayBy(base.Env, override.Env, func(e workspacecatalog.EnvVar) string { return e.Name })
-	out.Ports = overlayBy(base.Ports, override.Ports, func(p workspacecatalog.PortMapping) portKey {
+	out.Mounts = overlayBy(base.Mounts, override.Mounts, func(m Mount) string { return m.Target })
+	out.Env = overlayBy(base.Env, override.Env, func(e EnvVar) string { return e.Name })
+	out.Ports = overlayBy(base.Ports, override.Ports, func(p PortMapping) portKey {
 		return portKey{p.ContainerPort, p.Protocol}
 	})
 

@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 architecture_dir="$repo_root/docs/architecture"
 max_words=750
-components=(cluster orchestrator client node workspace sandbox storage)
+components=(sandbox)
 
 fail() {
 	printf 'architecture-docs: %s\n' "$*" >&2
@@ -30,7 +30,7 @@ done
 while IFS= read -r page; do
 	words=$(wc -w <"$page")
 	((words <= max_words)) || fail "$page has $words words; limit is $max_words"
-done < <(printf '%s\n' "$repo_root/ARCHITECTURE.md"; find "$architecture_dir" -maxdepth 1 -name '*.md' ! -name 'resource-model-reference.md' -print | sort)
+done < <(printf '%s\n' "$repo_root/ARCHITECTURE.md"; find "$architecture_dir" -maxdepth 1 -name '*.md' -print | sort)
 
 while IFS=: read -r page target; do
 	case "$target" in
@@ -43,9 +43,6 @@ done < <(rg -o --no-heading --replace '$1' '\]\(([^)]+)\)' "$repo_root/ARCHITECT
 
 for page in "$architecture_dir"/*.md; do
 	base=$(basename "$page")
-	case "$base" in
-	resource-model-reference.md) continue ;;
-	esac
 	if ! rg -Fq "($base)" "$repo_root/ARCHITECTURE.md" "$architecture_dir"/*.md &&
 		! rg -Fq "(docs/architecture/$base)" "$repo_root/ARCHITECTURE.md"; then
 		fail "orphan page: $page"

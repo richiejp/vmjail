@@ -1,63 +1,43 @@
 # Architecture
 
-darkaifactory is a distributed isolation system. A trusted Client declares a
-long-lived Workspace through an Orchestrator. The Orchestrator selects an
-authorised Node, and that Node runs a short-lived Sandbox consisting of a VM
-and one workload container. The VM, not the container, is the security
-boundary.
+vmjail is being reduced to a local Linux microVM sandbox. The host launches
+Cloud Hypervisor and virtiofsd; the guest helper mounts the supplied directories
+and runs an OCI container with crun. The VM is the security boundary. The
+container supplies the workload's process and filesystem environment.
 
-The implementation is asynchronous: catalogue state, Node observations,
-Sandbox execution, control streams, and retained storage can change
-independently. A user-visible lifecycle state is therefore a derived claim,
-not a field owned by any one component. The architecture model exists to make
-those claims and their required evidence explicit.
+## Runtime components
 
-## Global properties
+- [Sandbox](docs/architecture/sandbox.md) and its
+  [lifecycle](docs/architecture/sandbox-lifecycle.md): host preparation, guest
+  configuration, workload execution and process cleanup.
+- `internal/imagestore` and `internal/sandboxboot`: OCI image preparation,
+  per-run bundles and host-directory share assembly.
+- `internal/sandbox`, `internal/cgroupwrap` and `internal/userns`: VMM/virtiofsd
+  supervision, resource accounting and namespace setup.
+- `internal/agent`: guest mounts, crun execution, vsock control and guest
+  instrumentation. This helper is part of the VM runtime.
+- [Observability](OBSERVABILITY.md): host resource logs, guest eBPF IO and
+  process summaries, and retained local diagnostic files.
+- [Storage paths](docs/usage/storage-paths.md): host image caches, observation
+  files and temporary sockets.
 
-- Untrusted workloads never receive the Client's ambient credentials.
-- Only authenticated and authorised identities cross the control-plane trust
-  boundary.
-- A Workspace generation identifies the declaration used to create a Sandbox.
-- Sandbox termination is not complete until writable state is preserved or a
-  bounded, recoverable failure is recorded.
-- Unadopted Sandbox writes are not discarded by cleanup or overwritten by a
-  newer Client push.
-- Loss of a Node changes what is known; it does not prove that its Sandboxes or
-  retained disks were destroyed.
-- Every wait and recovery action is bounded, idempotent, and diagnosable.
+## Reduction status
 
-## Map
+The distributed control plane, web UI and workspace CAS implementation have
+been deleted. Some retained launchers and tests still reference those packages,
+so the complete application does not yet build. This page describes the local
+runtime being retained, not a claim that its replacement CLI is finished.
 
-- [Cluster](docs/architecture/cluster.md) — component boundaries, concurrent
-  state, and trust relationships.
-  - [Cluster lifecycle](docs/architecture/cluster-lifecycle.md) — process
-    readiness, request admission, draining, and shutdown.
-  - [Orchestrator](docs/architecture/orchestrator.md) and
-    [lifecycle](docs/architecture/orchestrator-lifecycle.md) — durable
-    control-plane authority and process readiness.
-  - [Client](docs/architecture/client.md) and
-    [lifecycle](docs/architecture/client-lifecycle.md) — trusted local state,
-    identity, trust, and bounded operations.
-  - [Node](docs/architecture/node.md) and
-    [lifecycle](docs/architecture/node-lifecycle.md) — registration,
-    authorisation, liveness, and disconnection.
-  - [Workspace](docs/architecture/workspace.md) and
-    [lifecycle](docs/architecture/workspace-lifecycle.md) — declaration,
-    execution binding, and recoverability.
-    - [Storage](docs/architecture/storage.md) and
-      [lifecycle](docs/architecture/storage-lifecycle.md) — retained disks,
-      manifests, protection, and adoption.
-    - [Sandbox](docs/architecture/sandbox.md) and
-      [lifecycle](docs/architecture/sandbox-lifecycle.md) — one execution of a
-      Workspace generation.
-- [Glossary](docs/architecture/glossary.md) — canonical terms used throughout
-  the model.
-- [Detailed resource-model reference](docs/architecture/resource-model-reference.md)
-  — older, implementation-level material being split into the layers above.
-- [Architecture conformance review](docs/architecture/conformance-review-2026-08-19.md)
-  — claim, implementation, and executed-test comparison at commit `6791e4f`.
+The next change must separate local launch and observation setup from the old
+remote dispatch paths. Direct host shares already exist, but the launcher must
+preserve bundle ownership, cgroup/user-namespace setup and guest observation
+configuration. See [PLAN.md](PLAN.md) for remaining work and validation status.
 
-The lifecycle diagrams are explanatory projections. They do not yet constitute a proof
-that the Go implementation refines a formal model. The next modelling step is
-an executable specification of the Workspace lifecycle, followed by trace
-mapping from implementation events to model actions.
+## Boundaries
+
+Host paths are explicitly shared through virtiofsd, not copied into a workspace
+CAS. Workload writes to a writable direct share affect that host directory.
+Optional guest overlays have different persistence semantics and must be chosen
+explicitly. Teardown must reap the VMM and sharing processes and retain
+observation files. Guest control still requires vsock even without a remote
+management service.

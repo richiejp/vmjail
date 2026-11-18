@@ -1,5 +1,5 @@
 {
-  description = "darkaifactory - daft CLI";
+  description = "vmjail local microVM sandbox";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -254,45 +254,22 @@
         packages = rec {
           guest-xfs-tools = guestXfsTools;
 
-          # The default output is the full local-cluster toolset, not the
-          # bare CLI: `daft cluster up` spawns the daft-orchestrator and
-          # daft-sandboxd daemons (resolved next to the daft binary, else
-          # via PATH — see internal/localcluster resolveBin), so a plain
-          # `nix shell <flake>` must put all three on PATH or cluster up
-          # fails with "daft-orchestrator: executable file not found".
-          # Use `.#daft` for the lean CLI-only closure (no sandboxd VM
-          # artefacts). mainProgram keeps `nix run <flake>` running daft.
-          default = daft-cluster;
+          default = daft-sandboxd;
 
-          daft-cluster = pkgs.symlinkJoin {
-            name = "daft-cluster-${version}";
-            paths = [ daft daft-orchestrator daft-sandboxd ];
-            meta = with pkgs.lib; {
-              description = "darkaifactory CLI + orchestrator + sandbox-host (local-cluster toolset)";
-              license = licenses.asl20;
-              maintainers = [ ];
-              platforms = platforms.linux;
-              mainProgram = "daft";
-            };
-          };
-
-          # Portable x86_64 Linux distribution. All three executables are
-          # static; daft-sandboxd also embeds its VMM, kernel, initramfs, and
+          # Portable x86_64 Linux distribution. The sandbox executable is
+          # static and embeds its VMM, kernel, initramfs, and
           # virtiofsd, so extracting this archive does not require Nix.
           release-archive = pkgs.runCommand "darkaifactory-${version}-linux-${system}" {
             nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ];
             meta = with pkgs.lib; {
-              description = "Portable darkaifactory cluster archive";
+              description = "Portable local sandbox archive";
               license = licenses.asl20;
               platforms = [ "x86_64-linux" ];
             };
           } ''
             root=darkaifactory-${version}-linux-x86_64
-            mkdir -p "$root/bin" "$root/systemd" $out
-            cp ${daft}/bin/daft "$root/bin/"
-            cp ${daft-orchestrator}/bin/daft-orchestrator "$root/bin/"
+            mkdir -p "$root/bin" $out
             cp ${daft-sandboxd}/bin/daft-sandboxd "$root/bin/"
-            cp -R ${./packaging/systemd}/. "$root/systemd/"
             tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner \
               -czf "$out/$root.tar.gz" "$root"
             (cd "$out" && ${pkgs.coreutils}/bin/sha256sum "$root.tar.gz" \
@@ -315,35 +292,11 @@
                   }
                 ];
               };
-              orchestratorSystem = nixpkgs.lib.nixosSystem {
-                inherit system;
-                modules = [
-                  ./nix/orchestrator.nix
-                  {
-                    system.stateVersion = "25.11";
-                    users.users.darkaifactory = {
-                      isSystemUser = true;
-                      group = "darkaifactory";
-                    };
-                    users.groups.darkaifactory = { };
-                    services.darkaifactory-orchestrator = {
-                      enable = true;
-                      package = daft-orchestrator;
-                      user = "darkaifactory";
-                      controlAddress = "127.0.0.1:14443";
-                      webAddress = "127.0.0.1:18080";
-                      configDir = "/var/lib/darkaifactory-orchestrator";
-                    };
-                  }
-                ];
-              };
             in
             pkgs.runCommand "darkaifactory-nixos-module-check" {
               nodeExecStart = nodeSystem.config.systemd.services.darkaifactory-node.serviceConfig.ExecStart;
-              orchestratorExecStart = orchestratorSystem.config.systemd.services.darkaifactory-orchestrator.serviceConfig.ExecStart;
             } ''
               test -n "$nodeExecStart"
-              test -n "$orchestratorExecStart"
               touch $out
             '';
 
@@ -356,12 +309,6 @@
           # be `packages` outputs without failing `nix flake check`.)
           u-root-src = pkgs.runCommand "u-root-src" { } "cp -r ${uRootSrc} $out";
 
-          daft = mkDaftBinary {
-            name = "daft";
-            subPackage = "cmd/daft";
-            description = "darkaifactory daft CLI";
-          };
-
           # daft-agent runs inside our minimal microVM rootfs which has
           # no libc, so it must be statically linked. (Default cgoEnabled
           # = false on mkDaftBinary makes this implicit; kept here only
@@ -371,27 +318,6 @@
             subPackage = "cmd/daft-agent";
             description = "darkaifactory in-VM sandbox agent";
             platforms = pkgs.lib.platforms.linux;
-          };
-
-          # daft-orchestrator is the central control-plane binary:
-          # mTLS-authenticated Connect-RPC over HTTP/2, with TOFU
-          # peer approvals managed via internal/identity. v0 ships
-          # a single Health.Ping endpoint to prove the trust path
-          # works end-to-end; the registry handler, port forwarder,
-          # and terminal stream join the same listener later.
-          # The orchestrator embeds the buildah build image (internal/
-          # buildimage) so it can auto-seed it into its in-memory registry at
-          # startup under ociregistry.BuiltinBuildRef() — a build-based
-          # devcontainer then needs no DAFT_BUILD_IMAGE_REF. preBuild stages
-          # the real tarball over the committed 0-byte stub (mirrors the
-          # daft-sandboxd VM-artefact staging below).
-          daft-orchestrator = mkDaftBinary {
-            name = "daft-orchestrator";
-            subPackage = "cmd/daft-orchestrator";
-            description = "darkaifactory orchestrator control-plane";
-            preBuild = ''
-              cp ${daft-build-image} internal/buildimage/assets/build-image.tar.gz
-            '';
           };
 
           # kconfig-verify is a build-time tool: it asserts that every
@@ -1382,7 +1308,6 @@
         };
       })) // {
         nixosModules = {
-          orchestrator = import ./nix/orchestrator.nix;
           node = import ./nix/node.nix;
           default = self.nixosModules.node;
         };

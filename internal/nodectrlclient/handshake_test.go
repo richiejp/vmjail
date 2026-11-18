@@ -111,7 +111,7 @@ func TestRegisterAndServeRejectsIncompatibleServerProtocol(t *testing.T) {
 		URL:      "https://" + ln.Addr().String(),
 		Identity: id,
 		Peers:    sbPeers,
-		Version:  testFixtureVer,
+		Version:  "test-v0",
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

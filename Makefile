@@ -1,4 +1,4 @@
-.PHONY: all check check-submodule-revs check-deploy-skill check-agent-tools check-architecture-docs verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft build-daft-agent build-daft-hello-container build-daft-sandboxd build-daft-orchestrator build-artefacts build-initramfs build-hello-bundle dev integration integration-build update-egress-cache proto gen-bpf clean help
+.PHONY: all check check-submodule-revs check-deploy-skill check-agent-tools check-architecture-docs verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft-agent build-daft-hello-container build-daft-sandboxd build-artefacts build-initramfs build-hello-bundle dev integration integration-build proto gen-bpf clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -45,8 +45,6 @@ check-deploy-skill:
 check-agent-tools:
 	@sh -n scripts/go-nav.sh
 	@scripts/test-go-nav.sh
-	@sh -n scripts/blackbox-agent.sh scripts/test-blackbox-agent.sh
-	@scripts/test-blackbox-agent.sh
 
 # Architecture pages are an agent-facing navigation and correctness surface.
 # Keep every component paired with a bounded lifecycle view and reject link or
@@ -218,22 +216,6 @@ fuzz:
 # don't escape into the repo or into /nix/store.
 INITRAMFS_OUT := $(BIN_DIR)/initramfs.cpio.gz
 BUNDLE_OUT    := $(BIN_DIR)/hello-bundle
-# Test-fixture OCI images / flake fixture, built fresh from the flake by
-# `integration-build` (nix build -o) so they track source instead of a
-# frozen dev-shell path.
-NIX_IMAGE_OUT         := $(BIN_DIR)/nix-shell-image
-NIX_TOOLING_IMAGE_OUT := $(BIN_DIR)/nix-tooling-image
-NIX_FLAKE_FIXTURE_OUT := $(BIN_DIR)/nix-flake-fixture
-# Nix-less make-check image (D6c.4 slice 1): toolchain only, runs
-# `make check` offline. The Go deps are delivered separately as the
-# vendor tree (daft.goModules) the test copies into its source mount —
-# baking go:embed files through dockerTools corrupts them. See
-# flake.nix `daft-check-image`.
-NIX_CHECK_IMAGE_OUT   := $(BIN_DIR)/daft-check-image
-NIX_CHECK_VENDOR_OUT  := $(BIN_DIR)/daft-check-vendor
-# In-sandbox image builder (buildah) for #101 slice 3 — the build-based
-# devcontainer path. Consumed by TestClusterWorkspaceBuildahSpike.
-NIX_BUILD_IMAGE_OUT   := $(BIN_DIR)/daft-build-image
 # Sandbox-VM toolchain artefacts, built fresh from the flake by
 # `build-artefacts` (nix build -o) instead of exported by the dev shell.
 # Nobody runs these by hand — they're dependencies of the sandbox build
@@ -246,30 +228,6 @@ NIX_CRUN_OUT      := $(BIN_DIR)/crun
 NIX_UROOT_OUT     := $(BIN_DIR)/u-root
 NIX_UROOT_SRC_OUT := $(BIN_DIR)/u-root-src
 NIX_XFS_TOOLS_OUT := $(BIN_DIR)/guest-xfs-tools
-# Real (//go:embed-bundled) daft-sandboxd, for the embedded-boot test.
-NIX_SANDBOXD_OUT  := $(BIN_DIR)/daft-sandboxd-bundled
-# Real (//go:embed-bundled build image) daft-orchestrator, for the
-# auto-seeded-builder devcontainer-build test.
-NIX_ORCH_OUT      := $(BIN_DIR)/daft-orchestrator-bundled
-# iso-nested-qemu diversion fixtures (branch iso-nested-qemu): a tiny
-# bootable-with-sshd NixOS ISO + a headless-qemu launcher image. Consumed
-# by TestClusterNestedISOBoot, which boots the ISO as a nested L2 VM under
-# qemu inside a daft sandbox and forwards its sshd out. See PLAN.md.
-NIX_ISO_FIXTURE_OUT    := $(BIN_DIR)/iso-ssh-fixture
-NIX_ISO_QEMU_IMAGE_OUT := $(BIN_DIR)/iso-qemu-runner-image
-
-# Pinned egress-replay cache for the bun e2e test (PLAN.md "Pinned
-# egress-replay cache"). The recorded cache is published as a one-layer
-# OCI image to ghcr and pulled here; the tag is the first 16 hex of the
-# fixture flake.lock's sha256, so bumping the lock forces a re-record via
-# `make update-egress-cache`. integration-build pulls it (best-effort);
-# `make integration` then replays it offline when present.
-EGRESS_CACHE_OUT  := $(BIN_DIR)/egress-cache
-EGRESS_CACHE_LOCK := internal/testdaemons/bun-flake.lock
-EGRESS_CACHE_REPO := ghcr.io/richiejp/daft-egress-cache
-EGRESS_CACHE_TAG  := $(shell sha256sum $(EGRESS_CACHE_LOCK) 2>/dev/null | cut -c1-16)
-EGRESS_CACHE_REF  := $(EGRESS_CACHE_REPO):$(EGRESS_CACHE_TAG)
-
 # build-artefacts realises the sandbox-VM toolchain from the flake into
 # bin/ (a cache hit when nothing changed). These used to be exported by
 # the dev shell at entry; building them here on demand keeps the shell
@@ -321,34 +279,8 @@ build-hello-bundle: build-daft-hello-container
 	@chmod +x $(BUNDLE_OUT)/rootfs/hello
 	@cp contrib/hello-bundle/config.json $(BUNDLE_OUT)/config.json
 
-# integration-build = `dev` (every real artefact) plus the test-only
-# fixtures the e2e suite mounts: the OCI fixture images, the flake
-# fixture, and the //go:embed-bundled daft-sandboxd the embedded-boot
-# test exercises. Building on `dev` keeps it as the single real-artefact
-# build path so `make dev` and the e2e suite produce the same things,
-# rather than maintaining a parallel artefact list here. Fixtures come
-# fresh from the flake (cache hits when unchanged). See PLAN.md
-# "Dev-shell purification".
+# The retained tests need only the local VM artifacts and hello bundle.
 integration-build: dev
-	@echo "[images] nix build test-fixture images + bundled daft-sandboxd"
-	@nix build .#nix-shell-image    -o $(NIX_IMAGE_OUT)
-	@nix build .#nix-tooling-image  -o $(NIX_TOOLING_IMAGE_OUT)
-	@nix build .#daft-check-image   -o $(NIX_CHECK_IMAGE_OUT)
-	@nix build .#daft-build-image   -o $(NIX_BUILD_IMAGE_OUT)
-	@nix build .#daft.goModules     -o $(NIX_CHECK_VENDOR_OUT)
-	@nix build .#d6c1-flake-fixture -o $(NIX_FLAKE_FIXTURE_OUT)
-	@nix build .#daft-sandboxd      -o $(NIX_SANDBOXD_OUT)
-	@nix build .#daft-orchestrator  -o $(NIX_ORCH_OUT)
-	@nix build .#iso-ssh-fixture       -o $(NIX_ISO_FIXTURE_OUT)
-	@nix build .#iso-qemu-runner-image -o $(NIX_ISO_QEMU_IMAGE_OUT)
-	@# Pull the pinned egress-replay cache so the bun test runs offline.
-	@# Best-effort: skipped while recording, and a miss (not yet published,
-	@# or no network) just leaves the bun test to record live this run.
-	@if [ -z "$$DAFT_EGRESS_RECORD" ]; then \
-		echo "[egress-cache] pull $(EGRESS_CACHE_REF)"; \
-		go run ./cmd/daft-egress-cache pull-unpack $(EGRESS_CACHE_REF) $(EGRESS_CACHE_OUT) \
-			|| echo "[egress-cache] pull failed (unpublished?) — bun test will record live"; \
-	fi
 
 # Lock file for `make integration`. Two concurrent runs race on
 # /dev/kvm, host ports, vsock CIDs, and tap interface names, and
@@ -373,34 +305,16 @@ integration: integration-build
 		delegate=""; \
 		if systemd-run --user --scope -p Delegate=yes --quiet -- true >/dev/null 2>&1; then \
 			delegate="systemd-run --user --scope -p Delegate=yes --quiet --"; \
-			echo "[e2e] cgroup delegation on — sandbox pkg gets accounting; testdaemons sandboxd self-wraps for limits"; \
+			echo "[e2e] cgroup delegation on — sandbox tests get per-VM accounting"; \
 		else \
-			echo "[e2e] cgroup delegation off — no --user scope: the sandbox in-process host and sandboxd's self-wrap both need one, so e2e will fail (enable-linger / run under a Delegate=yes unit)"; \
+			echo "[e2e] cgroup delegation off — no --user scope: the sandbox in-process host needs one, so e2e will fail (enable-linger / run under a Delegate=yes unit)"; \
 		fi; \
 		export DAFT_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT); \
 			export DAFT_BUNDLE=$(CURDIR)/$(BUNDLE_OUT); \
 			export DAFT_KERNEL=$(CURDIR)/$(NIX_KERNEL_OUT)/bzImage; \
 			export DAFT_CLOUD_HYPERVISOR=$(CURDIR)/$(NIX_CHV_OUT)/bin/cloud-hypervisor; \
 			export DAFT_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd; \
-			export DAFT_SANDBOXD_BUNDLED_BIN=$(CURDIR)/$(NIX_SANDBOXD_OUT)/bin/daft-sandboxd; \
-			export DAFT_ORCH_BUNDLED_BIN=$(CURDIR)/$(NIX_ORCH_OUT)/bin/daft-orchestrator; \
-			export DAFT_NIX_IMAGE=$$(realpath $(NIX_IMAGE_OUT)); \
-			export DAFT_BUILD_IMAGE=$$(realpath $(NIX_BUILD_IMAGE_OUT)); \
-			export DAFT_NIX_TOOLING_IMAGE=$$(realpath $(NIX_TOOLING_IMAGE_OUT)); \
-			export DAFT_CHECK_IMAGE=$$(realpath $(NIX_CHECK_IMAGE_OUT)); \
-			export DAFT_CHECK_VENDOR=$$(realpath $(NIX_CHECK_VENDOR_OUT)); \
-			export DAFT_NIX_FLAKE_FIXTURE=$$(realpath $(NIX_FLAKE_FIXTURE_OUT)); \
-			export DAFT_ISO_SSH_FIXTURE=$$(realpath $(NIX_ISO_FIXTURE_OUT)/iso/*.iso); \
-			export DAFT_ISO_QEMU_IMAGE=$$(realpath $(NIX_ISO_QEMU_IMAGE_OUT)); \
 			runflag=""; [ -n "$$INTEGRATION_RUN" ] && runflag="-run $$INTEGRATION_RUN"; \
-			if [ -n "$$DAFT_EGRESS_RECORD" ]; then \
-				echo "[egress-cache] RECORD: bun test records into $(EGRESS_CACHE_OUT)"; \
-				rm -rf $(EGRESS_CACHE_OUT); mkdir -p $(EGRESS_CACHE_OUT); \
-				export DAFT_EGRESS_PROXY_CACHE_RECORD=$$(realpath $(EGRESS_CACHE_OUT)); \
-			elif [ -f $(EGRESS_CACHE_OUT)/index.json ]; then \
-				echo "[egress-cache] REPLAY: bun test replays $(EGRESS_CACHE_OUT) offline"; \
-				export DAFT_EGRESS_PROXY_CACHE=$$(realpath $(EGRESS_CACHE_OUT)); \
-			fi; \
 			rc=0; \
 			echo "[e2e] sandbox pkg — in-process host shares the delegated scope: per-VM accounting, limits off"; \
 			sandbox_log=$$(mktemp /tmp/daft-integration-sandbox.XXXXXX.log); \
@@ -411,32 +325,8 @@ integration: integration-build
 				grep -n -E -B 12 -A 80 -- '--- FAIL:|panic:|fatal error|^FAIL([[:space:]]|$$)' $$sandbox_log || tail -200 $$sandbox_log; \
 				rc=1; \
 			fi; \
-			echo "[e2e] testdaemons pkg — daft-sandboxd self-wraps into a private scope: per-VM limits enforced (fail-closed)"; \
-			daemon_log=$$(mktemp /tmp/daft-integration-testdaemons.XXXXXX.log); \
-			if go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/testdaemons/ 9>&- >$$daemon_log 2>&1; then \
-				tail -2 $$daemon_log; rm -f $$daemon_log; \
-			else \
-				echo "[e2e] testdaemons failure; full log retained at $$daemon_log"; \
-				grep -n -E -B 12 -A 80 -- '--- FAIL:|panic:|fatal error|^FAIL([[:space:]]|$$)' $$daemon_log || tail -200 $$daemon_log; \
-				rc=1; \
-			fi; \
 			exit $$rc; \
 	)
-
-## update-egress-cache: re-record the bun dev-shell egress cache and
-## publish it to ghcr. Run after bumping internal/testdaemons/bun-flake.lock
-## (the tag tracks the lock's hash). Records online once (~13 min cold) via
-## the bun test in RECORD mode, then packs + pushes the OCI artifact. Needs
-## gh authenticated with write:packages.
-update-egress-cache:
-	@command -v gh >/dev/null 2>&1 || { echo "gh not on PATH (needed for ghcr auth)"; exit 1; }
-	@gh auth token >/dev/null 2>&1 || { echo "gh not authenticated — run: gh auth login"; exit 1; }
-	@echo "[egress-cache] recording $(EGRESS_CACHE_REF) (online; ~13 min cold)…"
-	@DAFT_EGRESS_RECORD=1 INTEGRATION_RUN='^TestClusterWorkspaceBunDevServer$$' $(MAKE) integration
-	@echo "[egress-cache] publishing $(EGRESS_CACHE_REF)…"
-	@DAFT_GHCR_TOKEN=$$(gh auth token) DAFT_GHCR_USER=$$(gh api user -q .login) \
-		go run ./cmd/daft-egress-cache pack-push $(EGRESS_CACHE_OUT) $(EGRESS_CACHE_REF)
-	@echo "[egress-cache] published $(EGRESS_CACHE_REF) — make this public in the ghcr UI the first time."
 
 ## Git hooks -----------------------------------------------------------------
 
@@ -461,7 +351,7 @@ hooks:
 #     only by the Nix build (`nix build .#daft-sandboxd`). Use Nix
 #     for any release artefact.
 
-build: build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator build-daft-mcp
+build: build-daft-agent build-daft-sandboxd
 
 # dev builds every artefact daft produces, entirely within the Nix
 # dev shell: the host-side Go binaries (build), the sandbox-VM
@@ -476,10 +366,6 @@ build: build-daft build-daft-agent build-daft-sandboxd build-daft-orchestrator b
 # use `nix build .#daft-sandboxd` (what `make integration-build` does).
 dev: build build-artefacts build-initramfs build-hello-bundle
 	@echo "[dev] full build complete — artefacts under $(BIN_DIR)/"
-
-build-daft:
-	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft ./cmd/daft
 
 build-daft-agent:
 	@mkdir -p $(BIN_DIR)
@@ -496,14 +382,6 @@ build-daft-hello-container:
 build-daft-sandboxd:
 	@mkdir -p $(BIN_DIR)
 	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-sandboxd ./cmd/daft-sandboxd
-
-build-daft-orchestrator:
-	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-orchestrator ./cmd/daft-orchestrator
-
-build-daft-mcp:
-	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-mcp ./cmd/daft-mcp
 
 ## Codegen -------------------------------------------------------------------
 

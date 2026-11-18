@@ -31,7 +31,7 @@ happen.
 
 ### Probe preconditions at startup; no silent fallbacks
 
-Before a workload starts, the sandbox, harness, and orchestrator
+Before a workload starts, the sandbox and its launch harness
 verify every resource they are configured to depend on — files
 exist and are accessible to the uid that will use them, devices
 are openable, the network is reachable, required cgroup
@@ -165,9 +165,9 @@ milestone lands, when an open question gets answered — update `PLAN.md` in
 the same change. Stale plans actively mislead future contributors (and agents).
 
 Keep the living plan compact: current architecture, active work, decisions, and
-open questions belong in `PLAN.md`; completed implementation diaries and
-superseded detail belong in `PLAN_HISTORY.md`. Test logs and command transcripts
-do not belong in either file.
+open questions belong in `PLAN.md`. Git history retains superseded architecture
+and completed implementation details. Keep test logs and command transcripts
+out of the living plan.
 
 ### Bound investigation output
 
@@ -280,8 +280,11 @@ by the definition above. They:
   `initramfs`, `hello-bundle`),
 - spawn real VMs via Cloud Hypervisor against `/dev/kvm`,
 - assert the full pull → bundle → boot → run pipeline, and
-- exercise full-cluster CLI workflows against real orchestrator, Node, agent,
-  networking, file-sync, exec, build, and observability paths.
+- exercise retained guest execution, direct mounts, networking and
+  observability paths.
+
+The old distributed test harness is being reduced. Some retained tests still
+need migration before the complete integration target can run; see `PLAN.md`.
 
 **Linux + KVM is required, not optional.** Every developer who
 can meaningfully contribute to this codebase has them — the whole
@@ -508,8 +511,8 @@ Mechanics:
   can think of by hand. The fuzzer mutates outward from there.
 - Fuzz targets only accept primitive types. For structured input, take a
   single `string` or `[]byte` and parse it into the shape you want inside
-  the fuzz body. See `FuzzExecute` in `internal/cli/cli_test.go` for the
-  pattern (NUL-separated argv).
+  the fuzz body. See `FuzzParseBytes` in `internal/sandboxdcli/images_test.go` for a
+  string-input parser example.
 - Assert only invariants the fuzzer can verify mechanically: "doesn't panic",
   "round-trips", "output satisfies property X". Don't write fuzz tests that
   assert specific outputs — they'll fail constantly on every new input.
@@ -521,13 +524,13 @@ Running fuzzers:
 
 ```sh
 # Run only the seed corpus (acts as regular tests; this is what `make test` does):
-go test ./internal/cli
+go test ./internal/sandboxdcli
 
 # Actively fuzz for 30 seconds:
-go test -run='^$' -fuzz=FuzzExecute -fuzztime=30s ./internal/cli
+go test -run='^$' -fuzz=FuzzParseBytes -fuzztime=30s ./internal/sandboxdcli
 
 # Or by iteration count:
-go test -run='^$' -fuzz=FuzzExecute -fuzztime=100000x ./internal/cli
+go test -run='^$' -fuzz=FuzzParseBytes -fuzztime=100000x ./internal/sandboxdcli
 ```
 
 Without `-fuzztime`, fuzzing runs until you Ctrl-C — useful when hardening

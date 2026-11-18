@@ -324,7 +324,7 @@ func TestBuildDevcontainerImageHappyPath(t *testing.T) {
 // (the build runner writes the output tarball), pushed, and the workload
 // boots from the resulting ref — not from ErrBuildUnsupported.
 func TestHandleSandboxEventBuildDevcontainer(t *testing.T) {
-	mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
+	source := seedWorkspace(t, func(dest string) error {
 		dir := filepath.Join(dest, ".devcontainer")
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return err
@@ -334,7 +334,7 @@ func TestHandleSandboxEventBuildDevcontainer(t *testing.T) {
 			return err
 		}
 		return os.WriteFile(filepath.Join(dir, defaultDockerfile), []byte("FROM scratch\n"), 0o644)
-	}}
+	})
 
 	// One assembler serves both boots; record every ref it bundles and
 	// mirror the share layout so the build runner can find its output mount.
@@ -349,7 +349,7 @@ func TestHandleSandboxEventBuildDevcontainer(t *testing.T) {
 
 	e, err := New(Config{
 		Stdout: io.Discard, Runner: noopRunner(), Assembler: asm,
-		MountMaterializer: mat, MountBackingDir: t.TempDir(),
+
 		BuildImageRef:      testBuildImageRef,
 		BuildPushTransport: stubTransport{},
 		BuildRunner:        buildRunner,
@@ -364,7 +364,7 @@ func TestHandleSandboxEventBuildDevcontainer(t *testing.T) {
 	spec := &sandboxv1.SandboxSpec{
 		WorkspaceUuid:    testWSUUID,
 		DevcontainerPath: devcontainerNestedPath,
-		Mounts:           []*sandboxv1.Mount{{Target: mntWorkspace}},
+		Mounts:           []*sandboxv1.Mount{{Target: mntWorkspace, Source: source}},
 	}
 	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-build", spec)); err != nil {
 		t.Fatalf("HandleSandboxEvent: %v", err)
@@ -384,10 +384,10 @@ func TestHandleSandboxEventBuildDevcontainer(t *testing.T) {
 // TestExplicitImageOverridesBuild pins the overlay precedence: a workspace
 // image_ref wins over a build-based devcontainer, so no build runs.
 func TestExplicitImageOverridesBuild(t *testing.T) {
-	mat := &fakeMaterializer{applied: true, seed: func(dest string) error {
+	source := seedWorkspace(t, func(dest string) error {
 		return os.WriteFile(filepath.Join(dest, "devcontainer.json"),
 			[]byte(`{"build":{"dockerfile":"Dockerfile"}}`), 0o644)
-	}}
+	})
 	var gotRef string
 	asm := func(_ context.Context, ref string, _ sandboxboot.BootOptions) (sandbox.Config, func(), error) {
 		gotRef = ref
@@ -395,7 +395,7 @@ func TestExplicitImageOverridesBuild(t *testing.T) {
 	}
 	e, err := New(Config{
 		Stdout: io.Discard, Runner: noopRunner(), Assembler: asm,
-		MountMaterializer: mat, MountBackingDir: t.TempDir(),
+
 		BuildImageRef:      testBuildImageRef,
 		BuildPushTransport: stubTransport{},
 		BuildRunner: func(context.Context, io.Writer, sandbox.Config) error {
@@ -410,7 +410,7 @@ func TestExplicitImageOverridesBuild(t *testing.T) {
 		WorkspaceUuid:    testWSUUID,
 		DevcontainerPath: devcontainerFlatPath,
 		ImageRef:         "ghcr.io/acme/override:9",
-		Mounts:           []*sandboxv1.Mount{{Target: mntWorkspace}},
+		Mounts:           []*sandboxv1.Mount{{Target: mntWorkspace, Source: source}},
 	}
 	if err := e.HandleSandboxEvent(t.Context(), addedEvent("sb-ovr", spec)); err != nil {
 		t.Fatalf("HandleSandboxEvent: %v", err)

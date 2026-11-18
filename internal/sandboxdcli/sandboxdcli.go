@@ -49,21 +49,15 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newImagesCmd())
 	root.AddCommand(newDebugCmd())
 	root.AddCommand(newAuthCmd())
-	root.AddCommand(newWorkspaceCmd())
-	root.AddCommand(newServeCmd())
 	return root
 }
 
-// newDebugCmd is the parent for legacy / offline subcommands kept
-// around for hand testing. Production workloads arrive via
-// orchestrator dispatch (`daft-sandboxd serve`), not these.
+// newDebugCmd contains the retained local image-run command.
 func newDebugCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "debug",
-		Short: "Offline / legacy subcommands (not used in production)",
-		Long: "debug holds the subcommands that used to be at the top level\n" +
-			"but have been superseded by orchestrator-driven dispatch.\n" +
-			"They remain for hand testing and offline reproduction.",
+		Short: "Local sandbox debugging commands",
+		Long:  "Run local image workloads for testing and reproduction.",
 	}
 	cmd.AddCommand(newRunCmd())
 	return cmd

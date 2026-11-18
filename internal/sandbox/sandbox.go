@@ -1,7 +1,7 @@
 // Package sandbox boots and supervises sandbox VMs by driving the
 // configured VMM (Cloud Hypervisor in v1) and ferrying their console
 // output back to the caller. The host-side `daft sandbox` commands in
-// internal/cli call into this package.
+// local launchers call into this package.
 //
 // The public surface is deliberately VMM-agnostic so we can swap the
 // backend behind the same interface (Firecracker, QEMU q35) — see PLAN.md

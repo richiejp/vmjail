@@ -1,8 +1,6 @@
 package sandboxexec
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,8 +10,6 @@ import (
 	"github.com/richiejp/darkaifactory/internal/devcontainerspec"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
-	"github.com/richiejp/darkaifactory/internal/workspace"
-	"github.com/richiejp/darkaifactory/internal/workspacecatalog"
 )
 
 // devcontainerResolution is the effective boot inputs a devcontainer.json
@@ -29,7 +25,6 @@ type devcontainerResolution struct {
 	PostStart [][]string
 	Build     *devcontainerBuildPlan
 	BuildSpec *devcontainer.BuildSpec
-	Cleanup   func() error
 }
 
 // resolveDevcontainerOverlay reads the devcontainer.json named by
@@ -82,9 +77,9 @@ func resolveDevcontainerData(spec *sandboxv1.SandboxSpec, data []byte, rel strin
 	if err != nil {
 		return devcontainerResolution{}, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
 	}
-	// ToWorkspaceSpec projects env/ports/mounts for both image- and
+	// ToSpec projects env/ports/mounts for both image- and
 	// build-based configs, leaving ImageRef empty for the latter.
-	base, err := devcontainerspec.ToWorkspaceSpec(resolved)
+	base, err := devcontainerspec.ToSpec(resolved)
 	if err != nil {
 		return devcontainerResolution{}, fmt.Errorf("sandboxexec: devcontainer %q: %w", rel, err)
 	}
@@ -101,54 +96,6 @@ func resolveDevcontainerData(spec *sandboxv1.SandboxSpec, data []byte, rel strin
 		PostStart: normalizePostStart(resolved.Lifecycle.PostStart),
 		BuildSpec: resolved.Build,
 	}, nil
-}
-
-// resolveDevcontainerOverlay reads metadata directly from CAS for writable
-// disk mounts. Image-based configurations therefore never recreate the old
-// host workspace tree. Build-based configurations still need a build context;
-// only that case is materialised into an ephemeral directory and removed as
-// soon as the build plan has been consumed.
-func (e *Executor) resolveDevcontainerOverlay(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec, mounts []sandboxboot.Mount) (devcontainerResolution, error) {
-	rel := strings.TrimPrefix(filepath.Clean("/"+filepath.FromSlash(spec.GetDevcontainerPath())), string(filepath.Separator))
-	if rel == "" || rel == "." {
-		return devcontainerResolution{}, fmt.Errorf("sandboxexec: invalid devcontainer path %q", spec.GetDevcontainerPath())
-	}
-	for i, mount := range spec.GetMounts() {
-		if e.mountMaterializer == nil || filepath.IsAbs(mount.GetSource()) || mount.GetReadOnly() {
-			continue
-		}
-		key := workspace.SyncKey(spec.GetWorkspaceUuid(), mount.GetTarget())
-		data, found, err := e.mountMaterializer.ReadMountFile(ctx, key, filepath.ToSlash(rel))
-		if err != nil {
-			return devcontainerResolution{}, fmt.Errorf("sandboxexec: read devcontainer %q: %w", spec.GetDevcontainerPath(), err)
-		}
-		if !found {
-			continue
-		}
-		resolved, err := resolveDevcontainerData(spec, data, spec.GetDevcontainerPath())
-		if err != nil || resolved.BuildSpec == nil || resolved.ImageRef != "" {
-			return resolved, err
-		}
-		root, err := os.MkdirTemp(filepath.Dir(e.mountDir(uid, i)), ".daft-devcontainer-build-*")
-		if err != nil {
-			return devcontainerResolution{}, fmt.Errorf("sandboxexec: create devcontainer build context: %w", err)
-		}
-		if _, err := e.mountMaterializer.MaterializeMount(ctx, key, root); err != nil {
-			return devcontainerResolution{}, errors.Join(
-				fmt.Errorf("sandboxexec: materialize devcontainer build context: %w", err), os.RemoveAll(root),
-			)
-		}
-		file := filepath.Join(root, rel)
-		resolved.Build, err = resolveBuildPlan(file, root, resolved.BuildSpec)
-		if err != nil {
-			return devcontainerResolution{}, errors.Join(
-				fmt.Errorf("sandboxexec: devcontainer %q: %w", spec.GetDevcontainerPath(), err), os.RemoveAll(root),
-			)
-		}
-		resolved.Cleanup = func() error { return os.RemoveAll(root) }
-		return resolved, nil
-	}
-	return resolveDevcontainerOverlay(spec, mounts)
 }
 
 const (
@@ -213,14 +160,14 @@ func findDevcontainerFile(mounts []sandboxboot.Mount, rel string) (file, root st
 }
 
 // explicitSpec projects the SandboxSpec's user-set image+env+ports onto a
-// workspacecatalog.Spec — the "override" side of the overlay.
-func explicitSpec(spec *sandboxv1.SandboxSpec) workspacecatalog.Spec {
-	out := workspacecatalog.Spec{ImageRef: spec.GetImageRef()}
+// devcontainerspec.Spec — the "override" side of the overlay.
+func explicitSpec(spec *sandboxv1.SandboxSpec) devcontainerspec.Spec {
+	out := devcontainerspec.Spec{ImageRef: spec.GetImageRef()}
 	for _, e := range spec.GetEnv() {
-		out.Env = append(out.Env, workspacecatalog.EnvVar{Name: e.GetName(), Value: e.GetValue()})
+		out.Env = append(out.Env, devcontainerspec.EnvVar{Name: e.GetName(), Value: e.GetValue()})
 	}
 	for _, p := range spec.GetPorts() {
-		out.Ports = append(out.Ports, workspacecatalog.PortMapping{
+		out.Ports = append(out.Ports, devcontainerspec.PortMapping{
 			ContainerPort: p.GetContainerPort(),
 			Protocol:      int32(p.GetProtocol()),
 		})
@@ -228,9 +175,9 @@ func explicitSpec(spec *sandboxv1.SandboxSpec) workspacecatalog.Spec {
 	return out
 }
 
-// portMappingsToProto converts the overlay's effective catalog ports back
+// portMappingsToProto converts the overlay's effective launch ports back
 // to the wire type portForwardsFromSpec consumes.
-func portMappingsToProto(in []workspacecatalog.PortMapping) []*sandboxv1.PortMapping {
+func portMappingsToProto(in []devcontainerspec.PortMapping) []*sandboxv1.PortMapping {
 	if len(in) == 0 {
 		return nil
 	}
@@ -244,9 +191,9 @@ func portMappingsToProto(in []workspacecatalog.PortMapping) []*sandboxv1.PortMap
 	return out
 }
 
-// envStrings flattens catalog EnvVars to the "NAME=VALUE" form
+// envStrings flattens local EnvVars to the "NAME=VALUE" form
 // BootOptions.Env expects.
-func envStrings(in []workspacecatalog.EnvVar) []string {
+func envStrings(in []devcontainerspec.EnvVar) []string {
 	if len(in) == 0 {
 		return nil
 	}

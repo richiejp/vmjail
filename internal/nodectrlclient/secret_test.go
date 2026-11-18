@@ -41,10 +41,11 @@ func (w reportingWriter) Write(p []byte) (int, error) {
 
 func (f *fakeNodeControlSecret) ReportSecretDelivery(_ context.Context, req *connect.Request[nodectrlv1.SecretDeliveryResponse]) (*connect.Response[nodectrlv1.SecretDeliveryAck], error) {
 	f.resp = req.Msg
+	err := f.err
 	if f.reported != nil {
 		close(f.reported)
 	}
-	return connect.NewResponse(&nodectrlv1.SecretDeliveryAck{}), f.err
+	return connect.NewResponse(&nodectrlv1.SecretDeliveryAck{}), err
 }
 
 func TestDispatchEventHandlesSecretDeliveryAsynchronously(t *testing.T) {

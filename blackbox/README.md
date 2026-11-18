@@ -1,105 +1,24 @@
-# Source-blind product testing
+# Local sandbox blackbox fixtures
 
-The tester sees this directory, an installed `daft` CLI, public usage
-documentation, fixture projects, and optionally the trusted MCP server. It
-must not receive the darkaifactory source checkout or implementation logs.
+This directory retains workload fixtures and the existing source-blind scenario
+format. The old distributed product and browser workflows are no longer the
+supported scope. The CLI/harness is still being reduced and is not currently a
+working end-to-end local test interface.
 
-Explore public workflows as a user would. A suspected problem is valid only
-after two clean reproductions. Classify it as `correctness`, `ux`, or
-`performance`, save each scenario run's JSON output below `runs/`, and append
-one JSON object to `issues.jsonl`. Do not infer implementation causes. Set a
-confirmed finding to `resolved` only after its executable scenario passes
-against the fixed client; retain the original failed evidence as provenance.
+The fixtures can be reused by local VM tests:
 
-Run a scenario:
+- `workspaces/networked-go`: requests to a configurable HTTP endpoint.
+- `workspaces/bun-package`: dependency installation and test execution.
+- `workspaces/http-service`: a service with a health endpoint.
+- `workspaces/mutable-tree`: host files for direct-mount read/write tests.
+- `workspaces/disk-writer`: a bounded storage-growth workload.
 
-```sh
-daft blackbox scenario --file scenarios/example.json > runs/example-1.json
-```
+[GOALS.md](GOALS.md) lists local behavior worth testing. Existing scenarios,
+issue records and run history describe the earlier product; review them before
+using them as acceptance criteria. In particular, remote catalog, transfer,
+cluster and browser scenarios need retirement, not a replacement fake service.
 
-The command returns non-zero when an assertion fails but still prints complete
-evidence. Repeat from clean state and retain both outputs.
-
-Name each scenario file `<scenario.name>.json`. An issue must reference two
-distinct failed run records for that exact scenario.
-
-Validate the issue ledger:
-
-```sh
-daft blackbox issues --file issues.jsonl
-```
-
-`history.jsonl` is the tracker-independent, source-blind regression context.
-It may be assembled from any issue tracker. Records contain only public
-symptoms and expectations; `sources` retain opaque provenance without copying
-diagnoses, source paths, host details, credentials, or private logs. Validate
-it with:
-
-```sh
-daft blackbox history --file history.jsonl
-```
-
-History format:
-
-```json
-{"version":1,"id":"history-example","category":"correctness","title":"Prior failure","status":"resolved","symptom":"A public command returned stale data.","expected":"The command returns current data.","public_surfaces":["workspace status"],"sources":[{"system":"tracker","reference":"issue-123"}]}
-```
-
-Scenario format:
-
-```json
-{
-  "version": 1,
-  "name": "public-help-smoke",
-  "steps": [{
-    "name": "help",
-    "argv": ["daft", "--help"],
-    "timeout_seconds": 5,
-    "want_exit": 0,
-    "stdout_contains": ["darkaifactory CLI"]
-  }]
-}
-```
-
-Issue format (one compact object per line):
-
-```json
-{"id":"bb-example","category":"ux","title":"Example","status":"open","scenario":"public-help-smoke","expected":"Clear result","observed":"Ambiguous result","reproduced":2,"evidence":["runs/example-1.json","runs/example-2.json"],"first_seen_version":"0.1.0"}
-```
-
-Finite commands require tight measured deadlines. Performance findings must
-state a repeatable budget in the scenario. Never write credentials, absolute
-host paths, source paths, or unbounded command output into evidence.
-
-[`GOALS.md`](GOALS.md) is the outcome-oriented exploratory catalogue. Unlike
-the deterministic scenario files, its goals deliberately do not prescribe
-commands. Agents may vary the supplied `workspaces/` fixtures or substitute a
-real project. Only human-interface feature goals constrain the interface.
-
-Run the complete exploratory campaign from a trusted client host with:
-
-```sh
-DAFT_BLACKBOX_UNRESTRICTED=1 scripts/blackbox-agent.sh
-```
-
-The explicit opt-in disables Codex's own shell and network sandbox. By default,
-the launcher builds the current checkout, starts a disposable loopback cluster
-with its own identities and dashboard, and gives Terra a temporary source-blind
-copy of only the public CLI, documentation, goals, and fixtures. It always
-stops that cluster and retains its logs with the results; darkaifactory remains
-the isolation boundary for untrusted workloads. The campaign attempts all 20
-goals within two hours and records at most ten confirmed issues. The disposable
-environment also provides an immutable Nix-built Go/Bun toolbox image, a small
-Workspace disk allowance, password and WebAuthn dashboard alternatives, a
-synthetic one-shot secret, and a narrow pause/resume Node fault injector. These
-are test preconditions, not instructions for how to satisfy each outcome.
-
-Testing an existing deployment is intentionally separate and requires both an
-explicit mode switch and client identity:
-
-```sh
-DAFT_BLACKBOX_UNRESTRICTED=1 DAFT_BLACKBOX_LIVE=1 \
-  DAFT_CONFIG_DIR=/explicit/client \
-  DAFT_BLACKBOX_ORCHESTRATOR=https://explicit.example:14443 \
-  scripts/blackbox-agent.sh
-```
+When the local command is ready, run blackbox checks against its installed
+binary without source access. Record the public operation, bounded output,
+expected result and reproducible fixture inputs. Keep implementation diagnosis
+separate from evidence of the observable failure.

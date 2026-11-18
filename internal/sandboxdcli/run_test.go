@@ -13,6 +13,8 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 )
 
+const testImageRef = "img:1"
+
 func TestRunIsRegisteredUnderDebug(t *testing.T) {
 	rootHelp, _, err := runCmd(t, "--help")
 	if err != nil {
@@ -34,27 +36,6 @@ func TestRunRequiresImageRef(t *testing.T) {
 	_, _, err := runCmd(t, "debug", "run")
 	if err == nil {
 		t.Fatal("expected error when image ref is missing")
-	}
-}
-
-// TestRunEmitsDeprecationBanner pins the banner so removing it is
-// a deliberate act. Captures stderr from a runCmd invocation that
-// fails at validate() (no image ref) — the banner fires before
-// validation runs.
-func TestRunEmitsDeprecationBannerBeforeFailure(t *testing.T) {
-	// MinimumNArgs(1) trips before RunE, so we need a real ref.
-	// Use defaultRunDepsFn = a stub that fails at openStore so we
-	// don't dial a registry.
-	saved := defaultRunDepsFn
-	t.Cleanup(func() { defaultRunDepsFn = saved })
-	defaultRunDepsFn = func() runDeps {
-		base := saved()
-		base.openStore = func() (storeAPI, error) { return nil, errors.New("stub: no store") }
-		return base
-	}
-	_, stderr, _ := runCmd(t, "debug", "run", "alpine:3")
-	if !strings.Contains(stderr, "deprecated") {
-		t.Errorf("expected deprecation banner on stderr, got:\n%s", stderr)
 	}
 }
 

@@ -1,41 +1,41 @@
-# Sandbox lifecycle
+# Local sandbox lifecycle
 
-The public wire phase is currently a forward-compatible string with Running,
-Exited, and Killed observations. The finer states below expose protocol
-boundaries that are presently open-coded. See the
+The diagram shows the retained local runtime's responsibilities, not a remote
+state machine or a completed replacement CLI. See the
 [Graphviz source](diagrams/sandbox-lifecycle.dot).
 
-![Sandbox lifecycle statechart](diagrams/sandbox-lifecycle.svg)
+![Local sandbox lifecycle](diagrams/sandbox-lifecycle.svg)
 
-## Abstract transitions
+## Transitions
 
-| Action | Required evidence | Result |
-|---|---|---|
-| Dispatch | Node, Workspace generation, resources, and image are fixed | Sandbox UID is immutable |
-| Prepare | Host files, devices, cgroups, disk, network, and VMM validate | VM may be created |
-| Boot | VMM starts and guest liveness is established | Guest control may be negotiated |
-| AttachGuest | Expected guest protocol responds | Container may be created |
-| StartWorkload | Container and routes start successfully | Running may be reported |
-| Stop | Exact Sandbox receives teardown request | New sessions are refused |
-| Fail | A required preparation, boot, attach, or workload invariant fails | Failure teardown begins with a bounded reason |
-| Preserve | Writable state is verified and published | Terminal phase may be committed |
-| PublishTerminal | Routes are closed and preservation outcome is durable | Binding may be cleared |
-| Lose | Node evidence disappears before terminal publication | State becomes unknown |
+| Stage | Work |
+| --- | --- |
+| Prepare | Validate configuration, assemble the image bundle and shares, prepare namespaces and cgroups. |
+| Start | Start virtiofsd sidecars, host control listeners and the VMM. |
+| Configure guest | Deliver configuration over vsock; mount shares and start requested instrumentation. |
+| Execute | Run the OCI workload with crun. |
+| Finish or cancel | Choose completion-driven or persistent-VM behavior; close listeners and reap children. |
+| Retain diagnostics | Remove the empty cgroup and temporary resources; leave observation files for inspection. |
+
+`Hello` is a smoke-test runner with a 30-second deadline. `RunToCompletion`
+waits for the guest completion event without that fixed deadline. `Serve`
+supervises a persistent VM until cancellation or VMM exit. The local CLI must
+choose its intended behavior explicitly.
 
 ## Initial invariants to formalise
 
-- `Running => GuestAttached /\ WorkloadStarted /\ LimitsApplied`.
-- Only the bound Node may publish observations for a Sandbox UID.
-- Terminal publication happens at most once per UID and never clears a newer UID.
-- `Terminal => RoutesClosed /\ PreservationOutcomeRecorded`.
-- Every admitted failure reaches terminal publication or an explicit lost state.
-- Loss never implies clean preservation or successful deletion.
+- A failed preparation step must not leave unmanaged child processes.
+- VMM and virtiofsd accounting belongs to the same sandbox cgroup.
+- A failure while reaping one child must not prevent reaping its siblings.
+- Cgroup removal follows child-process cleanup.
+- A guest IO summary is diagnostic evidence, not a complete filesystem audit.
 
 ## Implementation map
 
-- Host preparation: [`internal/sandboxboot`](../../internal/sandboxboot/)
-- Guest/container execution: [`internal/sandboxexec`](../../internal/sandboxexec/)
-- Route/session teardown: [`internal/sandboxgateway`](../../internal/sandboxgateway/)
-- Terminal ordering tests: [`internal/sandboxexec/exec_test.go`](../../internal/sandboxexec/exec_test.go)
+- Host lifecycle: [`internal/sandbox/sandbox.go`](../../internal/sandbox/sandbox.go)
+- Boot configuration: [`internal/sandboxboot/sandboxboot.go`](../../internal/sandboxboot/sandboxboot.go)
+- Guest execution: [`internal/agent/agent.go`](../../internal/agent/agent.go)
+- Cleanup tests: [`internal/sandbox/teardown_test.go`](../../internal/sandbox/teardown_test.go)
+- Direct-share overlay test: [`internal/sandbox/integration_workspace_overlay_test.go`](../../internal/sandbox/integration_workspace_overlay_test.go)
 
-Parent: [Sandbox](sandbox.md). Related: [Workspace lifecycle](workspace-lifecycle.md).
+Parent: [Sandbox](sandbox.md).

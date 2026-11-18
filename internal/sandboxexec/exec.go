@@ -40,7 +40,6 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/sandboxnet"
 	"github.com/richiejp/darkaifactory/internal/trace"
-	"github.com/richiejp/darkaifactory/internal/workspace"
 	"github.com/richiejp/darkaifactory/internal/workspacedisk"
 	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
@@ -61,29 +60,6 @@ const (
 // Production wires sandboxboot.BuildBundleConfig; tests pass fakes
 // that don't touch the imagestore.
 type Assembler func(ctx context.Context, ref string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error)
-
-// MountMaterializer is the node's mount-sync surface, shared between the
-// executor and the CAS-backed workspace.Server. Read-only shares use
-// MaterializeMount; first-launch writable disks use StreamMount to avoid a
-// host seed tree and virtiofs entirely.
-//
-// SetLiveMount / ClearLiveMount bracket the lifetime of a running VM's
-// writable mount (Slice S4): while a (syncKey → dir) entry is live, a
-// `daft workspace pull` re-manifests dir so in-VM writes surface,
-// instead of the last-pushed snapshot. ClearLiveMount is idempotent.
-// Production wires the node's workspace.Server.
-type MountMaterializer interface {
-	MaterializeMount(ctx context.Context, syncKey, dest string) (applied bool, err error)
-	ReadMountFile(ctx context.Context, syncKey, path string) (data []byte, found bool, err error)
-	StreamMount(ctx context.Context, syncKey string, destination io.Writer) (applied bool, err error)
-	SetLiveMount(syncKey, dir string)
-	PreserveLiveMount(ctx context.Context, syncKey string) error
-	ClearLiveMount(syncKey string)
-}
-
-type liveMountRefresher interface {
-	SetLiveMountRefresher(syncKey string, refresh func(context.Context, string) error)
-}
 
 // WorkspaceDiskPreparer atomically creates or reopens the retained qcow2
 // image keyed by Workspace UUID.
@@ -158,17 +134,7 @@ type Executor struct {
 	netEnabled bool
 	// egressProxy, when non-nil, drives Phase-J proxy-env + CA
 	// injection on every image-backed dispatch (see Config.EgressProxy).
-	egressProxy *EgressProxy
-	// mountMaterializer and mountBackingDir are the Slice S3 launch-time
-	// mount wiring. When set, every image-backed dispatch materialises
-	// each spec mount from the node's persistent CAS into a per-Sandbox
-	// backing dir under mountBackingDir and exports that dir via
-	// virtiofsd (instead of treating the mount's logical Source as a
-	// host path). nil materializer keeps the pre-S3 passthrough (Source
-	// is taken as a host path) so unit tests and the smoke path are
-	// unaffected.
-	mountMaterializer         MountMaterializer
-	mountBackingDir           string
+	egressProxy               *EgressProxy
 	workspaceDisks            WorkspaceDiskPreparer
 	workspaceDiskDefaultBytes uint64
 	workspaceDiskPollInterval time.Duration
@@ -211,7 +177,6 @@ type Executor struct {
 	mu                    sync.Mutex
 	live                  map[string]*liveSandbox
 	running               map[string]context.CancelFunc
-	preserve              map[string]func(context.Context) error
 	deleted               map[string]time.Time
 	diskMu                sync.RWMutex
 	workspaceDiskControls map[string]*workspaceDiskRuntime
@@ -287,16 +252,6 @@ type Config struct {
 	// into the bundle rootfs. Leave nil to keep direct egress (the
 	// pre-Phase-J behaviour).
 	EgressProxy *EgressProxy
-	// MountMaterializer, when non-nil, materialises each image-backed
-	// dispatch's spec mounts from the node's persistent CAS into host
-	// backing dirs at launch (Slice S3). Production wires the node's
-	// workspace.Server. Requires MountBackingDir. Leave nil to keep the
-	// pre-S3 passthrough where a mount's Source is used as a host path.
-	MountMaterializer MountMaterializer
-	// MountBackingDir is the absolute parent directory under which
-	// per-Sandbox mount backing trees are materialised. Required when
-	// MountMaterializer is set; ignored otherwise.
-	MountBackingDir string
 	// WorkspaceDisks enables retained qcow2 disks for dispatched Workspaces.
 	// It requires VsockDir, which also holds the per-Sandbox VMM API socket.
 	WorkspaceDisks WorkspaceDiskPreparer
@@ -338,9 +293,8 @@ type Config struct {
 // sandboxnet); the executor injects http(s)_proxy pointing at that
 // fixed gateway:port and ships the proxy CA into the bundle.
 type EgressProxy struct {
-	// Handler is the proxy's http.Handler (an internal/mitmproxy
-	// Proxy). sandboxd builds one and shares it across every VM's
-	// netstack, which serves it on gateway:Port. Must be safe for
+	// Handler is a caller-supplied proxy handler. The VM netstack
+	// serves it on gateway:Port. Must be safe for
 	// concurrent use. A nil Handler means "no proxy" — egressActive
 	// returns false and neither injection nor default-deny kicks in.
 	Handler http.Handler
@@ -375,14 +329,6 @@ func New(cfg Config) (*Executor, error) {
 		}
 		if !filepath.IsAbs(cfg.VsockDir) {
 			return nil, fmt.Errorf("sandboxexec: VsockDir %q must be absolute", cfg.VsockDir)
-		}
-	}
-	if cfg.MountMaterializer != nil {
-		if cfg.MountBackingDir == "" {
-			return nil, errors.New("sandboxexec: MountBackingDir required when MountMaterializer is set")
-		}
-		if !filepath.IsAbs(cfg.MountBackingDir) {
-			return nil, fmt.Errorf("sandboxexec: MountBackingDir %q must be absolute", cfg.MountBackingDir)
 		}
 	}
 	if cfg.ObserverDir != "" && !filepath.IsAbs(cfg.ObserverDir) {
@@ -420,8 +366,6 @@ func New(cfg Config) (*Executor, error) {
 		vsockDir:                  cfg.VsockDir,
 		netEnabled:                cfg.NetEnabled,
 		egressProxy:               cfg.EgressProxy,
-		mountMaterializer:         cfg.MountMaterializer,
-		mountBackingDir:           cfg.MountBackingDir,
 		workspaceDisks:            cfg.WorkspaceDisks,
 		workspaceDiskDefaultBytes: cfg.WorkspaceDiskDefaultBytes,
 		workspaceDiskPollInterval: cfg.WorkspaceDiskPollInterval,
@@ -437,7 +381,6 @@ func New(cfg Config) (*Executor, error) {
 		buildTimeout:              cfg.BuildTimeout,
 		live:                      map[string]*liveSandbox{},
 		running:                   map[string]context.CancelFunc{},
-		preserve:                  map[string]func(context.Context) error{},
 		deleted:                   map[string]time.Time{},
 		workspaceDiskControls:     map[string]*workspaceDiskRuntime{},
 	}
@@ -599,12 +542,6 @@ func (e *Executor) HandleSandboxEvent(
 	}
 	runErr := func() error {
 		defer unlock()
-		// A terminal heartbeat is the Node's teardown acknowledgement. Finish
-		// preserving the Workspace before publishing that phase, otherwise a
-		// fast relaunch can replace the live mount while its predecessor is
-		// still committing the authoritative stopped snapshot.
-		defer e.teardownMounts(context.WithoutCancel(ctx), uid, spec)
-
 		unregisterPorts := e.registerPortRoutes(cfg, spec.GetWorkspaceUuid())
 		defer unregisterPorts()
 		unregisterAttach := e.registerAttachRoute(cfg, uid)
@@ -615,10 +552,8 @@ func (e *Executor) HandleSandboxEvent(
 		defer unregisterObserver()
 		unregisterSummary := e.registerSummaryRoute(cfg, uid)
 		defer unregisterSummary()
-		e.registerWorkspaceSnapshotRoutes(cfg, spec)
 		unregisterDiskControl := e.registerWorkspaceDiskControl(ctx, cfg, spec.GetWorkspaceUuid(), uid, e.workspaceDiskAllowance(spec))
 		defer unregisterDiskControl()
-		e.setSandboxPreserver(uid, spec)
 
 		e.markPhase(uid, phaseRunning, 0, "")
 		return e.run(ctx, e.stdout, cfg)
@@ -631,59 +566,9 @@ func (e *Executor) HandleSandboxEvent(
 	return nil
 }
 
-func (e *Executor) registerWorkspaceSnapshotRoutes(cfg sandbox.Config, spec *sandboxv1.SandboxSpec) {
-	refresher, ok := e.mountMaterializer.(liveMountRefresher)
-	if !ok || cfg.Vsock == nil || cfg.WorkspaceDisk == nil {
-		return
-	}
-	hostSocket := cfg.Vsock.HostSocket
-	dialGuest := e.dialWorkspaceGuest
-	if dialGuest == nil {
-		dialGuest = sandbox.DialGuestVsock
-	}
-	for i, mount := range spec.GetMounts() {
-		if mount == nil || mount.GetReadOnly() || filepath.IsAbs(mount.GetSource()) {
-			continue
-		}
-		directory := fmt.Sprintf("mounts/%d", i)
-		key := workspace.SyncKey(spec.GetWorkspaceUuid(), mount.GetTarget())
-		refresher.SetLiveMountRefresher(key, func(ctx context.Context, destination string) error {
-			dial := func(ctx context.Context) (net.Conn, error) {
-				return dialGuest(ctx, hostSocket, workspacesnapshot.DefaultVsockPort)
-			}
-			// A verified CAS snapshot protects the contents, while syncfs makes
-			// the retained qcow2 itself safe to reuse after this VM is stopped.
-			// Refuse the pull/stop if either durability boundary cannot be proven.
-			if err := workspacesnapshot.Flush(ctx, dial); err != nil {
-				return fmt.Errorf("sandboxexec: flush retained workspace disk: %w", err)
-			}
-			// Pull extracts a complete snapshot and intentionally refuses to
-			// overwrite entries. The staging tree may still contain the launch
-			// seed or a failed prior attempt, so reset it before every refresh.
-			// The retained qcow2 remains authoritative until PreserveLiveMount
-			// commits the fully verified replacement manifest.
-			if err := resetWorkspaceSnapshotDestination(destination); err != nil {
-				return err
-			}
-			return workspacesnapshot.Pull(ctx, dial, directory, destination)
-		})
-	}
-}
-
-func resetWorkspaceSnapshotDestination(destination string) error {
-	if err := os.RemoveAll(destination); err != nil {
-		return fmt.Errorf("sandboxexec: reset workspace snapshot destination: %w", err)
-	}
-	if err := os.MkdirAll(destination, 0o750); err != nil {
-		return fmt.Errorf("sandboxexec: create workspace snapshot destination: %w", err)
-	}
-	return nil
-}
-
 const (
 	maxPendingSandboxDeletes = 256
 	pendingSandboxDeleteTTL  = time.Minute
-	workspacePreserveTimeout = 20 * time.Second
 )
 
 func (e *Executor) beginSandbox(uid string, cancel context.CancelFunc) bool {
@@ -701,7 +586,6 @@ func (e *Executor) beginSandbox(uid string, cancel context.CancelFunc) bool {
 		return false
 	}
 	e.running[uid] = cancel
-	e.preserve[uid] = nil
 	// A launch is live as soon as this executor accepts its ADDED event, not
 	// only after image resolution and disk preparation finish. Those finite
 	// operations can span several heartbeats; omitting the uid during that
@@ -714,7 +598,6 @@ func (e *Executor) beginSandbox(uid string, cancel context.CancelFunc) bool {
 func (e *Executor) finishSandbox(uid string, cancel context.CancelFunc) {
 	e.mu.Lock()
 	delete(e.running, uid)
-	delete(e.preserve, uid)
 	e.mu.Unlock()
 	cancel()
 }
@@ -723,20 +606,7 @@ func (e *Executor) deleteSandbox(ctx context.Context, uid string) error {
 	e.mu.Lock()
 	e.expireSandboxDeletes(time.Now())
 	if cancel := e.running[uid]; cancel != nil {
-		preserve := e.preserve[uid]
 		e.mu.Unlock()
-		if preserve != nil {
-			// Leave a strict response budget for cancellation, VM teardown, the
-			// next heartbeat, and the orchestrator's acknowledgment. Matching
-			// the outer 30s deadline made a completed snapshot indistinguishable
-			// from a lost delete event at the client.
-			preserveCtx, stop := context.WithTimeout(context.WithoutCancel(ctx), workspacePreserveTimeout)
-			err := preserve(preserveCtx)
-			stop()
-			if err != nil {
-				return fmt.Errorf("sandboxexec: preserve workspace before stop: %w", err)
-			}
-		}
 		cancel()
 		return nil
 	}
@@ -751,30 +621,6 @@ func (e *Executor) deleteSandbox(ctx context.Context, uid string) error {
 	e.deleted[uid] = time.Now()
 	e.mu.Unlock()
 	return nil
-}
-
-func (e *Executor) setSandboxPreserver(uid string, spec *sandboxv1.SandboxSpec) {
-	if e.mountMaterializer == nil {
-		return
-	}
-	keys := make([]string, 0, len(spec.GetMounts()))
-	for _, mount := range spec.GetMounts() {
-		if mount != nil && !mount.GetReadOnly() && !filepath.IsAbs(mount.GetSource()) {
-			keys = append(keys, workspace.SyncKey(spec.GetWorkspaceUuid(), mount.GetTarget()))
-		}
-	}
-	e.mu.Lock()
-	if _, running := e.running[uid]; running {
-		e.preserve[uid] = func(ctx context.Context) error {
-			for _, key := range keys {
-				if err := e.mountMaterializer.PreserveLiveMount(ctx, key); err != nil {
-					return err
-				}
-			}
-			return nil
-		}
-	}
-	e.mu.Unlock()
 }
 
 func (e *Executor) expireSandboxDeletes(now time.Time) {
@@ -940,13 +786,12 @@ func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *san
 		return errors.New("sandboxexec: retained disk requires spec.workspace_uuid")
 	}
 	size := e.workspaceDiskAllowance(spec)
-	path, created, err := e.workspaceDisks.Prepare(workspaceID, size)
+	path, _, err := e.workspaceDisks.Prepare(workspaceID, size)
 	if err != nil {
 		return fmt.Errorf("sandboxexec: prepare workspace disk: %w", err)
 	}
 	cfg.WorkspaceDisk = &sandbox.DiskConfig{Path: path, ID: workspaceDiskID}
 	cfg.APISocket = filepath.Join(e.vsockDir, uid+".api.sock")
-	configureWorkspaceMounts(cfg, workspaceID, spec.GetMounts(), created, e.mountMaterializer)
 	return nil
 }
 
@@ -959,34 +804,6 @@ func (e *Executor) workspaceDiskAllowance(spec *sandboxv1.SandboxSpec) uint64 {
 		return e.workspaceDiskDefaultBytes
 	}
 	return size
-}
-
-func configureWorkspaceMounts(cfg *sandbox.Config, workspaceID string, mounts []*sandboxv1.Mount, seed bool, materializer MountMaterializer) {
-	for i, mount := range mounts {
-		if mount == nil || mount.GetReadOnly() || filepath.IsAbs(mount.GetSource()) {
-			continue
-		}
-		port := sandbox.WorkspaceSeedBaseVsockPort + uint32(i)
-		var seedPort uint32
-		if seed {
-			seedPort = port
-		}
-		cfg.WorkspaceMounts = append(cfg.WorkspaceMounts, sandbox.WorkspaceMount{
-			Target: mount.GetTarget(), Directory: fmt.Sprintf("mounts/%d", i), SeedPort: seedPort,
-		})
-		cfg.Shares = slices.DeleteFunc(cfg.Shares, func(share *sandbox.ShareConfig) bool {
-			return share != nil && share.Mountpoint == mount.GetTarget()
-		})
-		if seed && materializer != nil {
-			key := workspace.SyncKey(workspaceID, mount.GetTarget())
-			cfg.WorkspaceSeeds = append(cfg.WorkspaceSeeds, sandbox.WorkspaceSeed{
-				Port: port,
-				Stream: func(ctx context.Context, destination io.Writer) (bool, error) {
-					return materializer.StreamMount(ctx, key, destination)
-				},
-			})
-		}
-	}
 }
 
 // applyObserverLog defaults cfg.ObserverLogPath to a per-uid file
@@ -1178,21 +995,14 @@ func (e *Executor) baseBootConfig(ctx context.Context, uid string, spec *sandbox
 	// than leave a containerless Sandbox behind.
 	persistent := spec.GetWorkspaceUuid() != "" && !spec.GetPreserveImageCommand()
 	if hasDevcontainer {
-		// Read the devcontainer from the just-materialised content and
+		// Read the devcontainer from the host-mounted content and
 		// overlay the explicit spec on top (explicit wins). The effective
 		// env/ports already fold in the explicit ones, so they replace
 		// (not append to) the spec values here. A build-based devcontainer
 		// also yields a build plan (nil otherwise).
-		res, derr := e.resolveDevcontainerOverlay(ctx, uid, spec, mounts)
+		res, derr := resolveDevcontainerOverlay(spec, mounts)
 		if derr != nil {
 			return sandbox.Config{}, nil, func() {}, derr
-		}
-		if res.Cleanup != nil {
-			defer func() {
-				if err := res.Cleanup(); err != nil {
-					_, _ = fmt.Fprintf(e.stdout, "daft-sandboxd: remove devcontainer build context: %v\n", err)
-				}
-			}()
 		}
 		imageRef, args, cwd, env, ports = res.ImageRef, res.Args, res.Cwd, res.Env, res.Ports
 		postStart = res.PostStart
@@ -1390,104 +1200,16 @@ func memoryArgFromBytes(b uint64) string {
 	return fmt.Sprintf("%dM", (b+mib-1)/mib)
 }
 
-// resolveMounts turns the spec's mounts into sandboxboot.Mount
-// entries whose Source is an absolute host path virtiofsd can export.
-//
-// Source determines how each mount resolves:
-//   - An absolute path is a direct host bind (the advanced `mount add
-//     --source /abs` form, and the pre-S3 behaviour): it's exported
-//     as-is, no CAS involved.
-//   - Anything else is a logical identifier — a workspace UUID for the
-//     dir-local push/pull mounts — so the executor materialises the
-//     tree pushed under SyncKey(workspace_uuid, target) from the node's
-//     persistent CAS into a per-Sandbox backing dir (Slice S3) and
-//     points the share at that dir. An unpushed mount materialises as
-//     an empty read-write tree.
-//
-// Without a materializer wired (unit tests, smoke path) every mount
-// falls back to the passthrough so those callers don't need a CAS.
-func (e *Executor) resolveMounts(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) ([]sandboxboot.Mount, error) {
-	in := spec.GetMounts()
-	out := make([]sandboxboot.Mount, 0, len(in))
-	for i, m := range in {
-		if e.mountMaterializer == nil || filepath.IsAbs(m.GetSource()) {
-			out = append(out, sandboxboot.Mount{
-				Target:   m.GetTarget(),
-				Source:   m.GetSource(),
-				ReadOnly: m.GetReadOnly(),
-			})
-			continue
+// resolveMounts accepts only explicit host directories for virtiofs shares.
+func (e *Executor) resolveMounts(_ context.Context, _ string, spec *sandboxv1.SandboxSpec) ([]sandboxboot.Mount, error) {
+	out := make([]sandboxboot.Mount, 0, len(spec.GetMounts()))
+	for _, m := range spec.GetMounts() {
+		if m == nil || !filepath.IsAbs(m.GetSource()) {
+			return nil, fmt.Errorf("sandboxexec: mount %q requires an absolute host source", m.GetTarget())
 		}
-		dest := e.mountDir(uid, i)
-		key := workspace.SyncKey(spec.GetWorkspaceUuid(), m.GetTarget())
-		if e.workspaceDisks != nil && !m.GetReadOnly() {
-			if err := os.MkdirAll(dest, 0o700); err != nil {
-				return nil, fmt.Errorf("create workspace staging mount %s: %w", m.GetTarget(), err)
-			}
-			e.mountMaterializer.SetLiveMount(key, dest)
-			out = append(out, sandboxboot.Mount{Target: m.GetTarget(), GuestOnly: true})
-			continue
-		}
-		applied, err := e.mountMaterializer.MaterializeMount(ctx, key, dest)
-		if err != nil {
-			return nil, fmt.Errorf("materialize mount %s: %w", m.GetTarget(), err)
-		}
-		if !applied {
-			_, _ = fmt.Fprintf(e.stdout,
-				"daft-sandboxd: mount %s has no pushed data; starting empty (run `daft workspace push`)\n",
-				m.GetTarget())
-		}
-		// Register the backing dir as live so a pull against this
-		// running VM re-manifests it (Slice S4). Read-only mounts are
-		// left out: the VM can't have changed them, so the last-pushed
-		// snapshot is already authoritative. Cleared in teardownMounts.
-		if !m.GetReadOnly() {
-			e.mountMaterializer.SetLiveMount(key, dest)
-		}
-		out = append(out, sandboxboot.Mount{
-			Target:   m.GetTarget(),
-			Source:   dest,
-			ReadOnly: m.GetReadOnly(),
-		})
+		out = append(out, sandboxboot.Mount{Target: m.GetTarget(), Source: m.GetSource(), ReadOnly: m.GetReadOnly()})
 	}
 	return out, nil
-}
-
-// mountDir is the absolute per-Sandbox, per-mount backing directory
-// virtiofsd exports. Keyed by Sandbox uid (unique per launch) so
-// concurrent dispatches never share a tree, and by mount index so the
-// dirs line up with the share tags the assembler mints.
-func (e *Executor) mountDir(uid string, i int) string {
-	return filepath.Join(e.mountBackingDir, uid, fmt.Sprintf("mnt%d", i))
-}
-
-// teardownMounts snapshots every writable live mount into the Node CAS before
-// unregistering and removing its backing tree. This makes a post-stop pull (or
-// later relaunch) observe the agent's final writes. A snapshot failure keeps
-// the live registration and backing directory intact: leaking bounded disk is
-// preferable to silently discarding project changes.
-func (e *Executor) teardownMounts(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec) {
-	if e.mountMaterializer == nil || e.mountBackingDir == "" {
-		return
-	}
-	workspaceUUID := spec.GetWorkspaceUuid()
-	preserveFailed := false
-	for _, m := range spec.GetMounts() {
-		if filepath.IsAbs(m.GetSource()) || m.GetReadOnly() {
-			continue
-		}
-		key := workspace.SyncKey(workspaceUUID, m.GetTarget())
-		if err := e.mountMaterializer.PreserveLiveMount(ctx, key); err != nil {
-			preserveFailed = true
-			_, _ = fmt.Fprintf(e.stdout, "sandboxexec: preserve mount %s: %v\n", m.GetTarget(), err)
-		}
-	}
-	if preserveFailed {
-		return
-	}
-	if err := os.RemoveAll(filepath.Join(e.mountBackingDir, uid)); err != nil {
-		_, _ = fmt.Fprintf(e.stdout, "sandboxexec: cleanup mount backing dir: %v\n", err)
-	}
 }
 
 // BaseVsockPort is the first AF_VSOCK port the executor hands out

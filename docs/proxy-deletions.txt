@@ -1,0 +1,14 @@
+cmd/daft-mitm-proxy/main.go
+cmd/daft-mitm-proxy/main_test.go
+docs/usage/egress.md
+internal/httpcache/export_test.go
+internal/httpcache/httpcache.go
+internal/httpcache/httpcache_test.go
+internal/mitmproxy/certs.go
+internal/mitmproxy/mitmproxy.go
+internal/mitmproxy/mitmproxy_test.go
+internal/testdaemons/workspace_buildah_pull_egress_test.go
+internal/testdaemons/workspace_caching_proxy_test.go
+internal/testdaemons/workspace_egress_proxy_env_test.go
+internal/testdaemons/workspace_https_egress_test.go
+internal/testdaemons/workspace_narinfo_probe_test.go
