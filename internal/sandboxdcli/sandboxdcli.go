@@ -135,7 +135,9 @@ func runHelloWith(ctx context.Context, w io.Writer, deps helloDeps) error {
 	if err != nil {
 		return err
 	}
+	defer paths.Close()
 	cfg := sandbox.Config{
+		ArtifactFiles:   paths.Files,
 		CloudHypervisor: paths.CloudHypervisor,
 		Kernel:          paths.Kernel,
 		Initramfs:       paths.Initramfs,
@@ -172,8 +174,8 @@ func applyObserverLog(w io.Writer, cfg *sandbox.Config, resolve func() (string, 
 	_, _ = fmt.Fprintf(w, "daft-sandboxd: observer log %s\n", path)
 }
 
-// userCacheDir returns the directory we extract artifacts into. Uses
-// os.UserCacheDir which honours $XDG_CACHE_HOME on Linux.
+// userCacheDir supplies the legacy loader hint. The embedded memfd loader
+// ignores it; retained loader interfaces still accept a cache directory.
 func userCacheDir() (string, error) {
 	base, err := os.UserCacheDir()
 	if err != nil {

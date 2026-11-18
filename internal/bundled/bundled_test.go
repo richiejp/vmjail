@@ -1,241 +1,222 @@
+//go:build linux
+
 package bundled
 
 import (
 	"bytes"
 	"errors"
 	"os"
-	"path/filepath"
+	"os/exec"
+	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
-func TestExtractReturnsErrNotBundledOnStubs(t *testing.T) {
-	_, err := extractTo(t.TempDir(), nil, nil, nil, nil)
-	if !errors.Is(err, ErrNotBundled) {
-		t.Fatalf("err = %v, want ErrNotBundled", err)
-	}
-
-	tiny := []byte{0x7f}
-	_, err = extractTo(t.TempDir(), tiny, tiny, tiny, tiny)
-	if !errors.Is(err, ErrNotBundled) {
-		t.Fatalf("err with sub-threshold blobs = %v, want ErrNotBundled", err)
-	}
-}
-
-func TestExtractWritesAllArtifacts(t *testing.T) {
-	dir := t.TempDir()
-	ch := bytes.Repeat([]byte("CH"), minBundledSize)
-	kernel := bytes.Repeat([]byte("KERNEL"), minBundledSize)
-	initramfs := bytes.Repeat([]byte("INITRD"), minBundledSize)
-	virtiofsd := bytes.Repeat([]byte("VFSD"), minBundledSize)
-
-	p, err := extractTo(dir, ch, kernel, initramfs, virtiofsd)
-	if err != nil {
-		t.Fatalf("extractTo: %v", err)
-	}
-
-	for _, want := range []struct {
-		path string
-		data []byte
-		perm os.FileMode
-	}{
-		{p.CloudHypervisor, ch, 0o755},
-		{p.Kernel, kernel, 0o644},
-		{p.Initramfs, initramfs, 0o644},
-		{p.Virtiofsd, virtiofsd, 0o755},
-	} {
-		got, err := os.ReadFile(want.path)
-		if err != nil {
-			t.Errorf("reading %s: %v", want.path, err)
-			continue
-		}
-		if !bytes.Equal(got, want.data) {
-			t.Errorf("%s: content mismatch (got %d bytes, want %d)", want.path, len(got), len(want.data))
-		}
-		fi, err := os.Stat(want.path)
-		if err != nil {
-			t.Errorf("stat %s: %v", want.path, err)
-			continue
-		}
-		// Mask out non-perm bits; some umask environments add the
-		// directory bit etc. We only care that exec is preserved
-		// (or not) for the binary vs the data files.
-		gotExec := fi.Mode().Perm() & 0o111
-		wantExec := want.perm & 0o111
-		if gotExec != wantExec {
-			t.Errorf("%s: exec bits = %o, want %o", want.path, gotExec, wantExec)
-		}
-	}
-}
-
-func TestExtractIsIdempotent(t *testing.T) {
-	dir := t.TempDir()
-	ch := bytes.Repeat([]byte("CH"), minBundledSize)
-	kernel := bytes.Repeat([]byte("KERNEL"), minBundledSize)
-	initramfs := bytes.Repeat([]byte("INITRD"), minBundledSize)
-	virtiofsd := bytes.Repeat([]byte("VFSD"), minBundledSize)
-
-	p1, err := extractTo(dir, ch, kernel, initramfs, virtiofsd)
-	if err != nil {
-		t.Fatalf("first extractTo: %v", err)
-	}
-	mtime1, err := os.Stat(p1.CloudHypervisor)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-
-	// Re-running with the same data must not rewrite the file —
-	// callers depend on this for caching.
-	p2, err := extractTo(dir, ch, kernel, initramfs, virtiofsd)
-	if err != nil {
-		t.Fatalf("second extractTo: %v", err)
-	}
-	if p1 != p2 {
-		t.Errorf("paths changed between calls: %+v vs %+v", p1, p2)
-	}
-	mtime2, err := os.Stat(p2.CloudHypervisor)
-	if err != nil {
-		t.Fatalf("stat: %v", err)
-	}
-	if !mtime1.ModTime().Equal(mtime2.ModTime()) {
-		t.Errorf("cloud-hypervisor was rewritten on no-op extract (mtime changed)")
-	}
-}
-
-func TestExtractRewritesOnSizeChange(t *testing.T) {
-	dir := t.TempDir()
-	old := bytes.Repeat([]byte("X"), minBundledSize)
-	if _, err := extractTo(dir, old, old, old, old); err != nil {
-		t.Fatalf("first extractTo: %v", err)
-	}
-
-	// Different size → must overwrite.
-	newer := bytes.Repeat([]byte("X"), minBundledSize+10)
-	if _, err := extractTo(dir, newer, newer, newer, newer); err != nil {
-		t.Fatalf("second extractTo: %v", err)
-	}
-	// #nosec G304 — test-only; dir is t.TempDir().
-	got, err := os.ReadFile(filepath.Join(dir, "cloud-hypervisor"))
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if !bytes.Equal(got, newer) {
-		t.Errorf("file not rewritten on size change")
-	}
-}
-
-func TestExtractRewritesOnSameSizeContentChange(t *testing.T) {
-	dir := t.TempDir()
-	old := bytes.Repeat([]byte("X"), minBundledSize)
-	if _, err := extractTo(dir, old, old, old, old); err != nil {
-		t.Fatalf("first extractTo: %v", err)
-	}
-
-	newer := bytes.Repeat([]byte("Y"), minBundledSize)
-	if _, err := extractTo(dir, newer, newer, newer, newer); err != nil {
-		t.Fatalf("second extractTo: %v", err)
-	}
-	// #nosec G304 -- test path under t.TempDir.
-	got, err := os.ReadFile(filepath.Join(dir, "cloud-hypervisor"))
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	if !bytes.Equal(got, newer) {
-		t.Error("file not rewritten on same-size content change")
-	}
-}
-
-// TestExtractMkdirError covers the error path of os.MkdirAll inside
-// extractTo. We point dir at a path whose parent is a regular file,
-// which makes MkdirAll fail with ENOTDIR.
-func TestExtractMkdirError(t *testing.T) {
-	parent := t.TempDir()
-	blocker := filepath.Join(parent, "blocker")
-	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
-		t.Fatalf("seed blocker file: %v", err)
-	}
-
-	bytesAtSize := bytes.Repeat([]byte("X"), minBundledSize)
-	_, err := extractTo(filepath.Join(blocker, "cache"),
-		bytesAtSize, bytesAtSize, bytesAtSize, bytesAtSize)
-	if err == nil {
-		t.Fatal("expected error when parent is a regular file")
-	}
-}
-
-// TestExtractWriteError covers the error path of writeIfChanged when
-// the target path is a directory rather than a file. A directory may report
-// the same size as the payload (notably 4096 bytes on ext4), but it must never
-// satisfy the unchanged regular-artifact digest check.
-func TestExtractWriteError(t *testing.T) {
-	dir := t.TempDir()
-	// Pre-create a directory at the path where cloud-hypervisor would be
-	// written. The payload deliberately matches ext4's common directory size.
-	// #nosec G301 — test-only; dir is t.TempDir().
-	if err := os.MkdirAll(filepath.Join(dir, "cloud-hypervisor"), 0o755); err != nil {
-		t.Fatalf("pre-create dir: %v", err)
-	}
-	bytesAtSize := bytes.Repeat([]byte("X"), minBundledSize)
-	_, err := extractTo(dir, bytesAtSize, bytesAtSize, bytesAtSize, bytesAtSize)
-	if err == nil {
-		t.Fatal("expected error when artifact path is a directory")
-	}
-}
-
-func TestWriteIfChangedCreateTempError(t *testing.T) {
-	parent := t.TempDir()
-	blocker := filepath.Join(parent, "blocker")
-	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
-		t.Fatalf("seed blocker: %v", err)
-	}
-	if err := writeIfChanged(filepath.Join(blocker, "artifact"), []byte("data"), 0o644); err == nil {
-		t.Fatal("expected temporary-file creation error under regular file")
-	}
-}
-
-func TestWriteIfChangedTempOperationErrors(t *testing.T) {
-	savedChmod, savedWrite, savedClose := tempChmod, tempWrite, tempClose
-	t.Cleanup(func() {
-		tempChmod, tempWrite, tempClose = savedChmod, savedWrite, savedClose
-	})
-	want := errors.New("injected")
-	tests := []struct {
-		name   string
-		inject func()
-	}{
-		{"chmod", func() { tempChmod = func(*os.File, os.FileMode) error { return want } }},
-		{"write", func() { tempWrite = func(*os.File, []byte) (int, error) { return 0, want } }},
-		{"close", func() { tempClose = func(*os.File) error { return want } }},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			tempChmod, tempWrite, tempClose = savedChmod, savedWrite, savedClose
-			tc.inject()
-			err := writeIfChanged(filepath.Join(t.TempDir(), "artifact"), []byte("data"), 0o644)
-			if !errors.Is(err, want) {
-				t.Fatalf("error = %v, want injected error", err)
-			}
-		})
-	}
-}
-
-func TestExtractWrapperPropagatesStubsError(t *testing.T) {
-	// The exported Extract wraps extractTo with the package-level
-	// embedded byte slices. In a plain `go test` build those slices
-	// are 0-byte stubs, so the call should return ErrNotBundled
-	// without touching disk. Covers the otherwise-uncovered Extract
-	// public surface.
-	_, err := Extract(t.TempDir())
-	if !errors.Is(err, ErrNotBundled) {
-		t.Fatalf("Extract on stub binary = %v, want ErrNotBundled", err)
-	}
-}
-
-func TestIsBundledReflectsBuildState(t *testing.T) {
-	// In `go test` runs (no Nix preBuild), the embedded slices are
-	// stubs, so IsBundled should be false. The Nix-built binary
-	// inverts this; that path is exercised by the daft-sandboxd
-	// integration test, not here.
+func TestExtractRejectsStubs(t *testing.T) {
 	if IsBundled() {
-		t.Error("IsBundled() = true in plain `go test`; expected stubs")
+		t.Fatal("expected stub assets in source build")
+	}
+	if _, err := Extract(t.TempDir()); !errors.Is(err, ErrNotBundled) {
+		t.Fatalf("Extract: %v", err)
+	}
+	if _, err := loadAssets(nil, nil, nil, nil); !errors.Is(err, ErrNotBundled) {
+		t.Fatalf("loadAssets: %v", err)
+	}
+}
+
+func TestAssetsSealedAndClosed(t *testing.T) {
+	data := bytes.Repeat([]byte("asset"), minBundledSize)
+	p, err := loadAssets(data, data, data, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	for i, path := range []string{p.CloudHypervisor, p.Kernel, p.Initramfs, p.Virtiofsd} {
+		got, err := os.ReadFile(path) //nolint:gosec // Path is an owned sealed memfd.
+		if err != nil || !bytes.Equal(got, data) {
+			t.Fatalf("read asset %d: %v", i, err)
+		}
+		f := p.Files[i]
+		if _, err := f.WriteAt([]byte("x"), 0); !errors.Is(err, unix.EPERM) {
+			t.Fatalf("write: %v", err)
+		}
+		if err := f.Truncate(0); !errors.Is(err, unix.EPERM) {
+			t.Fatalf("truncate: %v", err)
+		}
+		if err := f.Truncate(int64(len(data) + 1)); !errors.Is(err, unix.EPERM) {
+			t.Fatalf("grow: %v", err)
+		}
+		stat, err := f.Stat()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Chmod(stat.Mode() ^ 0o100); !errors.Is(err, unix.EPERM) {
+			t.Fatalf("change executable bit: %v", err)
+		}
+		reopened, err := os.OpenFile(path, os.O_WRONLY, 0) //nolint:gosec // Deliberately attempt to tamper with our own sealed memfd.
+		if err == nil {
+			_, err = reopened.WriteString("tampered")
+			_ = reopened.Close()
+			if !errors.Is(err, unix.EPERM) {
+				t.Fatalf("reopened write: %v", err)
+			}
+		} else if !errors.Is(err, os.ErrPermission) {
+			t.Fatal(err)
+		}
+	}
+	p.Close()
+	for _, f := range p.Files {
+		if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("descriptor still open: %v", err)
+		}
+	}
+}
+
+func TestMemfdCreationFailure(t *testing.T) {
+	if f, err := sealedAsset(strings.Repeat("x", 256), []byte("payload"), true); err == nil || f != nil {
+		t.Fatalf("file=%v err=%v", f, err)
+	}
+}
+
+func TestPartialLoadClosesDescriptors(t *testing.T) {
+	if os.Getenv("VMJAIL_MEMFD_LIMIT_CHILD") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestPartialLoadClosesDescriptors$") //nolint:gosec // Reexec this test binary to isolate resource limits.
+		cmd.Env = append(os.Environ(), "VMJAIL_MEMFD_LIMIT_CHILD=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("fd limit child: %v\n%s", err, out)
+		}
+		return
+	}
+	var limit unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	original := limit
+	t.Cleanup(func() {
+		if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &original); err != nil {
+			t.Error(err)
+		}
+	})
+	limit.Cur = 64
+	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	var held []*os.File
+	defer func() {
+		for _, f := range held {
+			_ = f.Close()
+		}
+	}()
+	for range 64 {
+		f, err := os.Open("/dev/null")
+		if errors.Is(err, unix.EMFILE) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		held = append(held, f)
+	}
+	if len(held) < 2 {
+		t.Fatal("not enough spare descriptors")
+	}
+	for range 2 {
+		n := len(held) - 1
+		_ = held[n].Close()
+		held = held[:n]
+	}
+	data := bytes.Repeat([]byte("x"), minBundledSize)
+	p, err := loadAssets(data, data, data, data)
+	if !errors.Is(err, unix.EMFILE) {
+		p.Close()
+		t.Fatalf("expected partial allocation failure, got %v", err)
+	}
+	if p != (Paths{}) {
+		t.Fatal("failed load returned live artifacts")
+	}
+	for range 2 {
+		f, err := os.Open("/dev/null")
+		if err != nil {
+			t.Fatalf("partial load leaked descriptor: %v", err)
+		}
+		held = append(held, f)
+	}
+}
+
+func TestMemfdWriteFailureClosesDescriptor(t *testing.T) {
+	if os.Getenv("VMJAIL_MEMFD_SIZE_CHILD") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestMemfdWriteFailureClosesDescriptor$") //nolint:gosec // Reexec this test binary to isolate resource limits.
+		cmd.Env = append(os.Environ(), "VMJAIL_MEMFD_SIZE_CHILD=1")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("file size limit child: %v\n%s", err, out)
+		}
+		return
+	}
+	before, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var limit unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_FSIZE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	original := limit
+	t.Cleanup(func() {
+		if err := unix.Setrlimit(unix.RLIMIT_FSIZE, &original); err != nil {
+			t.Error(err)
+		}
+	})
+	limit.Cur = 0
+	if err := unix.Setrlimit(unix.RLIMIT_FSIZE, &limit); err != nil {
+		t.Fatal(err)
+	}
+	f, err := sealedAsset("oversize", []byte("payload"), false)
+	if f != nil || !errors.Is(err, unix.EFBIG) {
+		t.Fatalf("file=%v err=%v", f, err)
+	}
+	after, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != len(after) {
+		t.Fatalf("descriptor leak: before=%d after=%d", len(before), len(after))
+	}
+}
+
+// A filesystem file cannot provide memfd sealing. Refuse to return it rather
+// than silently accepting mutable bytes; the input descriptor must be closed.
+func TestSealingFailureClosesUnsealedFile(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "unsealable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	result, err := sealAssetFile(f, []byte("untrusted without seals"), 0o400)
+	if result != nil || err == nil {
+		t.Fatalf("file=%v err=%v", result, err)
+	}
+	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("unsealed descriptor leaked: %v", err)
+	}
+}
+
+func TestSealedContentsMustMatchExactly(t *testing.T) {
+	fd, err := unix.MemfdCreate("changed-contents", unix.MFD_CLOEXEC|unix.MFD_ALLOW_SEALING|unix.MFD_EXEC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := os.NewFile(uintptr(fd), "changed-contents") //nolint:gosec // Successful memfd creation returns a nonnegative descriptor.
+	t.Cleanup(func() { _ = f.Close() })
+	// Simulate unexpected extra bytes present when the descriptor is sealed.
+	if _, err := f.WriteString("unexpected prefix"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := sealAssetFile(f, []byte("embedded payload"), 0o400)
+	if result != nil || err == nil || !strings.Contains(err.Error(), "contents differ") {
+		t.Fatalf("file=%v err=%v", result, err)
+	}
+	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("mismatched descriptor leaked: %v", err)
 	}
 }

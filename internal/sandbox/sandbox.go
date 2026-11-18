@@ -56,6 +56,9 @@ const (
 // absolute on the sandbox-host. The struct is exported so tests and
 // callers can build one without going through the env.
 type Config struct {
+	// ArtifactFiles pins sealed embedded assets; caller owns their lifetime.
+	ArtifactFiles [4]*os.File
+
 	// CloudHypervisor is the path to the cloud-hypervisor binary.
 	CloudHypervisor string
 	// Kernel is the path to the bzImage to boot.
@@ -589,7 +592,7 @@ func (virtiofsdSidecar) start(ctx context.Context, cfg Config, cgroupDir string)
 	}
 
 	for i, share := range cfg.Shares {
-		sock, oneStop, oneErr := startOneVirtiofsd(ctx, cfg.Virtiofsd, share, cgroupDir)
+		sock, oneStop, oneErr := startOneVirtiofsd(ctx, cfg.Virtiofsd, share, cgroupDir, cfg.ArtifactFiles)
 		if oneErr != nil {
 			stopAll()
 			return nil, nil, fmt.Errorf("sandbox: share %d (%s): %w", i, share.Tag, oneErr)
@@ -634,7 +637,7 @@ func translateArgs(t *ShareTranslate) []string {
 // cgroupDir, when non-empty, places the spawned process in the shared
 // per-VM cgroup (CLONE_INTO_CGROUP) so its resource use rolls up
 // into the same accounting as CH; empty is a no-op.
-func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig, cgroupDir string) (socket string, stop func(), err error) {
+func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig, cgroupDir string, artifacts ...[4]*os.File) (socket string, stop func(), err error) {
 	dir, err := os.MkdirTemp("", "daft-virtiofs-")
 	if err != nil {
 		return "", nil, fmt.Errorf("tmpdir: %w", err)
@@ -672,6 +675,9 @@ func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig, c
 	// every argv element is either a const flag or a daft-derived path /
 	// numeric id. There's no untrusted user input on the argv here.
 	cmd := exec.CommandContext(ctx, binary, args...)
+	if len(artifacts) > 0 {
+		inheritArtifacts(cmd, artifacts[0])
+	}
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
 
@@ -1137,6 +1143,7 @@ func (cloudHypervisorRunner) run(ctx context.Context, cfg Config, shareSockets [
 	// fields (Kernel/Initramfs/Memory) plus our own emitted
 	// cmdline. No untrusted user input.
 	cmd := exec.CommandContext(ctx, cfg.CloudHypervisor, args...)
+	inheritArtifacts(cmd, cfg.ArtifactFiles)
 
 	// Cloud Hypervisor sends both kernel logs and our agent's banner
 	// over the virtio-console (hvc0 → its stdout) when --console tty

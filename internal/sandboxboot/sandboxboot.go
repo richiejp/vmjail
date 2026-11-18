@@ -149,12 +149,10 @@ type Deps struct {
 	// closing the returned store (none of the Store methods need
 	// it today, so the closure happens implicitly at process exit).
 	OpenStore func() (Store, error)
-	// CacheDir is the on-disk directory the bundled artefacts get
-	// extracted into. Stable across invocations so the kernel /
-	// initramfs / VMM binaries unpack once.
+	// CacheDir is a legacy loader hint. The sealed embedded loader ignores it.
 	CacheDir func() (string, error)
-	// Extract unpacks the bundled artefacts into cacheDir and
-	// returns their absolute paths.
+	// Extract loads artifacts and returns their paths and owned descriptors.
+	// BuildBundleConfig includes descriptor cleanup in its returned release.
 	Extract func(cacheDir string) (bundled.Paths, error)
 }
 
@@ -245,6 +243,7 @@ func BuildBundleConfig(
 	}
 
 	cfg = sandbox.Config{
+		ArtifactFiles:      paths.Files,
 		CloudHypervisor:    paths.CloudHypervisor,
 		Kernel:             paths.Kernel,
 		Initramfs:          paths.Initramfs,
@@ -254,7 +253,7 @@ func BuildBundleConfig(
 		PostStartCommands:  opts.PostStartCommands,
 		CredentialProvider: opts.CredentialProvider,
 	}
-	return cfg, bundleTeardown, nil
+	return cfg, func() { paths.Close(); bundleTeardown() }, nil
 }
 
 func credentialBundleOptions(opts BootOptions) ([]imagestore.BundleMount, []string, error) {

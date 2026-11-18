@@ -77,33 +77,34 @@ work. Go module paths and retained executable names remain unchanged until after
   from check-agent-tools, which the pre-commit hook invokes via make verify.
   Retained Go navigation checks and reusable blackbox workload fixtures.
 
+- Replaced embedded asset cache files with sealed Linux memfds, inherited via
+  child descriptor tables. Hashes are checked after sealing to reject any
+  contents changed during population. Descriptors are retained until VM teardown; external
+  development artifact paths remain supported. No writable-cache verification
+  gap remains on the embedded path. Requires memfd executable/noexec sealing
+  support; unsupported kernels fail rather than falling back to mutable files.
+- Added seal/descriptor-lifetime tests and a real VM/container boot test using
+  all four sealed assets; wired the latter into make integration.
+
 ## Current validation
 
-The full default suite passes with 94.70% coverage against the unchanged 94.43%
-baseline; every gated file meets 80%. The full integration-tagged suite also
-passes: 70 test-bearing packages, 1,524 top-level tests, including all eight
-real VM tests (boot, shares, container, imagestore bundle, opensnoop, vsock
-traces, exec attachment and workspace overlay). The one test skipped by the
-unprivileged run (real TUN ioctl) passed separately in an isolated user/network
-namespace. All runs used fresh results, not cached test results.
+For the sealed-asset change, `make check` passes in the Nix dev shell: formatting,
+repository checks, lint, default tests and coverage. Coverage is 94.64% against
+the unchanged 94.43% baseline; every gated file meets 80%. Focused race tests
+pass for bundled, sandbox, sandboxboot and sandboxdcli. Tests cover sealed write,
+size and executable-bit protection, content mismatch rejection, inherited
+execution, partial-allocation/write cleanup and launcher descriptor lifetimes.
 
-Built current guest/host binaries and VM artifacts via `make dev`, then ran
-all packages with integration tags under a delegated systemd user scope and
-the integration lock. Logs: `/tmp/vmjail-vm-build.log`,
-`/tmp/vmjail-all-integration-final.jsonl`, `/tmp/vmjail-tests-cleanup.log`,
-`/tmp/vmjail-tests-cleanup-coverage.log`, `/tmp/vmjail-tun-test.log`.
-Earlier focused race tests pass for sandboxdcli, sandboxexec, nodectrlclient
-and cmd/daft-sandboxd.
+`make integration` passes all eight existing real VM tests plus the new sealed
+asset/container test. After adding post-seal verification, the new container
+boot test passed again. External development artifact paths remain supported.
+Logs: `/tmp/vmjail-memfd-check.log`, `/tmp/vmjail-memfd-integration.log`,
+`/tmp/vmjail-memfd-boot.log`, `/tmp/vmjail-memfd-race.log`.
 
-Go vet, the custom daft-lint checks, architecture validation and whitespace
-checks pass. Golangci-lint reports six gosec G115 integer-conversion warnings
-in retained agent/CLI terminal, observer and userns code; none are in the
-workspace/CAS changes. Log: `/tmp/vmjail-storage-golangci.log`.
-
-Unsandboxed execution works. Checks use installed Nix-store GCC and formatting
-binaries directly; the shell does not automatically expose the direnv toolchain.
-The full `make verify` pipeline (including benchmarks and active fuzzing) has
-not been rerun. The local integration target no longer builds cluster fixtures. Coverage and lint thresholds are unchanged.
+The preceding reduction commit passed the complete pre-commit `make verify`
+pipeline (including benchmarks and fuzzing) in the Nix shell. Benchmarks and
+active fuzzing have not been rerun for the sealed-asset change. Pre-commit and
+pre-push hooks are installed. All verification thresholds remain unchanged.
 
 ## Next implementation work
 

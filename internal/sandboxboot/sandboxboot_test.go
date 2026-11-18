@@ -728,3 +728,32 @@ func TestBuildBundleConfigLockError(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestBundleConfigOwnsArtifactsUntilRelease(t *testing.T) {
+	var unlockCalls int
+	deps := happyPathDeps(t, &unlockCalls)
+	f, err := os.CreateTemp(t.TempDir(), "artifact")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = f.Close() })
+	extract := deps.Extract
+	deps.Extract = func(dir string) (bundled.Paths, error) { p, err := extract(dir); p.Files[0] = f; return p, err }
+	cfg, release, err := BuildBundleConfig(t.Context(), "alpine:3", BootOptions{}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ArtifactFiles[0] != f {
+		t.Fatal("descriptor not forwarded")
+	}
+	if _, err := f.Stat(); err != nil {
+		t.Fatalf("closed before release: %v", err)
+	}
+	release()
+	if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("descriptor leaked: %v", err)
+	}
+	if unlockCalls != 1 {
+		t.Fatalf("bundle unlocks=%d", unlockCalls)
+	}
+}

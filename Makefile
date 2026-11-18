@@ -316,9 +316,9 @@ integration: integration-build
 			export DAFT_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd; \
 			runflag=""; [ -n "$$INTEGRATION_RUN" ] && runflag="-run $$INTEGRATION_RUN"; \
 			rc=0; \
-			echo "[e2e] sandbox pkg — in-process host shares the delegated scope: per-VM accounting, limits off"; \
+			echo "[e2e] sandbox + sealed assets — in-process host shares the delegated scope: per-VM accounting, limits off"; \
 			sandbox_log=$$(mktemp /tmp/daft-integration-sandbox.XXXXXX.log); \
-			if $$delegate go test -v -tags=integration -count=1 -timeout 20m $$runflag ./internal/sandbox/ 9>&- >$$sandbox_log 2>&1; then \
+			if $$delegate go test -v -tags=integration -count=1 -timeout 20m $$runflag -p 1 ./internal/sandbox/ ./internal/bundled/ 9>&- >$$sandbox_log 2>&1; then \
 				tail -2 $$sandbox_log; rm -f $$sandbox_log; \
 			else \
 				echo "[e2e] sandbox failure; full log retained at $$sandbox_log"; \
