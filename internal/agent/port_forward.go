@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/vmjail/internal/oops"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // PortForwardSpec names one in-VM port forward: VsockPort is the
@@ -126,7 +126,7 @@ func acceptLoop(
 	spec PortForwardSpec,
 	dial func(context.Context, uint32) (net.Conn, error),
 ) {
-	//daft:lint:disable=forloopbound reason="bounded by ln.Accept returning ErrClosed when ctx.Done closes the listener"
+	//vmjail:lint:disable=forloopbound reason="bounded by ln.Accept returning ErrClosed when ctx.Done closes the listener"
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

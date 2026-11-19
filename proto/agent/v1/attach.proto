@@ -1,6 +1,6 @@
-// Wire format for the in-VM daft-agent's attach listener. The
+// Wire format for the in-VM vmjail-agent's attach listener. The
 // sandboxd host dials the agent's AF_VSOCK attach port (configured
-// via `daft.attach_port=<n>` on the kernel cmdline), writes one
+// via `vmjail.attach_port=<n>` on the kernel cmdline), writes one
 // length-prefixed AgentAttachHello, then exchanges length-prefixed
 // AgentAttachFrame messages bidirectionally until either side
 // closes. Framing is the same 4-byte big-endian length prefix the
@@ -11,9 +11,9 @@
 // is the trust boundary.
 syntax = "proto3";
 
-package daft.agent.v1;
+package vmjail.agent.v1;
 
-option go_package = "github.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1";
+option go_package = "github.com/richiejp/vmjail/internal/genpb/agent/v1;agentv1";
 
 // AgentAttachHello is the first message the sandboxd sends on a
 // fresh attach connection. The agent uses it to decide what to

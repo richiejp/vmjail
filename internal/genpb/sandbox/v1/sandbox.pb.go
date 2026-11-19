@@ -413,7 +413,7 @@ type SandboxSpec struct {
 	GpuRequest *GpuRequest `protobuf:"bytes,5,opt,name=gpu_request,json=gpuRequest,proto3" json:"gpu_request,omitempty"`
 	// Sharing policy. UNSPECIFIED ⇒ scheduler-default (currently
 	// SHARED with other Sandboxes owned by the same identity).
-	Isolation Isolation `protobuf:"varint,6,opt,name=isolation,proto3,enum=daft.sandbox.v1.Isolation" json:"isolation,omitempty"`
+	Isolation Isolation `protobuf:"varint,6,opt,name=isolation,proto3,enum=vmjail.sandbox.v1.Isolation" json:"isolation,omitempty"`
 	// The Node the scheduler bound this Sandbox to. Set at Launch
 	// time; never rebinds (a re-Launch creates a fresh Sandbox).
 	Node *NodeRef `protobuf:"bytes,7,opt,name=node,proto3" json:"node,omitempty"`
@@ -423,7 +423,7 @@ type SandboxSpec struct {
 	WorkspaceUuid string `protobuf:"bytes,8,opt,name=workspace_uuid,json=workspaceUuid,proto3" json:"workspace_uuid,omitempty"`
 	// Guest RAM in bytes. Zero ⇒ the executor's built-in default
 	// (256 MiB). nix develop / build workloads need hundreds of
-	// MiB to low-GiB; see CLI `daft workspace resources`.
+	// MiB to low-GiB; see CLI `vmjail workspace resources`.
 	MemoryBytes uint64 `protobuf:"varint,9,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"`
 	// Guest vCPU count. Zero ⇒ the executor's default (half the
 	// host's logical cores, min 1 — the VM shares cores with the
@@ -751,7 +751,7 @@ type Mount struct {
 	// executor rejects relative or empty targets.
 	Target string `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
 	// Logical source identifier. Resolution is Node policy:
-	// a workspace UUID maps to the daft-fuse view of that
+	// a workspace UUID maps to the vmjail-fuse view of that
 	// workspace; a registered host-path tag maps to a pre-
 	// approved bind source. Free-form host paths are not
 	// accepted — adoption (Phase F1) is how user-host
@@ -879,7 +879,7 @@ type PortMapping struct {
 	ContainerPort uint32 `protobuf:"varint,1,opt,name=container_port,json=containerPort,proto3" json:"container_port,omitempty"`
 	// Transport. UNSPECIFIED is rejected — every PortMapping must
 	// declare its protocol explicitly so ingress can shape correctly.
-	Protocol      Protocol `protobuf:"varint,2,opt,name=protocol,proto3,enum=daft.sandbox.v1.Protocol" json:"protocol,omitempty"`
+	Protocol      Protocol `protobuf:"varint,2,opt,name=protocol,proto3,enum=vmjail.sandbox.v1.Protocol" json:"protocol,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -992,7 +992,7 @@ func (x *GpuRequest) GetMinVramBytes() uint64 {
 // kernel already builds CONFIG_KVM in and Cloud Hypervisor passes the
 // vendor VMX/SVM CPUID bit through by default. Off by default — it's
 // a real privilege and attack-surface bump, granted only to
-// workspaces that explicitly ask (the daft-dogfood profile that
+// workspaces that explicitly ask (the vmjail-dogfood profile that
 // `make integration` inside a sandbox selects).
 //
 // Modelled as a config section (Nix-module idiom: one section per
@@ -1110,7 +1110,7 @@ func (x *PrivilegedFuseMounts) GetEnable() bool {
 
 // PrivilegedBuild grants a workload the standard container capability set
 // (what Docker/podman give a container by default) so an in-sandbox image
-// builder (buildah) can run. daft strips containers to ZERO capabilities
+// builder (buildah) can run. vmjail strips containers to ZERO capabilities
 // by default (uid 0 + empty caps); a build needs more: even a Dockerfile
 // COPY fails because buildah's copier chroots (CAP_SYS_CHROOT), and RUN
 // steps bind-mount + chown + setuid (CAP_SYS_ADMIN + CHOWN/SETUID/SETGID/
@@ -1397,7 +1397,7 @@ type Condition struct {
 	//
 	// Readers ignore unknown types.
 	Type   string          `protobuf:"bytes,1,opt,name=type,proto3" json:"type,omitempty"`
-	Status ConditionStatus `protobuf:"varint,2,opt,name=status,proto3,enum=daft.sandbox.v1.ConditionStatus" json:"status,omitempty"`
+	Status ConditionStatus `protobuf:"varint,2,opt,name=status,proto3,enum=vmjail.sandbox.v1.ConditionStatus" json:"status,omitempty"`
 	// PascalCase machine-readable reason for the current status.
 	Reason             string                 `protobuf:"bytes,3,opt,name=reason,proto3" json:"reason,omitempty"`
 	Message            string                 `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
@@ -1475,45 +1475,45 @@ var File_sandbox_v1_sandbox_proto protoreflect.FileDescriptor
 
 const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\n" +
-	"\x18sandbox/v1/sandbox.proto\x12\x0fdaft.sandbox.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb1\x01\n" +
-	"\aSandbox\x12<\n" +
-	"\bmetadata\x18\x01 \x01(\v2 .daft.sandbox.v1.SandboxMetadataR\bmetadata\x120\n" +
-	"\x04spec\x18\x02 \x01(\v2\x1c.daft.sandbox.v1.SandboxSpecR\x04spec\x126\n" +
-	"\x06status\x18\x03 \x01(\v2\x1e.daft.sandbox.v1.SandboxStatusR\x06status\"\xe6\x01\n" +
+	"\x18sandbox/v1/sandbox.proto\x12\x11vmjail.sandbox.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb7\x01\n" +
+	"\aSandbox\x12>\n" +
+	"\bmetadata\x18\x01 \x01(\v2\".vmjail.sandbox.v1.SandboxMetadataR\bmetadata\x122\n" +
+	"\x04spec\x18\x02 \x01(\v2\x1e.vmjail.sandbox.v1.SandboxSpecR\x04spec\x128\n" +
+	"\x06status\x18\x03 \x01(\v2 .vmjail.sandbox.v1.SandboxStatusR\x06status\"\xe8\x01\n" +
 	"\x0fSandboxMetadata\x12\x10\n" +
-	"\x03uid\x18\x01 \x01(\tR\x03uid\x12;\n" +
-	"\tworkspace\x18\x02 \x01(\v2\x1d.daft.sandbox.v1.WorkspaceRefR\tworkspace\x129\n" +
+	"\x03uid\x18\x01 \x01(\tR\x03uid\x12=\n" +
+	"\tworkspace\x18\x02 \x01(\v2\x1f.vmjail.sandbox.v1.WorkspaceRefR\tworkspace\x129\n" +
 	"\n" +
 	"created_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12I\n" +
-	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xd2\a\n" +
+	"\x12deletion_timestamp\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x11deletionTimestamp\"\xe8\a\n" +
 	"\vSandboxSpec\x12\x1b\n" +
-	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x12.\n" +
-	"\x06mounts\x18\x02 \x03(\v2\x16.daft.sandbox.v1.MountR\x06mounts\x12)\n" +
-	"\x03env\x18\x03 \x03(\v2\x17.daft.sandbox.v1.EnvVarR\x03env\x122\n" +
-	"\x05ports\x18\x04 \x03(\v2\x1c.daft.sandbox.v1.PortMappingR\x05ports\x12<\n" +
-	"\vgpu_request\x18\x05 \x01(\v2\x1b.daft.sandbox.v1.GpuRequestR\n" +
-	"gpuRequest\x128\n" +
-	"\tisolation\x18\x06 \x01(\x0e2\x1a.daft.sandbox.v1.IsolationR\tisolation\x12,\n" +
-	"\x04node\x18\a \x01(\v2\x18.daft.sandbox.v1.NodeRefR\x04node\x12%\n" +
+	"\timage_ref\x18\x01 \x01(\tR\bimageRef\x120\n" +
+	"\x06mounts\x18\x02 \x03(\v2\x18.vmjail.sandbox.v1.MountR\x06mounts\x12+\n" +
+	"\x03env\x18\x03 \x03(\v2\x19.vmjail.sandbox.v1.EnvVarR\x03env\x124\n" +
+	"\x05ports\x18\x04 \x03(\v2\x1e.vmjail.sandbox.v1.PortMappingR\x05ports\x12>\n" +
+	"\vgpu_request\x18\x05 \x01(\v2\x1d.vmjail.sandbox.v1.GpuRequestR\n" +
+	"gpuRequest\x12:\n" +
+	"\tisolation\x18\x06 \x01(\x0e2\x1c.vmjail.sandbox.v1.IsolationR\tisolation\x12.\n" +
+	"\x04node\x18\a \x01(\v2\x1a.vmjail.sandbox.v1.NodeRefR\x04node\x12%\n" +
 	"\x0eworkspace_uuid\x18\b \x01(\tR\rworkspaceUuid\x12!\n" +
 	"\fmemory_bytes\x18\t \x01(\x04R\vmemoryBytes\x12\x1b\n" +
 	"\tcpu_cores\x18\n" +
-	" \x01(\rR\bcpuCores\x12Z\n" +
-	"\x15nested_virtualization\x18\v \x01(\v2%.daft.sandbox.v1.NestedVirtualizationR\x14nestedVirtualization\x12[\n" +
-	"\x16privileged_fuse_mounts\x18\f \x01(\v2%.daft.sandbox.v1.PrivilegedFuseMountsR\x14privilegedFuseMounts\x12+\n" +
-	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\x12K\n" +
-	"\x10privileged_build\x18\x0e \x01(\v2 .daft.sandbox.v1.PrivilegedBuildR\x0fprivilegedBuild\x12B\n" +
-	"\regress_policy\x18\x0f \x01(\v2\x1d.daft.sandbox.v1.EgressPolicyR\fegressPolicy\x12K\n" +
-	"\x10agent_credential\x18\x10 \x01(\v2 .daft.sandbox.v1.AgentCredentialR\x0fagentCredential\x124\n" +
+	" \x01(\rR\bcpuCores\x12\\\n" +
+	"\x15nested_virtualization\x18\v \x01(\v2'.vmjail.sandbox.v1.NestedVirtualizationR\x14nestedVirtualization\x12]\n" +
+	"\x16privileged_fuse_mounts\x18\f \x01(\v2'.vmjail.sandbox.v1.PrivilegedFuseMountsR\x14privilegedFuseMounts\x12+\n" +
+	"\x11devcontainer_path\x18\r \x01(\tR\x10devcontainerPath\x12M\n" +
+	"\x10privileged_build\x18\x0e \x01(\v2\".vmjail.sandbox.v1.PrivilegedBuildR\x0fprivilegedBuild\x12D\n" +
+	"\regress_policy\x18\x0f \x01(\v2\x1f.vmjail.sandbox.v1.EgressPolicyR\fegressPolicy\x12M\n" +
+	"\x10agent_credential\x18\x10 \x01(\v2\".vmjail.sandbox.v1.AgentCredentialR\x0fagentCredential\x124\n" +
 	"\x16preserve_image_command\x18\x12 \x01(\bR\x14preserveImageCommandJ\x04\b\x11\x10\x12R\n" +
 	"disk_bytes\"-\n" +
 	"\x0fAgentCredential\x12\x1a\n" +
-	"\bprovider\x18\x01 \x01(\tR\bprovider\"\xcc\x01\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\"\xce\x01\n" +
 	"\rSandboxStatus\x12\x14\n" +
 	"\x05phase\x18\x01 \x01(\tR\x05phase\x12\x1b\n" +
-	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12:\n" +
+	"\texit_code\x18\x02 \x01(\x05R\bexitCode\x12<\n" +
 	"\n" +
-	"conditions\x18\x03 \x03(\v2\x1a.daft.sandbox.v1.ConditionR\n" +
+	"conditions\x18\x03 \x03(\v2\x1c.vmjail.sandbox.v1.ConditionR\n" +
 	"conditions\x12L\n" +
 	"\x14last_transition_time\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\x12lastTransitionTime\"T\n" +
 	"\x05Mount\x12\x16\n" +
@@ -1522,10 +1522,10 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\tread_only\x18\x03 \x01(\bR\breadOnly\"2\n" +
 	"\x06EnvVar\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"k\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"m\n" +
 	"\vPortMapping\x12%\n" +
-	"\x0econtainer_port\x18\x01 \x01(\rR\rcontainerPort\x125\n" +
-	"\bprotocol\x18\x02 \x01(\x0e2\x19.daft.sandbox.v1.ProtocolR\bprotocol\"H\n" +
+	"\x0econtainer_port\x18\x01 \x01(\rR\rcontainerPort\x127\n" +
+	"\bprotocol\x18\x02 \x01(\x0e2\x1b.vmjail.sandbox.v1.ProtocolR\bprotocol\"H\n" +
 	"\n" +
 	"GpuRequest\x12\x14\n" +
 	"\x05count\x18\x01 \x01(\rR\x05count\x12$\n" +
@@ -1542,16 +1542,16 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"+\n" +
 	"\aNodeRef\x12 \n" +
-	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\"\xb1\x01\n" +
+	"\vfingerprint\x18\x01 \x01(\tR\vfingerprint\"\xb3\x01\n" +
 	"\n" +
 	"SandboxRef\x12\x10\n" +
-	"\x03uid\x18\x01 \x01(\tR\x03uid\x12,\n" +
-	"\x04node\x18\x02 \x01(\v2\x18.daft.sandbox.v1.NodeRefR\x04node\x120\n" +
+	"\x03uid\x18\x01 \x01(\tR\x03uid\x12.\n" +
+	"\x04node\x18\x02 \x01(\v2\x1a.vmjail.sandbox.v1.NodeRefR\x04node\x120\n" +
 	"\x14agent_profile_digest\x18\x03 \x01(\tR\x12agentProfileDigest\x121\n" +
-	"\x14workspace_generation\x18\x04 \x01(\x04R\x13workspaceGeneration\"\xd9\x01\n" +
+	"\x14workspace_generation\x18\x04 \x01(\x04R\x13workspaceGeneration\"\xdb\x01\n" +
 	"\tCondition\x12\x12\n" +
-	"\x04type\x18\x01 \x01(\tR\x04type\x128\n" +
-	"\x06status\x18\x02 \x01(\x0e2 .daft.sandbox.v1.ConditionStatusR\x06status\x12\x16\n" +
+	"\x04type\x18\x01 \x01(\tR\x04type\x12:\n" +
+	"\x06status\x18\x02 \x01(\x0e2\".vmjail.sandbox.v1.ConditionStatusR\x06status\x12\x16\n" +
 	"\x06reason\x18\x03 \x01(\tR\x06reason\x12\x18\n" +
 	"\amessage\x18\x04 \x01(\tR\amessage\x12L\n" +
 	"\x14last_transition_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\x12lastTransitionTime*H\n" +
@@ -1573,7 +1573,7 @@ const file_sandbox_v1_sandbox_proto_rawDesc = "" +
 	"\x1cCONDITION_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15CONDITION_STATUS_TRUE\x10\x01\x12\x1a\n" +
 	"\x16CONDITION_STATUS_FALSE\x10\x02\x12\x1c\n" +
-	"\x18CONDITION_STATUS_UNKNOWN\x10\x03BGZEgithub.com/richiejp/darkaifactory/internal/genpb/sandbox/v1;sandboxv1b\x06proto3"
+	"\x18CONDITION_STATUS_UNKNOWN\x10\x03B@Z>github.com/richiejp/vmjail/internal/genpb/sandbox/v1;sandboxv1b\x06proto3"
 
 var (
 	file_sandbox_v1_sandbox_proto_rawDescOnce sync.Once
@@ -1590,53 +1590,53 @@ func file_sandbox_v1_sandbox_proto_rawDescGZIP() []byte {
 var file_sandbox_v1_sandbox_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_sandbox_v1_sandbox_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_sandbox_v1_sandbox_proto_goTypes = []any{
-	(Protocol)(0),                 // 0: daft.sandbox.v1.Protocol
-	(Isolation)(0),                // 1: daft.sandbox.v1.Isolation
-	(EventType)(0),                // 2: daft.sandbox.v1.EventType
-	(ConditionStatus)(0),          // 3: daft.sandbox.v1.ConditionStatus
-	(*Sandbox)(nil),               // 4: daft.sandbox.v1.Sandbox
-	(*SandboxMetadata)(nil),       // 5: daft.sandbox.v1.SandboxMetadata
-	(*SandboxSpec)(nil),           // 6: daft.sandbox.v1.SandboxSpec
-	(*AgentCredential)(nil),       // 7: daft.sandbox.v1.AgentCredential
-	(*SandboxStatus)(nil),         // 8: daft.sandbox.v1.SandboxStatus
-	(*Mount)(nil),                 // 9: daft.sandbox.v1.Mount
-	(*EnvVar)(nil),                // 10: daft.sandbox.v1.EnvVar
-	(*PortMapping)(nil),           // 11: daft.sandbox.v1.PortMapping
-	(*GpuRequest)(nil),            // 12: daft.sandbox.v1.GpuRequest
-	(*NestedVirtualization)(nil),  // 13: daft.sandbox.v1.NestedVirtualization
-	(*PrivilegedFuseMounts)(nil),  // 14: daft.sandbox.v1.PrivilegedFuseMounts
-	(*PrivilegedBuild)(nil),       // 15: daft.sandbox.v1.PrivilegedBuild
-	(*EgressPolicy)(nil),          // 16: daft.sandbox.v1.EgressPolicy
-	(*WorkspaceRef)(nil),          // 17: daft.sandbox.v1.WorkspaceRef
-	(*NodeRef)(nil),               // 18: daft.sandbox.v1.NodeRef
-	(*SandboxRef)(nil),            // 19: daft.sandbox.v1.SandboxRef
-	(*Condition)(nil),             // 20: daft.sandbox.v1.Condition
+	(Protocol)(0),                 // 0: vmjail.sandbox.v1.Protocol
+	(Isolation)(0),                // 1: vmjail.sandbox.v1.Isolation
+	(EventType)(0),                // 2: vmjail.sandbox.v1.EventType
+	(ConditionStatus)(0),          // 3: vmjail.sandbox.v1.ConditionStatus
+	(*Sandbox)(nil),               // 4: vmjail.sandbox.v1.Sandbox
+	(*SandboxMetadata)(nil),       // 5: vmjail.sandbox.v1.SandboxMetadata
+	(*SandboxSpec)(nil),           // 6: vmjail.sandbox.v1.SandboxSpec
+	(*AgentCredential)(nil),       // 7: vmjail.sandbox.v1.AgentCredential
+	(*SandboxStatus)(nil),         // 8: vmjail.sandbox.v1.SandboxStatus
+	(*Mount)(nil),                 // 9: vmjail.sandbox.v1.Mount
+	(*EnvVar)(nil),                // 10: vmjail.sandbox.v1.EnvVar
+	(*PortMapping)(nil),           // 11: vmjail.sandbox.v1.PortMapping
+	(*GpuRequest)(nil),            // 12: vmjail.sandbox.v1.GpuRequest
+	(*NestedVirtualization)(nil),  // 13: vmjail.sandbox.v1.NestedVirtualization
+	(*PrivilegedFuseMounts)(nil),  // 14: vmjail.sandbox.v1.PrivilegedFuseMounts
+	(*PrivilegedBuild)(nil),       // 15: vmjail.sandbox.v1.PrivilegedBuild
+	(*EgressPolicy)(nil),          // 16: vmjail.sandbox.v1.EgressPolicy
+	(*WorkspaceRef)(nil),          // 17: vmjail.sandbox.v1.WorkspaceRef
+	(*NodeRef)(nil),               // 18: vmjail.sandbox.v1.NodeRef
+	(*SandboxRef)(nil),            // 19: vmjail.sandbox.v1.SandboxRef
+	(*Condition)(nil),             // 20: vmjail.sandbox.v1.Condition
 	(*timestamppb.Timestamp)(nil), // 21: google.protobuf.Timestamp
 }
 var file_sandbox_v1_sandbox_proto_depIdxs = []int32{
-	5,  // 0: daft.sandbox.v1.Sandbox.metadata:type_name -> daft.sandbox.v1.SandboxMetadata
-	6,  // 1: daft.sandbox.v1.Sandbox.spec:type_name -> daft.sandbox.v1.SandboxSpec
-	8,  // 2: daft.sandbox.v1.Sandbox.status:type_name -> daft.sandbox.v1.SandboxStatus
-	17, // 3: daft.sandbox.v1.SandboxMetadata.workspace:type_name -> daft.sandbox.v1.WorkspaceRef
-	21, // 4: daft.sandbox.v1.SandboxMetadata.created_at:type_name -> google.protobuf.Timestamp
-	21, // 5: daft.sandbox.v1.SandboxMetadata.deletion_timestamp:type_name -> google.protobuf.Timestamp
-	9,  // 6: daft.sandbox.v1.SandboxSpec.mounts:type_name -> daft.sandbox.v1.Mount
-	10, // 7: daft.sandbox.v1.SandboxSpec.env:type_name -> daft.sandbox.v1.EnvVar
-	11, // 8: daft.sandbox.v1.SandboxSpec.ports:type_name -> daft.sandbox.v1.PortMapping
-	12, // 9: daft.sandbox.v1.SandboxSpec.gpu_request:type_name -> daft.sandbox.v1.GpuRequest
-	1,  // 10: daft.sandbox.v1.SandboxSpec.isolation:type_name -> daft.sandbox.v1.Isolation
-	18, // 11: daft.sandbox.v1.SandboxSpec.node:type_name -> daft.sandbox.v1.NodeRef
-	13, // 12: daft.sandbox.v1.SandboxSpec.nested_virtualization:type_name -> daft.sandbox.v1.NestedVirtualization
-	14, // 13: daft.sandbox.v1.SandboxSpec.privileged_fuse_mounts:type_name -> daft.sandbox.v1.PrivilegedFuseMounts
-	15, // 14: daft.sandbox.v1.SandboxSpec.privileged_build:type_name -> daft.sandbox.v1.PrivilegedBuild
-	16, // 15: daft.sandbox.v1.SandboxSpec.egress_policy:type_name -> daft.sandbox.v1.EgressPolicy
-	7,  // 16: daft.sandbox.v1.SandboxSpec.agent_credential:type_name -> daft.sandbox.v1.AgentCredential
-	20, // 17: daft.sandbox.v1.SandboxStatus.conditions:type_name -> daft.sandbox.v1.Condition
-	21, // 18: daft.sandbox.v1.SandboxStatus.last_transition_time:type_name -> google.protobuf.Timestamp
-	0,  // 19: daft.sandbox.v1.PortMapping.protocol:type_name -> daft.sandbox.v1.Protocol
-	18, // 20: daft.sandbox.v1.SandboxRef.node:type_name -> daft.sandbox.v1.NodeRef
-	3,  // 21: daft.sandbox.v1.Condition.status:type_name -> daft.sandbox.v1.ConditionStatus
-	21, // 22: daft.sandbox.v1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
+	5,  // 0: vmjail.sandbox.v1.Sandbox.metadata:type_name -> vmjail.sandbox.v1.SandboxMetadata
+	6,  // 1: vmjail.sandbox.v1.Sandbox.spec:type_name -> vmjail.sandbox.v1.SandboxSpec
+	8,  // 2: vmjail.sandbox.v1.Sandbox.status:type_name -> vmjail.sandbox.v1.SandboxStatus
+	17, // 3: vmjail.sandbox.v1.SandboxMetadata.workspace:type_name -> vmjail.sandbox.v1.WorkspaceRef
+	21, // 4: vmjail.sandbox.v1.SandboxMetadata.created_at:type_name -> google.protobuf.Timestamp
+	21, // 5: vmjail.sandbox.v1.SandboxMetadata.deletion_timestamp:type_name -> google.protobuf.Timestamp
+	9,  // 6: vmjail.sandbox.v1.SandboxSpec.mounts:type_name -> vmjail.sandbox.v1.Mount
+	10, // 7: vmjail.sandbox.v1.SandboxSpec.env:type_name -> vmjail.sandbox.v1.EnvVar
+	11, // 8: vmjail.sandbox.v1.SandboxSpec.ports:type_name -> vmjail.sandbox.v1.PortMapping
+	12, // 9: vmjail.sandbox.v1.SandboxSpec.gpu_request:type_name -> vmjail.sandbox.v1.GpuRequest
+	1,  // 10: vmjail.sandbox.v1.SandboxSpec.isolation:type_name -> vmjail.sandbox.v1.Isolation
+	18, // 11: vmjail.sandbox.v1.SandboxSpec.node:type_name -> vmjail.sandbox.v1.NodeRef
+	13, // 12: vmjail.sandbox.v1.SandboxSpec.nested_virtualization:type_name -> vmjail.sandbox.v1.NestedVirtualization
+	14, // 13: vmjail.sandbox.v1.SandboxSpec.privileged_fuse_mounts:type_name -> vmjail.sandbox.v1.PrivilegedFuseMounts
+	15, // 14: vmjail.sandbox.v1.SandboxSpec.privileged_build:type_name -> vmjail.sandbox.v1.PrivilegedBuild
+	16, // 15: vmjail.sandbox.v1.SandboxSpec.egress_policy:type_name -> vmjail.sandbox.v1.EgressPolicy
+	7,  // 16: vmjail.sandbox.v1.SandboxSpec.agent_credential:type_name -> vmjail.sandbox.v1.AgentCredential
+	20, // 17: vmjail.sandbox.v1.SandboxStatus.conditions:type_name -> vmjail.sandbox.v1.Condition
+	21, // 18: vmjail.sandbox.v1.SandboxStatus.last_transition_time:type_name -> google.protobuf.Timestamp
+	0,  // 19: vmjail.sandbox.v1.PortMapping.protocol:type_name -> vmjail.sandbox.v1.Protocol
+	18, // 20: vmjail.sandbox.v1.SandboxRef.node:type_name -> vmjail.sandbox.v1.NodeRef
+	3,  // 21: vmjail.sandbox.v1.Condition.status:type_name -> vmjail.sandbox.v1.ConditionStatus
+	21, // 22: vmjail.sandbox.v1.Condition.last_transition_time:type_name -> google.protobuf.Timestamp
 	23, // [23:23] is the sub-list for method output_type
 	23, // [23:23] is the sub-list for method input_type
 	23, // [23:23] is the sub-list for extension type_name

@@ -7,7 +7,7 @@
 // delegated parent. Rather than degrade to /proc-only sampling when
 // the parent isn't delegated — which CONTRIBUTING "Probe preconditions
 // at startup; no silent fallbacks" forbids for blast-radius/diagnostics
-// infrastructure — daft *creates* the resource it needs: it wraps
+// infrastructure — vmjail *creates* the resource it needs: it wraps
 // itself in a transient `systemd-run --scope -p Delegate=yes`, which
 // hands back a freshly delegated subtree. If even that can't be
 // obtained, startup fails loudly with a fix-it message instead of
@@ -24,4 +24,4 @@ package cgroupwrap
 // delegation is still unavailable past the marker, that is a hard
 // failure, not another re-exec. Exported so tests (and tools that spawn
 // sub-processes which should not re-enter the wrap) can set/inspect it.
-const EnvMarker = "DAFT_IN_CGROUP_SCOPE"
+const EnvMarker = "VMJAIL_IN_CGROUP_SCOPE"

@@ -396,7 +396,7 @@ func TestDefaultBPFDeps(t *testing.T) {
 // The success path is exercised by the e2e gadget test inside a VM.
 func TestRunFailsUnprivileged(t *testing.T) {
 	// Pre-cancelled context: if the BPF load is *allowed* (a privileged
-	// environment such as the daft self-build sandbox, which holds
+	// environment such as the vmjail self-build sandbox, which holds
 	// CAP_SYS_ADMIN), Run otherwise runs past the load into the blocking
 	// ring-buffer read and the test hangs forever. With ctx already
 	// cancelled it returns promptly and the err==nil skip below applies.

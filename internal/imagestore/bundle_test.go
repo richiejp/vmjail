@@ -343,7 +343,7 @@ func TestDefaultRuntimeMountsIncludesDevPts(t *testing.T) {
 
 // TestDefaultRuntimeMountsIncludesWritableCgroup pins the rw cgroup-v2
 // mount that lets a workload manage its own cgroup subtree from inside the
-// VM (a nested daft-sandboxd's per-VM createVMCgroup most of all). Without
+// VM (a nested vmjail-sandboxd's per-VM createVMCgroup most of all). Without
 // it the container sees only the read-only /sys sysfs and the mkdir
 // ENOENTs. Default-on: safe in a single-tenant VM, and cgroupns-relative
 // so crun only ever exposes the container's own subtree.
@@ -740,7 +740,7 @@ func TestBuildRuntimeConfigRejectsNameFormUserWithoutPasswd(t *testing.T) {
 // symbolic `USER nonroot` resolves against the image's OWN /etc/passwd +
 // /etc/group (staged in the layer), flowing through Bundle to
 // process.user.{uid,gid}. This is what makes distroless-style best-practice
-// images run on daft.
+// images run on vmjail.
 func TestBuildRuntimeConfigResolvesSymbolicUser(t *testing.T) {
 	host := localRegistry(t)
 	ref := host + "/test/user-symbolic:v1"
@@ -799,7 +799,7 @@ func TestWriteJSONErrors(t *testing.T) {
 // TestBuildRuntimeConfigOmitsUserNamespace pins the D7 design:
 // the bundle no longer emits an OCI `user` namespace or uid/gid
 // maps. Container processes inherit the calling sandboxd's user
-// namespace (set up by the daft-sandboxd re-exec scaffold), so
+// namespace (set up by the vmjail-sandboxd re-exec scaffold), so
 // the runtime spec stays free of mapping clutter.
 func TestBuildRuntimeConfigOmitsUserNamespace(t *testing.T) {
 	host := localRegistry(t)

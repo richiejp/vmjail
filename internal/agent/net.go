@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/vmjail/internal/oops"
 )
 
 // NetReportPrefix tags console lines about the net bridge —
@@ -21,7 +21,7 @@ const NetReportPrefix = "net: "
 // the same /24. MTU matches sandboxnet.DefaultMTU on the host side
 // so frames never need fragmenting on the vsock hop.
 const (
-	DefaultTapName    = "daft0"
+	DefaultTapName    = "vmjail0"
 	DefaultGuestIPNet = "192.168.127.2/24"
 	DefaultGuestGw    = "192.168.127.1"
 	DefaultGuestMTU   = 1500
@@ -155,7 +155,7 @@ func startNetBridge(ctx context.Context, w io.Writer, d runDeps) *NetBridge {
 	// tracker on VM teardown AND pins the bridge wrapper for
 	// the agent's lifetime — without a live reference the
 	// *os.File finalizer on bridge.tap can close the tap fd,
-	// the kernel destroys daft0, and the container's
+	// the kernel destroys vmjail0, and the container's
 	// /proc/net/route silently empties out. Used by both paths
 	// so the tap-up branch can't drift apart from the conn-only
 	// branch.

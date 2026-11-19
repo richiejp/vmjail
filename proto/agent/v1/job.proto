@@ -4,9 +4,9 @@
 // side before JobExit is the cancellation signal.
 syntax = "proto3";
 
-package daft.agent.v1;
+package vmjail.agent.v1;
 
-option go_package = "github.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1";
+option go_package = "github.com/richiejp/vmjail/internal/genpb/agent/v1;agentv1";
 
 message JobHello {
   repeated string command = 1;

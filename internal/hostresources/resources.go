@@ -48,7 +48,7 @@ func readMemTotalKB(path string) (uint64, error) {
 	}
 	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(f)
-	//daft:lint:disable=forloopbound reason="bounded by io.EOF on a /proc/meminfo-shaped file; bufio.Scanner stops when the file does"
+	//vmjail:lint:disable=forloopbound reason="bounded by io.EOF on a /proc/meminfo-shaped file; bufio.Scanner stops when the file does"
 	for scanner.Scan() {
 		line := scanner.Text()
 		const prefix = "MemTotal:"

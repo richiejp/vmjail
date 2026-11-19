@@ -4,11 +4,11 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/ociregistry"
+	"github.com/richiejp/vmjail/internal/ociregistry"
 )
 
 // TestResolveBuildImageRef covers the three branches of the build-image ref
-// resolution: an explicit DAFT_BUILD_IMAGE_REF override, the no-transport
+// resolution: an explicit VMJAIL_BUILD_IMAGE_REF override, the no-transport
 // case (build path off, ref empty), and the default to the orchestrator's
 // auto-seeded built-in builder when a hosted transport exists.
 func TestResolveBuildImageRef(t *testing.T) {

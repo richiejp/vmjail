@@ -89,7 +89,7 @@ func benchmarkPump(b *testing.B, frameSize int, dir pumpDirection) {
 	go func() {
 		defer close(drainDone)
 		buf := make([]byte, outSize)
-		//daft:lint:disable=forloopbound reason="bounded by b.N; exits on Close-driven read error"
+		//vmjail:lint:disable=forloopbound reason="bounded by b.N; exits on Close-driven read error"
 		for i := 0; i < b.N; i++ {
 			if _, err := io.ReadFull(drainer, buf); err != nil {
 				return

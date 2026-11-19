@@ -15,7 +15,7 @@
 // deliberate review-time decision; update `allowedTags` and
 // CONTRIBUTING.md in the same change.
 //
-// Suppression: `//daft:lint:disable=tagcatalog reason="…"`. Use
+// Suppression: `//vmjail:lint:disable=tagcatalog reason="…"`. Use
 // sparingly — the right answer to "I need a new tag" is usually
 // to update the catalog, not to suppress the gate.
 //
@@ -32,10 +32,10 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
-// analyzerName drives Analyzer.Name and the //daft:lint:disable=
+// analyzerName drives Analyzer.Name and the //vmjail:lint:disable=
 // match.
 const analyzerName = "tagcatalog"
 
@@ -152,7 +152,7 @@ func unknownTags(expr constraint.Expr) []string {
 // parser caps expressions at one line per directive), so the
 // recursion depth is small and statically bounded.
 //
-//daft:lint:disable=norecursion reason="tree walk over a constraint.Expr; depth bounded by Go's one-line-per-directive parser, structurally ≤ a few dozen"
+//vmjail:lint:disable=norecursion reason="tree walk over a constraint.Expr; depth bounded by Go's one-line-per-directive parser, structurally ≤ a few dozen"
 func walkTags(expr constraint.Expr, visit func(string)) {
 	switch e := expr.(type) {
 	case *constraint.TagExpr:

@@ -1,0 +1,23 @@
+[Unit]
+Description=vmjail orchestrator
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=vmjail
+Group=vmjail
+EnvironmentFile=/etc/vmjail/orchestrator.env
+ExecStart=/usr/local/lib/vmjail/vmjail-orchestrator serve --addr ${VMJAIL_CONTROL_ADDRESS} --web-addr ${VMJAIL_WEB_ADDRESS} --config-dir /var/lib/vmjail-orchestrator
+StateDirectory=vmjail-orchestrator
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+RestrictAddressFamilies=AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

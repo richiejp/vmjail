@@ -21,7 +21,7 @@ func TestPrepareDelegatedSubtreeAt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	vmParent, err := prepareDelegatedSubtreeAt(scope, "daft-supervisor")
+	vmParent, err := prepareDelegatedSubtreeAt(scope, "vmjail-supervisor")
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -29,7 +29,7 @@ func TestPrepareDelegatedSubtreeAt(t *testing.T) {
 		t.Errorf("vmParent = %q, want the scope %q", vmParent, scope)
 	}
 	// We moved ourselves into the supervisor leaf.
-	procs, err := os.ReadFile(filepath.Join(scope, "daft-supervisor", "cgroup.procs")) //nolint:gosec // test reads a file under the temp cgroup root.
+	procs, err := os.ReadFile(filepath.Join(scope, "vmjail-supervisor", "cgroup.procs")) //nolint:gosec // test reads a file under the temp cgroup root.
 	if err != nil {
 		t.Fatalf("read leaf cgroup.procs: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestPrepareDelegatedSubtree(t *testing.T) {
 	if err := os.MkdirAll(cur, 0o750); err != nil {
 		t.Fatalf("seed cur: %v", err)
 	}
-	vmParent, err := PrepareDelegatedSubtree("daft-supervisor")
+	vmParent, err := PrepareDelegatedSubtree("vmjail-supervisor")
 	if err != nil {
 		t.Fatalf("PrepareDelegatedSubtree: %v", err)
 	}
@@ -75,8 +75,8 @@ func TestPrepareDelegatedSubtreeAtAlreadyPrepared(t *testing.T) {
 	t.Cleanup(func() { SwapCgroupRoot(prev) })
 
 	// Already inside the leaf (a re-exec'd child) — return the scope, no move.
-	cur := filepath.Join(root, "scope", "daft-supervisor")
-	vmParent, err := prepareDelegatedSubtreeAt(cur, "daft-supervisor")
+	cur := filepath.Join(root, "scope", "vmjail-supervisor")
+	vmParent, err := prepareDelegatedSubtreeAt(cur, "vmjail-supervisor")
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}

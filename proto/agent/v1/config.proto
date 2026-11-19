@@ -1,4 +1,4 @@
-// Wire format for the in-VM daft-agent's per-VM config fetch. Right
+// Wire format for the in-VM vmjail-agent's per-VM config fetch. Right
 // after printing its banner the agent dials the host's config server
 // on a fixed AF_VSOCK port (agent.DefaultConfigVsockPort), writes one
 // length-prefixed GuestConfigRequest handshake, and reads back one
@@ -6,7 +6,7 @@
 // settings this VM should apply (shares to mount, container bundle to
 // run, …). The server then closes — it's a single request→response.
 //
-// This replaces hand-serializing those settings as `daft.*` tokens on
+// This replaces hand-serializing those settings as `vmjail.*` tokens on
 // the kernel cmdline, which is world-readable and un-namespaceable (a
 // nested container reads the *outer* VM's line). The per-VM identity is
 // implicit in the hybrid-vsock socket the connection arrives on, so the
@@ -20,9 +20,9 @@
 // trust boundary.
 syntax = "proto3";
 
-package daft.agent.v1;
+package vmjail.agent.v1;
 
-option go_package = "github.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1";
+option go_package = "github.com/richiejp/vmjail/internal/genpb/agent/v1;agentv1";
 
 // GuestConfigRequest is the handshake the agent sends on a fresh
 // config connection. Identity is implicit in the per-VM socket, so the
@@ -37,15 +37,15 @@ message GuestConfigRequest {
 // shares (the coupled minimum to start a workload — a bundle path lives
 // on a share mount); later slices fold in overlays, port-forwards,
 // observe-gadget paths, and the trace port, after which the kernel
-// cmdline drops to zero daft.* tokens.
+// cmdline drops to zero vmjail.* tokens.
 message GuestConfig {
   // Absolute guest path of the OCI bundle to crun-run. Empty means "no
   // container" (the bare-boot / share-only path). Mirrors the old
-  // daft.bundle= token.
+  // vmjail.bundle= token.
   string bundle = 1;
 
   // Virtio-fs shares to mount, in order. Mirrors the repeatable
-  // daft.share=<tag>:<mountpoint> tokens.
+  // vmjail.share=<tag>:<mountpoint> tokens.
   repeated Share shares = 2;
 
   // Share is one virtio-fs mount: device tag → absolute guest
@@ -55,7 +55,7 @@ message GuestConfig {
     string mountpoint = 2;
     // overlay, when true, wraps the share in a tmpfs-backed overlay so
     // the guest's writes don't reach the host backing dir. Mirrors the
-    // old daft.workspace_overlay=<mountpoint> token (which keyed the
+    // old vmjail.workspace_overlay=<mountpoint> token (which keyed the
     // overlay to a share by its mountpoint); carrying it on the Share
     // itself drops that indirection.
     bool overlay = 3;
@@ -63,7 +63,7 @@ message GuestConfig {
   }
 
   // Guest-side ports the agent vsock-forwards to the container. Mirrors
-  // the repeatable daft.port=<vsockPort>:<containerPort> tokens. This is
+  // the repeatable vmjail.port=<vsockPort>:<containerPort> tokens. This is
   // the one genuinely per-workspace table (it comes straight from the
   // SandboxSpec's exposed ports), so it must travel in the payload.
   repeated PortForward port_forwards = 3;
@@ -76,15 +76,15 @@ message GuestConfig {
   }
 
   // observe carries the Tier-2 gadget output paths. Absent (nil) leaves
-  // every gadget off. Mirrors the daft.observe.* tokens.
+  // every gadget off. Mirrors the vmjail.observe.* tokens.
   Observe observe = 4;
 
   // Protocol-feature toggles. The host enables a feature; the agent brings
   // it up on that feature's fixed AF_VSOCK port — a protocol constant (see
   // agent.DefaultAttachVsockPort / DefaultJobVsockPort / DefaultNetVsockPort /
   // DefaultTraceVsockPort), so the port number never travels as per-VM
-  // data. These replace the daft.attach_port / daft.net_port /
-  // daft.vsock.trace_port cmdline tokens (each of which only ever carried
+  // data. These replace the vmjail.attach_port / vmjail.net_port /
+  // vmjail.vsock.trace_port cmdline tokens (each of which only ever carried
   // the constant anyway).
   bool attach_enabled = 5; // run interactive attach + detached job listeners
   bool net_enabled = 6;    // dial sandboxd's netstack + bring up tap0

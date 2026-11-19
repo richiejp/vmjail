@@ -1,4 +1,4 @@
-// Cross-component tracing for daft. Spans accumulate in each
+// Cross-component tracing for vmjail. Spans accumulate in each
 // component's in-memory ring buffer and are shipped to the
 // orchestrator via TraceService.ReportSpans, where they're merged
 // into a single buffer per trace_id.
@@ -22,7 +22,7 @@ import (
 	connect "connectrpc.com/connect"
 	context "context"
 	errors "errors"
-	v1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	v1 "github.com/richiejp/vmjail/internal/genpb/trace/v1"
 	http "net/http"
 	strings "strings"
 )
@@ -36,7 +36,7 @@ const _ = connect.IsAtLeastVersion1_13_0
 
 const (
 	// TraceServiceName is the fully-qualified name of the TraceService service.
-	TraceServiceName = "daft.trace.v1.TraceService"
+	TraceServiceName = "vmjail.trace.v1.TraceService"
 )
 
 // These constants are the fully-qualified names of the RPCs defined in this package. They're
@@ -49,18 +49,18 @@ const (
 const (
 	// TraceServiceReportSpansProcedure is the fully-qualified name of the TraceService's ReportSpans
 	// RPC.
-	TraceServiceReportSpansProcedure = "/daft.trace.v1.TraceService/ReportSpans"
+	TraceServiceReportSpansProcedure = "/vmjail.trace.v1.TraceService/ReportSpans"
 )
 
-// TraceServiceClient is a client for the daft.trace.v1.TraceService service.
+// TraceServiceClient is a client for the vmjail.trace.v1.TraceService service.
 type TraceServiceClient interface {
 	ReportSpans(context.Context, *connect.Request[v1.ReportSpansRequest]) (*connect.Response[v1.ReportSpansResponse], error)
 }
 
-// NewTraceServiceClient constructs a client for the daft.trace.v1.TraceService service. By default,
-// it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses, and
-// sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC()
-// or connect.WithGRPCWeb() options.
+// NewTraceServiceClient constructs a client for the vmjail.trace.v1.TraceService service. By
+// default, it uses the Connect protocol with the binary Protobuf Codec, asks for gzipped responses,
+// and sends uncompressed requests. To use the gRPC or gRPC-Web protocols, supply the
+// connect.WithGRPC() or connect.WithGRPCWeb() options.
 //
 // The URL supplied here should be the base URL for the Connect or gRPC server (for example,
 // http://api.acme.com or https://acme.com/grpc).
@@ -82,12 +82,12 @@ type traceServiceClient struct {
 	reportSpans *connect.Client[v1.ReportSpansRequest, v1.ReportSpansResponse]
 }
 
-// ReportSpans calls daft.trace.v1.TraceService.ReportSpans.
+// ReportSpans calls vmjail.trace.v1.TraceService.ReportSpans.
 func (c *traceServiceClient) ReportSpans(ctx context.Context, req *connect.Request[v1.ReportSpansRequest]) (*connect.Response[v1.ReportSpansResponse], error) {
 	return c.reportSpans.CallUnary(ctx, req)
 }
 
-// TraceServiceHandler is an implementation of the daft.trace.v1.TraceService service.
+// TraceServiceHandler is an implementation of the vmjail.trace.v1.TraceService service.
 type TraceServiceHandler interface {
 	ReportSpans(context.Context, *connect.Request[v1.ReportSpansRequest]) (*connect.Response[v1.ReportSpansResponse], error)
 }
@@ -105,7 +105,7 @@ func NewTraceServiceHandler(svc TraceServiceHandler, opts ...connect.HandlerOpti
 		connect.WithSchema(traceServiceMethods.ByName("ReportSpans")),
 		connect.WithHandlerOptions(opts...),
 	)
-	return "/daft.trace.v1.TraceService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return "/vmjail.trace.v1.TraceService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case TraceServiceReportSpansProcedure:
 			traceServiceReportSpansHandler.ServeHTTP(w, r)
@@ -119,5 +119,5 @@ func NewTraceServiceHandler(svc TraceServiceHandler, opts ...connect.HandlerOpti
 type UnimplementedTraceServiceHandler struct{}
 
 func (UnimplementedTraceServiceHandler) ReportSpans(context.Context, *connect.Request[v1.ReportSpansRequest]) (*connect.Response[v1.ReportSpansResponse], error) {
-	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("daft.trace.v1.TraceService.ReportSpans is not implemented"))
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("vmjail.trace.v1.TraceService.ReportSpans is not implemented"))
 }

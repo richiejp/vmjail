@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/nodejob"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/richiejp/vmjail/internal/agent"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/nodejob"
+	"github.com/richiejp/vmjail/internal/sandboxgateway"
 )
 
 const (
@@ -68,7 +68,7 @@ func (r *Runner) Start(ctx context.Context, req nodejob.StartRequest, stdout, st
 func (r *Runner) dialGuest(ctx context.Context, sandboxUID string) (net.Conn, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, r.routeWait)
 	defer cancel()
-	//daft:lint:disable=forloopbound reason="bounded by routeWait through waitCtx and returns immediately on every non-readiness result"
+	//vmjail:lint:disable=forloopbound reason="bounded by routeWait through waitCtx and returns immediately on every non-readiness result"
 	for {
 		conn, err := r.dial(waitCtx, sandboxUID, agent.DefaultJobVsockPort)
 		if err == nil || !routePending(err) {
@@ -107,7 +107,7 @@ type process struct {
 func (p *process) receive() {
 	defer close(p.done)
 	defer func() { _ = p.conn.Close() }()
-	//daft:lint:disable=forloopbound reason="bounded by terminal JobExit, connection close, or malformed frame"
+	//vmjail:lint:disable=forloopbound reason="bounded by terminal JobExit, connection close, or malformed frame"
 	for {
 		frame, err := agent.ReadJobFrame(p.conn)
 		if err != nil {

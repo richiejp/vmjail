@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/observability"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/bundled"
+	"github.com/richiejp/vmjail/internal/observability"
+	"github.com/richiejp/vmjail/internal/sandbox"
 )
 
 // resolvedLogPath is a stand-in absolute observer-log path used by the
@@ -21,20 +21,20 @@ import (
 const resolvedLogPath = "/state/sb/observer.jsonl"
 
 func TestSandboxesStateRootOverride(t *testing.T) {
-	t.Setenv(EnvStateDir, "/srv/daft-state")
+	t.Setenv(EnvStateDir, "/srv/vmjail-state")
 	got, err := sandboxesStateRoot()
 	if err != nil {
 		t.Fatalf("sandboxesStateRoot: %v", err)
 	}
-	if got != "/srv/daft-state" {
-		t.Errorf("root = %q, want the DAFT_STATE_DIR override verbatim", got)
+	if got != "/srv/vmjail-state" {
+		t.Errorf("root = %q, want the VMJAIL_STATE_DIR override verbatim", got)
 	}
 }
 
 func TestSandboxesStateRootRejectsRelativeOverride(t *testing.T) {
 	t.Setenv(EnvStateDir, "relative/state")
 	if _, err := sandboxesStateRoot(); err == nil {
-		t.Fatal("relative DAFT_STATE_DIR should be rejected")
+		t.Fatal("relative VMJAIL_STATE_DIR should be rejected")
 	}
 }
 

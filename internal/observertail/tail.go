@@ -3,7 +3,7 @@
 // Tier-1 trace (see internal/observability) to a writer, optionally
 // following appended lines like `tail -f`. It never modifies the
 // file. The sandbox host's ObserverStream handler uses it to relay a
-// running sandbox's log to a `daft sandbox observer-tail` client.
+// running sandbox's log to a `vmjail sandbox observer-tail` client.
 package observertail
 
 import (
@@ -49,7 +49,7 @@ func stream(ctx context.Context, path string, follow bool, w io.Writer, poll tim
 	}
 
 	buf := make([]byte, readBufSize)
-	//daft:lint:disable=forloopbound reason="returns on ctx cancel, on EOF when !follow, or on a read/write error; an unbounded follow tail is the intended behaviour (tail -f)"
+	//vmjail:lint:disable=forloopbound reason="returns on ctx cancel, on EOF when !follow, or on a read/write error; an unbounded follow tail is the intended behaviour (tail -f)"
 	for {
 		if ctx.Err() != nil {
 			return nil

@@ -12,8 +12,8 @@ import (
 // clear translation step instead of a silent collision with
 // other instrumentation in the same request.
 const (
-	HeaderTraceID      = "Daft-Trace-Id"
-	HeaderParentSpanID = "Daft-Parent-Span-Id"
+	HeaderTraceID      = "Vmjail-Trace-Id"
+	HeaderParentSpanID = "Vmjail-Parent-Span-Id"
 )
 
 // ClientInterceptor wraps every outbound unary call in a CLIENT

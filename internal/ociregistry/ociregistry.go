@@ -34,7 +34,7 @@ import (
 // registry. It contains a dot and is neither loopback nor RFC1918, so
 // go-containerregistry resolves it to https; Transport then dials the
 // orchestrator's real address regardless of this name.
-const Host = "daft-registry.internal"
+const Host = "vmjail-registry.internal"
 
 // Ref builds an orchestrator-hosted image reference (Host/repo:tag).
 func Ref(repo, tag string) string {
@@ -44,18 +44,18 @@ func Ref(repo, tag string) string {
 // BuiltinBuildRepo / BuiltinBuildTag name the built-in devcontainer build
 // image (the buildah-based image builder) in the orchestrator's embedded
 // registry. The orchestrator auto-seeds this ref from its bundled copy at
-// startup, and the sandbox-host defaults DAFT_BUILD_IMAGE_REF to it — so a
+// startup, and the sandbox-host defaults VMJAIL_BUILD_IMAGE_REF to it — so a
 // build-based devcontainer works with no env vars set. The tag is a fixed
 // sentinel (not the binary version) so the node and orchestrator agree on
 // the ref without sharing a version string.
 const (
-	BuiltinBuildRepo = "daft-builtin/build"
+	BuiltinBuildRepo = "vmjail-builtin/build"
 	BuiltinBuildTag  = "bundled"
 )
 
 // BuiltinBuildRef is the orchestrator-hosted ref of the built-in build
 // image. Both the orchestrator (seeder) and the sandbox-host (default
-// DAFT_BUILD_IMAGE_REF) resolve to this single value.
+// VMJAIL_BUILD_IMAGE_REF) resolve to this single value.
 func BuiltinBuildRef() string {
 	return Ref(BuiltinBuildRepo, BuiltinBuildTag)
 }

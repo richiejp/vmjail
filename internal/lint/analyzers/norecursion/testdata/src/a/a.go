@@ -34,7 +34,7 @@ func (t T) methodSelf() { // want `participates in a call cycle`
 
 // suppressed pins the directive silences the diagnostic.
 //
-//daft:lint:disable=norecursion reason="fixture exercises suppression"
+//vmjail:lint:disable=norecursion reason="fixture exercises suppression"
 func suppressedSelf() {
 	suppressedSelf()
 }

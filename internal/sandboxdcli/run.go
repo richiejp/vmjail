@@ -10,11 +10,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/component"
-	"github.com/richiejp/darkaifactory/internal/imagestore"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/vmjail/internal/bundled"
+	"github.com/richiejp/vmjail/internal/component"
+	"github.com/richiejp/vmjail/internal/imagestore"
+	"github.com/richiejp/vmjail/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // In-VM mountpoints used by the run command. Stable so the bundle
@@ -99,7 +99,7 @@ func runRun(ctx context.Context, w io.Writer, opts runOptions, deps runDeps) err
 	if trace.TracerFromContext(ctx) == nil {
 		ctx = trace.ContextWithTracer(ctx, trace.New(component.Sandboxd))
 	}
-	ctx, span := trace.Start(ctx, "daft-sandboxd.run",
+	ctx, span := trace.Start(ctx, "vmjail-sandboxd.run",
 		trace.WithAttributes(
 			trace.KV{Key: "ref", Value: opts.ref},
 			trace.KV{Key: "args", Value: strconv.Itoa(len(opts.cmdArgs))},
@@ -127,7 +127,7 @@ func runRun(ctx context.Context, w io.Writer, opts runOptions, deps runDeps) err
 // any side-effects fire.
 func (o runOptions) validate() error {
 	if o.workspaceOverlay && o.workspace == "" {
-		return errors.New("daft-sandboxd: --workspace-overlay requires a workspace share (use --workspace)")
+		return errors.New("vmjail-sandboxd: --workspace-overlay requires a workspace share (use --workspace)")
 	}
 	return nil
 }
@@ -143,7 +143,7 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 	}
 	img, err := store.Pull(ctx, opts.ref)
 	if err != nil {
-		return sandbox.Config{}, nil, fmt.Errorf("daft-sandboxd: pull %s: %w", opts.ref, err)
+		return sandbox.Config{}, nil, fmt.Errorf("vmjail-sandboxd: pull %s: %w", opts.ref, err)
 	}
 	bundleOpts := imagestore.BundleOptions{}
 	if len(opts.cmdArgs) > 0 {
@@ -159,11 +159,11 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 	}
 	bundle, err := store.Bundle(ctx, img.Digest, bundleOpts)
 	if err != nil {
-		return sandbox.Config{}, nil, fmt.Errorf("daft-sandboxd: bundle %s: %w", img.Digest, err)
+		return sandbox.Config{}, nil, fmt.Errorf("vmjail-sandboxd: bundle %s: %w", img.Digest, err)
 	}
 	unlock, err := store.Lock(img.Digest)
 	if err != nil {
-		return sandbox.Config{}, nil, fmt.Errorf("daft-sandboxd: lock bundle: %w", err)
+		return sandbox.Config{}, nil, fmt.Errorf("vmjail-sandboxd: lock bundle: %w", err)
 	}
 	cacheDir, err := deps.cacheDir()
 	if err != nil {
@@ -173,7 +173,7 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 	paths, err := deps.extract(cacheDir)
 	if err != nil {
 		unlock()
-		return sandbox.Config{}, nil, fmt.Errorf("daft-sandboxd: extract bundled artifacts: %w", err)
+		return sandbox.Config{}, nil, fmt.Errorf("vmjail-sandboxd: extract bundled artifacts: %w", err)
 	}
 
 	bundleRelease := unlock
@@ -206,7 +206,7 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 		abs, err := filepath.Abs(workspaceDir)
 		if err != nil {
 			unlock()
-			return sandbox.Config{}, nil, fmt.Errorf("daft-sandboxd: resolve workspace %q: %w", workspaceDir, err)
+			return sandbox.Config{}, nil, fmt.Errorf("vmjail-sandboxd: resolve workspace %q: %w", workspaceDir, err)
 		}
 		cfg.Shares = append(cfg.Shares, &sandbox.ShareConfig{
 			HostDir:    abs,

@@ -1,4 +1,4 @@
-// Wire format for the in-VM daft-agent's per-VM config fetch. Right
+// Wire format for the in-VM vmjail-agent's per-VM config fetch. Right
 // after printing its banner the agent dials the host's config server
 // on a fixed AF_VSOCK port (agent.DefaultConfigVsockPort), writes one
 // length-prefixed GuestConfigRequest handshake, and reads back one
@@ -6,7 +6,7 @@
 // settings this VM should apply (shares to mount, container bundle to
 // run, …). The server then closes — it's a single request→response.
 //
-// This replaces hand-serializing those settings as `daft.*` tokens on
+// This replaces hand-serializing those settings as `vmjail.*` tokens on
 // the kernel cmdline, which is world-readable and un-namespaceable (a
 // nested container reads the *outer* VM's line). The per-VM identity is
 // implicit in the hybrid-vsock socket the connection arrives on, so the
@@ -147,30 +147,30 @@ func (x *GuestConfigRequest) GetAgentVersion() string {
 // shares (the coupled minimum to start a workload — a bundle path lives
 // on a share mount); later slices fold in overlays, port-forwards,
 // observe-gadget paths, and the trace port, after which the kernel
-// cmdline drops to zero daft.* tokens.
+// cmdline drops to zero vmjail.* tokens.
 type GuestConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Absolute guest path of the OCI bundle to crun-run. Empty means "no
 	// container" (the bare-boot / share-only path). Mirrors the old
-	// daft.bundle= token.
+	// vmjail.bundle= token.
 	Bundle string `protobuf:"bytes,1,opt,name=bundle,proto3" json:"bundle,omitempty"`
 	// Virtio-fs shares to mount, in order. Mirrors the repeatable
-	// daft.share=<tag>:<mountpoint> tokens.
+	// vmjail.share=<tag>:<mountpoint> tokens.
 	Shares []*GuestConfig_Share `protobuf:"bytes,2,rep,name=shares,proto3" json:"shares,omitempty"`
 	// Guest-side ports the agent vsock-forwards to the container. Mirrors
-	// the repeatable daft.port=<vsockPort>:<containerPort> tokens. This is
+	// the repeatable vmjail.port=<vsockPort>:<containerPort> tokens. This is
 	// the one genuinely per-workspace table (it comes straight from the
 	// SandboxSpec's exposed ports), so it must travel in the payload.
 	PortForwards []*GuestConfig_PortForward `protobuf:"bytes,3,rep,name=port_forwards,json=portForwards,proto3" json:"port_forwards,omitempty"`
 	// observe carries the Tier-2 gadget output paths. Absent (nil) leaves
-	// every gadget off. Mirrors the daft.observe.* tokens.
+	// every gadget off. Mirrors the vmjail.observe.* tokens.
 	Observe *GuestConfig_Observe `protobuf:"bytes,4,opt,name=observe,proto3" json:"observe,omitempty"`
 	// Protocol-feature toggles. The host enables a feature; the agent brings
 	// it up on that feature's fixed AF_VSOCK port — a protocol constant (see
 	// agent.DefaultAttachVsockPort / DefaultJobVsockPort / DefaultNetVsockPort /
 	// DefaultTraceVsockPort), so the port number never travels as per-VM
-	// data. These replace the daft.attach_port / daft.net_port /
-	// daft.vsock.trace_port cmdline tokens (each of which only ever carried
+	// data. These replace the vmjail.attach_port / vmjail.net_port /
+	// vmjail.vsock.trace_port cmdline tokens (each of which only ever carried
 	// the constant anyway).
 	AttachEnabled bool `protobuf:"varint,5,opt,name=attach_enabled,json=attachEnabled,proto3" json:"attach_enabled,omitempty"` // run interactive attach + detached job listeners
 	NetEnabled    bool `protobuf:"varint,6,opt,name=net_enabled,json=netEnabled,proto3" json:"net_enabled,omitempty"`          // dial sandboxd's netstack + bring up tap0
@@ -305,7 +305,7 @@ func (x *GuestConfig) GetContainerPersistent() bool {
 // the agent closes the conn (VM teardown).
 type AgentEvent struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Kind          AgentEvent_Kind        `protobuf:"varint,1,opt,name=kind,proto3,enum=daft.agent.v1.AgentEvent_Kind" json:"kind,omitempty"`
+	Kind          AgentEvent_Kind        `protobuf:"varint,1,opt,name=kind,proto3,enum=vmjail.agent.v1.AgentEvent_Kind" json:"kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -355,7 +355,7 @@ type GuestConfig_Share struct {
 	Mountpoint string                 `protobuf:"bytes,2,opt,name=mountpoint,proto3" json:"mountpoint,omitempty"`
 	// overlay, when true, wraps the share in a tmpfs-backed overlay so
 	// the guest's writes don't reach the host backing dir. Mirrors the
-	// old daft.workspace_overlay=<mountpoint> token (which keyed the
+	// old vmjail.workspace_overlay=<mountpoint> token (which keyed the
 	// overlay to a share by its mountpoint); carrying it on the Share
 	// itself drops that indirection.
 	Overlay       bool `protobuf:"varint,3,opt,name=overlay,proto3" json:"overlay,omitempty"`
@@ -614,19 +614,19 @@ var File_agent_v1_config_proto protoreflect.FileDescriptor
 
 const file_agent_v1_config_proto_rawDesc = "" +
 	"\n" +
-	"\x15agent/v1/config.proto\x12\rdaft.agent.v1\"9\n" +
+	"\x15agent/v1/config.proto\x12\x0fvmjail.agent.v1\"9\n" +
 	"\x12GuestConfigRequest\x12#\n" +
-	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xd5\a\n" +
+	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xdd\a\n" +
 	"\vGuestConfig\x12\x16\n" +
-	"\x06bundle\x18\x01 \x01(\tR\x06bundle\x128\n" +
-	"\x06shares\x18\x02 \x03(\v2 .daft.agent.v1.GuestConfig.ShareR\x06shares\x12K\n" +
-	"\rport_forwards\x18\x03 \x03(\v2&.daft.agent.v1.GuestConfig.PortForwardR\fportForwards\x12<\n" +
-	"\aobserve\x18\x04 \x01(\v2\".daft.agent.v1.GuestConfig.ObserveR\aobserve\x12%\n" +
+	"\x06bundle\x18\x01 \x01(\tR\x06bundle\x12:\n" +
+	"\x06shares\x18\x02 \x03(\v2\".vmjail.agent.v1.GuestConfig.ShareR\x06shares\x12M\n" +
+	"\rport_forwards\x18\x03 \x03(\v2(.vmjail.agent.v1.GuestConfig.PortForwardR\fportForwards\x12>\n" +
+	"\aobserve\x18\x04 \x01(\v2$.vmjail.agent.v1.GuestConfig.ObserveR\aobserve\x12%\n" +
 	"\x0eattach_enabled\x18\x05 \x01(\bR\rattachEnabled\x12\x1f\n" +
 	"\vnet_enabled\x18\x06 \x01(\bR\n" +
 	"netEnabled\x12#\n" +
-	"\rtrace_enabled\x18\a \x01(\bR\ftraceEnabled\x12[\n" +
-	"\x13post_start_commands\x18\b \x03(\v2+.daft.agent.v1.GuestConfig.PostStartCommandR\x11postStartCommands\x12/\n" +
+	"\rtrace_enabled\x18\a \x01(\bR\ftraceEnabled\x12]\n" +
+	"\x13post_start_commands\x18\b \x03(\v2-.vmjail.agent.v1.GuestConfig.PostStartCommandR\x11postStartCommands\x12/\n" +
 	"\x13credential_provider\x18\t \x01(\tR\x12credentialProvider\x121\n" +
 	"\x14container_persistent\x18\v \x01(\bR\x13containerPersistent\x1ap\n" +
 	"\x05Share\x12\x10\n" +
@@ -651,13 +651,13 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\aiosnoop\x18\x04 \x01(\tR\aiosnoop\x12\x1a\n" +
 	"\bsyscalls\x18\x05 \x01(\tR\bsyscalls\x12\x18\n" +
 	"\asummary\x18\x06 \x01(\tR\asummaryJ\x04\b\n" +
-	"\x10\vR\x0eworkspace_disk\"q\n" +
+	"\x10\vR\x0eworkspace_disk\"s\n" +
 	"\n" +
-	"AgentEvent\x122\n" +
-	"\x04kind\x18\x01 \x01(\x0e2\x1e.daft.agent.v1.AgentEvent.KindR\x04kind\"/\n" +
+	"AgentEvent\x124\n" +
+	"\x04kind\x18\x01 \x01(\x0e2 .vmjail.agent.v1.AgentEvent.KindR\x04kind\"/\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x11\n" +
-	"\rBOOT_COMPLETE\x10\x01BCZAgithub.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1b\x06proto3"
+	"\rBOOT_COMPLETE\x10\x01B<Z:github.com/richiejp/vmjail/internal/genpb/agent/v1;agentv1b\x06proto3"
 
 var (
 	file_agent_v1_config_proto_rawDescOnce sync.Once
@@ -674,21 +674,21 @@ func file_agent_v1_config_proto_rawDescGZIP() []byte {
 var file_agent_v1_config_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_agent_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_agent_v1_config_proto_goTypes = []any{
-	(AgentEvent_Kind)(0),                 // 0: daft.agent.v1.AgentEvent.Kind
-	(*GuestConfigRequest)(nil),           // 1: daft.agent.v1.GuestConfigRequest
-	(*GuestConfig)(nil),                  // 2: daft.agent.v1.GuestConfig
-	(*AgentEvent)(nil),                   // 3: daft.agent.v1.AgentEvent
-	(*GuestConfig_Share)(nil),            // 4: daft.agent.v1.GuestConfig.Share
-	(*GuestConfig_PortForward)(nil),      // 5: daft.agent.v1.GuestConfig.PortForward
-	(*GuestConfig_PostStartCommand)(nil), // 6: daft.agent.v1.GuestConfig.PostStartCommand
-	(*GuestConfig_Observe)(nil),          // 7: daft.agent.v1.GuestConfig.Observe
+	(AgentEvent_Kind)(0),                 // 0: vmjail.agent.v1.AgentEvent.Kind
+	(*GuestConfigRequest)(nil),           // 1: vmjail.agent.v1.GuestConfigRequest
+	(*GuestConfig)(nil),                  // 2: vmjail.agent.v1.GuestConfig
+	(*AgentEvent)(nil),                   // 3: vmjail.agent.v1.AgentEvent
+	(*GuestConfig_Share)(nil),            // 4: vmjail.agent.v1.GuestConfig.Share
+	(*GuestConfig_PortForward)(nil),      // 5: vmjail.agent.v1.GuestConfig.PortForward
+	(*GuestConfig_PostStartCommand)(nil), // 6: vmjail.agent.v1.GuestConfig.PostStartCommand
+	(*GuestConfig_Observe)(nil),          // 7: vmjail.agent.v1.GuestConfig.Observe
 }
 var file_agent_v1_config_proto_depIdxs = []int32{
-	4, // 0: daft.agent.v1.GuestConfig.shares:type_name -> daft.agent.v1.GuestConfig.Share
-	5, // 1: daft.agent.v1.GuestConfig.port_forwards:type_name -> daft.agent.v1.GuestConfig.PortForward
-	7, // 2: daft.agent.v1.GuestConfig.observe:type_name -> daft.agent.v1.GuestConfig.Observe
-	6, // 3: daft.agent.v1.GuestConfig.post_start_commands:type_name -> daft.agent.v1.GuestConfig.PostStartCommand
-	0, // 4: daft.agent.v1.AgentEvent.kind:type_name -> daft.agent.v1.AgentEvent.Kind
+	4, // 0: vmjail.agent.v1.GuestConfig.shares:type_name -> vmjail.agent.v1.GuestConfig.Share
+	5, // 1: vmjail.agent.v1.GuestConfig.port_forwards:type_name -> vmjail.agent.v1.GuestConfig.PortForward
+	7, // 2: vmjail.agent.v1.GuestConfig.observe:type_name -> vmjail.agent.v1.GuestConfig.Observe
+	6, // 3: vmjail.agent.v1.GuestConfig.post_start_commands:type_name -> vmjail.agent.v1.GuestConfig.PostStartCommand
+	0, // 4: vmjail.agent.v1.AgentEvent.kind:type_name -> vmjail.agent.v1.AgentEvent.Kind
 	5, // [5:5] is the sub-list for method output_type
 	5, // [5:5] is the sub-list for method input_type
 	5, // [5:5] is the sub-list for extension type_name

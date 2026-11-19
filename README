@@ -1,6 +1,10 @@
 vmjail
 ======
 
+Run programs in a tiny Linux VM with a single command. This project aims to
+make running processes in a VM as easy as running them in a more lightweight
+sandbox like those using namespaces (e.g. nsjail).
+
 A local Linux microVM sandbox for running an OCI container with explicit
 host-directory mounts and host/guest observability. Cloud Hypervisor supplies
 the VM, virtiofsd serves the shared directories, and a guest helper runs the
@@ -8,8 +12,9 @@ container with crun.
 
 This repository is being reduced from darkaifactory. The distributed control
 plane, web interface, remote client/MCP facade and workspace CAS have been deleted. The remaining Go packages compile and pass the default test suite.
-The replacement local command wiring is still in progress; Go module paths and
-executable names have not yet been renamed.
+The replacement local command wiring is still in progress. The Go module is
+github.com/richiejp/vmjail; the host executable is vmjail-sandboxd and the guest
+helper is vmjail-agent. Configuration variables use the VMJAIL_ prefix.
 
 Retained capabilities
 ---------------------
@@ -42,6 +47,6 @@ Documentation
 - CONTRIBUTING.md: development and verification rules.
 - PLAN.md: current scope, build status and next steps.
 
-The earlier analysis and deletion reports under docs/ record the reduction
+The earlier analysis and deletion reports under docs/archive/ record the reduction
 process. They describe their audited revisions, not supported remote features.
 Git history retains the original project and its removed documentation.

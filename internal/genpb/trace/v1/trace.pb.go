@@ -1,4 +1,4 @@
-// Cross-component tracing for daft. Spans accumulate in each
+// Cross-component tracing for vmjail. Spans accumulate in each
 // component's in-memory ring buffer and are shipped to the
 // orchestrator via TraceService.ReportSpans, where they're merged
 // into a single buffer per trace_id.
@@ -269,8 +269,8 @@ func (x *SpanEvent) GetAttributes() []*KeyValue {
 // operation; (trace_id, span_id) uniquely identifies a span within
 // a trace; parent_span_id chains spans into a tree.
 //
-// component identifies the producer ("daft", "daft-orchestrator",
-// "daft-sandboxd", "daft-agent") so a single shared buffer at the
+// component identifies the producer ("vmjail", "vmjail-orchestrator",
+// "vmjail-sandboxd", "vmjail-agent") so a single shared buffer at the
 // orchestrator can attribute spans without inferring from the mTLS
 // peer cert.
 type Span struct {
@@ -279,8 +279,8 @@ type Span struct {
 	SpanId        string                 `protobuf:"bytes,2,opt,name=span_id,json=spanId,proto3" json:"span_id,omitempty"`
 	ParentSpanId  string                 `protobuf:"bytes,3,opt,name=parent_span_id,json=parentSpanId,proto3" json:"parent_span_id,omitempty"`
 	Name          string                 `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
-	Kind          SpanKind               `protobuf:"varint,5,opt,name=kind,proto3,enum=daft.trace.v1.SpanKind" json:"kind,omitempty"`
-	Status        SpanStatus             `protobuf:"varint,6,opt,name=status,proto3,enum=daft.trace.v1.SpanStatus" json:"status,omitempty"`
+	Kind          SpanKind               `protobuf:"varint,5,opt,name=kind,proto3,enum=vmjail.trace.v1.SpanKind" json:"kind,omitempty"`
+	Status        SpanStatus             `protobuf:"varint,6,opt,name=status,proto3,enum=vmjail.trace.v1.SpanStatus" json:"status,omitempty"`
 	StatusMessage string                 `protobuf:"bytes,7,opt,name=status_message,json=statusMessage,proto3" json:"status_message,omitempty"`
 	StartUnixNano int64                  `protobuf:"varint,8,opt,name=start_unix_nano,json=startUnixNano,proto3" json:"start_unix_nano,omitempty"`
 	EndUnixNano   int64                  `protobuf:"varint,9,opt,name=end_unix_nano,json=endUnixNano,proto3" json:"end_unix_nano,omitempty"`
@@ -489,34 +489,34 @@ var File_trace_v1_trace_proto protoreflect.FileDescriptor
 
 const file_trace_v1_trace_proto_rawDesc = "" +
 	"\n" +
-	"\x14trace/v1/trace.proto\x12\rdaft.trace.v1\"2\n" +
+	"\x14trace/v1/trace.proto\x12\x0fvmjail.trace.v1\"2\n" +
 	"\bKeyValue\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"~\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value\"\x80\x01\n" +
 	"\tSpanEvent\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12$\n" +
-	"\x0etime_unix_nano\x18\x02 \x01(\x03R\ftimeUnixNano\x127\n" +
+	"\x0etime_unix_nano\x18\x02 \x01(\x03R\ftimeUnixNano\x129\n" +
 	"\n" +
-	"attributes\x18\x03 \x03(\v2\x17.daft.trace.v1.KeyValueR\n" +
-	"attributes\"\xd0\x03\n" +
+	"attributes\x18\x03 \x03(\v2\x19.vmjail.trace.v1.KeyValueR\n" +
+	"attributes\"\xd8\x03\n" +
 	"\x04Span\x12\x19\n" +
 	"\btrace_id\x18\x01 \x01(\tR\atraceId\x12\x17\n" +
 	"\aspan_id\x18\x02 \x01(\tR\x06spanId\x12$\n" +
 	"\x0eparent_span_id\x18\x03 \x01(\tR\fparentSpanId\x12\x12\n" +
-	"\x04name\x18\x04 \x01(\tR\x04name\x12+\n" +
-	"\x04kind\x18\x05 \x01(\x0e2\x17.daft.trace.v1.SpanKindR\x04kind\x121\n" +
-	"\x06status\x18\x06 \x01(\x0e2\x19.daft.trace.v1.SpanStatusR\x06status\x12%\n" +
+	"\x04name\x18\x04 \x01(\tR\x04name\x12-\n" +
+	"\x04kind\x18\x05 \x01(\x0e2\x19.vmjail.trace.v1.SpanKindR\x04kind\x123\n" +
+	"\x06status\x18\x06 \x01(\x0e2\x1b.vmjail.trace.v1.SpanStatusR\x06status\x12%\n" +
 	"\x0estatus_message\x18\a \x01(\tR\rstatusMessage\x12&\n" +
 	"\x0fstart_unix_nano\x18\b \x01(\x03R\rstartUnixNano\x12\"\n" +
-	"\rend_unix_nano\x18\t \x01(\x03R\vendUnixNano\x127\n" +
+	"\rend_unix_nano\x18\t \x01(\x03R\vendUnixNano\x129\n" +
 	"\n" +
 	"attributes\x18\n" +
-	" \x03(\v2\x17.daft.trace.v1.KeyValueR\n" +
-	"attributes\x120\n" +
-	"\x06events\x18\v \x03(\v2\x18.daft.trace.v1.SpanEventR\x06events\x12\x1c\n" +
-	"\tcomponent\x18\f \x01(\tR\tcomponent\"?\n" +
-	"\x12ReportSpansRequest\x12)\n" +
-	"\x05spans\x18\x01 \x03(\v2\x13.daft.trace.v1.SpanR\x05spans\"\x15\n" +
+	" \x03(\v2\x19.vmjail.trace.v1.KeyValueR\n" +
+	"attributes\x122\n" +
+	"\x06events\x18\v \x03(\v2\x1a.vmjail.trace.v1.SpanEventR\x06events\x12\x1c\n" +
+	"\tcomponent\x18\f \x01(\tR\tcomponent\"A\n" +
+	"\x12ReportSpansRequest\x12+\n" +
+	"\x05spans\x18\x01 \x03(\v2\x15.vmjail.trace.v1.SpanR\x05spans\"\x15\n" +
 	"\x13ReportSpansResponse*i\n" +
 	"\bSpanKind\x12\x19\n" +
 	"\x15SPAN_KIND_UNSPECIFIED\x10\x00\x12\x16\n" +
@@ -528,9 +528,9 @@ const file_trace_v1_trace_proto_rawDesc = "" +
 	"\x11SPAN_STATUS_UNSET\x10\x00\x12\x12\n" +
 	"\x0eSPAN_STATUS_OK\x10\x01\x12\x15\n" +
 	"\x11SPAN_STATUS_ERROR\x10\x02\x12\x19\n" +
-	"\x15SPAN_STATUS_ABANDONED\x10\x032f\n" +
-	"\fTraceService\x12V\n" +
-	"\vReportSpans\x12!.daft.trace.v1.ReportSpansRequest\x1a\".daft.trace.v1.ReportSpansResponse\"\x00BCZAgithub.com/richiejp/darkaifactory/internal/genpb/trace/v1;tracev1b\x06proto3"
+	"\x15SPAN_STATUS_ABANDONED\x10\x032j\n" +
+	"\fTraceService\x12Z\n" +
+	"\vReportSpans\x12#.vmjail.trace.v1.ReportSpansRequest\x1a$.vmjail.trace.v1.ReportSpansResponse\"\x00B<Z:github.com/richiejp/vmjail/internal/genpb/trace/v1;tracev1b\x06proto3"
 
 var (
 	file_trace_v1_trace_proto_rawDescOnce sync.Once
@@ -547,23 +547,23 @@ func file_trace_v1_trace_proto_rawDescGZIP() []byte {
 var file_trace_v1_trace_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_trace_v1_trace_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_trace_v1_trace_proto_goTypes = []any{
-	(SpanKind)(0),               // 0: daft.trace.v1.SpanKind
-	(SpanStatus)(0),             // 1: daft.trace.v1.SpanStatus
-	(*KeyValue)(nil),            // 2: daft.trace.v1.KeyValue
-	(*SpanEvent)(nil),           // 3: daft.trace.v1.SpanEvent
-	(*Span)(nil),                // 4: daft.trace.v1.Span
-	(*ReportSpansRequest)(nil),  // 5: daft.trace.v1.ReportSpansRequest
-	(*ReportSpansResponse)(nil), // 6: daft.trace.v1.ReportSpansResponse
+	(SpanKind)(0),               // 0: vmjail.trace.v1.SpanKind
+	(SpanStatus)(0),             // 1: vmjail.trace.v1.SpanStatus
+	(*KeyValue)(nil),            // 2: vmjail.trace.v1.KeyValue
+	(*SpanEvent)(nil),           // 3: vmjail.trace.v1.SpanEvent
+	(*Span)(nil),                // 4: vmjail.trace.v1.Span
+	(*ReportSpansRequest)(nil),  // 5: vmjail.trace.v1.ReportSpansRequest
+	(*ReportSpansResponse)(nil), // 6: vmjail.trace.v1.ReportSpansResponse
 }
 var file_trace_v1_trace_proto_depIdxs = []int32{
-	2, // 0: daft.trace.v1.SpanEvent.attributes:type_name -> daft.trace.v1.KeyValue
-	0, // 1: daft.trace.v1.Span.kind:type_name -> daft.trace.v1.SpanKind
-	1, // 2: daft.trace.v1.Span.status:type_name -> daft.trace.v1.SpanStatus
-	2, // 3: daft.trace.v1.Span.attributes:type_name -> daft.trace.v1.KeyValue
-	3, // 4: daft.trace.v1.Span.events:type_name -> daft.trace.v1.SpanEvent
-	4, // 5: daft.trace.v1.ReportSpansRequest.spans:type_name -> daft.trace.v1.Span
-	5, // 6: daft.trace.v1.TraceService.ReportSpans:input_type -> daft.trace.v1.ReportSpansRequest
-	6, // 7: daft.trace.v1.TraceService.ReportSpans:output_type -> daft.trace.v1.ReportSpansResponse
+	2, // 0: vmjail.trace.v1.SpanEvent.attributes:type_name -> vmjail.trace.v1.KeyValue
+	0, // 1: vmjail.trace.v1.Span.kind:type_name -> vmjail.trace.v1.SpanKind
+	1, // 2: vmjail.trace.v1.Span.status:type_name -> vmjail.trace.v1.SpanStatus
+	2, // 3: vmjail.trace.v1.Span.attributes:type_name -> vmjail.trace.v1.KeyValue
+	3, // 4: vmjail.trace.v1.Span.events:type_name -> vmjail.trace.v1.SpanEvent
+	4, // 5: vmjail.trace.v1.ReportSpansRequest.spans:type_name -> vmjail.trace.v1.Span
+	5, // 6: vmjail.trace.v1.TraceService.ReportSpans:input_type -> vmjail.trace.v1.ReportSpansRequest
+	6, // 7: vmjail.trace.v1.TraceService.ReportSpans:output_type -> vmjail.trace.v1.ReportSpansResponse
 	7, // [7:8] is the sub-list for method output_type
 	6, // [6:7] is the sub-list for method input_type
 	6, // [6:6] is the sub-list for extension type_name

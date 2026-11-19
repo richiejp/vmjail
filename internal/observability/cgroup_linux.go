@@ -219,7 +219,7 @@ func DelegationOK() bool {
 	if err != nil {
 		return false
 	}
-	dir, err := CreateSubCgroup(parent, fmt.Sprintf("daft-delegation-probe-%d", os.Getpid()))
+	dir, err := CreateSubCgroup(parent, fmt.Sprintf("vmjail-delegation-probe-%d", os.Getpid()))
 	if err != nil {
 		return false
 	}

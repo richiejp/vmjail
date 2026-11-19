@@ -21,17 +21,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/observability/progress"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/observability/progress"
 )
 
-// testTagDaftshare is the virtio-fs tag the integration tests use
+// testTagVmjailshare is the virtio-fs tag the integration tests use
 // when wiring a single share into the VM. Lives here because only
 // the tagged integration tests reference it; unit tests pick their
 // own tag names per-test.
-const testTagDaftshare = "daftshare"
+const testTagVmjailshare = "vmjailshare"
 
-// resolveArtifacts builds a sandbox.Config from a) DAFT_* env vars
+// resolveArtifacts builds a sandbox.Config from a) VMJAIL_* env vars
 // when set, falling back to b) ./result-* symlinks at the repo
 // root (the default Nix output convention). It is intentionally
 // strict: every prerequisite for running the sandbox — the
@@ -157,7 +157,7 @@ func TestHelloIntegrationBootsVMWithShare(t *testing.T) {
 
 	cfg.Shares = []*ShareConfig{{
 		HostDir:    dir,
-		Tag:        testTagDaftshare,
+		Tag:        testTagVmjailshare,
 		Mountpoint: testMountpoint,
 	}}
 
@@ -191,7 +191,7 @@ func TestHelloIntegrationBootsVMWithContainer(t *testing.T) {
 
 	cfg.Shares = []*ShareConfig{{
 		HostDir:    shareDir,
-		Tag:        testTagDaftshare,
+		Tag:        testTagVmjailshare,
 		Mountpoint: testMountpoint,
 	}}
 	cfg.Bundle = testBundlePath
@@ -219,7 +219,7 @@ func linePresent(s, want string) bool {
 
 // TestHelloIntegrationOpensnoopCapturesOpenat is the e2e proof of the
 // Tier-2 open-snoop eBPF gadget: boot a container VM with
-// daft.observe.opensnoop pointed at a path on a writable virtiofs share,
+// vmjail.observe.opensnoop pointed at a path on a writable virtiofs share,
 // let crun + the workload do their openat(2) storm, then read the trace
 // back from the host side of the share and assert the gadget loaded,
 // attached, and decoded real events.
@@ -240,7 +240,7 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 
 	cfg.Shares = []*ShareConfig{{
 		HostDir:    shareDir,
-		Tag:        testTagDaftshare,
+		Tag:        testTagVmjailshare,
 		Mountpoint: testMountpoint,
 	}}
 	cfg.Bundle = testBundlePath
@@ -315,15 +315,15 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 	// The PID-namespace filter keeps only the container workload: the
 	// agent runs /hello (comm "hello") in a child PID namespace, so its
 	// openat (the Go runtime's /sys reads, the /workspace probe) must be
-	// captured, while the agent's own opens (comm "daft-agent") must not.
+	// captured, while the agent's own opens (comm "vmjail-agent") must not.
 	// Both checks together prove the filter is on and selective, not just
 	// that *something* was traced.
 	if !strings.Contains(string(data), `comm="hello"`) {
 		t.Fatalf("opensnoop trace missing the container workload (comm=\"hello\"); filter may have dropped everything\n--- trace ---\n%s\n--- console ---\n%s",
 			data, buf.String())
 	}
-	if strings.Contains(string(data), `comm="daft-agent"`) {
-		t.Fatalf("opensnoop trace contains agent opens (comm=\"daft-agent\"); the container-workload filter is not excluding the agent's namespace\n--- trace ---\n%s",
+	if strings.Contains(string(data), `comm="vmjail-agent"`) {
+		t.Fatalf("opensnoop trace contains agent opens (comm=\"vmjail-agent\"); the container-workload filter is not excluding the agent's namespace\n--- trace ---\n%s",
 			data)
 	}
 	if !strings.Contains(buf.String(), agent.OpensnoopReportPrefix+"tracing container openat") {
@@ -465,7 +465,7 @@ func TestHelloIntegrationOpensnoopCapturesOpenat(t *testing.T) {
 }
 
 // TestHelloIntegrationBootsVMWithImagestoreBundle proves the
-// `daft-sandboxd run`-style flow without touching the CLI: pull a
+// `vmjail-sandboxd run`-style flow without touching the CLI: pull a
 // real image into a real on-disk imagestore, ask the store to
 // build a bundle, share the bundle dir into the VM, and run it.
 //
@@ -532,7 +532,7 @@ func BenchmarkHelloBootWithShare(b *testing.B) {
 	}
 	cfg.Shares = []*ShareConfig{{
 		HostDir:    dir,
-		Tag:        testTagDaftshare,
+		Tag:        testTagVmjailshare,
 		Mountpoint: testMountpoint,
 	}}
 
@@ -557,7 +557,7 @@ func BenchmarkHelloBootWithContainer(b *testing.B) {
 	}
 	cfg.Shares = []*ShareConfig{{
 		HostDir:    dir,
-		Tag:        testTagDaftshare,
+		Tag:        testTagVmjailshare,
 		Mountpoint: testMountpoint,
 	}}
 	cfg.Bundle = testBundlePath

@@ -8,33 +8,33 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/observability"
+	"github.com/richiejp/vmjail/internal/observability"
 )
 
 // EnvStateDir overrides the per-sandbox state root outright. When
 // unset, the root derives from $XDG_STATE_HOME (or ~/.local/state) +
 // stateSubdir. The test cluster sets it so e2e launches don't scatter
 // observer logs under the developer's real home.
-const EnvStateDir = "DAFT_STATE_DIR"
+const EnvStateDir = "VMJAIL_STATE_DIR"
 
 // stateSubdir is the path under the XDG state dir that holds
 // per-sandbox observability state. Each sandbox gets a <root>/<id>/
 // leaf containing its observer log. Sibling-in-spirit to the config
-// dir's "daft/sandboxd" and the image cache's "daft-sandboxd-images",
+// dir's "vmjail/sandboxd" and the image cache's "vmjail-sandboxd-images",
 // kept separate because their size profiles and pruning rules differ.
-const stateSubdir = "daft/sandboxes"
+const stateSubdir = "vmjail/sandboxes"
 
 // sandboxesStateRoot returns the absolute parent directory under which
-// each sandbox gets a per-id subdir. DAFT_STATE_DIR overrides it
-// outright; otherwise it is $XDG_STATE_HOME/daft/sandboxes, falling
-// back to ~/.local/state/daft/sandboxes per the XDG base-dir spec —
+// each sandbox gets a per-id subdir. VMJAIL_STATE_DIR overrides it
+// outright; otherwise it is $XDG_STATE_HOME/vmjail/sandboxes, falling
+// back to ~/.local/state/vmjail/sandboxes per the XDG base-dir spec —
 // Go's os package has no UserStateDir, and a relative XDG_STATE_HOME
 // is ignored exactly as the spec mandates. The directory is not
 // created here; callers mkdir the per-id leaf at launch.
 func sandboxesStateRoot() (string, error) {
 	if override := os.Getenv(EnvStateDir); override != "" {
 		if !filepath.IsAbs(override) {
-			return "", fmt.Errorf("daft-sandboxd: %s %q must be absolute", EnvStateDir, override)
+			return "", fmt.Errorf("vmjail-sandboxd: %s %q must be absolute", EnvStateDir, override)
 		}
 		return override, nil
 	}
@@ -42,7 +42,7 @@ func sandboxesStateRoot() (string, error) {
 	if !filepath.IsAbs(base) {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", fmt.Errorf("daft-sandboxd: locate state dir: %w", err)
+			return "", fmt.Errorf("vmjail-sandboxd: locate state dir: %w", err)
 		}
 		base = filepath.Join(home, ".local", "state")
 	}

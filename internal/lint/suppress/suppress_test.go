@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
 // Shared fixture strings so funlen + goconst stay green and the
@@ -31,56 +31,56 @@ func parseCases() []parseCase {
 		},
 		{
 			name:   "prefix in middle is not a directive",
-			raw:    "// see daft:lint:disable= for context",
+			raw:    "// see vmjail:lint:disable= for context",
 			wantOK: false,
 		},
 		{
 			name:       "canonical form",
-			raw:        `//daft:lint:disable=foo reason="why"`,
+			raw:        `//vmjail:lint:disable=foo reason="why"`,
 			wantNames:  []string{fixtureName},
 			wantReason: fixtureReason,
 			wantOK:     true,
 		},
 		{
 			name:       "space after slashes",
-			raw:        `// daft:lint:disable=foo reason="why"`,
+			raw:        `// vmjail:lint:disable=foo reason="why"`,
 			wantNames:  []string{fixtureName},
 			wantReason: fixtureReason,
 			wantOK:     true,
 		},
 		{
 			name:       "multi-analyzer",
-			raw:        `//daft:lint:disable=foo,bar reason="why"`,
+			raw:        `//vmjail:lint:disable=foo,bar reason="why"`,
 			wantNames:  []string{fixtureName, "bar"},
 			wantReason: fixtureReason,
 			wantOK:     true,
 		},
 		{
 			name:      "missing reason",
-			raw:       `//daft:lint:disable=foo`,
+			raw:       `//vmjail:lint:disable=foo`,
 			wantNames: []string{fixtureName},
 			wantOK:    true,
 		},
 		{
 			name:      "empty reason",
-			raw:       `//daft:lint:disable=foo reason=""`,
+			raw:       `//vmjail:lint:disable=foo reason=""`,
 			wantNames: []string{fixtureName},
 			wantOK:    true,
 		},
 		{
 			name:      "whitespace-only reason",
-			raw:       `//daft:lint:disable=foo reason="   "`,
+			raw:       `//vmjail:lint:disable=foo reason="   "`,
 			wantNames: []string{fixtureName},
 			wantOK:    true,
 		},
 		{
 			name:   "bare prefix is malformed",
-			raw:    `//daft:lint:disable=`,
+			raw:    `//vmjail:lint:disable=`,
 			wantOK: true,
 		},
 		{
 			name:       "block comment",
-			raw:        `/* daft:lint:disable=foo reason="why" */`,
+			raw:        `/* vmjail:lint:disable=foo reason="why" */`,
 			wantNames:  []string{fixtureName},
 			wantReason: fixtureReason,
 			wantOK:     true,

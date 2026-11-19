@@ -226,17 +226,17 @@ var File_agent_v1_job_proto protoreflect.FileDescriptor
 
 const file_agent_v1_job_proto_rawDesc = "" +
 	"\n" +
-	"\x12agent/v1/job.proto\x12\rdaft.agent.v1\"$\n" +
+	"\x12agent/v1/job.proto\x12\x0fvmjail.agent.v1\"$\n" +
 	"\bJobHello\x12\x18\n" +
-	"\acommand\x18\x01 \x03(\tR\acommand\"t\n" +
+	"\acommand\x18\x01 \x03(\tR\acommand\"v\n" +
 	"\bJobFrame\x12\x18\n" +
 	"\x06stdout\x18\x01 \x01(\fH\x00R\x06stdout\x12\x18\n" +
-	"\x06stderr\x18\x02 \x01(\fH\x00R\x06stderr\x12,\n" +
-	"\x04exit\x18\x03 \x01(\v2\x16.daft.agent.v1.JobExitH\x00R\x04exitB\x06\n" +
+	"\x06stderr\x18\x02 \x01(\fH\x00R\x06stderr\x12.\n" +
+	"\x04exit\x18\x03 \x01(\v2\x18.vmjail.agent.v1.JobExitH\x00R\x04exitB\x06\n" +
 	"\x04body\"3\n" +
 	"\aJobExit\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05errorBCZAgithub.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1b\x06proto3"
+	"\x05error\x18\x02 \x01(\tR\x05errorB<Z:github.com/richiejp/vmjail/internal/genpb/agent/v1;agentv1b\x06proto3"
 
 var (
 	file_agent_v1_job_proto_rawDescOnce sync.Once
@@ -252,12 +252,12 @@ func file_agent_v1_job_proto_rawDescGZIP() []byte {
 
 var file_agent_v1_job_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_agent_v1_job_proto_goTypes = []any{
-	(*JobHello)(nil), // 0: daft.agent.v1.JobHello
-	(*JobFrame)(nil), // 1: daft.agent.v1.JobFrame
-	(*JobExit)(nil),  // 2: daft.agent.v1.JobExit
+	(*JobHello)(nil), // 0: vmjail.agent.v1.JobHello
+	(*JobFrame)(nil), // 1: vmjail.agent.v1.JobFrame
+	(*JobExit)(nil),  // 2: vmjail.agent.v1.JobExit
 }
 var file_agent_v1_job_proto_depIdxs = []int32{
-	2, // 0: daft.agent.v1.JobFrame.exit:type_name -> daft.agent.v1.JobExit
+	2, // 0: vmjail.agent.v1.JobFrame.exit:type_name -> vmjail.agent.v1.JobExit
 	1, // [1:1] is the sub-list for method output_type
 	1, // [1:1] is the sub-list for method input_type
 	1, // [1:1] is the sub-list for extension type_name

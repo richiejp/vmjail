@@ -1,5 +1,5 @@
 // Package iosnoop is a Tier-2 CO-RE eBPF gadget (see OBSERVABILITY.md
-// "Tier 2"). It runs inside the guest, attached by daft-agent, and reports the
+// "Tier 2"). It runs inside the guest, attached by vmjail-agent, and reports the
 // files, sockets, and pipes the workload reads and writes — per-fd byte and
 // call counts resolved to a target via /proc/<pid>/fd — so "what is this build
 // shovelling data through" is answerable from a guest-side log. It is the

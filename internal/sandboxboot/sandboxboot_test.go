@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/agentcredential"
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/imagestore"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/agentcredential"
+	"github.com/richiejp/vmjail/internal/bundled"
+	"github.com/richiejp/vmjail/internal/imagestore"
+	"github.com/richiejp/vmjail/internal/sandbox"
 )
 
 const (
@@ -124,14 +124,14 @@ func TestBuildBundleConfigWritesCACert(t *testing.T) {
 	pem := []byte("-----BEGIN CERTIFICATE-----\nxyz\n-----END CERTIFICATE-----\n")
 	_, unlock, err := BuildBundleConfig(t.Context(), "alpine:3", BootOptions{
 		CACert:          pem,
-		CACertGuestPath: "/etc/daft-egress-ca.pem",
+		CACertGuestPath: "/etc/vmjail-egress-ca.pem",
 	}, deps)
 	if err != nil {
 		t.Fatalf("BuildBundleConfig: %v", err)
 	}
 	defer unlock()
 	// #nosec G304 — test-only path under t.TempDir().
-	got, err := os.ReadFile(filepath.Join(bundlePath, "rootfs", "etc", "daft-egress-ca.pem"))
+	got, err := os.ReadFile(filepath.Join(bundlePath, "rootfs", "etc", "vmjail-egress-ca.pem"))
 	if err != nil {
 		t.Fatalf("read CA cert: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestBuildBundleConfigCACertWriteError(t *testing.T) {
 	deps := tempBundleDeps(t, bundleFile)
 	_, _, err := BuildBundleConfig(t.Context(), "alpine:3", BootOptions{
 		CACert:          []byte("pem"),
-		CACertGuestPath: "/etc/daft-egress-ca.pem",
+		CACertGuestPath: "/etc/vmjail-egress-ca.pem",
 	}, deps)
 	if err == nil {
 		t.Fatal("want error when rootfs dir cannot be created under a file")

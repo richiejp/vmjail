@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/userns"
+	"github.com/richiejp/vmjail/internal/userns"
 )
 
 // helperEnvVar, when set, makes TestMain invoke
@@ -22,7 +22,7 @@ import (
 // (instead of running the test suite). The smoke test spawns
 // itself with this var set; the spawned copy plays the role of
 // a "real" sandboxd that the smoke test inspects.
-const helperEnvVar = "DAFT_USERNS_REEXEC_HELPER"
+const helperEnvVar = "VMJAIL_USERNS_REEXEC_HELPER"
 
 // TestMain is the re-exec trampoline: the test binary plays
 // two roles. With helperEnvVar set, it just runs Reexec and
@@ -152,7 +152,7 @@ func waitForMapEntries(t *testing.T, path string, minimum int) []mapEntry {
 	deadline := time.Now().Add(2 * time.Second)
 	var last []mapEntry
 	var lastErr error
-	//daft:lint:disable=forloopbound reason="bounded by deadline + t.Fatalf below"
+	//vmjail:lint:disable=forloopbound reason="bounded by deadline + t.Fatalf below"
 	for {
 		last, lastErr = readMap(path)
 		if lastErr == nil && len(last) >= minimum {
@@ -185,7 +185,7 @@ func haveNewIDMap() bool {
 func waitForChild(t *testing.T, parentPID int) int {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
-	//daft:lint:disable=forloopbound reason="bounded by deadline + t.Fatalf below"
+	//vmjail:lint:disable=forloopbound reason="bounded by deadline + t.Fatalf below"
 	for {
 		path := fmt.Sprintf("/proc/%d/task/%d/children", parentPID, parentPID)
 		//nolint:gosec // path is constructed from a child pid we just spawned.

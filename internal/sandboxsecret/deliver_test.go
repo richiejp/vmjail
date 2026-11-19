@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/agentcredential"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/agentcredential"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
 )
 
 func TestDeliverRoundTripAndValidation(t *testing.T) {

@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/version"
+	"github.com/richiejp/vmjail/internal/bundled"
+	"github.com/richiejp/vmjail/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/version"
 )
 
 func runCmd(t *testing.T, args ...string) (stdout, stderr string, err error) {
@@ -23,7 +23,7 @@ func runCmd(t *testing.T, args ...string) (stdout, stderr string, err error) {
 func TestVersionPrintsVersion(t *testing.T) {
 	stdout, _, err := runCmd(t, "version")
 	if err != nil {
-		t.Fatalf("daft-sandboxd version: %v", err)
+		t.Fatalf("vmjail-sandboxd version: %v", err)
 	}
 	if got := strings.TrimSpace(stdout); got != version.Version {
 		t.Fatalf("version output = %q, want %q", got, version.Version)
@@ -33,7 +33,7 @@ func TestVersionPrintsVersion(t *testing.T) {
 func TestHelloIsRegistered(t *testing.T) {
 	stdout, _, err := runCmd(t, "--help")
 	if err != nil {
-		t.Fatalf("daft-sandboxd --help: %v", err)
+		t.Fatalf("vmjail-sandboxd --help: %v", err)
 	}
 	if !strings.Contains(stdout, "hello") {
 		t.Fatalf("help output should advertise hello sub-command, got:\n%s", stdout)
@@ -41,7 +41,7 @@ func TestHelloIsRegistered(t *testing.T) {
 }
 
 // TestHelloRefusesWithoutBundle exercises the dev `go test` path: in
-// this build, internal/bundled has stub assets, so daft-sandboxd hello
+// this build, internal/bundled has stub assets, so vmjail-sandboxd hello
 // should refuse with a user-actionable error pointing at the env-var
 // fallback.
 func TestHelloRefusesWithoutBundle(t *testing.T) {
@@ -50,7 +50,7 @@ func TestHelloRefusesWithoutBundle(t *testing.T) {
 	}
 	_, _, err := runCmd(t, "hello")
 	if err == nil {
-		t.Fatal("daft-sandboxd hello with stub bundle returned nil, want error")
+		t.Fatal("vmjail-sandboxd hello with stub bundle returned nil, want error")
 	}
 	if !strings.Contains(err.Error(), "no bundled artifacts") {
 		t.Errorf("error should mention missing bundle, got: %v", err)

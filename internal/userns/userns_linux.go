@@ -21,13 +21,13 @@ import (
 // Reexec recognise themselves as the child and skip the spawn.
 // Exported so tests (and tools that need to fork sub-processes
 // that should NOT re-enter userns logic) can set/inspect it.
-const EnvMarker = "DAFT_IN_USERNS"
+const EnvMarker = "VMJAIL_IN_USERNS"
 
 // EnvDisable, when set to "1" before sandboxd starts, skips the
 // userns re-exec entirely. Intended for debugging and for
 // container-host environments that already provide an equivalent
 // userns to the calling process.
-const EnvDisable = "DAFT_DISABLE_USERNS"
+const EnvDisable = "VMJAIL_DISABLE_USERNS"
 
 // SubBase / SubSize describe the host id range we expect to
 // inherit from /etc/subuid + /etc/subgid for the calling user.
@@ -200,7 +200,7 @@ var buildReexecCmd = defaultBuildReexecCmd
 // in the child).
 func defaultBuildReexecCmd(syncFD *os.File) *exec.Cmd {
 	//nolint:gosec // /proc/self/exe is our own binary.
-	//daft:lint:disable=commandcontext reason="the re-exec is the supervised workload itself; waitWithSignalForwarding provides lifetime and liveness control"
+	//vmjail:lint:disable=commandcontext reason="the re-exec is the supervised workload itself; waitWithSignalForwarding provides lifetime and liveness control"
 	cmd := exec.Command("/proc/self/exe", os.Args[1:]...)
 	cmd.Env = append(os.Environ(), EnvMarker+"=1")
 	cmd.Stdin = os.Stdin
@@ -228,7 +228,7 @@ func waitWithSignalForwarding(cmd *exec.Cmd) int {
 
 	done := make(chan struct{})
 	go func() {
-		//daft:lint:disable=forloopbound reason="bounded by close(done) when cmd.Wait returns"
+		//vmjail:lint:disable=forloopbound reason="bounded by close(done) when cmd.Wait returns"
 		for {
 			select {
 			case s := <-sigs:

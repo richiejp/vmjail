@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/sleepsnoop"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/sleepsnoop"
 )
 
 // sleepsnoopCfg builds a GuestConfig carrying the sleep-snoop observe path.

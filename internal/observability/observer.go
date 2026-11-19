@@ -44,8 +44,8 @@ const (
 	DefaultMaxBytes    = int64(50 * 1024 * 1024) // 50 MB total, ~25 MB current + ~25 MB .1
 	// DefaultLogFilename is the conventional basename for a per-sandbox
 	// observer trace living at <state-dir>/<sandbox-id>/<here>. The
-	// daft-sandboxd launch paths default Config.ObserverLogPath to it
-	// and `daft sandbox observer-tail` (roadmap) finds the log from a
+	// vmjail-sandboxd launch paths default Config.ObserverLogPath to it
+	// and `vmjail sandbox observer-tail` (roadmap) finds the log from a
 	// sandbox id alone — one source of truth so the two never drift.
 	DefaultLogFilename = "observer.jsonl"
 )
@@ -54,7 +54,7 @@ const (
 // <parent>/<id>/observer.jsonl, creating the <parent>/<id> directory
 // (which persists past VM exit for post-mortem inspection). It is the
 // single place that joins the DefaultLogFilename convention onto a
-// state dir + sandbox id, shared by every daft-sandboxd launch path
+// state dir + sandbox id, shared by every vmjail-sandboxd launch path
 // (CLI hello/run and orchestrator dispatch) so the layout can't drift.
 func DefaultPath(parent, id string) (string, error) {
 	dir := filepath.Join(parent, id)
@@ -144,7 +144,7 @@ type Options struct {
 	// the workload's cgroup v2 files (cpu.stat / memory.* /
 	// io.stat / pids.*) once per tick in addition to /proc/<pid>.
 	// Path must be the absolute filesystem path to the cgroup
-	// directory (e.g. /sys/fs/cgroup/.../daft-<id>). Empty
+	// directory (e.g. /sys/fs/cgroup/.../vmjail-<id>). Empty
 	// disables cgroup sampling; the /proc sampler still runs.
 	CgroupDir string
 	// CollectNet, when non-nil, is called once per tick to capture
@@ -295,7 +295,7 @@ func (o *Observer) run() {
 		o.finish(err)
 		return
 	}
-	//daft:lint:disable=forloopbound reason="exits when o.stop is closed by Stop, or when tick reports a fatal write/marshal error"
+	//vmjail:lint:disable=forloopbound reason="exits when o.stop is closed by Stop, or when tick reports a fatal write/marshal error"
 	for {
 		select {
 		case <-o.stop:

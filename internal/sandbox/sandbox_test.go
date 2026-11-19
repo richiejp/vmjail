@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/observability"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/observability"
 )
 
 // TestMain doubles the test binary as a "fake VMM" when invoked with the
@@ -29,19 +29,19 @@ import (
 // The check happens before m.Run, so flag.Parse() never sees the
 // cloud-hypervisor flags our parent passes us.
 const (
-	fakeVMMEnv = "DAFT_TEST_FAKE_VMM_LINES"
+	fakeVMMEnv = "VMJAIL_TEST_FAKE_VMM_LINES"
 	// fakeVirtiofsdEnv: when set the test binary impersonates virtiofsd
 	// well enough for the sidecar's spawn / wait-for-socket / stop
 	// dance — it parses --socket-path, creates a Unix socket node
 	// there, and blocks until killed.
-	fakeVirtiofsdEnv = "DAFT_TEST_FAKE_VIRTIOFSD"
+	fakeVirtiofsdEnv = "VMJAIL_TEST_FAKE_VIRTIOFSD"
 	// devNull is /dev/null. Used as a stand-in for the kernel and
 	// initramfs paths in tests that swap in a fake VMM — the fake
 	// ignores its args, so the paths only need to exist.
 	devNull = "/dev/null"
 	// testMountpoint is the in-VM share mountpoint reused across
 	// share tests; testBundlePath is the in-VM bundle path.
-	// testTagDaftshare lives in integration_test.go because only
+	// testTagVmjailshare lives in integration_test.go because only
 	// the tagged integration tests use it (the non-tagged unit
 	// tests pick their own tag names per-test).
 	testMountpoint    = "/share"
@@ -318,7 +318,7 @@ func TestScanForBannerWrapsReadError(t *testing.T) {
 
 // TestCloudHypervisorRunnerViaFakeBinary exercises the real
 // cloudHypervisorRunner by pointing it at this test binary, which TestMain
-// turns into a fake VMM when DAFT_TEST_FAKE_VMM_LINES is set. We verify
+// turns into a fake VMM when VMJAIL_TEST_FAKE_VMM_LINES is set. We verify
 // that:
 //   - Hello succeeds against a "VMM" that prints kernel-style noise then
 //     the banner.
@@ -424,7 +424,7 @@ func TestCloudHypervisorRunner_ObserverAndCgroupTeardown(t *testing.T) {
 	// Cleanup must have removed the cgroup directory we created.
 	entries, _ := os.ReadDir(parent)
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "daft-vm-") {
+		if strings.HasPrefix(e.Name(), "vmjail-vm-") {
 			t.Errorf("leaked cgroup dir under fake parent: %s", e.Name())
 		}
 	}
@@ -655,12 +655,12 @@ func TestTranslateArgs(t *testing.T) {
 	}
 }
 
-// TestBuildKernelCmdlineHasNoDaftTokens pins the slice-3 cutover: every
+// TestBuildKernelCmdlineHasNoVmjailTokens pins the slice-3 cutover: every
 // per-VM setting now travels over the vsock control channel, so the kernel
-// cmdline carries zero daft.* tokens no matter how richly the Config is
+// cmdline carries zero vmjail.* tokens no matter how richly the Config is
 // populated — only the static base remains. The settings themselves are
 // covered by TestBuildGuestConfigProjectsConfig.
-func TestBuildKernelCmdlineHasNoDaftTokens(t *testing.T) {
+func TestBuildKernelCmdlineHasNoVmjailTokens(t *testing.T) {
 	cfg := validCfg().withDefaults()
 	cfg.Bundle = testBundlePath
 	cfg.Shares = []*ShareConfig{{Tag: "ws", Mountpoint: testMountpoint, Overlay: true}}
@@ -676,10 +676,10 @@ func TestBuildKernelCmdlineHasNoDaftTokens(t *testing.T) {
 	}
 	got := buildKernelCmdline(cfg)
 	if got != kernelCmdlineBase {
-		t.Errorf("cmdline = %q, want exactly the base %q (zero daft.* tokens)", got, kernelCmdlineBase)
+		t.Errorf("cmdline = %q, want exactly the base %q (zero vmjail.* tokens)", got, kernelCmdlineBase)
 	}
-	if strings.Contains(got, "daft.") {
-		t.Errorf("cmdline %q still carries a daft.* token", got)
+	if strings.Contains(got, "vmjail.") {
+		t.Errorf("cmdline %q still carries a vmjail.* token", got)
 	}
 }
 
@@ -732,7 +732,7 @@ func TestValidatePortForwardsRejectsZeroPorts(t *testing.T) {
 
 // TestValidateRejectsRelativeObserverLogPath: ObserverLogPath
 // must be absolute. Relative paths would be resolved against
-// whatever cwd daft-sandboxd happens to be in — surprising and
+// whatever cwd vmjail-sandboxd happens to be in — surprising and
 // post-launch-fragile (cwd can change). Caught at validate so
 // no half-spawned cloud-hypervisor leaks before the operator
 // sees the diagnostic.
@@ -789,7 +789,7 @@ func TestVMCgroupName_UniquePerCall(t *testing.T) {
 	if a == b {
 		t.Fatalf("vmCgroupName collided across calls: %q == %q", a, b)
 	}
-	if !strings.HasPrefix(a, "daft-vm-") || !strings.HasPrefix(b, "daft-vm-") {
+	if !strings.HasPrefix(a, "vmjail-vm-") || !strings.HasPrefix(b, "vmjail-vm-") {
 		t.Errorf("unexpected prefix: a=%q b=%q", a, b)
 	}
 }
@@ -799,8 +799,8 @@ func TestVMCgroupName_UniquePerCall(t *testing.T) {
 // well-formed name.
 func TestVMCgroupName_HandlesEmptyLogPath(t *testing.T) {
 	got := vmCgroupName(Config{})
-	if !strings.HasPrefix(got, "daft-vm-") {
-		t.Errorf("got %q, want daft-vm- prefix", got)
+	if !strings.HasPrefix(got, "vmjail-vm-") {
+		t.Errorf("got %q, want vmjail-vm- prefix", got)
 	}
 }
 

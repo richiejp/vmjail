@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	address := os.Getenv("DAFT_LISTEN_ADDR")
+	address := os.Getenv("VMJAIL_LISTEN_ADDR")
 	if address == "" {
 		address = ":8080"
 	}

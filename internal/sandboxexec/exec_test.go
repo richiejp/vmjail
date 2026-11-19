@@ -16,19 +16,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/richiejp/darkaifactory/internal/hostresources"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/sandboxboot"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
-	"github.com/richiejp/darkaifactory/internal/sandboxnet"
+	"github.com/richiejp/vmjail/internal/agent"
+	sandboxv1 "github.com/richiejp/vmjail/internal/genpb/sandbox/v1"
+	"github.com/richiejp/vmjail/internal/hostresources"
+	"github.com/richiejp/vmjail/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/sandboxboot"
+	"github.com/richiejp/vmjail/internal/sandboxgateway"
+	"github.com/richiejp/vmjail/internal/sandboxnet"
 )
 
 const (
 	testImageRef  = "alpine:3"
 	testSandboxID = "sb-1"
-	testVsockDir  = "/var/run/daft-sandboxd"
+	testVsockDir  = "/var/run/vmjail-sandboxd"
 	mntWorkspace  = "/workspace"
 	mntData       = "/data"
 	mntReference  = "/reference"
@@ -37,7 +37,7 @@ const (
 
 	devcontainerNestedPath = ".devcontainer/devcontainer.json"
 	devcontainerFlatPath   = "devcontainer.json"
-	testBuildImageRef      = "daft-registry.internal/builder:v1"
+	testBuildImageRef      = "vmjail-registry.internal/builder:v1"
 )
 
 func TestProductionAssemblerReturnsConfiguredAssembler(t *testing.T) {
@@ -626,7 +626,7 @@ func TestHandleSandboxEventNoAssemblerFallback(t *testing.T) {
 // TestHandleSandboxEventPropagatesMounts pins D6c.1's mount
 // wiring: spec.Mounts flow through to the assembler as
 // sandboxboot.BootOptions.Mounts, in declaration order. Without
-// this seam, `daft workspace mount add /workspace` is a no-op
+// this seam, `vmjail workspace mount add /workspace` is a no-op
 // inside the container.
 func TestHandleSandboxEventPropagatesMounts(t *testing.T) {
 	var seenOpts sandboxboot.BootOptions
@@ -786,7 +786,7 @@ func TestDevcontainerMissingFileFailsDispatch(t *testing.T) {
 }
 
 // TestDevcontainerInvalidConfigFailsDispatch pins that a present but
-// unusable devcontainer (malformed JSON, or build-based which daft can't
+// unusable devcontainer (malformed JSON, or build-based which vmjail can't
 // build yet) fails the dispatch rather than booting the fallback.
 func TestDevcontainerInvalidConfigFailsDispatch(t *testing.T) {
 	for _, tc := range []struct {
@@ -1033,27 +1033,27 @@ func TestHandleSandboxEventRegistersSummaryRoute(t *testing.T) {
 		t.Errorf("summary route during run = %q (err %v), want %q", routeDuringRun, resolveErr, wantHost)
 	}
 	// The guest paths point into the observe share, and the share is exported.
-	if seen.ObserveSummaryPath != "/run/daft/observe/progress.json" {
+	if seen.ObserveSummaryPath != "/run/vmjail/observe/progress.json" {
 		t.Errorf("guest summary path = %q", seen.ObserveSummaryPath)
 	}
-	if seen.OpensnoopLogPath != "/run/daft/observe/opensnoop.log" {
+	if seen.OpensnoopLogPath != "/run/vmjail/observe/opensnoop.log" {
 		t.Errorf("guest opensnoop path = %q", seen.OpensnoopLogPath)
 	}
-	if seen.ExecsnoopLogPath != "/run/daft/observe/execsnoop.log" {
+	if seen.ExecsnoopLogPath != "/run/vmjail/observe/execsnoop.log" {
 		t.Errorf("guest execsnoop path = %q", seen.ExecsnoopLogPath)
 	}
-	if seen.SleepsnoopLogPath != "/run/daft/observe/sleepsnoop.log" {
+	if seen.SleepsnoopLogPath != "/run/vmjail/observe/sleepsnoop.log" {
 		t.Errorf("guest sleepsnoop path = %q", seen.SleepsnoopLogPath)
 	}
-	if seen.IosnoopLogPath != "/run/daft/observe/iosnoop.log" {
+	if seen.IosnoopLogPath != "/run/vmjail/observe/iosnoop.log" {
 		t.Errorf("guest iosnoop path = %q", seen.IosnoopLogPath)
 	}
-	if seen.SyscallListPath != "/run/daft/observe/syscalls.txt" {
+	if seen.SyscallListPath != "/run/vmjail/observe/syscalls.txt" {
 		t.Errorf("guest syscalls path = %q", seen.SyscallListPath)
 	}
 	var haveObserveShare bool
 	for _, s := range seen.Shares {
-		if s.Tag == "daftobserve" && s.Mountpoint == "/run/daft/observe" {
+		if s.Tag == "vmjailobserve" && s.Mountpoint == "/run/vmjail/observe" {
 			haveObserveShare = true
 		}
 	}
@@ -1576,7 +1576,7 @@ func TestHandleSandboxEventAssignsPerSandboxVsock(t *testing.T) {
 	if seen.Vsock.GuestCID < 3 {
 		t.Errorf("GuestCID = %d, want >= 3", seen.Vsock.GuestCID)
 	}
-	wantPath := "/var/run/daft-sandboxd/sb-xyz.sock"
+	wantPath := "/var/run/vmjail-sandboxd/sb-xyz.sock"
 	if seen.Vsock.HostSocket != wantPath {
 		t.Errorf("HostSocket = %q, want %q", seen.Vsock.HostSocket, wantPath)
 	}

@@ -80,7 +80,7 @@ func Run(ctx context.Context, scenario Scenario, execute Executor) (Result, erro
 }
 
 func executeCommand(ctx context.Context, argv []string) (stdoutText, stderrText string, exitCode int, runErr error) {
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- Scenario validation fixes argv[0] to the installed daft client; remaining arguments are the purpose of the source-blind public CLI test.
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) // #nosec G204 -- Scenario validation fixes argv[0] to the installed vmjail client; remaining arguments are the purpose of the source-blind public CLI test.
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()

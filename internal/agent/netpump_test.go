@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/sandboxnet/sandboxnettest"
+	"github.com/richiejp/vmjail/internal/sandboxnet/sandboxnettest"
 )
 
 func TestPumpFramesConnToTap(t *testing.T) {

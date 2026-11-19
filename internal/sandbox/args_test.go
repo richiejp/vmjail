@@ -12,7 +12,7 @@ import (
 const testTagWorkspace = "workspace"
 
 const (
-	testAPISocket       = "/run/daft/vm.sock"
+	testAPISocket       = "/run/vmjail/vm.sock"
 	testErrMustAbsolute = "must be absolute"
 	testWorkspaceMount  = "/workspace"
 )

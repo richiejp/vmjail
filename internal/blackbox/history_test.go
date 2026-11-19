@@ -33,7 +33,7 @@ func TestHistoryValidationRejectsInvalidRecords(t *testing.T) {
 	base := HistoryIssue{
 		Version: Version, ID: "history-help", Category: CategoryUX, Title: "example title",
 		Status: HistoryResolved, Symptom: "example symptom", Expected: "expected behavior",
-		PublicSurfaces: []string{"daft --help"}, Sources: []HistorySource{{System: "tracker", Reference: "123"}},
+		PublicSurfaces: []string{"vmjail --help"}, Sources: []HistorySource{{System: "tracker", Reference: "123"}},
 	}
 	cases := []struct {
 		name   string

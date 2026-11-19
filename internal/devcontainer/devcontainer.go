@@ -1,9 +1,9 @@
 // Package devcontainer parses a devcontainer.json (the containers.dev
-// "development container" spec) into a small, daft-shaped intermediate
+// "development container" spec) into a small, vmjail-shaped intermediate
 // representation (Spec).
 //
 // It is deliberately a *consumer* of the spec, not a full
-// implementation: daft already owns the runtime half (virtio-fs shares,
+// implementation: vmjail already owns the runtime half (virtio-fs shares,
 // the image store, uid translation, port forwards, in-container exec),
 // so this package resolves only the fields that map onto that machinery
 // — image/build, containerEnv, remoteUser, the workspace mount,
@@ -29,7 +29,7 @@ import (
 )
 
 // Config is the raw, decoded devcontainer.json — the subset of fields
-// daft consumes, with the spec's polymorphic shapes captured by the
+// vmjail consumes, with the spec's polymorphic shapes captured by the
 // custom types below. Resolve turns it into a Spec.
 type Config struct {
 	Name string `json:"name"`
@@ -77,7 +77,7 @@ type Build struct {
 
 // Parse decodes jsonc bytes into a Config. Comments and trailing commas
 // are stripped first (see stripJSONC) since encoding/json rejects both.
-// Unknown keys are ignored by design — the spec has ~40 fields and daft
+// Unknown keys are ignored by design — the spec has ~40 fields and vmjail
 // consumes a deliberate subset.
 func Parse(data []byte) (*Config, error) {
 	var c Config
@@ -148,7 +148,7 @@ func scalarToString(v any) (string, error) {
 
 // Port is a single forwardPorts entry, which the spec allows as either
 // an integer (8080) or a string ("8080" or "host:8080"). Only the
-// container-side port number is retained — daft forwards by port.
+// container-side port number is retained — vmjail forwards by port.
 type Port int
 
 // UnmarshalJSON accepts 8080, "8080", or "127.0.0.1:8080".

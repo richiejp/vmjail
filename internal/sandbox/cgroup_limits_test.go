@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/observability"
+	"github.com/richiejp/vmjail/internal/observability"
 )
 
 func TestParseSizeBytes(t *testing.T) {
@@ -135,7 +135,7 @@ func TestCreateVMCgroupUsesSetParent(t *testing.T) {
 	SetVMCgroupParent(parent)
 	t.Cleanup(func() { SetVMCgroupParent("") })
 
-	dir, err := createVMCgroup("daft-vm-setparent")
+	dir, err := createVMCgroup("vmjail-vm-setparent")
 	if err != nil {
 		t.Fatalf("createVMCgroup: %v", err)
 	}

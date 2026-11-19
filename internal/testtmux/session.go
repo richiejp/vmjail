@@ -30,11 +30,11 @@ import (
 
 // PromptMarker is the PS1 the harness installs into the pane.
 // Documented for reference; tests should not WaitFor it
-// directly because the literal "DAFT$ " appears in the echoed
-// `PS1='DAFT$ '` setup command. For per-command synchronisation
+// directly because the literal "VMJAIL$ " appears in the echoed
+// `PS1='VMJAIL$ '` setup command. For per-command synchronisation
 // use a unique sentinel echoed after the command (see the
-// `printf 'DAFT-DONE-%d\n' $((…))` pattern in tests).
-const PromptMarker = "DAFT$ "
+// `printf 'VMJAIL-DONE-%d\n' $((…))` pattern in tests).
+const PromptMarker = "VMJAIL$ "
 
 const (
 	paneCols = "200"
@@ -132,7 +132,7 @@ func (s *Session) Capture() string {
 func (s *Session) WaitFor(substr string, timeout time.Duration) string {
 	s.t.Helper()
 	deadline := time.Now().Add(timeout)
-	//daft:lint:disable=forloopbound reason="bounded by deadline via the if-fatal below"
+	//vmjail:lint:disable=forloopbound reason="bounded by deadline via the if-fatal below"
 	for {
 		got := s.Capture()
 		if strings.Contains(got, substr) {

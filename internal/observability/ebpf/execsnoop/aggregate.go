@@ -3,8 +3,8 @@ package execsnoop
 import (
 	"sync"
 
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/topk"
-	"github.com/richiejp/darkaifactory/internal/observability/progress"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/topk"
+	"github.com/richiejp/vmjail/internal/observability/progress"
 )
 
 // Aggregation caps. A build execs thousands of distinct commands; the

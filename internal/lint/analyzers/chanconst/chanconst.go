@@ -19,7 +19,7 @@
 // Flagged: any non-constant expression in the buffer-size slot —
 // function parameters, function calls, slice lengths, etc.
 //
-// Suppression: `//daft:lint:disable=chanconst reason="…"`. The
+// Suppression: `//vmjail:lint:disable=chanconst reason="…"`. The
 // reason should explain why a runtime-sized buffer is genuinely
 // needed (e.g. "queue size derived from a config we validated
 // against a hard ceiling at startup").
@@ -31,10 +31,10 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
-// analyzerName drives Analyzer.Name and the //daft:lint:disable=
+// analyzerName drives Analyzer.Name and the //vmjail:lint:disable=
 // match; one constant keeps them in lock-step.
 const analyzerName = "chanconst"
 

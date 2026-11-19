@@ -7,7 +7,7 @@ import (
 
 // FuzzIsValidTraceID covers the wire-header validator that gates
 // trace-context propagation in the server interceptor. Because a
-// peer can write any string into the Daft-Trace-Id header, the
+// peer can write any string into the Vmjail-Trace-Id header, the
 // validator's job is to filter to just well-formed lowercase hex
 // of the right length. Anything that survives this is then trusted
 // downstream as a real trace ID.

@@ -4,7 +4,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/richiejp/darkaifactory/internal/observability/progress"
+	"github.com/richiejp/vmjail/internal/observability/progress"
 )
 
 // defaultTopN is how many targets each ranking surfaces.

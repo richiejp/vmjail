@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // TestHelloIntegrationShipsAgentSpansOverVsock is the e2e proof of
@@ -58,7 +58,7 @@ func TestHelloIntegrationShipsAgentSpansOverVsock(t *testing.T) {
 }
 
 // findAgentBootSpan reports whether the host Tracer received a
-// span named "agent.boot" produced by the daft-agent component.
+// span named "agent.boot" produced by the vmjail-agent component.
 // Returns the snapshot regardless so a failing test can dump
 // what *did* arrive.
 func findAgentBootSpan(tr *trace.Tracer) (bool, []string) {
@@ -67,7 +67,7 @@ func findAgentBootSpan(tr *trace.Tracer) (bool, []string) {
 	found := false
 	for _, s := range snap {
 		names = append(names, s.Name()+"@"+s.Component())
-		if s.Name() == "agent.boot" && s.Component() == "daft-agent" {
+		if s.Name() == "agent.boot" && s.Component() == "vmjail-agent" {
 			found = true
 		}
 	}

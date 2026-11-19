@@ -11,14 +11,14 @@ loop:
 	}
 }
 
-// suppressed pins that //daft:lint:disable=nogoto silences the
+// suppressed pins that //vmjail:lint:disable=nogoto silences the
 // diagnostic.
 func suppressed() {
 	i := 0
 again:
 	if i < 3 {
 		i++
-		//daft:lint:disable=nogoto reason="fixture exercises suppression"
+		//vmjail:lint:disable=nogoto reason="fixture exercises suppression"
 		goto again
 	}
 }

@@ -15,9 +15,9 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/oops"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 const (
@@ -125,7 +125,7 @@ func runSecretListener(ctx context.Context, w io.Writer, ln net.Listener, store 
 	_, span := trace.Start(ctx, "agent.secret.listener", trace.WithAttributes(trace.KV{Key: traceAttrVsockPort, Value: strconv.FormatUint(uint64(DefaultSecretVsockPort), 10)}))
 	defer span.End()
 	go func() { <-ctx.Done(); _ = ln.Close() }()
-	//daft:lint:disable=forloopbound reason="bounded by listener close on VM cancellation"
+	//vmjail:lint:disable=forloopbound reason="bounded by listener close on VM cancellation"
 	for {
 		conn, err := ln.Accept()
 		if err != nil {

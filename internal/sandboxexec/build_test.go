@@ -11,10 +11,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/devcontainer"
-	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/sandboxboot"
+	"github.com/richiejp/vmjail/internal/devcontainer"
+	sandboxv1 "github.com/richiejp/vmjail/internal/genpb/sandbox/v1"
+	"github.com/richiejp/vmjail/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/sandboxboot"
 )
 
 var (
@@ -146,8 +146,8 @@ func TestBuildScript(t *testing.T) {
 		"mkdir -p /tmp/cstore /tmp/crun\n" +
 		"cd '/build/ctx'\n" +
 		"buildah --root /tmp/cstore --runroot /tmp/crun build --isolation chroot --storage-driver vfs" +
-		" --target 'dev' --build-arg 'A=1' --build-arg 'B=2' -t daft-build -f 'Dockerfile' .\n" +
-		"buildah --root /tmp/cstore --runroot /tmp/crun push daft-build docker-archive:'/build/out/image.tar'\n" +
+		" --target 'dev' --build-arg 'A=1' --build-arg 'B=2' -t vmjail-build -f 'Dockerfile' .\n" +
+		"buildah --root /tmp/cstore --runroot /tmp/crun push vmjail-build docker-archive:'/build/out/image.tar'\n" +
 		"sync\n"
 	if got != want {
 		t.Errorf("buildScript mismatch\n got: %q\nwant: %q", got, want)
@@ -172,9 +172,9 @@ func TestBuildScript(t *testing.T) {
 // NODE_EXTRA_CA_CERTS points at it, so RUN-step TLS through the MITM proxy
 // is trusted without baking a brittle file-path CA env into the image.
 func TestBuildScriptEgressCA(t *testing.T) {
-	got := buildScript(&devcontainerBuildPlan{dockerfile: defaultDockerfile}, "/etc/daft-egress-ca.pem")
+	got := buildScript(&devcontainerBuildPlan{dockerfile: defaultDockerfile}, "/etc/vmjail-egress-ca.pem")
 	const sysBundle = "/etc/ssl/certs/ca-certificates.crt"
-	if !strings.Contains(got, "--volume '/etc/daft-egress-ca.pem:"+sysBundle+":ro'") {
+	if !strings.Contains(got, "--volume '/etc/vmjail-egress-ca.pem:"+sysBundle+":ro'") {
 		t.Errorf("egress script missing CA volume mount: %q", got)
 	}
 	if !strings.Contains(got, "--env NODE_EXTRA_CA_CERTS="+sysBundle) {
@@ -204,10 +204,10 @@ func TestSanitizeRefAndNames(t *testing.T) {
 	if got := sanitizeRef(""); got != "x" {
 		t.Errorf("sanitizeRef empty = %q, want x", got)
 	}
-	if got := buildRepo(""); got != "daft-build/anon" {
+	if got := buildRepo(""); got != "vmjail-build/anon" {
 		t.Errorf("buildRepo empty = %q", got)
 	}
-	if got := buildRepo("WS-123"); got != "daft-build/ws-123" {
+	if got := buildRepo("WS-123"); got != "vmjail-build/ws-123" {
 		t.Errorf("buildRepo = %q", got)
 	}
 	if got := buildTag(""); got != "build" {
@@ -293,7 +293,7 @@ func TestBuildDevcontainerImageHappyPath(t *testing.T) {
 		// removes it on return.
 		data, _ := os.ReadFile(tarPath) //nolint:gosec // test reads the temp tarball it just wrote.
 		gotTarDir, gotRepo, gotTag, gotContents = filepath.Dir(tarPath), repo, tag, string(data)
-		return "daft-registry.internal/" + repo + ":" + tag, nil
+		return "vmjail-registry.internal/" + repo + ":" + tag, nil
 	}
 
 	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: "ws-7"}
@@ -304,10 +304,10 @@ func TestBuildDevcontainerImageHappyPath(t *testing.T) {
 	if !ranBuild {
 		t.Error("build runner was not invoked")
 	}
-	if want := "daft-registry.internal/daft-build/ws-7:uid-2"; ref != want {
+	if want := "vmjail-registry.internal/vmjail-build/ws-7:uid-2"; ref != want {
 		t.Errorf("ref = %q, want %q", ref, want)
 	}
-	if gotRepo != "daft-build/ws-7" || gotTag != "uid-2" {
+	if gotRepo != "vmjail-build/ws-7" || gotTag != "uid-2" {
 		t.Errorf("push repo/tag = %q/%q", gotRepo, gotTag)
 	}
 	if gotContents != "fake-tar" {
@@ -358,7 +358,7 @@ func TestHandleSandboxEventBuildDevcontainer(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	e.pushImage = func(_, repo, tag string) (string, error) {
-		return "daft-registry.internal/" + repo + ":" + tag, nil
+		return "vmjail-registry.internal/" + repo + ":" + tag, nil
 	}
 
 	spec := &sandboxv1.SandboxSpec{
@@ -375,7 +375,7 @@ func TestHandleSandboxEventBuildDevcontainer(t *testing.T) {
 	if refs[0] != testBuildImageRef {
 		t.Errorf("build boot ref = %q, want the build image", refs[0])
 	}
-	wantWorkload := "daft-registry.internal/daft-build/" + sanitizeRef(testWSUUID) + ":sb-build"
+	wantWorkload := "vmjail-registry.internal/vmjail-build/" + sanitizeRef(testWSUUID) + ":sb-build"
 	if refs[1] != wantWorkload {
 		t.Errorf("workload boot ref = %q, want the built image %q", refs[1], wantWorkload)
 	}
@@ -496,7 +496,7 @@ func TestBuildDevcontainerImageErrorPaths(t *testing.T) {
 				if tc.push != nil {
 					return tc.push(tarPath, repo, tag)
 				}
-				return "daft-registry.internal/" + repo + ":" + tag, nil
+				return "vmjail-registry.internal/" + repo + ":" + tag, nil
 			}
 			_, err = e.buildDevcontainerImage(context.Background(), "uid", &sandboxv1.SandboxSpec{},
 				&devcontainerBuildPlan{contextDir: t.TempDir(), dockerfile: defaultDockerfile})

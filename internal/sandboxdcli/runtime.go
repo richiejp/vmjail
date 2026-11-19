@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/imagestore"
-	"github.com/richiejp/darkaifactory/internal/ociregistry"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/bundled"
+	"github.com/richiejp/vmjail/internal/imagestore"
+	"github.com/richiejp/vmjail/internal/ociregistry"
+	"github.com/richiejp/vmjail/internal/sandbox"
 )
 
 // envBuildImageRef names the orchestrator-hosted ref of the static image
@@ -20,10 +20,10 @@ import (
 // (#101 slice 3c). It is OPTIONAL: unset, the node defaults to the
 // orchestrator's auto-seeded built-in builder (ociregistry.BuiltinBuildRef);
 // set it only to override with a custom builder image.
-const envBuildImageRef = "DAFT_BUILD_IMAGE_REF"
+const envBuildImageRef = "VMJAIL_BUILD_IMAGE_REF"
 
 // resolveBuildImageRef resolves the build image ref: the
-// DAFT_BUILD_IMAGE_REF override when set, else the orchestrator's
+// VMJAIL_BUILD_IMAGE_REF override when set, else the orchestrator's
 // auto-seeded built-in builder. The built-in default is a hosted ref
 // (sentinel host) pulled over the same mTLS transport as any workspace
 // image, so it is only meaningful when that transport exists — without it
@@ -42,11 +42,11 @@ func resolveBuildImageRef(hostedRT http.RoundTripper) string {
 
 // envObserveSummary gates the Tier-2 observe share (open-snoop gadget +
 // build-progress summary) on every image-backed dispatch. It is ON BY
-// DEFAULT so the `daft sandbox observe` progress summary works out of the
+// DEFAULT so the `vmjail sandbox observe` progress summary works out of the
 // box; an operator who does not want the gadget load + extra virtiofs
 // device per VM sets it to a falsy value ("0"/"false"/"no"/"off",
 // case-insensitive) to opt a node out.
-const envObserveSummary = "DAFT_OBSERVE_SUMMARY"
+const envObserveSummary = "VMJAIL_OBSERVE_SUMMARY"
 
 func observeSummaryFromEnv() bool {
 	return envEnabledByDefault(envObserveSummary)
@@ -107,13 +107,13 @@ func resolveVsockDir(override string) (dir string, cleanup func(), err error) {
 		dir, owned = defaultVsockDir()
 	}
 	if !filepath.IsAbs(dir) {
-		return "", nil, fmt.Errorf("daft-sandboxd: --vsock-dir %q must be absolute", dir)
+		return "", nil, fmt.Errorf("vmjail-sandboxd: --vsock-dir %q must be absolute", dir)
 	}
 	if err := validateVsockDirLength(dir); err != nil {
 		return "", nil, err
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return "", nil, fmt.Errorf("daft-sandboxd: mkdir vsock dir: %w", err)
+		return "", nil, fmt.Errorf("vmjail-sandboxd: mkdir vsock dir: %w", err)
 	}
 	cleanup = func() {}
 	if owned {
@@ -134,7 +134,7 @@ func validateVsockDirLength(dir string) error {
 	const longestSocketLeaf = "00000000-0000-0000-0000-000000000000-build.sock_7000"
 	path := filepath.Join(dir, longestSocketLeaf)
 	if len(path) > maxUnixPathBytes {
-		return fmt.Errorf("daft-sandboxd: vsock directory %q leaves no room for Unix socket names (%d-byte path exceeds %d)",
+		return fmt.Errorf("vmjail-sandboxd: vsock directory %q leaves no room for Unix socket names (%d-byte path exceeds %d)",
 			dir, len(path), maxUnixPathBytes)
 	}
 	return nil
@@ -145,9 +145,9 @@ func defaultVsockDir() (string, bool) {
 		return filepath.Join(dir, "vsock"), false
 	}
 	if dir := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(dir) {
-		return filepath.Join(dir, "daft-vsock"), false
+		return filepath.Join(dir, "vmjail-vsock"), false
 	}
-	return filepath.Join(os.TempDir(), fmt.Sprintf("daft-vsock-%d", os.Getpid())), true
+	return filepath.Join(os.TempDir(), fmt.Sprintf("vmjail-vsock-%d", os.Getpid())), true
 }
 
 // firstAbsolutePath selects the first absolute entry from a systemd

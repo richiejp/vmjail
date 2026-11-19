@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/assert"
+	"github.com/richiejp/vmjail/internal/assert"
 )
 
 // recoverPanic returns the panic value if fn panics, or nil otherwise.
@@ -18,7 +18,7 @@ func recoverPanic(fn func()) (val any) {
 }
 
 func TestTrueNoPanicOnTrue(t *testing.T) {
-	//daft:lint:disable=assertpure reason="literal true is the path under test"
+	//vmjail:lint:disable=assertpure reason="literal true is the path under test"
 	got := recoverPanic(func() { assert.True(true, "should not panic") })
 	if got != nil {
 		t.Fatalf("True(true) panicked: %v", got)
@@ -43,7 +43,7 @@ func TestTruePanicsOnFalse(t *testing.T) {
 }
 
 func TestNoErrNoPanicOnNil(t *testing.T) {
-	//daft:lint:disable=assertpure reason="literal nil is the path under test"
+	//vmjail:lint:disable=assertpure reason="literal nil is the path under test"
 	got := recoverPanic(func() { assert.NoErr(nil, "should not panic") })
 	if got != nil {
 		t.Fatalf("NoErr(nil) panicked: %v", got)

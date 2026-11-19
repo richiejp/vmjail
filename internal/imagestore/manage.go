@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/vmjail/internal/oops"
 )
 
 // ErrLocked is returned by Remove when the image's bundle is held by
@@ -18,7 +18,7 @@ var ErrLocked = errors.New("imagestore: image is locked by a running VM")
 
 // List returns every known image, with Locked populated by checking
 // the lockfiles directory. Sorted by LastUsed descending (most recent
-// first) so `daft images ls` shows the freshest entries at the top.
+// first) so `vmjail images ls` shows the freshest entries at the top.
 func (s *Store) List() ([]Entry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

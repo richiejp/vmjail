@@ -6,10 +6,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/richiejp/darkaifactory/internal/devcontainer"
-	"github.com/richiejp/darkaifactory/internal/devcontainerspec"
-	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/richiejp/darkaifactory/internal/sandboxboot"
+	"github.com/richiejp/vmjail/internal/devcontainer"
+	"github.com/richiejp/vmjail/internal/devcontainerspec"
+	sandboxv1 "github.com/richiejp/vmjail/internal/genpb/sandbox/v1"
+	"github.com/richiejp/vmjail/internal/sandboxboot"
 )
 
 // devcontainerResolution is the effective boot inputs a devcontainer.json

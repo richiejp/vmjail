@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-const validScenario = `{"version":1,"name":"help-smoke","steps":[{"name":"help","argv":["daft","--help"],"want_exit":0,"stdout_contains":["darkaifactory"]}]}`
+const validScenario = `{"version":1,"name":"help-smoke","steps":[{"name":"help","argv":["vmjail","--help"],"want_exit":0,"stdout_contains":["vmjail"]}]}`
 
 func TestDecodeScenarioAndRun(t *testing.T) {
 	scenario, err := DecodeScenario(strings.NewReader(validScenario))
@@ -18,10 +18,10 @@ func TestDecodeScenarioAndRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := Run(t.Context(), scenario, func(_ context.Context, argv []string) (string, string, int, error) {
-		if strings.Join(argv, " ") != "daft --help" {
+		if strings.Join(argv, " ") != "vmjail --help" {
 			t.Fatalf("argv = %q", argv)
 		}
-		return "darkaifactory CLI", "", 0, nil
+		return "vmjail CLI", "", 0, nil
 	})
 	if err != nil || !result.Passed || len(result.Steps) != 1 || !result.Steps[0].Passed {
 		t.Fatalf("result = %#v, %v", result, err)
@@ -60,12 +60,12 @@ func TestDecodeScenarioRejectsContractViolations(t *testing.T) {
 		strings.Replace(validScenario, `"version":1`, `"version":2`, 1),
 		strings.Replace(validScenario, `"help-smoke"`, `"Bad Name"`, 1),
 		strings.Replace(validScenario, `"steps":[{`, `"unknown":1,"steps":[{`, 1),
-		strings.Replace(validScenario, `["daft","--help"]`, `["sh"]`, 1),
+		strings.Replace(validScenario, `["vmjail","--help"]`, `["sh"]`, 1),
 		strings.Replace(validScenario, `"want_exit":0`, `"want_exit":256`, 1),
 		strings.Replace(validScenario, `"want_exit":0`, `"timeout_seconds":121,"want_exit":0`, 1),
 		strings.Replace(validScenario, `"name":"help"`, `"name":""`, 1),
-		strings.Replace(validScenario, `["daft","--help"]`, `["daft",""]`, 1),
-		strings.Replace(validScenario, `"darkaifactory"`, `""`, 1),
+		strings.Replace(validScenario, `["vmjail","--help"]`, `["vmjail",""]`, 1),
+		strings.Replace(validScenario, `"vmjail"`, `""`, 1),
 		validScenario + `{}`,
 	}
 	for i, input := range cases {
@@ -113,7 +113,7 @@ func TestDecodeIssues(t *testing.T) {
 }
 
 func TestRunUsesRealCommandExecutor(t *testing.T) {
-	scenario := Scenario{Version: Version, Name: "missing-daft", Steps: []Step{{Name: "missing", Argv: []string{Executable, "--help"}, WantExit: 0}}}
+	scenario := Scenario{Version: Version, Name: "missing-vmjail", Steps: []Step{{Name: "missing", Argv: []string{Executable, "--help"}, WantExit: 0}}}
 	t.Setenv("PATH", t.TempDir())
 	result, err := Run(t.Context(), scenario, nil)
 	if err != nil || result.Passed || result.Steps[0].ExitCode != -1 {
@@ -123,12 +123,12 @@ func TestRunUsesRealCommandExecutor(t *testing.T) {
 
 func TestRunAcceptsExpectedNonzeroExitAndStderr(t *testing.T) {
 	dir := t.TempDir()
-	path := dir + "/daft"
+	path := dir + "/vmjail"
 	if err := os.WriteFile(path, []byte("#!/bin/sh\necho expected-error >&2\nexit 7\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	scenario := Scenario{Version: Version, Name: "expected-error", Steps: []Step{{Name: "error", Argv: []string{"daft"}, WantExit: 7, StderrContains: []string{"expected-error"}}}}
+	scenario := Scenario{Version: Version, Name: "expected-error", Steps: []Step{{Name: "error", Argv: []string{"vmjail"}, WantExit: 7, StderrContains: []string{"expected-error"}}}}
 	result, err := Run(t.Context(), scenario, nil)
 	if err != nil || !result.Passed {
 		t.Fatalf("result = %#v, %v", result, err)

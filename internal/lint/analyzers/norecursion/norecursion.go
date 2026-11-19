@@ -29,7 +29,7 @@
 //     analyzer that runs in milliseconds.
 //   - Recursion that spans packages. Same reasoning.
 //
-// Suppression: `//daft:lint:disable=norecursion reason="…"`. The
+// Suppression: `//vmjail:lint:disable=norecursion reason="…"`. The
 // reason should explain why iteration isn't viable for this
 // shape — usually because the data structure is recursive (AST
 // nodes, file trees) and the depth is structurally bounded by
@@ -42,10 +42,10 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
-// analyzerName drives Analyzer.Name and the //daft:lint:disable=
+// analyzerName drives Analyzer.Name and the //vmjail:lint:disable=
 // match.
 const analyzerName = "norecursion"
 
@@ -86,7 +86,7 @@ func run(pass *analysis.Pass) (any, error) {
 			continue
 		}
 		pass.Reportf(n.decl.Pos(),
-			"function %s participates in a call cycle (Power of 10 rule 1); restructure with explicit iteration or a stack, or annotate //daft:lint:disable=norecursion reason=\"…\"",
+			"function %s participates in a call cycle (Power of 10 rule 1); restructure with explicit iteration or a stack, or annotate //vmjail:lint:disable=norecursion reason=\"…\"",
 			fn.Name())
 	}
 	//nolint:nilnil // standard x/tools analyzer pattern: no result, no error.
@@ -177,7 +177,7 @@ func findCyclic(nodes map[*types.Func]*fnNode) map[*types.Func]bool {
 	stackPos := map[*types.Func]int{}
 
 	var visit func(*types.Func)
-	//daft:lint:disable=norecursion reason="DFS over the package's own call graph; depth bounded by the number of source-declared functions, which is finite per package"
+	//vmjail:lint:disable=norecursion reason="DFS over the package's own call graph; depth bounded by the number of source-declared functions, which is finite per package"
 	visit = func(fn *types.Func) {
 		colour[fn] = colourGrey
 		stackPos[fn] = len(stack)

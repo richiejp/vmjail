@@ -73,7 +73,7 @@ func (t *Terminal) Resize(ctx context.Context) <-chan struct{} {
 	go func() {
 		defer signal.Stop(sigCh)
 		defer close(out)
-		//daft:lint:disable=forloopbound reason="bounded by ctx cancellation / sigCh close on shutdown"
+		//vmjail:lint:disable=forloopbound reason="bounded by ctx cancellation / sigCh close on shutdown"
 		for {
 			select {
 			case <-ctx.Done():

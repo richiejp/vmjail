@@ -55,7 +55,7 @@ type AttachSession interface {
 
 // AttachBridger opens an attach session into a running Sandbox
 // on the local Node. Implementations live in the sandboxd
-// (production: vsock to daft-agent) and tests (fake in-process
+// (production: vsock to vmjail-agent) and tests (fake in-process
 // PTY). The interface is transport-free so this package never
 // depends on the agent or the wire format.
 type AttachBridger interface {

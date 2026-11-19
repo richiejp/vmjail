@@ -9,7 +9,7 @@ import "errors"
 // platforms return ErrUnsupported and the Observer records the
 // error in the Sample's Err field for each tick. We keep the
 // package buildable cross-platform because the surrounding
-// daft-sandboxd command needs to build on developer laptops
+// vmjail-sandboxd command needs to build on developer laptops
 // running macOS for unit-test work, even though the runtime
 // target is Linux.
 func collectProcSample(_ int) (*ProcSample, error) {

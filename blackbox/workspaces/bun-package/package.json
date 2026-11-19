@@ -1,5 +1,5 @@
 {
-  "name": "daft-blackbox-bun-package",
+  "name": "vmjail-blackbox-bun-package",
   "private": true,
   "scripts": {
     "test": "bun test"

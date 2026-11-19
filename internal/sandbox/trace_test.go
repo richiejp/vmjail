@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // traceCtx returns a context with a fresh Tracer attached and
@@ -30,7 +30,7 @@ func traceCtx(tb testing.TB) context.Context {
 
 // TestHelloEmitsExpectedSpanTree drives helloWith with fakes and a
 // captured Tracer to verify the boot path produces the trace shape
-// PLAN.md advertises: one daft.sandbox.hello root with three child
+// PLAN.md advertises: one vmjail.sandbox.hello root with three child
 // spans for the boot pipeline stages.
 func TestHelloEmitsExpectedSpanTree(t *testing.T) {
 	ctx := traceCtx(t)

@@ -14,11 +14,11 @@
 // PLAN.md Phase B4 for the slicing.
 syntax = "proto3";
 
-package daft.sandbox.v1;
+package vmjail.sandbox.v1;
 
 import "google/protobuf/timestamp.proto";
 
-option go_package = "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1;sandboxv1";
+option go_package = "github.com/richiejp/vmjail/internal/genpb/sandbox/v1;sandboxv1";
 
 // Sandbox is the orchestrator's record of one execution instance.
 message Sandbox {
@@ -74,7 +74,7 @@ message SandboxSpec {
   string workspace_uuid = 8;
   // Guest RAM in bytes. Zero ⇒ the executor's built-in default
   // (256 MiB). nix develop / build workloads need hundreds of
-  // MiB to low-GiB; see CLI `daft workspace resources`.
+  // MiB to low-GiB; see CLI `vmjail workspace resources`.
   uint64 memory_bytes = 9;
   // Guest vCPU count. Zero ⇒ the executor's default (half the
   // host's logical cores, min 1 — the VM shares cores with the
@@ -155,7 +155,7 @@ message Mount {
   // executor rejects relative or empty targets.
   string target = 1;
   // Logical source identifier. Resolution is Node policy:
-  // a workspace UUID maps to the daft-fuse view of that
+  // a workspace UUID maps to the vmjail-fuse view of that
   // workspace; a registered host-path tag maps to a pre-
   // approved bind source. Free-form host paths are not
   // accepted — adoption (Phase F1) is how user-host
@@ -209,7 +209,7 @@ message GpuRequest {
 // kernel already builds CONFIG_KVM in and Cloud Hypervisor passes the
 // vendor VMX/SVM CPUID bit through by default. Off by default — it's
 // a real privilege and attack-surface bump, granted only to
-// workspaces that explicitly ask (the daft-dogfood profile that
+// workspaces that explicitly ask (the vmjail-dogfood profile that
 // `make integration` inside a sandbox selects).
 //
 // Modelled as a config section (Nix-module idiom: one section per
@@ -245,7 +245,7 @@ message PrivilegedFuseMounts {
 
 // PrivilegedBuild grants a workload the standard container capability set
 // (what Docker/podman give a container by default) so an in-sandbox image
-// builder (buildah) can run. daft strips containers to ZERO capabilities
+// builder (buildah) can run. vmjail strips containers to ZERO capabilities
 // by default (uid 0 + empty caps); a build needs more: even a Dockerfile
 // COPY fails because buildah's copier chroots (CAP_SYS_CHROOT), and RUN
 // steps bind-mount + chown + setuid (CAP_SYS_ADMIN + CHOWN/SETUID/SETGID/

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
 )
 
 // fakeVsockListener is an in-process net.Listener that accepts
@@ -306,7 +306,7 @@ func TestPumpConnectionDialErrorReportsAndExits(t *testing.T) {
 	// Give the goroutine a moment to attempt the dial. The upstream
 	// pipe gets closed when pumpConnection bails.
 	deadline := time.Now().Add(time.Second)
-	//daft:lint:disable=forloopbound reason="wall-clock bounded to 1s; exits on observed close or on the deadline"
+	//vmjail:lint:disable=forloopbound reason="wall-clock bounded to 1s; exits on observed close or on the deadline"
 	for time.Now().Before(deadline) {
 		// A 1-byte write either blocks (pump still alive) or
 		// errors (pump tore down). Use a short deadline so the

@@ -20,7 +20,7 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/transport/udp"
 	"gvisor.dev/gvisor/pkg/waiter"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/vmjail/internal/oops"
 )
 
 const readTimeout = 5 * time.Second
@@ -273,7 +273,7 @@ func TestForwarderEndpointCreateFailures(t *testing.T) {
 }
 
 func acceptAndDrop(ln net.Listener) {
-	//daft:lint:disable=forloopbound reason="bounded by ln.Close() in test cleanup — Accept returns an error"
+	//vmjail:lint:disable=forloopbound reason="bounded by ln.Close() in test cleanup — Accept returns an error"
 	for {
 		c, err := ln.Accept()
 		if err != nil {

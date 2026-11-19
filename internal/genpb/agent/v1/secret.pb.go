@@ -76,7 +76,7 @@ type SecretInstallRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	DeliveryId    string                 `protobuf:"bytes,1,opt,name=delivery_id,json=deliveryId,proto3" json:"delivery_id,omitempty"`
 	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	Kind          SecretKind             `protobuf:"varint,3,opt,name=kind,proto3,enum=daft.agent.v1.SecretKind" json:"kind,omitempty"`
+	Kind          SecretKind             `protobuf:"varint,3,opt,name=kind,proto3,enum=vmjail.agent.v1.SecretKind" json:"kind,omitempty"`
 	Payload       []byte                 `protobuf:"bytes,4,opt,name=payload,proto3" json:"payload,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -204,13 +204,13 @@ var File_agent_v1_secret_proto protoreflect.FileDescriptor
 
 const file_agent_v1_secret_proto_rawDesc = "" +
 	"\n" +
-	"\x15agent/v1/secret.proto\x12\rdaft.agent.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbb\x01\n" +
+	"\x15agent/v1/secret.proto\x12\x0fvmjail.agent.v1\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbd\x01\n" +
 	"\x14SecretInstallRequest\x12\x1f\n" +
 	"\vdelivery_id\x18\x01 \x01(\tR\n" +
 	"deliveryId\x129\n" +
 	"\n" +
-	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12-\n" +
-	"\x04kind\x18\x03 \x01(\x0e2\x19.daft.agent.v1.SecretKindR\x04kind\x12\x18\n" +
+	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12/\n" +
+	"\x04kind\x18\x03 \x01(\x0e2\x1b.vmjail.agent.v1.SecretKindR\x04kind\x12\x18\n" +
 	"\apayload\x18\x04 \x01(\fR\apayload\"l\n" +
 	"\x15SecretInstallResponse\x12\x1f\n" +
 	"\vdelivery_id\x18\x01 \x01(\tR\n" +
@@ -220,7 +220,7 @@ const file_agent_v1_secret_proto_rawDesc = "" +
 	"\n" +
 	"SecretKind\x12\x1b\n" +
 	"\x17SECRET_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
-	"\x1bSECRET_KIND_CODEX_AUTH_JSON\x10\x01BCZAgithub.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1b\x06proto3"
+	"\x1bSECRET_KIND_CODEX_AUTH_JSON\x10\x01B<Z:github.com/richiejp/vmjail/internal/genpb/agent/v1;agentv1b\x06proto3"
 
 var (
 	file_agent_v1_secret_proto_rawDescOnce sync.Once
@@ -237,14 +237,14 @@ func file_agent_v1_secret_proto_rawDescGZIP() []byte {
 var file_agent_v1_secret_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_agent_v1_secret_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
 var file_agent_v1_secret_proto_goTypes = []any{
-	(SecretKind)(0),               // 0: daft.agent.v1.SecretKind
-	(*SecretInstallRequest)(nil),  // 1: daft.agent.v1.SecretInstallRequest
-	(*SecretInstallResponse)(nil), // 2: daft.agent.v1.SecretInstallResponse
+	(SecretKind)(0),               // 0: vmjail.agent.v1.SecretKind
+	(*SecretInstallRequest)(nil),  // 1: vmjail.agent.v1.SecretInstallRequest
+	(*SecretInstallResponse)(nil), // 2: vmjail.agent.v1.SecretInstallResponse
 	(*timestamppb.Timestamp)(nil), // 3: google.protobuf.Timestamp
 }
 var file_agent_v1_secret_proto_depIdxs = []int32{
-	3, // 0: daft.agent.v1.SecretInstallRequest.expires_at:type_name -> google.protobuf.Timestamp
-	0, // 1: daft.agent.v1.SecretInstallRequest.kind:type_name -> daft.agent.v1.SecretKind
+	3, // 0: vmjail.agent.v1.SecretInstallRequest.expires_at:type_name -> google.protobuf.Timestamp
+	0, // 1: vmjail.agent.v1.SecretInstallRequest.kind:type_name -> vmjail.agent.v1.SecretKind
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name

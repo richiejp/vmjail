@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/execsnoop"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/iosnoop"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/opensnoop"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/sleepsnoop"
-	"github.com/richiejp/darkaifactory/internal/observability/progress"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/execsnoop"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/iosnoop"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/opensnoop"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/sleepsnoop"
+	"github.com/richiejp/vmjail/internal/observability/progress"
 )
 
 // fakeClock is a deterministic clock for the time-derived summary fields.

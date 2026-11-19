@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/commandcontext"
+	"github.com/richiejp/vmjail/internal/lint/analyzers/commandcontext"
 )
 
 func TestAnalyzer(t *testing.T) {

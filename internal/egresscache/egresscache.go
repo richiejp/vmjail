@@ -161,7 +161,7 @@ func closeAll(tw *tar.Writer, f *os.File, walkErr error) error {
 // escape it (zip-slip).
 func untar(r io.Reader, destDir string) error {
 	tr := tar.NewReader(r)
-	//daft:lint:disable=forloopbound reason="bounded by the tar entry count"
+	//vmjail:lint:disable=forloopbound reason="bounded by the tar entry count"
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {

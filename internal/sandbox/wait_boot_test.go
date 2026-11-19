@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/richiejp/vmjail/internal/agent"
 )
 
 // TestWaitForBootCompleteReturnsOnEvent: the agent reports boot-complete

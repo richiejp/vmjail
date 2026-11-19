@@ -1,7 +1,7 @@
 // Package progress is the wire contract for the per-sandbox build-progress
 // summary (OBSERVABILITY.md roadmap #6). The guest agent rolls the always-on
 // gadgets' aggregates into a Summary and atomically rewrites it ~1 Hz onto
-// the observe share; the host-side `daft sandbox observe` CLI reads it back.
+// the observe share; the host-side `vmjail sandbox observe` CLI reads it back.
 //
 // It is a dependency-free leaf on purpose: the summary types must be shared
 // by the guest writer and the host reader without dragging the linux-only

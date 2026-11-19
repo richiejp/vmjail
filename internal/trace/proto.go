@@ -3,7 +3,7 @@ package trace
 import (
 	"time"
 
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	tracev1 "github.com/richiejp/vmjail/internal/genpb/trace/v1"
 )
 
 // toProto serialises a Span for the wire. Caller holds no locks —

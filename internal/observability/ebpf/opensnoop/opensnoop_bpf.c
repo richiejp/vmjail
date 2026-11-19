@@ -35,7 +35,7 @@ char LICENSE[] SEC("license") = "GPL";
 #define TASK_COMM_LEN 16
 #define NAME_MAX 255
 
-// self_pidns is the daft-agent's own PID-namespace inode number, written
+// self_pidns is the vmjail-agent's own PID-namespace inode number, written
 // into .rodata by the Go loader (opensnoop.go) before load. When non-zero,
 // every openat from a task sharing this namespace — the agent, the guest
 // init, kernel threads, and crun itself — is dropped, so the trace and the

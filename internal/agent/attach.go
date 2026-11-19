@@ -15,19 +15,19 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/oops"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // AttachPortCmdlineKey is the kernel cmdline parameter that asks the
 // agent to vsock-listen on this port for incoming attach sessions
-// from the sandboxd host. Format: `daft.attach_port=<port>`. Absent
+// from the sandboxd host. Format: `vmjail.attach_port=<port>`. Absent
 // token disables the attach listener (the agent runs hello-only).
 //
 // Mirrors PortForwardCmdlineKey in shape so the host's cmdline
 // builder stays uniform.
-const AttachPortCmdlineKey = "daft.attach_port"
+const AttachPortCmdlineKey = "vmjail.attach_port"
 
 // DefaultAttachVsockPort is the AF_VSOCK port the agent listens on
 // for attach sessions when the host opts in. Picked to sit
@@ -244,7 +244,7 @@ func runAttachListener(ctx context.Context, w io.Writer, port uint32, d attachDe
 // handleAttach per connection. Returns on ErrClosed (ctx-driven
 // listener close) or any non-temporary error.
 func attachAcceptLoop(ctx context.Context, w io.Writer, ln net.Listener, exec ExecAttach, proc containerProcess) {
-	//daft:lint:disable=forloopbound reason="bounded by ln.Accept returning ErrClosed when ctx.Done closes the listener"
+	//vmjail:lint:disable=forloopbound reason="bounded by ln.Accept returning ErrClosed when ctx.Done closes the listener"
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -263,7 +263,7 @@ func attachAcceptLoop(ctx context.Context, w io.Writer, ln net.Listener, exec Ex
 // directions, and writes a terminal AgentAttachExit before closing.
 //
 // All error paths surface to the client as an Exit frame with a
-// non-empty error string so the attaching `daft workspace attach`
+// non-empty error string so the attaching `vmjail workspace attach`
 // session sees the failure rather than a silent EOF.
 func handleAttach(ctx context.Context, w io.Writer, conn net.Conn, exec ExecAttach, proc containerProcess) {
 	defer func() { oops.Skip("agent: close attach conn", conn.Close(), net.ErrClosed) }()
@@ -339,7 +339,7 @@ func pumpAttachProcess(ctx context.Context, w io.Writer, conn net.Conn, exec Exe
 // consumed once). Returns when the conn EOFs or a write to proc
 // fails.
 func pumpAttachConnToProcess(w io.Writer, conn net.Conn, proc AttachProcess) {
-	//daft:lint:disable=forloopbound reason="bounded by ReadFrame returning io.EOF / net.ErrClosed when the conn closes"
+	//vmjail:lint:disable=forloopbound reason="bounded by ReadFrame returning io.EOF / net.ErrClosed when the conn closes"
 	for {
 		frame, err := readAttachFrame(conn)
 		if err != nil {
@@ -377,7 +377,7 @@ func pumpAttachConnToProcess(w io.Writer, conn net.Conn, proc AttachProcess) {
 // exited) or a frame write fails.
 func pumpAttachProcessToConn(w io.Writer, conn net.Conn, proc AttachProcess) {
 	buf := make([]byte, attachCopyBufSize)
-	//daft:lint:disable=forloopbound reason="bounded by proc.Read returning io.EOF when the process exits"
+	//vmjail:lint:disable=forloopbound reason="bounded by proc.Read returning io.EOF when the process exits"
 	for {
 		n, err := proc.Read(buf)
 		if n > 0 {

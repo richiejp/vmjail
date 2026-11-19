@@ -42,7 +42,7 @@ func runtimeLen(s []int) {
 
 // suppressed pins the directive silences the diagnostic.
 func suppressed(n int) {
-	//daft:lint:disable=chanconst reason="fixture exercises suppression"
+	//vmjail:lint:disable=chanconst reason="fixture exercises suppression"
 	_ = make(chan int, n)
 }
 

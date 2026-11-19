@@ -20,7 +20,7 @@ var ContainerRuntime = "/bin/crun"
 // ContainerID is the crun-side container identifier. crun keeps state
 // under /run/<id>; we only run one container per VM in v0 so a
 // constant is fine.
-const ContainerID = "daft-container"
+const ContainerID = "vmjail-container"
 
 // ContainerDeps abstracts the subprocess surface RunContainer uses so
 // tests can swap in a fake without spawning crun. Bundle is the only

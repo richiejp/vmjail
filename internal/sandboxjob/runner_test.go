@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/nodejob"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/richiejp/vmjail/internal/agent"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/nodejob"
+	"github.com/richiejp/vmjail/internal/sandboxgateway"
 )
 
 func TestRunnerRoundTripSeparatedOutput(t *testing.T) {

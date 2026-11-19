@@ -40,7 +40,7 @@ char LICENSE[] SEC("license") = "GPL";
 #define TIMER_ABSTIME 1
 #define NSEC_PER_SEC 1000000000ULL
 
-// self_pidns is the daft-agent's own PID-namespace inode, written into
+// self_pidns is the vmjail-agent's own PID-namespace inode, written into
 // .rodata by the Go loader before load. Non-zero drops every sleep from a
 // task in that namespace (agent, init, kernel threads, crun), leaving only
 // the container workload — symmetric with open-snoop / exec-snoop. Zero

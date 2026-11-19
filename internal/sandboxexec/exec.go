@@ -27,22 +27,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/assert"
-	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/richiejp/darkaifactory/internal/hostresources"
-	"github.com/richiejp/darkaifactory/internal/observability"
-	"github.com/richiejp/darkaifactory/internal/ociregistry"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/sandboxattach"
-	"github.com/richiejp/darkaifactory/internal/sandboxboot"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
-	"github.com/richiejp/darkaifactory/internal/sandboxnet"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/assert"
+	sandboxv1 "github.com/richiejp/vmjail/internal/genpb/sandbox/v1"
+	"github.com/richiejp/vmjail/internal/hostresources"
+	"github.com/richiejp/vmjail/internal/observability"
+	"github.com/richiejp/vmjail/internal/ociregistry"
+	"github.com/richiejp/vmjail/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/sandboxattach"
+	"github.com/richiejp/vmjail/internal/sandboxboot"
+	"github.com/richiejp/vmjail/internal/sandboxgateway"
+	"github.com/richiejp/vmjail/internal/sandboxnet"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // Phase tokens reported on heartbeat. Match the PascalCase values
-// documented on daft.sandbox.v1.SandboxStatus.phase and read by the
+// documented on vmjail.sandbox.v1.SandboxStatus.phase and read by the
 // orchestrator's reconciler.
 const (
 	phasePending = "Pending"
@@ -162,7 +162,7 @@ type Executor struct {
 }
 
 // Config bundles the Executor's dependencies. The baseline
-// sandbox.Config is the one resolved at startup from DAFT_*
+// sandbox.Config is the one resolved at startup from VMJAIL_*
 // (used for the bare-Hello fallback when image_ref is empty);
 // Assembler is the image-ref → bootable-config seam used when
 // image_ref is set. Runner is the function that actually boots
@@ -208,20 +208,20 @@ type Config struct {
 	// ObserveSummary opts every image-backed dispatch into the Tier-2
 	// observe share (open-snoop gadget + build-progress summary). Off by
 	// default because it costs a gadget load + a virtiofs device per VM;
-	// `daft-sandboxd serve` flips it on from DAFT_OBSERVE_SUMMARY. Requires
+	// `vmjail-sandboxd serve` flips it on from VMJAIL_OBSERVE_SUMMARY. Requires
 	// ObserverDir and SummaryRegistry to be useful.
 	ObserveSummary bool
 	// VsockDir is the absolute parent directory where per-Sandbox
 	// hybrid-vsock UDS files live (one per running VM, named after
 	// the Sandbox uid). Required when Bridger or AttachRegistry is
-	// non-nil; ignored otherwise. Typically `/var/run/daft-sandboxd`
+	// non-nil; ignored otherwise. Typically `/var/run/vmjail-sandboxd`
 	// in production.
 	VsockDir string
 	// NetEnabled, when true, wires a sandboxnet-backed AF_VSOCK
 	// listener into every dispatched VM so the in-VM agent's tap
 	// bridge has somewhere to dial. Implies a per-Sandbox Vsock
 	// device (allocated like the attach/bridger paths). Production
-	// `daft-sandboxd serve` enables it; unit tests leave it off so
+	// `vmjail-sandboxd serve` enables it; unit tests leave it off so
 	// they don't have to wire a real sandboxnet stack.
 	NetEnabled bool
 	// EgressProxy, when non-nil, makes every image-backed dispatch
@@ -233,15 +233,15 @@ type Config struct {
 	EgressProxy *EgressProxy
 	// ObserverDir, when non-empty, is the absolute parent directory
 	// under which each dispatched VM gets a per-uid host-side observer
-	// log. `daft-sandboxd serve` sets it to the per-sandbox state dir
-	// ($XDG_STATE_HOME/daft/sandboxes); leave empty in tests/baselines
+	// log. `vmjail-sandboxd serve` sets it to the per-sandbox state dir
+	// ($XDG_STATE_HOME/vmjail/sandboxes); leave empty in tests/baselines
 	// that don't want observer logs written.
 	ObserverDir string
 	// BuildImageRef is the orchestrator-hosted ref of the static image
 	// builder (buildah + dash + CA bundle). When set, a build-based
 	// devcontainer is built in an ephemeral sandbox booted from this ref
-	// before the workload boots (#101 slice 3c). `daft-sandboxd serve`
-	// sources it from DAFT_BUILD_IMAGE_REF. Empty disables in-sandbox
+	// before the workload boots (#101 slice 3c). `vmjail-sandboxd serve`
+	// sources it from VMJAIL_BUILD_IMAGE_REF. Empty disables in-sandbox
 	// builds (build-based devcontainers then fail the dispatch loudly).
 	BuildImageRef string
 	// BuildRunner boots the ephemeral build VM and returns once its build
@@ -412,7 +412,7 @@ func terminalMessage(err error) string {
 
 // ProductionAssembler returns an Assembler backed by
 // sandboxboot.BuildBundleConfig. Threading the deps through here
-// keeps the wiring in one place — `daft-sandboxd serve`
+// keeps the wiring in one place — `vmjail-sandboxd serve`
 // constructs one and hands it to New.
 func ProductionAssembler(deps sandboxboot.Deps) Assembler {
 	return func(ctx context.Context, ref string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error) {
@@ -473,7 +473,7 @@ func (e *Executor) HandleSandboxEvent(
 	defer span.End()
 
 	_, _ = fmt.Fprintf(e.stdout,
-		"daft-sandboxd: sandbox %s spec.workspace=%s image=%s mounts=%d\n",
+		"vmjail-sandboxd: sandbox %s spec.workspace=%s image=%s mounts=%d\n",
 		uid, spec.GetWorkspaceUuid(), spec.GetImageRef(), len(spec.GetMounts()))
 
 	cfg, unlock, err := e.resolveBootConfig(ctx, uid, spec)
@@ -735,8 +735,8 @@ func (e *Executor) applyObserverLog(cfg *sandbox.Config, uid string) {
 // summary back from the same backing dir; it is kept separate from the
 // host-written observer.jsonl so the guest can only touch its own files.
 const (
-	observeShareTag       = "daftobserve"
-	observeMount          = "/run/daft/observe"
+	observeShareTag       = "vmjailobserve"
+	observeMount          = "/run/vmjail/observe"
 	observeSubdir         = "observe"
 	observeOpensnoopName  = "opensnoop.log"
 	observeExecsnoopName  = "execsnoop.log"
@@ -983,7 +983,7 @@ func (e *Executor) proxyGuestURL() string {
 
 // egressCAGuestPath is where the proxy CA lands inside the container;
 // the injected NIX_SSL_CERT_FILE / SSL_CERT_FILE point at it.
-const egressCAGuestPath = "/etc/daft-egress-ca.pem"
+const egressCAGuestPath = "/etc/vmjail-egress-ca.pem"
 
 // envFromSpec flattens the spec's EnvVars into OCI "NAME=VALUE"
 // entries. Returns nil for an empty spec so the bundle keeps the

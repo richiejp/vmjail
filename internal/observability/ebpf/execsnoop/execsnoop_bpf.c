@@ -44,7 +44,7 @@ char LICENSE[] SEC("license") = "GPL";
 #define ARGS_BUF (MAX_ARGS * ARG_SIZE)
 #define LAST_ARG (ARGS_BUF - ARG_SIZE)
 
-// self_pidns is the daft-agent's own PID-namespace inode, written into
+// self_pidns is the vmjail-agent's own PID-namespace inode, written into
 // .rodata by the Go loader before load. Non-zero drops every exec from a
 // task in that namespace (agent, init, kernel threads, crun), leaving only
 // the container workload — symmetric with open-snoop. Zero disables it.

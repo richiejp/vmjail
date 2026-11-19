@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	tracev1 "github.com/richiejp/vmjail/internal/genpb/trace/v1"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // TestRunWithVsockShipsSpansToFakeHost wires runWith with a fake
@@ -64,8 +64,8 @@ func TestRunWithVsockShipsSpansToFakeHost(t *testing.T) {
 		for _, s := range spans {
 			if s.GetName() == "agent.boot" {
 				found = true
-				if s.GetComponent() != "daft-agent" {
-					t.Errorf("component = %q, want daft-agent", s.GetComponent())
+				if s.GetComponent() != "vmjail-agent" {
+					t.Errorf("component = %q, want vmjail-agent", s.GetComponent())
 				}
 			}
 		}

@@ -1,6 +1,6 @@
 package sandboxexec
 
-import sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+import sandboxv1 "github.com/richiejp/vmjail/internal/genpb/sandbox/v1"
 
 // LiveSandbox is a local snapshot of an executor workload.
 type LiveSandbox struct {

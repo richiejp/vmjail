@@ -13,7 +13,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/richiejp/darkaifactory/internal/agentcredential"
+	"github.com/richiejp/vmjail/internal/agentcredential"
 )
 
 const credentialFSType = "tmpfs"

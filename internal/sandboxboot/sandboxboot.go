@@ -6,7 +6,7 @@
 //
 // The output is everything `internal/sandbox` needs to boot a VM
 // that runs the image's entrypoint inside a container — the same
-// pipeline that `daft-sandboxd run` drives from CLI flags, but
+// pipeline that `vmjail-sandboxd run` drives from CLI flags, but
 // factored so both the dispatch executor (`internal/sandboxexec`)
 // and the legacy CLI can call it.
 //
@@ -21,27 +21,27 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/richiejp/darkaifactory/internal/agentcredential"
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/imagestore"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/agentcredential"
+	"github.com/richiejp/vmjail/internal/bundled"
+	"github.com/richiejp/vmjail/internal/imagestore"
+	"github.com/richiejp/vmjail/internal/oops"
+	"github.com/richiejp/vmjail/internal/sandbox"
 )
 
 // In-VM mount points the executor and CLI agree on. Stable so the
-// daft-agent inside the VM can find them.
+// vmjail-agent inside the VM can find them.
 const (
 	BundlesMount            = "/bundles"
 	BundlesTag              = "bundles"
 	credentialProviderCodex = "codex"
 	bundleMountTypeBind     = "bind"
-	persistentBinarySource  = "/bin/daft-agent"
-	persistentBinaryTarget  = "/daft-workspace-keepalive"
+	persistentBinarySource  = "/bin/vmjail-agent"
+	persistentBinaryTarget  = "/vmjail-workspace-keepalive"
 	persistentBinaryFlag    = "--container-keepalive"
 )
 
 // PersistentContainerArgs is an image-independent keepalive command. The
-// assembler bind-mounts the guest's static daft-agent at this target, so
+// assembler bind-mounts the guest's static vmjail-agent at this target, so
 // scratch and distroless images do not need /bin/sh or sleep.
 func PersistentContainerArgs() []string {
 	return []string{persistentBinaryTarget, persistentBinaryFlag}
@@ -331,7 +331,7 @@ func buildShares(bundle *imagestore.Bundle, mounts []Mount) []*sandbox.ShareConf
 }
 
 // writeBundleCACert writes pem into the bundle's rootfs at the
-// absolute in-container path guestPath (e.g. /etc/daft-egress-ca.pem),
+// absolute in-container path guestPath (e.g. /etc/vmjail-egress-ca.pem),
 // creating parent dirs. Written before boot and 0644 because a CA
 // cert is public; the container's TLS clients read it via
 // NIX_SSL_CERT_FILE / SSL_CERT_FILE. Atomic (tmp+rename) so a bundle

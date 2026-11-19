@@ -199,7 +199,7 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions, rootfs string) (runtim
 		// capabilities the remount fails. Writable rootfs means
 		// statvfs(/nix/store) reports rw and nix skips the remount.
 		Root:     runtimeRoot{Path: "rootfs", Readonly: false},
-		Hostname: firstNonEmpty(opts.Hostname, "", "daft-container"),
+		Hostname: firstNonEmpty(opts.Hostname, "", "vmjail-container"),
 		Mounts:   mounts,
 		Linux:    linux,
 	}, nil
@@ -284,7 +284,7 @@ func applyPrivilegedFuseMounts(
 
 // buildCapabilities is the standard container capability set (what
 // Docker/podman grant a container by default) plus CAP_SYS_ADMIN — the
-// set an in-sandbox buildah needs. daft zeroes container caps by default;
+// set an in-sandbox buildah needs. vmjail zeroes container caps by default;
 // a Dockerfile build needs them back: even COPY fails without
 // CAP_SYS_CHROOT (buildah's copier chroots), and RUN bind-mounts
 // (CAP_SYS_ADMIN) + chowns/setuids/mknods (CHOWN/SETUID/SETGID/MKNOD/…).
@@ -494,7 +494,7 @@ func defaultRuntimeLinuxConfig() runtimeLinuxConfig {
 		// container per sandbox VM, and the VM is the security
 		// boundary, so the container shares the VM's loopback
 		// instead of getting its own netns. This is load-bearing
-		// for `daft workspace forward`, where the agent dials the
+		// for `vmjail workspace forward`, where the agent dials the
 		// container's port via 127.0.0.1 from inside the VM's
 		// init namespace — a separate container netns would put
 		// the container's listener out of reach of that dial.
@@ -538,7 +538,7 @@ const (
 // (not the container) owns the vsock control/trace channels — so blocking
 // the family stops a workload from accidentally opening its own host
 // vsock conn without touching AF_INET/AF_UNIX. Native x86_64 only,
-// matching daft's single-arch microVM target. The filter installs under
+// matching vmjail's single-arch microVM target. The filter installs under
 // the container's existing NoNewPrivileges=true (no CAP_SYS_ADMIN needed
 // to load it). See PLAN.md "accidental-clobber surface".
 func defaultRuntimeSeccomp() *runtimeSeccomp {
@@ -620,7 +620,7 @@ func defaultRuntimeMounts() []runtimeMount {
 		},
 		// /sys/fs/cgroup is mounted rw as a cgroup-v2 hierarchy so a
 		// workload can manage its own cgroup subtree from inside the VM —
-		// most importantly a nested daft-sandboxd creating per-VM
+		// most importantly a nested vmjail-sandboxd creating per-VM
 		// accounting cgroups (createVMCgroup). Without it the container
 		// sees only the read-only /sys sysfs, so /sys/fs/cgroup is an empty
 		// dir and the mkdir ENOENTs. The mount is cgroupns-relative (the

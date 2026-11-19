@@ -22,7 +22,7 @@ writes remain in the host directory; there is no remote synchronization step.
 
 ## Implementation map
 
-- Process setup: [`cmd/daft-sandboxd`](../../cmd/daft-sandboxd/)
+- Process setup: [`cmd/vmjail-sandboxd`](../../cmd/vmjail-sandboxd/)
 - VM supervision: [`internal/sandbox`](../../internal/sandbox/)
 - Bundle and share assembly: [`internal/sandboxboot`](../../internal/sandboxboot/)
 - Image storage: [`internal/imagestore`](../../internal/imagestore/)

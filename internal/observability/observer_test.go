@@ -491,7 +491,7 @@ func TestObserver_RunLoopPropagatesTickError(t *testing.T) {
 	o.mu.Unlock()
 	// Wait for the goroutine to notice on a subsequent tick.
 	deadline := time.Now().Add(time.Second)
-	//daft:lint:disable=forloopbound reason="exits when o.done closes or the 1s deadline expires; both are bounded"
+	//vmjail:lint:disable=forloopbound reason="exits when o.done closes or the 1s deadline expires; both are bounded"
 	for {
 		select {
 		case <-o.done:

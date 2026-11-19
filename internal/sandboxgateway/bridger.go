@@ -27,7 +27,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/vmjail/internal/oops"
 )
 
 // ErrNoRoute is returned by Bridge when no DialFunc has been

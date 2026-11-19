@@ -42,7 +42,7 @@ linters:
 
     # Power of 10 (Go) — keyword/pattern bans (Slice 2). See
     # CONTRIBUTING.md "Power of 10 (Go)". Custom analyzers
-    # (nogoto / nolinkname / nodoubleptr) ship in cmd/daft-lint
+    # (nogoto / nolinkname / nodoubleptr) ship in cmd/vmjail-lint
     # alongside these.
     - forbidigo          # ban panic(/recover(/unsafe.*; allowlist via //nolint
     - gochecknoglobals   # no package-level mutable var; sentinels auto-exempt
@@ -134,7 +134,7 @@ linters:
       # cmd/<name>/main.go follows the project's "testable main"
       # pattern: package vars like osExit, stdout, fsRead are
       # indirection points the in-package test swaps, not shared
-      # mutable state. See cmd/daft/main.go for the canonical form.
+      # mutable state. See cmd/vmjail/main.go for the canonical form.
       - path: cmd/.+/main\.go
         linters:
           - gochecknoglobals

@@ -9,7 +9,7 @@ import (
 
 	"connectrpc.com/connect"
 
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	tracev1 "github.com/richiejp/vmjail/internal/genpb/trace/v1"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
@@ -134,7 +134,7 @@ func TestClientInterceptorRecordsErrors(t *testing.T) {
 }
 
 // TestNewConnectExporter verifies the constructor handles the
-// trivial case (used by `daft ping`).
+// trivial case (used by `vmjail ping`).
 func TestNewConnectExporter(t *testing.T) {
 	if e := NewConnectExporter(nil); e == nil || e.Client != nil {
 		t.Errorf("constructor returned %+v", e)

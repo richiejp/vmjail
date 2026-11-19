@@ -20,7 +20,7 @@
 // come from a server we already trust enough to call. Only request
 // bodies (`*http.Request.Body`) are gated.
 //
-// Suppression: `//daft:lint:disable=maxbytes reason="…"`. The
+// Suppression: `//vmjail:lint:disable=maxbytes reason="…"`. The
 // reason should explain why bounded reading is genuinely not
 // needed at this call site.
 package maxbytes
@@ -32,10 +32,10 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
-// analyzerName drives Analyzer.Name and the //daft:lint:disable=
+// analyzerName drives Analyzer.Name and the //vmjail:lint:disable=
 // match.
 const analyzerName = "maxbytes"
 

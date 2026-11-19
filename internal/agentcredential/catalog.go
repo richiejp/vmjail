@@ -14,7 +14,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/richiejp/darkaifactory/internal/secretvalue"
+	"github.com/richiejp/vmjail/internal/secretvalue"
 )
 
 const (
@@ -24,8 +24,8 @@ const (
 	MaxNameBytes = 128
 	// CodexHome is the fixed tmpfs-backed directory exposed to sandboxed
 	// Codex processes. Callers cannot override this path or its env name.
-	CodexHome     = "/run/daft/agent-home/codex"
-	AgentHomeRoot = "/run/daft/agent-home"
+	CodexHome     = "/run/vmjail/agent-home/codex"
+	AgentHomeRoot = "/run/vmjail/agent-home"
 )
 
 type Provider string

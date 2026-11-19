@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/richiejp/darkaifactory/internal/devcontainer"
-	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	"github.com/richiejp/vmjail/internal/devcontainer"
+	sandboxv1 "github.com/richiejp/vmjail/internal/genpb/sandbox/v1"
 )
 
 // ErrNoImage is returned when a Spec selects neither an image nor a build.

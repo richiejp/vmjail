@@ -1,6 +1,6 @@
 // Package forloopbound hosts the analyzer that requires every
 // bare `for { … }` loop (no init, no condition, no post) to carry
-// a `//daft:lint:disable=forloopbound reason="…"` directive.
+// a `//vmjail:lint:disable=forloopbound reason="…"` directive.
 //
 // Holzmann's rule 2 mandates a statically-provable upper bound on
 // every loop's iteration count. Most Go loops satisfy this for
@@ -14,7 +14,7 @@
 // requiring an explicit annotation with a non-empty reason.
 //
 // Suppression: place a same-line or preceding-line
-// `//daft:lint:disable=forloopbound reason="…"` directive. The
+// `//vmjail:lint:disable=forloopbound reason="…"` directive. The
 // reason should name the termination signal (e.g. "exits on
 // ctx.Done()", "exits when the registration stream closes").
 package forloopbound
@@ -24,10 +24,10 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
-// analyzerName drives Analyzer.Name and the //daft:lint:disable=
+// analyzerName drives Analyzer.Name and the //vmjail:lint:disable=
 // match.
 const analyzerName = "forloopbound"
 
@@ -36,7 +36,7 @@ const analyzerName = "forloopbound"
 //nolint:gochecknoglobals // go/analysis API contract.
 var Analyzer = &analysis.Analyzer{
 	Name: analyzerName,
-	Doc:  "bare `for {}` loops require a //daft:lint:disable=forloopbound reason=\"…\" directive (Power of 10 rule 2)",
+	Doc:  "bare `for {}` loops require a //vmjail:lint:disable=forloopbound reason=\"…\" directive (Power of 10 rule 2)",
 	Run:  run,
 }
 
@@ -58,7 +58,7 @@ func run(pass *analysis.Pass) (any, error) {
 				return true
 			}
 			pass.Reportf(forStmt.Pos(),
-				"bare `for {}` loop requires a //daft:lint:disable=forloopbound reason=\"…\" directive (Power of 10 rule 2); name the termination signal")
+				"bare `for {}` loop requires a //vmjail:lint:disable=forloopbound reason=\"…\" directive (Power of 10 rule 2); name the termination signal")
 			return true
 		})
 	}

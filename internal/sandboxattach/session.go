@@ -1,5 +1,5 @@
 // Package sandboxattach is the sandbox-host's attach client. It
-// dials the in-VM daft-agent's attach listener over a fresh
+// dials the in-VM vmjail-agent's attach listener over a fresh
 // AF_VSOCK connection, sends the AgentAttachHello, and adapts the
 // length-prefixed bidi frame stream to the
 // sandboxgateway.AttachSession surface so the orchestrator-driven
@@ -19,10 +19,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
+	"github.com/richiejp/vmjail/internal/agent"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/oops"
+	"github.com/richiejp/vmjail/internal/sandboxgateway"
 )
 
 // OpenSession sends the AgentAttachHello derived from req onto
@@ -94,7 +94,7 @@ func (s *agentSession) Read(b []byte) (int, error) {
 	// Loop because off-spec agent → host Resize frames are dropped
 	// (a confused peer mustn't kill the session); keep reading
 	// until we see Data, Exit, or an error.
-	//daft:lint:disable=forloopbound reason="bounded by agent.ReadAttachFrame returning io.EOF / net.ErrClosed on close. A trusted agent terminates the session with Data or Exit; the trusted-agent threat model accepts a goroutine pin if the agent floods Resize frames."
+	//vmjail:lint:disable=forloopbound reason="bounded by agent.ReadAttachFrame returning io.EOF / net.ErrClosed on close. A trusted agent terminates the session with Data or Exit; the trusted-agent threat model accepts a goroutine pin if the agent floods Resize frames."
 	for {
 		frame, err := agent.ReadAttachFrame(s.conn)
 		if err != nil {

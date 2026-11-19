@@ -17,8 +17,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
-	"github.com/richiejp/darkaifactory/internal/ociregistry"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/vmjail/internal/ociregistry"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // remoteKeychain authenticates pulls. DefaultKeychain reads
@@ -33,7 +33,7 @@ var remoteKeychain = authn.DefaultKeychain
 type Image struct {
 	// Ref is the human-readable reference the caller asked for, e.g.
 	// "alpine:3.19" or "ghcr.io/owner/repo@sha256:…". Preserved so
-	// `daft images ls` can show what the user actually typed.
+	// `vmjail images ls` can show what the user actually typed.
 	Ref string
 	// Digest is the canonical sha256 digest the ref resolved to.
 	// Persisted as the primary key in meta.json; bundle directory

@@ -21,8 +21,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/tarball"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/imagestore"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/imagestore"
 )
 
 // newImagestore creates a Store rooted at a fresh temp dir with a
@@ -51,7 +51,7 @@ func storeBundle(t *testing.T, s *imagestore.Store, digest string) (*imagestore.
 // agent.ContainerBanner, and returns (host, full ref).
 //
 // Compiling a Go binary at test time would be slow and pull in a
-// toolchain dep, so we reuse the Nix-built daft-hello-container
+// toolchain dep, so we reuse the Nix-built vmjail-hello-container
 // binary that already lives at result-bundle/rootfs/hello.
 func pushHelloIntegrationImage(t *testing.T) (host, ref string) {
 	t.Helper()
@@ -104,7 +104,7 @@ func pushHelloIntegrationImage(t *testing.T) (host, ref string) {
 	return u.Host, ref
 }
 
-// readHelloBinary slurps the Nix-built daft-hello-container binary
+// readHelloBinary slurps the Nix-built vmjail-hello-container binary
 // from result-bundle/rootfs/hello, asserts it embeds the banner
 // constant we expect (so a stale bundle fails fast), and returns
 // the bytes.

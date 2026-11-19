@@ -7,7 +7,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/vmjail/internal/oops"
 )
 
 // maxNetFrameSize caps a single Ethernet frame on the wire. 1600
@@ -60,7 +60,7 @@ func pumpFrames(ctx context.Context, conn, tap io.ReadWriteCloser) {
 func pumpConnToTap(conn io.Reader, tap io.Writer) {
 	hdr := make([]byte, 2)
 	buf := make([]byte, maxNetFrameSize)
-	//daft:lint:disable=forloopbound reason="bounded by conn.Close in pumpFrames"
+	//vmjail:lint:disable=forloopbound reason="bounded by conn.Close in pumpFrames"
 	for {
 		if _, err := io.ReadFull(conn, hdr); err != nil {
 			return
@@ -82,7 +82,7 @@ func pumpConnToTap(conn io.Reader, tap io.Writer) {
 // u16-le size prefix + frame to conn.
 func pumpTapToConn(tap io.Reader, conn io.Writer) {
 	buf := make([]byte, 2+maxNetFrameSize)
-	//daft:lint:disable=forloopbound reason="bounded by tap.Close in pumpFrames"
+	//vmjail:lint:disable=forloopbound reason="bounded by tap.Close in pumpFrames"
 	for {
 		n, err := tap.Read(buf[2:])
 		if err != nil {

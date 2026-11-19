@@ -15,7 +15,7 @@ const rlimitNPROC = 6
 
 // guestRlimit is the soft+hard value raiseGuestRlimits sets NOFILE and
 // NPROC to. 1048576 matches a normal systemd host (DefaultLimitNOFILE)
-// and buildah's RUN defaults. daft's microVM otherwise inherits the
+// and buildah's RUN defaults. vmjail's microVM otherwise inherits the
 // kernel's pristine-low limits (NOFILE 1024/4096; NPROC RAM-derived)
 // because there is no systemd/PAM in the guest to lift them — which
 // surprises FD- or process-hungry workloads (databases, node, and an

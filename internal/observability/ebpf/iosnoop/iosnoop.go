@@ -114,7 +114,7 @@ func run(ctx context.Context, w io.Writer, agg *Aggregator, open opener, resolve
 
 	t := time.NewTicker(interval)
 	defer t.Stop()
-	//daft:lint:disable=forloopbound reason="re-samples the BPF maps once per tick for the agent's lifetime; ctx cancel is the termination signal (drains a final snapshot and returns)"
+	//vmjail:lint:disable=forloopbound reason="re-samples the BPF maps once per tick for the agent's lifetime; ctx cancel is the termination signal (drains a final snapshot and returns)"
 	for {
 		select {
 		case <-ctx.Done():

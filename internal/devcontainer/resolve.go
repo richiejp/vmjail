@@ -10,7 +10,7 @@ import (
 )
 
 // ErrComposeUnsupported is returned when a config selects the container
-// via dockerComposeFile. daft runs a single container per VM, not a
+// via dockerComposeFile. vmjail runs a single container per VM, not a
 // compose project; this is a deliberate non-goal (see PLAN.md).
 var ErrComposeUnsupported = errors.New("devcontainer: dockerComposeFile is not supported")
 
@@ -22,8 +22,8 @@ var ErrNoSource = errors.New("devcontainer: config selects no image or build")
 // which the spec treats as mutually exclusive.
 var ErrImageAndBuild = errors.New("devcontainer: image and build are mutually exclusive")
 
-// Spec is the resolved, daft-shaped intermediate representation: the
-// devcontainer.json fields daft consumes, with ${…} variables expanded,
+// Spec is the resolved, vmjail-shaped intermediate representation: the
+// devcontainer.json fields vmjail consumes, with ${…} variables expanded,
 // lifecycle commands normalised, and the image-vs-build choice
 // validated. It is intentionally runtime-agnostic — slice 2 maps it onto
 // sandboxboot (shares, bundle env, port forwards, post-create exec).
@@ -39,7 +39,7 @@ type Spec struct {
 	// imagestore.BundleOptions.Env expects.
 	Env []string
 
-	// RemoteUser/ContainerUser carry the spec's user intent. daft
+	// RemoteUser/ContainerUser carry the spec's user intent. vmjail
 	// already derives the container uid from the image USER (#97/#98);
 	// these let a config override it. Empty means "honour the image".
 	RemoteUser    string
@@ -313,7 +313,7 @@ func (sub Substitutions) expand(s string, containerEnv map[string]string) string
 		return s
 	}
 	var b strings.Builder
-	//daft:lint:disable=forloopbound reason="terminates when strings.Index finds no more ${ (returns -1); s shrinks past each match every iteration"
+	//vmjail:lint:disable=forloopbound reason="terminates when strings.Index finds no more ${ (returns -1); s shrinks past each match every iteration"
 	for {
 		i := strings.Index(s, "${")
 		if i < 0 {

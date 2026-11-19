@@ -12,7 +12,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	tracev1 "github.com/richiejp/vmjail/internal/genpb/trace/v1"
 )
 
 // streamMaxMessage caps a single framed batch at 4 MiB. Generous
@@ -135,7 +135,7 @@ func (r *StreamReceiver) Run(ctx context.Context) error {
 	}()
 	defer close(doneCtx)
 
-	//daft:lint:disable=forloopbound reason="exits when r.listener.Close drives Accept to return net.ErrClosed"
+	//vmjail:lint:disable=forloopbound reason="exits when r.listener.Close drives Accept to return net.ErrClosed"
 	for {
 		conn, err := r.listener.Accept()
 		if err != nil {

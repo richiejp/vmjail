@@ -82,7 +82,7 @@
         # module graph hash below.
         kconfigVerifyVendorHash = "sha256-FUQsIWPumWRthlrJ71jHztjPRlUNTh0pAcbxZq74NuM=";
 
-        # mkDaftBinary builds one of our cmd/ binaries from the repo's
+        # mkVmjailBinary builds one of our cmd/ binaries from the repo's
         # go.mod. Shared so vendorHash stays defined once — otherwise
         # it drifts the next time go.mod changes.
         #
@@ -98,7 +98,7 @@
         # Go build (e.g. the orchestrator's bundled build image). Empty by
         # default and omitted from the derivation when empty, so binaries
         # that embed nothing keep their existing build hash.
-        mkDaftBinary = {
+        mkVmjailBinary = {
           name,
           subPackage,
           description,
@@ -106,7 +106,7 @@
           platforms ? pkgs.lib.platforms.unix,
           preBuild ? "",
           src ? goSrc,
-          vendorHash ? "sha256-Jf2libRaPoM3Fvp+JvHxVHSIlHH4Td22vfbjUQhcUDw=",
+          vendorHash ? "sha256-tfCzB6+pJqC0iW/DAh6GtZt8/hlxVghlgxjmr+2tTH8=",
         }: pkgs.buildGoModule ({
           pname = name;
           inherit version;
@@ -115,7 +115,7 @@
           env.CGO_ENABLED = if cgoEnabled then "1" else "0";
           ldflags = [
             "-s" "-w"
-            "-X github.com/richiejp/darkaifactory/internal/version.Version=${version}"
+            "-X github.com/richiejp/vmjail/internal/version.Version=${version}"
           ];
           subPackages = [ subPackage ];
           meta = with pkgs.lib; {
@@ -129,7 +129,7 @@
         devShells.default =
           let
             # Slow-moving sandbox-host *toolchain* artefacts pinned by
-            # the flake. They land on the shell as DAFT_* env vars;
+            # the flake. They land on the shell as VMJAIL_* env vars;
             # `make integration` reads those vars. Their store paths
             # change only when their (upstream) sources change, so they
             # don't churn /nix/store commit-by-commit — unlike the
@@ -208,16 +208,16 @@
               # tools — nobody runs the kernel at a prompt; they're
               # dependencies *of* the sandbox. Exporting them here forced
               # a build of every artefact at shell entry and froze their
-              # store paths, which went stale the moment a baked-in daft
+              # store paths, which went stale the moment a baked-in vmjail
               # binary changed. `make integration` now `nix build`s each
               # one fresh into bin/ and injects the paths for that run; a
               # bare `go test -tags=integration` skips with a hint naming
               # the exact `nix build .#<pkg> -o bin/<pkg>` to run. The
-              # production daft-sandboxd embeds its artefacts via
+              # production vmjail-sandboxd embeds its artefacts via
               # //go:embed, so it never needed these either. See PLAN.md
               # "Dev-shell purification".
 
-              echo "darkaifactory dev shell ready (version ${version})"
+              echo "vmjail dev shell ready (version ${version})"
               echo "  make fmt          - format Go code"
               echo "  make lint         - run golangci-lint"
               echo "  make test         - run tests"
@@ -229,12 +229,12 @@
 
         packages = rec {
 
-          default = daft-sandboxd;
+          default = vmjail-sandboxd;
 
           # Portable x86_64 Linux distribution. The sandbox executable is
           # static and embeds its VMM, kernel, initramfs, and
           # virtiofsd, so extracting this archive does not require Nix.
-          release-archive = pkgs.runCommand "darkaifactory-${version}-linux-${system}" {
+          release-archive = pkgs.runCommand "vmjail-${version}-linux-${system}" {
             nativeBuildInputs = [ pkgs.gnutar pkgs.gzip ];
             meta = with pkgs.lib; {
               description = "Portable local sandbox archive";
@@ -242,9 +242,9 @@
               platforms = [ "x86_64-linux" ];
             };
           } ''
-            root=darkaifactory-${version}-linux-x86_64
+            root=vmjail-${version}-linux-x86_64
             mkdir -p "$root/bin" $out
-            cp ${daft-sandboxd}/bin/daft-sandboxd "$root/bin/"
+            cp ${vmjail-sandboxd}/bin/vmjail-sandboxd "$root/bin/"
             tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner \
               -czf "$out/$root.tar.gz" "$root"
             (cd "$out" && ${pkgs.coreutils}/bin/sha256sum "$root.tar.gz" \
@@ -259,17 +259,17 @@
                   ./nix/node.nix
                   {
                     system.stateVersion = "25.11";
-                    services.darkaifactory-node = {
+                    services.vmjail-node = {
                       enable = true;
-                      package = daft-sandboxd;
+                      package = vmjail-sandboxd;
                       orchestratorAddress = "https://orchestrator.example:14443";
                     };
                   }
                 ];
               };
             in
-            pkgs.runCommand "darkaifactory-nixos-module-check" {
-              nodeExecStart = nodeSystem.config.systemd.services.darkaifactory-node.serviceConfig.ExecStart;
+            pkgs.runCommand "vmjail-nixos-module-check" {
+              nodeExecStart = nodeSystem.config.systemd.services.vmjail-node.serviceConfig.ExecStart;
             } ''
               test -n "$nodeExecStart"
               touch $out
@@ -279,19 +279,19 @@
           # buildable package so `make integration` can `nix build` it
           # into bin/ (the raw fetchGit result is not a valid flake
           # package output). build-initramfs runs u-root against this
-          # tree. (goSrc + mkDaftBinary live in the outer `let` — they
+          # tree. (goSrc + mkVmjailBinary live in the outer `let` — they
           # are a source and a function, not derivations, so they can't
           # be `packages` outputs without failing `nix flake check`.)
           u-root-src = pkgs.runCommand "u-root-src" { } "cp -r ${uRootSrc} $out";
 
-          # daft-agent runs inside our minimal microVM rootfs which has
+          # vmjail-agent runs inside our minimal microVM rootfs which has
           # no libc, so it must be statically linked. (Default cgoEnabled
-          # = false on mkDaftBinary makes this implicit; kept here only
+          # = false on mkVmjailBinary makes this implicit; kept here only
           # for the platform restriction.)
-          daft-agent = mkDaftBinary {
-            name = "daft-agent";
-            subPackage = "cmd/daft-agent";
-            description = "darkaifactory in-VM sandbox agent";
+          vmjail-agent = mkVmjailBinary {
+            name = "vmjail-agent";
+            subPackage = "cmd/vmjail-agent";
+            description = "vmjail in-VM sandbox agent";
             platforms = pkgs.lib.platforms.linux;
           };
 
@@ -299,56 +299,56 @@
           # Kconfig symbol our fragments request survived `olddefconfig`
           # (which silently demotes symbols with unmet deps). Used by the
           # kernel derivation's configurePhase below.
-          kconfig-verify = mkDaftBinary {
+          kconfig-verify = mkVmjailBinary {
             name = "kconfig-verify";
             subPackage = "cmd/kconfig-verify";
-            description = "darkaifactory kernel-config survival checker";
+            description = "vmjail kernel-config survival checker";
             platforms = pkgs.lib.platforms.linux;
             src = kconfigVerifySrc;
             vendorHash = kconfigVerifyVendorHash;
           };
 
-          # daft-hello-container is the workload binary in the v0
+          # vmjail-hello-container is the workload binary in the v0
           # smoke-test OCI bundle. It runs *inside the container*
           # (which runs inside the sandbox VM), prints
           # agent.ContainerBanner, and exits 0.
-          daft-hello-container = mkDaftBinary {
-            name = "daft-hello-container";
-            subPackage = "cmd/daft-hello-container";
-            description = "darkaifactory hello-world container workload";
+          vmjail-hello-container = mkVmjailBinary {
+            name = "vmjail-hello-container";
+            subPackage = "cmd/vmjail-hello-container";
+            description = "vmjail hello-world container workload";
             platforms = pkgs.lib.platforms.linux;
           };
 
-          # daft-hello-server is the D6b.4 dev-server proof
+          # vmjail-hello-server is the D6b.4 dev-server proof
           # workload: a static HTTP listener with a known body.
           # Baked into the nix-shell-image so the integration test
-          # can `daft workspace exec` it and then prove the
+          # can `vmjail workspace exec` it and then prove the
           # port-forward path end to end.
-          daft-hello-server = mkDaftBinary {
-            name = "daft-hello-server";
-            subPackage = "cmd/daft-hello-server";
-            description = "darkaifactory hello-world HTTP server (test workload)";
+          vmjail-hello-server = mkVmjailBinary {
+            name = "vmjail-hello-server";
+            subPackage = "cmd/vmjail-hello-server";
+            description = "vmjail hello-world HTTP server (test workload)";
             platforms = pkgs.lib.platforms.linux;
           };
 
-          daft-iso-fixture-init = mkDaftBinary {
-            name = "daft-iso-fixture-init";
-            subPackage = "./cmd/daft-iso-fixture";
+          vmjail-iso-fixture-init = mkVmjailBinary {
+            name = "vmjail-iso-fixture-init";
+            subPackage = "./cmd/vmjail-iso-fixture";
             description = "Minimal init and SSH-banner endpoint for the nested-ISO test fixture";
             platforms = pkgs.lib.platforms.linux;
           };
 
-          # daft-http-fetch is the D6c.2 slice-4 client workload:
+          # vmjail-http-fetch is the D6c.2 slice-4 client workload:
           # a tiny HTTPS GET that prints a known-shape sentinel on
           # success. Baked into the nix-shell-image so the
-          # integration test can `daft workspace exec` it against
+          # integration test can `vmjail workspace exec` it against
           # an httptest TLS server bound to the host's loopback —
           # reached through sandboxnet's DefaultHostLoopbackIP NAT
           # — and prove the container's network egress works.
-          daft-http-fetch = mkDaftBinary {
-            name = "daft-http-fetch";
-            subPackage = "cmd/daft-http-fetch";
-            description = "darkaifactory HTTPS GET client (test workload)";
+          vmjail-http-fetch = mkVmjailBinary {
+            name = "vmjail-http-fetch";
+            subPackage = "cmd/vmjail-http-fetch";
+            description = "vmjail HTTPS GET client (test workload)";
             platforms = pkgs.lib.platforms.linux;
           };
 
@@ -356,7 +356,7 @@
           # the D6b.3 integration test. It carries dash + coreutils
           # (so /bin/sh and /bin/sleep resolve inside the container)
           # and an Entrypoint of `sleep infinity` so the container
-          # stays alive long enough for `daft workspace exec` to
+          # stays alive long enough for `vmjail workspace exec` to
           # crun-exec into it. dockerTools.buildLayeredImage produces
           # a docker-format tarball; the test loads it with
           # go-containerregistry's tarball.ImageFromPath, pushes to
@@ -367,30 +367,30 @@
           # dev-server proof can actually invoke `nix develop` /
           # `nix run` inside the sandbox.
           nix-shell-image = pkgs.dockerTools.buildLayeredImage {
-            name = "daft-nix-shell";
+            name = "vmjail-nix-shell";
             tag = "v1";
-            # daft-hello-server is the D6b.4 dev-server workload —
-            # exec'd via `daft workspace exec` after the container
+            # vmjail-hello-server is the D6b.4 dev-server workload —
+            # exec'd via `vmjail workspace exec` after the container
             # is up so the port-forward test has something to GET
-            # against. Its /bin/daft-hello-server lands here via
+            # against. Its /bin/vmjail-hello-server lands here via
             # the same dockerTools buildEnv symlink mechanism as
-            # dash and coreutils. daft-http-fetch joins the same
+            # dash and coreutils. vmjail-http-fetch joins the same
             # buildEnv for the D6c.2 slice-4 HTTPS-egress proof.
             contents = [
               pkgs.dash pkgs.coreutils
-              daft-hello-server daft-http-fetch
+              vmjail-hello-server vmjail-http-fetch
             ];
             # The entrypoint prints a readiness sentinel on container
             # startup, then execs sleep so the container stays alive.
             # The sentinel travels container stdout → agent → vsock →
             # sandboxd stdout, where the D6b.3 test waits on it via
             # Cluster.WaitForSandboxdOutput before driving
-            # `daft workspace exec`. Mirrors the role of
+            # `vmjail workspace exec`. Mirrors the role of
             # agent.ContainerBanner for the hello bundle.
             config = {
               Entrypoint = [
                 "/bin/dash" "-c"
-                "echo daft-nix-shell ready; exec /bin/sleep infinity"
+                "echo vmjail-nix-shell ready; exec /bin/sleep infinity"
               ];
               Env = [ "PATH=/bin" ];
             };
@@ -402,7 +402,7 @@
           # external mutable tag. Its deliberately short image command serves
           # both persistent-Workspace and preserve-command lifecycle goals.
           blackbox-toolbox-image = pkgs.dockerTools.buildLayeredImage {
-            name = "daft-blackbox-toolbox";
+            name = "vmjail-blackbox-toolbox";
             tag = "v1";
             contents = with pkgs; [
               bashInteractive bun cacert coreutils curl dash findutils gcc go
@@ -411,7 +411,7 @@
             config = {
               Entrypoint = [
                 "/bin/dash" "-c"
-                "echo daft-blackbox-short-command"
+                "echo vmjail-blackbox-short-command"
               ];
               Env = [
                 "PATH=/bin"
@@ -456,7 +456,7 @@
                 ];
               };
             in pkgs.dockerTools.buildLayeredImage {
-              name = "daft-nix-tooling";
+              name = "vmjail-nix-tooling";
               tag = "v1";
               # pkgs.curl is on board so the D6c.4 narinfo probe
               # (TestClusterWorkspace404NarinfoProbe) can drive an
@@ -496,11 +496,11 @@
               '';
               config = {
                 # Entrypoint sentinel mirrors nix-shell-image's
-                # "daft-nix-shell ready" pattern so the test can
+                # "vmjail-nix-shell ready" pattern so the test can
                 # wait on a stable string in sandboxd output.
                 Entrypoint = [
                   "/bin/dash" "-c"
-                  "echo daft-nix-tooling ready; exec /bin/sleep infinity"
+                  "echo vmjail-nix-tooling ready; exec /bin/sleep infinity"
                 ];
                 Env = [
                   "PATH=/bin"
@@ -512,14 +512,14 @@
               };
             };
 
-          # daft-check-image is the D6c.4 slice-1 self-build image:
+          # vmjail-check-image is the D6c.4 slice-1 self-build image:
           # a NIX-LESS toolchain image that runs `make check` fully
           # offline. It carries the dev-shell's check toolchain (Go +
           # linters + make + git + a POSIX shell + coreutils) baked
           # under /nix/store as plain files — no nix binary, no daemon,
           # no store DB. The project's Go dependencies ride along as a
-          # vendor tree (daft.goModules, pinned by the same vendorHash
-          # as the daft binaries) which the self-build test copies into
+          # vendor tree (vmjail.goModules, pinned by the same vendorHash
+          # as the vmjail binaries) which the self-build test copies into
           # its source mount at /workspace/vendor, so `go build
           # -mod=vendor` resolves every package without the network.
           # The vendor tree is delivered via the mount rather than baked
@@ -546,7 +546,7 @@
           # and fixture images, so a full `make verify` still needs a
           # real nix — that is a separate hermetic-nix image (the
           # nix-tooling-image pattern extended), not this one.
-          daft-check-image =
+          vmjail-check-image =
             let
               # Mirrors devShells.default's buildInputs MINUS the eBPF
               # compile chain (clang/llvm/bpftool/libbpf): `make check`
@@ -554,7 +554,7 @@
               # of it (see the devShell note). buf/gzip/cpio are
               # likewise build-time-only (proto / initramfs), not check.
               checkToolchain = pkgs.buildEnv {
-                name = "daft-check-toolchain";
+                name = "vmjail-check-toolchain";
                 paths = with pkgs; [
                   go gofumpt golangci-lint gocyclo goconst scc
                   gnumake git bashInteractive dash coreutils
@@ -575,13 +575,13 @@
               #     kernel's binfmt-script handler can't resolve the
               #     shebang and every script exec fails ENOENT (Error
               #     127), aborting `make check` at the first gate.
-              pathShims = pkgs.runCommand "daft-check-path-shims" { } ''
+              pathShims = pkgs.runCommand "vmjail-check-path-shims" { } ''
                 mkdir -p $out/bin $out/usr/bin
                 ln -s ${pkgs.dash}/bin/dash $out/bin/sh
                 ln -s ${pkgs.coreutils}/bin/env $out/usr/bin/env
               '';
             in pkgs.dockerTools.buildLayeredImage {
-              name = "daft-check";
+              name = "vmjail-check";
               tag = "v1";
               contents = [ checkToolchain pathShims ];
               config = {
@@ -589,7 +589,7 @@
                 # test can WaitForSandboxdOutput on a stable string.
                 Entrypoint = [
                   "/bin/dash" "-c"
-                  "echo daft-check ready; exec /bin/sleep infinity"
+                  "echo vmjail-check ready; exec /bin/sleep infinity"
                 ];
                 # NOTE: crun-exec does NOT inherit these for `workspace
                 # exec` (only the entrypoint sees them), so the
@@ -599,7 +599,7 @@
                   "PATH=/bin"
                   "HOME=/workspace/.home"
                   "USER=root"
-                  # No C compiler is baked (the daft binaries are all
+                  # No C compiler is baked (the vmjail binaries are all
                   # static CGO=0); CGO_ENABLED=0 keeps golangci-lint's
                   # typecheck off the cgo `net` path, which would else
                   # fail to preprocess C.
@@ -611,31 +611,31 @@
               };
             };
 
-          # daft-build-image is the #101 slice-3 builder image: it runs
-          # inside a disposable daft sandbox and turns a Dockerfile into an
+          # vmjail-build-image is the #101 slice-3 builder image: it runs
+          # inside a disposable vmjail sandbox and turns a Dockerfile into an
           # OCI image tarball via buildah (daemonless), which the host then
           # ociregistry.Pushes for the workspace to boot.
           #
           # Isolation is `chroot` (Env BUILDAH_ISOLATION): the default `oci`
           # isolation would have buildah spawn a nested OCI runtime +
           # user/mount namespaces for every RUN, which is fragile inside
-          # daft's already-nested container-in-a-microVM; chroot runs RUN
+          # vmjail's already-nested container-in-a-microVM; chroot runs RUN
           # steps in a chroot and is far likelier to work nested. Storage is
           # `vfs` for the spike (no overlay/fuse deps); the perf path
           # (fuse-overlayfs over the existing privileged-fuse CAP_SYS_ADMIN +
           # /dev/fuse grant) is a follow-up. fuse-overlayfs is bundled now so
           # that switch needs no image change.
-          daft-build-image =
+          vmjail-build-image =
             let
               buildToolchain = pkgs.buildEnv {
-                name = "daft-build-toolchain";
+                name = "vmjail-build-toolchain";
                 paths = with pkgs; [
                   buildah fuse-overlayfs
                   bashInteractive dash coreutils
                   gnutar gzip
                 ];
               };
-              containersConf = pkgs.runCommand "daft-build-containers-conf"
+              containersConf = pkgs.runCommand "vmjail-build-containers-conf"
                 {
                   policy = pkgs.writeText "policy.json"
                     ''{"default":[{"type":"insecureAcceptAnything"}]}'';
@@ -660,7 +660,7 @@
                 # first (/etc/ssl/certs/ca-certificates.crt) so buildah's
                 # registry-pull TLS has a trust store. A bare nix image ships
                 # none, so without this buildah can't validate ANY registry
-                # cert. When daft's egress proxy is on, installProxyCA
+                # cert. When vmjail's egress proxy is on, installProxyCA
                 # overwrites this file with the proxy CA so the MITM leaf is
                 # trusted; off, it's the real CA set (cacert) for direct pulls.
                 ln -s ${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt \
@@ -673,7 +673,7 @@
               '';
             in
             pkgs.dockerTools.buildLayeredImage {
-              name = "daft-build";
+              name = "vmjail-build";
               tag = "v1";
               # fakeNss provides /etc/passwd (+ group, nsswitch) with a root
               # uid-0 entry. Without it buildah's user.Current() lookup fails
@@ -683,7 +683,7 @@
               config = {
                 Entrypoint = [
                   "/bin/dash" "-c"
-                  "echo daft-build ready; exec /bin/sleep infinity"
+                  "echo vmjail-build ready; exec /bin/sleep infinity"
                 ];
                 Env = [
                   "PATH=/bin"
@@ -700,7 +700,7 @@
           # closure via store path, so `nix run /workspace#serve`
           # finds the binary without evaluating any other
           # derivation. The fixture is shipped as a writeTextDir
-          # output so the test can `cp $DAFT_NIX_FLAKE_FIXTURE/
+          # output so the test can `cp $VMJAIL_NIX_FLAKE_FIXTURE/
           # flake.nix mountSrc/`.
           d6c1-flake-fixture = pkgs.writeTextDir "flake.nix" ''
             {
@@ -718,24 +718,24 @@
           # crun: a directory containing config.json + rootfs/ with
           # one statically-linked /hello binary. The host shares the
           # bundle dir into the guest via virtiofs and surfaces its
-          # path as `daft.bundle=...` on the kernel cmdline.
-          hello-bundle = pkgs.runCommand "daft-hello-bundle" {} ''
+          # path as `vmjail.bundle=...` on the kernel cmdline.
+          hello-bundle = pkgs.runCommand "vmjail-hello-bundle" {} ''
             mkdir -p $out/rootfs
-            cp ${daft-hello-container}/bin/daft-hello-container $out/rootfs/hello
+            cp ${vmjail-hello-container}/bin/vmjail-hello-container $out/rootfs/hello
             chmod +x $out/rootfs/hello
             cp ${./contrib/hello-bundle/config.json} $out/config.json
           '';
 
-          # daft-sandboxd is the single-executable sandbox-host. It
+          # vmjail-sandboxd is the single-executable sandbox-host. It
           # embeds cloud-hypervisor, the guest kernel, and the
           # initramfs into the binary at build time, so the resulting
           # ELF runs on any Linux distro of the same arch with no
           # external runtime dependencies.
-          daft-sandboxd = pkgs.buildGoModule {
-            pname = "daft-sandboxd";
+          vmjail-sandboxd = pkgs.buildGoModule {
+            pname = "vmjail-sandboxd";
             inherit version;
             src = goSrc;
-            vendorHash = "sha256-Jf2libRaPoM3Fvp+JvHxVHSIlHH4Td22vfbjUQhcUDw=";
+            vendorHash = "sha256-tfCzB6+pJqC0iW/DAh6GtZt8/hlxVghlgxjmr+2tTH8=";
             env.CGO_ENABLED = "0";
 
             # Stage the real artifacts into internal/bundled/assets/
@@ -749,12 +749,12 @@
 
             ldflags = [
               "-s" "-w"
-              "-X github.com/richiejp/darkaifactory/internal/version.Version=${version}"
+              "-X github.com/richiejp/vmjail/internal/version.Version=${version}"
             ];
-            subPackages = [ "cmd/daft-sandboxd" ];
+            subPackages = [ "cmd/vmjail-sandboxd" ];
 
             meta = with pkgs.lib; {
-              description = "darkaifactory sandbox-host (single-executable, statically linked)";
+              description = "vmjail sandbox-host (single-executable, statically linked)";
               license = licenses.asl20;
               maintainers = [ ];
               platforms = platforms.linux;
@@ -767,8 +767,8 @@
           #   /init           — u-root's pure-Go init (cmds/core/init);
           #                     mounts /proc, /sys, devtmpfs, cgroup2, etc.,
           #                     reaps zombies, and execs /bin/uinit.
-          #   /bin/uinit ->   /bin/daft-agent (symlink, set via -uinitcmd)
-          #   /bin/daft-agent — our statically-linked agent.
+          #   /bin/uinit ->   /bin/vmjail-agent (symlink, set via -uinitcmd)
+          #   /bin/vmjail-agent — our statically-linked agent.
           #   /bin/crun       — the OCI runtime the agent execs to launch
           #                     workload containers; static-musl build.
           #
@@ -778,7 +778,7 @@
           # Only u-root's `init` busybox-binary, our agent, and crun end up
           # in the archive — no interpreters, no diagnostic tools, zero
           # setuid (crun is built without the +s helper bits).
-          initramfs = pkgs.runCommand "daft-initramfs.cpio.gz" {
+          initramfs = pkgs.runCommand "vmjail-initramfs.cpio.gz" {
             nativeBuildInputs = [ pkgs.go pkgs.gzip pkgs.cpio ];
           } ''
             export HOME=$TMPDIR
@@ -799,9 +799,9 @@
               -o $TMPDIR/initramfs.cpio \
               -defaultsh="" \
               -base=/dev/null \
-              -files "${daft-agent}/bin/daft-agent:bin/daft-agent" \
+              -files "${vmjail-agent}/bin/vmjail-agent:bin/vmjail-agent" \
               -files "${crun}/bin/crun:bin/crun" \
-              -uinitcmd=/bin/daft-agent \
+              -uinitcmd=/bin/vmjail-agent \
               ./cmds/core/init
 
             gzip < $TMPDIR/initramfs.cpio > $out
@@ -809,11 +809,11 @@
 
           # Linux kernel for the sandbox VM, built from the pinned
           # submodule. Config is assembled from the ground up — tinyconfig
-          # + kvm_guest + our microvm/daft/hardening fragments (see
+          # + kvm_guest + our microvm/vmjail/hardening fragments (see
           # configurePhase) — not from defconfig. Output: bzImage (suitable
           # for Cloud Hypervisor PVH or bzImage boot).
           kernel = pkgs.stdenv.mkDerivation {
-            pname = "linux-daft";
+            pname = "linux-vmjail";
             version = kernelVersion;
 
             src = linuxSrc;
@@ -878,7 +878,7 @@
               # bloated defconfig: tinyconfig (allnoconfig + tiny.config) is
               # the minimal base, then merge_config.sh folds the fragments in
               # order — upstream KVM-guest essentials, our microvm base (re-add
-              # what tinyconfig drops + trim), daft features, and KSPP
+              # what tinyconfig drops + trim), vmjail features, and KSPP
               # hardening last so it wins. allnoconfig sets CONFIG_EXPERT, which
               # is what lets the fragments turn off otherwise-forced symbols
               # (e.g. io_uring). -m merges without running conf; olddefconfig
@@ -887,7 +887,7 @@
               ./scripts/kconfig/merge_config.sh -m -O . .config \
                 kernel/configs/kvm_guest.config \
                 ${./third_party/kernel-config/microvm-base.config} \
-                ${./third_party/kernel-config/daft.config} \
+                ${./third_party/kernel-config/vmjail.config} \
                 ${./third_party/kernel-config/microvm-hardening.config}
               make $kmakeTools olddefconfig
               # `make olddefconfig` has been observed to silently drop
@@ -907,7 +907,7 @@
               # drop that otherwise only surfaces as a runtime e2e failure.
               kconfig-verify .config \
                 ${./third_party/kernel-config/microvm-base.config} \
-                ${./third_party/kernel-config/daft.config} \
+                ${./third_party/kernel-config/vmjail.config} \
                 ${./third_party/kernel-config/microvm-hardening.config}
               runHook postConfigure
             '';
@@ -934,7 +934,7 @@
             dontPatchELF = true;
 
             meta = with pkgs.lib; {
-              description = "Linux kernel for the daft sandbox VM";
+              description = "Linux kernel for the vmjail sandbox VM";
               homepage = "https://kernel.org/";
               license = licenses.gpl2Only;
               maintainers = [ ];
@@ -945,7 +945,7 @@
           # Cloud Hypervisor — our v1 VMM, built from our pinned
           # submodule, statically linked against musl so the resulting
           # ELF runs on any Linux distro of the same arch. We bundle it
-          # into the sandbox-host single executable (daft-sandboxd), so
+          # into the sandbox-host single executable (vmjail-sandboxd), so
           # static linking is load-bearing for portability.
           cloud-hypervisor = pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "cloud-hypervisor";
@@ -989,7 +989,7 @@
           # $LIBSECCOMP_LINK_TYPE — we set them to "static" and feed
           # the static .a paths so rustc embeds the archives rather
           # than the shared libs. The result is a fully self-contained
-          # binary that drops into the daft-sandboxd bundle alongside
+          # binary that drops into the vmjail-sandboxd bundle alongside
           # cloud-hypervisor and crun.
           virtiofsd = pkgs.pkgsStatic.rustPlatform.buildRustPackage {
             pname = "virtiofsd";
@@ -1105,7 +1105,7 @@
 
           # u-root command, built from our pinned submodule. Used to
           # assemble future-slice initramfs variants once we move off
-          # daft-agent-as-PID-1.
+          # vmjail-agent-as-PID-1.
           u-root = pkgs.buildGoModule {
             pname = "u-root";
             version = "0.16.0";
@@ -1137,13 +1137,13 @@
 
           # iso-qemu-runner-image carries qemu + a launcher that boots a
           # third-party ISO as a NESTED L2 VM: QEMU -accel kvm against
-          # the daft sandbox's bound /dev/kvm, with slirp user-net
+          # the vmjail sandbox's bound /dev/kvm, with slirp user-net
           # hostfwd exposing the ISO's sshd on the container loopback.
-          # daft's existing port-forward then reaches it from the host
+          # vmjail's existing port-forward then reaches it from the host
           # (TestClusterNestedISOBoot). Part of the iso-nested-qemu
           # diversion: the ISO is the only untrusted layer, wrapped from
-          # outside by the normal daft VM (vsock, cgroups, /proc
-          # sampler) — daft never has to learn to boot ISOs itself.
+          # outside by the normal vmjail VM (vsock, cgroups, /proc
+          # sampler) — vmjail never has to learn to boot ISOs itself.
           iso-qemu-runner-image =
             let
               # qemu_test is the headless "for-vm-tests" build: same
@@ -1155,7 +1155,7 @@
               qemuRunner = pkgs.qemu_test;
               # launch-iso boots the ISO under qemu and blocks until its
               # sshd answers SSH-2.0 on the slirp-forwarded loopback
-              # port, then prints DAFT_ISO_SSH_READY (the sentinel the
+              # port, then prints VMJAIL_ISO_SSH_READY (the sentinel the
               # test waits on) and stays in the foreground so the
               # host-side forward + SSH assertions have a live target.
               # writeShellScriptBin (not writeShellApplication) on
@@ -1177,7 +1177,7 @@
                   -device virtio-net-pci,netdev=n \
                   -display none -serial "file:$SER" &
                 QPID=$!
-                echo "daft-iso-qemu: launched qemu pid=$QPID iso=$ISO hostfwd=127.0.0.1:''${HOSTPORT}->:22"
+                echo "vmjail-iso-qemu: launched qemu pid=$QPID iso=$ISO hostfwd=127.0.0.1:''${HOSTPORT}->:22"
                 trap 'kill -TERM "$QPID" 2>/dev/null' TERM INT
 
                 # Slirp accepts the host-forward connection before the guest
@@ -1190,11 +1190,11 @@
                 ' _ "''${HOSTPORT}" 2>/dev/null)
                 case "$banner" in
                   SSH-2.0*)
-                    echo "daft-iso-qemu: sshd reachable: ''${banner%%$'\r'*}"
-                    echo "DAFT_ISO_SSH_READY"
+                    echo "vmjail-iso-qemu: sshd reachable: ''${banner%%$'\r'*}"
+                    echo "VMJAIL_ISO_SSH_READY"
                     ;;
                   *)
-                  echo "daft-iso-qemu: FATAL sshd not reachable within timeout"
+                  echo "vmjail-iso-qemu: FATAL sshd not reachable within timeout"
                   echo "--- serial tail ---"; tail -n 40 "$SER" 2>/dev/null || true
                   kill -9 "$QPID" 2>/dev/null
                   exit 1
@@ -1204,7 +1204,7 @@
                 wait "$QPID"
               '';
             in pkgs.dockerTools.buildLayeredImage {
-              name = "daft-iso-qemu-runner";
+              name = "vmjail-iso-qemu-runner";
               tag = "v1";
               contents = [
                 pkgs.bashInteractive pkgs.coreutils pkgs.dash
@@ -1213,7 +1213,7 @@
               config = {
                 Entrypoint = [
                   "${pkgs.bashInteractive}/bin/bash" "-c"
-                  "echo daft-iso-qemu ready; exec ${pkgs.coreutils}/bin/sleep infinity"
+                  "echo vmjail-iso-qemu ready; exec ${pkgs.coreutils}/bin/sleep infinity"
                 ];
                 Env = [ "PATH=/bin" "HOME=/work" ];
               };
@@ -1224,15 +1224,15 @@
           # deliberately tiny bootable Linux ISO that exposes an SSH banner.
           # It stands in for a third-party "Linux + agent" ISO we
           # cannot rebuild — the integration test boots it under QEMU
-          # *inside* a daft sandbox VM (nested KVM), forwards its sshd
+          # *inside* a vmjail sandbox VM (nested KVM), forwards its sshd
           # out, and asserts the SSH banner is reachable end-to-end.
           # Pointing the mechanism at a real ISO is a one-line --source
           # swap; this fixture exists only so the chain is CI-provable.
           #
-          # The fixture reuses daft's small kernel and a u-root initramfs. Its
+          # The fixture reuses vmjail's small kernel and a u-root initramfs. Its
           # only userspace payload configures eth0 at QEMU slirp's conventional
           # guest address and emits an SSH-2.0 banner on port 22.
-          iso-fixture-initramfs = pkgs.runCommand "daft-iso-fixture-initramfs.cpio.gz" {
+          iso-fixture-initramfs = pkgs.runCommand "vmjail-iso-fixture-initramfs.cpio.gz" {
             nativeBuildInputs = [ pkgs.go pkgs.gzip pkgs.cpio ];
           } ''
             export HOME=$TMPDIR
@@ -1245,8 +1245,8 @@
               -o $TMPDIR/initramfs.cpio \
               -defaultsh="" \
               -base=/dev/null \
-              -files "${daft-iso-fixture-init}/bin/daft-iso-fixture:bin/daft-iso-fixture-init" \
-              -uinitcmd=/bin/daft-iso-fixture-init \
+              -files "${vmjail-iso-fixture-init}/bin/vmjail-iso-fixture:bin/vmjail-iso-fixture-init" \
+              -uinitcmd=/bin/vmjail-iso-fixture-init \
               ./cmds/core/init
             gzip < $TMPDIR/initramfs.cpio > $out
           '';
@@ -1254,15 +1254,15 @@
           iso-ssh-fixture =
             let
               isolinuxCfg = pkgs.writeText "isolinux.cfg" ''
-                DEFAULT daft
+                DEFAULT vmjail
                 PROMPT 0
                 TIMEOUT 1
-                LABEL daft
+                LABEL vmjail
                   KERNEL /bzImage
                   INITRD /initramfs.cpio.gz
                   APPEND console=ttyS0,115200n8 panic=-1
               '';
-            in pkgs.runCommand "daft-iso-ssh-fixture" {
+            in pkgs.runCommand "vmjail-iso-ssh-fixture" {
               nativeBuildInputs = [ pkgs.xorriso ];
             } ''
               mkdir -p $out/iso image/isolinux
@@ -1272,7 +1272,7 @@
               cp ${pkgs.syslinux}/share/syslinux/ldlinux.c32 image/isolinux/
               cp ${isolinuxCfg} image/isolinux/isolinux.cfg
               xorriso -as mkisofs \
-                -o $out/iso/daft-iso-ssh-fixture.iso \
+                -o $out/iso/vmjail-iso-ssh-fixture.iso \
                 -b isolinux/isolinux.bin \
                 -c isolinux/boot.cat \
                 -no-emul-boot -boot-load-size 4 -boot-info-table \

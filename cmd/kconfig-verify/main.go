@@ -10,7 +10,7 @@ package main
 import (
 	"os"
 
-	"github.com/richiejp/darkaifactory/internal/kconfig"
+	"github.com/richiejp/vmjail/internal/kconfig"
 )
 
 // osExit and kconfigRun are indirection points so main_test.go can verify

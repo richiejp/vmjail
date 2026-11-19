@@ -4,7 +4,7 @@ package a
 //go:linkname forbidden other.forbidden // want `forbidden by Power of 10`
 var forbidden = 1
 
-//daft:lint:disable=nolinkname reason="fixture exercises suppression"
+//vmjail:lint:disable=nolinkname reason="fixture exercises suppression"
 //go:linkname suppressed other.suppressed
 var suppressed = 2
 

@@ -1,6 +1,6 @@
 // Package lintreasons hosts the analyzer that enforces the project's
 // suppression-comment convention: every comment that opens with
-// `//daft:lint:disable=` (after optional whitespace) must include a
+// `//vmjail:lint:disable=` (after optional whitespace) must include a
 // non-empty `reason="…"` clause.
 //
 // Suppressions exist; the project's policy is that they must be
@@ -20,15 +20,15 @@ package lintreasons
 import (
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
 // Analyzer is the lintreasons analyzer entry point. Run via
-// golang.org/x/tools/go/analysis or the project's cmd/daft-lint
+// golang.org/x/tools/go/analysis or the project's cmd/vmjail-lint
 // multichecker.
 var Analyzer = &analysis.Analyzer{
 	Name: "lintreasons",
-	Doc:  `require non-empty reason="…" on every //daft:lint:disable= directive`,
+	Doc:  `require non-empty reason="…" on every //vmjail:lint:disable= directive`,
 	Run:  run,
 }
 
@@ -42,12 +42,12 @@ func run(pass *analysis.Pass) (any, error) {
 				}
 				if len(names) == 0 {
 					pass.Reportf(c.Pos(),
-						`daft:lint:disable= directive must list at least one analyzer name`)
+						`vmjail:lint:disable= directive must list at least one analyzer name`)
 					continue
 				}
 				if reason == "" {
 					pass.Reportf(c.Pos(),
-						`daft:lint:disable= directive missing or empty reason="…"`)
+						`vmjail:lint:disable= directive missing or empty reason="…"`)
 				}
 			}
 		}

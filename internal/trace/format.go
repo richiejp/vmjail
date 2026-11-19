@@ -10,7 +10,7 @@ import (
 
 // FormatText writes a human-readable rendering of spans to w,
 // grouped by trace_id and indented by parent depth. Designed for
-// test failure dumps and `daft trace dump` — not stable for
+// test failure dumps and `vmjail trace dump` — not stable for
 // programmatic parsing.
 //
 // Output shape per trace:
@@ -116,7 +116,7 @@ func sortByStart(spans []*Span) {
 	sort.Slice(spans, func(i, j int) bool { return spans[i].start.Before(spans[j].start) })
 }
 
-//daft:lint:disable=norecursion reason="tree walk over span children; depth bounded by the producer's trace nesting, which is itself capped by Span.deadline + the reaper"
+//vmjail:lint:disable=norecursion reason="tree walk over span children; depth bounded by the producer's trace nesting, which is itself capped by Span.deadline + the reaper"
 func writeSpan(w io.Writer, s *Span, childrenOf map[string][]*Span, prefix string, last bool) error {
 	branch := "├─ "
 	contPrefix := prefix + "│  "

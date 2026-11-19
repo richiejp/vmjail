@@ -1,5 +1,5 @@
 // Package blackbox defines source-blind product-test scenarios and issue
-// records. The formats deliberately describe only public daft CLI behaviour;
+// records. The formats deliberately describe only public vmjail CLI behaviour;
 // implementation-aware regression tests are produced in a separate workflow.
 package blackbox
 
@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	Executable         = "daft"
+	Executable         = "vmjail"
 	titleField         = "title"
 	expectedField      = "expected"
 	Version            = 1
@@ -104,7 +104,7 @@ func (s Step) validate() error {
 		return errors.New("name must be a lowercase identifier")
 	}
 	if len(s.Argv) == 0 || len(s.Argv) > MaxArguments || s.Argv[0] != Executable {
-		return fmt.Errorf("argv must contain 1..%d arguments and start with daft", MaxArguments)
+		return fmt.Errorf("argv must contain 1..%d arguments and start with vmjail", MaxArguments)
 	}
 	for _, arg := range s.Argv {
 		if arg == "" || len(arg) > MaxArgumentBytes {

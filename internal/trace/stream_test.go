@@ -13,7 +13,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	tracev1 "github.com/richiejp/vmjail/internal/genpb/trace/v1"
 )
 
 // TestStreamRoundTripOverUDS exercises StreamExporter and

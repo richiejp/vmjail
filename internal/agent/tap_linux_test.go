@@ -21,7 +21,7 @@ func (f *fakeLink) Attrs() *netlink.LinkAttrs { return &f.attrs }
 func (f *fakeLink) Type() string              { return "tap" }
 
 func newFakeLink(index int) *fakeLink {
-	return &fakeLink{attrs: netlink.LinkAttrs{Index: index, Name: "daft0"}}
+	return &fakeLink{attrs: netlink.LinkAttrs{Index: index, Name: "vmjail0"}}
 }
 
 func TestOpenTapLinuxWithRejectsLongName(t *testing.T) {
@@ -38,7 +38,7 @@ func TestOpenTapLinuxWithRejectsLongName(t *testing.T) {
 }
 
 func TestOpenTapLinuxWithSurfacesOpenError(t *testing.T) {
-	_, _, err := openTapLinuxWith("daft0", tapLinuxDeps{
+	_, _, err := openTapLinuxWith("vmjail0", tapLinuxDeps{
 		OpenTun: func() (*os.File, error) { return nil, errors.New("synthetic open") },
 	})
 	if err == nil || !strings.Contains(err.Error(), "/dev/net/tun") {
@@ -49,7 +49,7 @@ func TestOpenTapLinuxWithSurfacesOpenError(t *testing.T) {
 func TestOpenTapLinuxWithSurfacesIoctlError(t *testing.T) {
 	f, cleanup := tempTunFile(t)
 	defer cleanup()
-	_, _, err := openTapLinuxWith("daft0", tapLinuxDeps{
+	_, _, err := openTapLinuxWith("vmjail0", tapLinuxDeps{
 		OpenTun:   func() (*os.File, error) { return f, nil },
 		TUNSETIFF: func(uintptr, *tapIfReq) error { return errors.New("EPERM") },
 	})
@@ -62,7 +62,7 @@ func TestOpenTapLinuxWithSuccess(t *testing.T) {
 	f, cleanup := tempTunFile(t)
 	defer cleanup()
 	var ioctlReq tapIfReq
-	got, name, err := openTapLinuxWith("daft0", tapLinuxDeps{
+	got, name, err := openTapLinuxWith("vmjail0", tapLinuxDeps{
 		OpenTun: func() (*os.File, error) { return f, nil },
 		TUNSETIFF: func(_ uintptr, req *tapIfReq) error {
 			ioctlReq = *req
@@ -70,15 +70,15 @@ func TestOpenTapLinuxWithSuccess(t *testing.T) {
 			// device name (it doesn't, for a requested name, but
 			// it would for a blank one — we want to cover the
 			// trim-trailing-NUL branch either way).
-			copy(req.Name[:], "daft0\x00")
+			copy(req.Name[:], "vmjail0\x00")
 			return nil
 		},
 	})
 	if err != nil {
 		t.Fatalf("openTapLinuxWith: %v", err)
 	}
-	if name != "daft0" {
-		t.Fatalf("name = %q, want daft0", name)
+	if name != "vmjail0" {
+		t.Fatalf("name = %q, want vmjail0", name)
 	}
 	if got != f {
 		t.Fatalf("returned file = %v, want %v", got, f)
@@ -89,7 +89,7 @@ func TestOpenTapLinuxWithSuccess(t *testing.T) {
 }
 
 func TestConfigureTapLinuxWithLinkByNameError(t *testing.T) {
-	err := configureTapLinuxWith("daft0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
+	err := configureTapLinuxWith("vmjail0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
 		LinkByName: func(string) (netlink.Link, error) { return nil, errors.New("not found") },
 	})
 	if err == nil || !strings.Contains(err.Error(), "LinkByName") {
@@ -99,7 +99,7 @@ func TestConfigureTapLinuxWithLinkByNameError(t *testing.T) {
 
 func TestConfigureTapLinuxWithLinkSetMTUError(t *testing.T) {
 	link := newFakeLink(7)
-	err := configureTapLinuxWith("daft0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
+	err := configureTapLinuxWith("vmjail0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
 		LinkByName: func(string) (netlink.Link, error) { return link, nil },
 		LinkSetMTU: func(netlink.Link, int) error { return errors.New("E2BIG") },
 	})
@@ -110,7 +110,7 @@ func TestConfigureTapLinuxWithLinkSetMTUError(t *testing.T) {
 
 func TestConfigureTapLinuxWithBadAddr(t *testing.T) {
 	link := newFakeLink(7)
-	err := configureTapLinuxWith("daft0", "not-a-cidr", "192.168.127.1", 1500, tapLinuxDeps{
+	err := configureTapLinuxWith("vmjail0", "not-a-cidr", "192.168.127.1", 1500, tapLinuxDeps{
 		LinkByName: func(string) (netlink.Link, error) { return link, nil },
 		LinkSetMTU: func(netlink.Link, int) error { return nil },
 	})
@@ -121,7 +121,7 @@ func TestConfigureTapLinuxWithBadAddr(t *testing.T) {
 
 func TestConfigureTapLinuxWithAddrAddError(t *testing.T) {
 	link := newFakeLink(7)
-	err := configureTapLinuxWith("daft0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
+	err := configureTapLinuxWith("vmjail0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
 		LinkByName: func(string) (netlink.Link, error) { return link, nil },
 		LinkSetMTU: func(netlink.Link, int) error { return nil },
 		AddrAdd:    func(netlink.Link, *netlink.Addr) error { return errors.New("EEXIST") },
@@ -133,7 +133,7 @@ func TestConfigureTapLinuxWithAddrAddError(t *testing.T) {
 
 func TestConfigureTapLinuxWithLinkSetUpError(t *testing.T) {
 	link := newFakeLink(7)
-	err := configureTapLinuxWith("daft0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
+	err := configureTapLinuxWith("vmjail0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
 		LinkByName: func(string) (netlink.Link, error) { return link, nil },
 		LinkSetMTU: func(netlink.Link, int) error { return nil },
 		AddrAdd:    func(netlink.Link, *netlink.Addr) error { return nil },
@@ -146,7 +146,7 @@ func TestConfigureTapLinuxWithLinkSetUpError(t *testing.T) {
 
 func TestConfigureTapLinuxWithBadGateway(t *testing.T) {
 	link := newFakeLink(7)
-	err := configureTapLinuxWith("daft0", "192.168.127.2/24", "not-an-ip", 1500, tapLinuxDeps{
+	err := configureTapLinuxWith("vmjail0", "192.168.127.2/24", "not-an-ip", 1500, tapLinuxDeps{
 		LinkByName: func(string) (netlink.Link, error) { return link, nil },
 		LinkSetMTU: func(netlink.Link, int) error { return nil },
 		AddrAdd:    func(netlink.Link, *netlink.Addr) error { return nil },
@@ -159,7 +159,7 @@ func TestConfigureTapLinuxWithBadGateway(t *testing.T) {
 
 func TestConfigureTapLinuxWithRouteAddError(t *testing.T) {
 	link := newFakeLink(7)
-	err := configureTapLinuxWith("daft0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
+	err := configureTapLinuxWith("vmjail0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
 		LinkByName: func(string) (netlink.Link, error) { return link, nil },
 		LinkSetMTU: func(netlink.Link, int) error { return nil },
 		AddrAdd:    func(netlink.Link, *netlink.Addr) error { return nil },
@@ -184,7 +184,7 @@ func TestConfigureTapLinuxWithSuccess(t *testing.T) {
 		linkUp bool
 		gw     string
 	}
-	err := configureTapLinuxWith("daft0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
+	err := configureTapLinuxWith("vmjail0", "192.168.127.2/24", "192.168.127.1", 1500, tapLinuxDeps{
 		LinkByName: func(string) (netlink.Link, error) { return link, nil },
 		LinkSetMTU: func(_ netlink.Link, mtu int) error { got.mtu = mtu; return nil },
 		AddrAdd: func(_ netlink.Link, a *netlink.Addr) error {
@@ -228,7 +228,7 @@ func TestRealTunSetIffSurfacesEnotty(t *testing.T) {
 // are covered. configureTapLinux against a nonexistent link is
 // guaranteed to fail at LinkByName without requiring root.
 func TestDefaultTapLinuxDepsWiresRealHelpers(t *testing.T) {
-	if err := configureTapLinux("daft-no-such-1c4f0a8e", "192.168.127.2/24", "192.168.127.1", 1500); err == nil {
+	if err := configureTapLinux("vmjail-no-such-1c4f0a8e", "192.168.127.2/24", "192.168.127.1", 1500); err == nil {
 		t.Fatal("configureTapLinux against nonexistent link: want error")
 	}
 }

@@ -1,4 +1,4 @@
-// Cross-component tracing for daft. Spans accumulate in each
+// Cross-component tracing for vmjail. Spans accumulate in each
 // component's in-memory ring buffer and are shipped to the
 // orchestrator via TraceService.ReportSpans, where they're merged
 // into a single buffer per trace_id.
@@ -13,9 +13,9 @@
 // span.
 syntax = "proto3";
 
-package daft.trace.v1;
+package vmjail.trace.v1;
 
-option go_package = "github.com/richiejp/darkaifactory/internal/genpb/trace/v1;tracev1";
+option go_package = "github.com/richiejp/vmjail/internal/genpb/trace/v1;tracev1";
 
 // SpanKind disambiguates client/server pairs sharing one trace_id
 // across an RPC boundary, matching the OTel convention so a future
@@ -60,8 +60,8 @@ message SpanEvent {
 // operation; (trace_id, span_id) uniquely identifies a span within
 // a trace; parent_span_id chains spans into a tree.
 //
-// component identifies the producer ("daft", "daft-orchestrator",
-// "daft-sandboxd", "daft-agent") so a single shared buffer at the
+// component identifies the producer ("vmjail", "vmjail-orchestrator",
+// "vmjail-sandboxd", "vmjail-agent") so a single shared buffer at the
 // orchestrator can attribute spans without inferring from the mTLS
 // peer cert.
 message Span {

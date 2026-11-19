@@ -9,7 +9,7 @@ import (
 	"os/exec"
 	"syscall"
 
-	"github.com/richiejp/darkaifactory/internal/observability"
+	"github.com/richiejp/vmjail/internal/observability"
 )
 
 // Test seams: package-level vars so unit tests can drive every branch
@@ -73,7 +73,7 @@ func EnsureDelegated(stderr io.Writer) error {
 	argv = append(argv, "--scope", "-p", "Delegate=yes", "--quiet", "--", self)
 	argv = append(argv, os.Args[1:]...)
 	env := append(os.Environ(), EnvMarker+"=1")
-	_, _ = fmt.Fprintln(stderr, "daft-sandboxd: cgroup not delegated; re-exec under a systemd-run scope to obtain one")
+	_, _ = fmt.Fprintln(stderr, "vmjail-sandboxd: cgroup not delegated; re-exec under a systemd-run scope to obtain one")
 	// execve: on success the process image is replaced and this never
 	// returns. The re-exec'd self re-enters EnsureDelegated, finds itself
 	// delegated, and proceeds.

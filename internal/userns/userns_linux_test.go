@@ -584,7 +584,7 @@ func TestReexecParentBranchHappyPath(t *testing.T) {
 // parent branch (no EnvMarker, no EnvDisable). With newuidmap
 // candidates pointed at missing paths, the parent branch
 // surfaces a setup error to the caller — that's what the
-// daft-sandboxd main() relies on to bail with a clear
+// vmjail-sandboxd main() relies on to bail with a clear
 // diagnostic when the host's rootless setup isn't viable.
 func TestReexecParentBranchPropagatesError(t *testing.T) {
 	t.Setenv(EnvDisable, "")

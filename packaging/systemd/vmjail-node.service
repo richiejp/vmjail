@@ -1,0 +1,32 @@
+[Unit]
+Description=vmjail sandbox node
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=vmjail-node
+Group=vmjail-node
+SupplementaryGroups=kvm
+EnvironmentFile=/etc/vmjail/node.env
+Environment=VMJAIL_STATE_DIR=/var/lib/vmjail-node
+Environment=VMJAIL_STORE_DIR=/var/lib/vmjail-node/images
+Environment=XDG_CACHE_HOME=/var/cache/vmjail-node
+ExecStart=/usr/local/lib/vmjail/vmjail-sandboxd serve --orchestrator ${VMJAIL_ORCHESTRATOR_ADDRESS} --config-dir /var/lib/vmjail-node --vsock-dir /run/vmjail-node/vsock
+StateDirectory=vmjail-node
+StateDirectoryMode=0700
+CacheDirectory=vmjail-node
+CacheDirectoryMode=0700
+RuntimeDirectory=vmjail-node
+RuntimeDirectoryMode=0700
+Delegate=true
+DeviceAllow=/dev/kvm rw
+Restart=on-failure
+RestartSec=2s
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

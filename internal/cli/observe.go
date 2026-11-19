@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/observability/progress"
+	"github.com/richiejp/vmjail/internal/observability/progress"
 )
 
 const (

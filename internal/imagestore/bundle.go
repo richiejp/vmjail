@@ -15,8 +15,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/vmjail/internal/oops"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // ErrUnknownImage is returned by Bundle when the requested digest is
@@ -54,7 +54,7 @@ type BundleOptions struct {
 	Env []string
 	// Cwd, when non-empty, overrides the image's WorkingDir.
 	Cwd string
-	// Hostname, when non-empty, overrides the default ("daft-container").
+	// Hostname, when non-empty, overrides the default ("vmjail-container").
 	Hostname string
 	// ExtraMounts is appended to the default OCI mounts (proc, dev,
 	// sys). Used by the host orchestrator to bind-mount a writable
@@ -82,7 +82,7 @@ type BundleOptions struct {
 	// PrivilegedBuild grants the container the standard container
 	// capability set (CAP_SYS_CHROOT, CAP_SYS_ADMIN, CHOWN, DAC_OVERRIDE,
 	// SETUID, SETGID, MKNOD, …) so an in-sandbox buildah can build images:
-	// daft zeroes container caps by default, and a Dockerfile build needs
+	// vmjail zeroes container caps by default, and a Dockerfile build needs
 	// them (COPY chroots, RUN mounts/chowns). Off by default — a real
 	// privilege bump, emitted only when the workspace opts in
 	// (SandboxSpec.privileged_build.enable).
@@ -127,7 +127,7 @@ func (s *Store) Bundle(ctx context.Context, digest string, opts BundleOptions) (
 		span.AddEvent("rootfs-cached")
 	} else {
 		// #nosec G301 — 0755 is intentional. The bundle dir is read by
-		// virtiofsd (running as the daft-sandboxd user) and the VM's
+		// virtiofsd (running as the vmjail-sandboxd user) and the VM's
 		// kernel mount, which may use a different uid inside the
 		// guest. World-execute lets crun's uid traverse this path
 		// regardless of which user owns it.
@@ -229,7 +229,7 @@ func unpackRootfs(img v1.Image, dst string) error {
 // header) are rejected — defence against tar-bomb / path traversal.
 func untarTo(r io.Reader, dst string) error {
 	tr := tar.NewReader(r)
-	//daft:lint:disable=forloopbound reason="exits on tar.Reader.Next returning io.EOF (clean end) or any other read error"
+	//vmjail:lint:disable=forloopbound reason="exits on tar.Reader.Next returning io.EOF (clean end) or any other read error"
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
@@ -351,7 +351,7 @@ const writableDirMode os.FileMode = 0o755
 func ensureWritableAncestors(dir, root string) error {
 	rootClean := filepath.Clean(root)
 	dir = filepath.Clean(dir)
-	//daft:lint:disable=forloopbound reason="terminates when dir reaches root or filesystem root; bounded by path depth"
+	//vmjail:lint:disable=forloopbound reason="terminates when dir reaches root or filesystem root; bounded by path depth"
 	for {
 		if dir == rootClean || !strings.HasPrefix(dir, rootClean+string(filepath.Separator)) {
 			return nil

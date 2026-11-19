@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/opensnoop"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/opensnoop"
 )
 
 // TestMain doubles the test binary as a "fake crun" when invoked with
@@ -274,7 +274,7 @@ func TestMainReturnsOneOnRunError(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("Main exit code = %d, want 1 when Run fails", code)
 	}
-	if !strings.Contains(errOut.String(), "daft-agent:") {
+	if !strings.Contains(errOut.String(), "vmjail-agent:") {
 		t.Fatalf("stderr should report agent error, got: %q", errOut.String())
 	}
 }

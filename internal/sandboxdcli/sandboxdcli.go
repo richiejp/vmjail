@@ -1,13 +1,13 @@
-// Package sandboxdcli wires up the daft-sandboxd command tree.
+// Package sandboxdcli wires up the vmjail-sandboxd command tree.
 //
-// daft-sandboxd is the single-executable sandbox-host: cloud-hypervisor,
+// vmjail-sandboxd is the single-executable sandbox-host: cloud-hypervisor,
 // the guest kernel, and the initramfs are all embedded in the binary
 // (see internal/bundled). At run time it extracts them to the user's
 // cache directory and uses them as the default Config for sandbox.Hello.
 //
 // Builds outside the project's Nix flake see stub artifacts, so the
 // `hello` command refuses to run and points the user at the env-var
-// fallback (which `daft sandbox hello` exposes for dev work).
+// fallback (which `vmjail sandbox hello` exposes for dev work).
 package sandboxdcli
 
 import (
@@ -20,24 +20,24 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/richiejp/darkaifactory/internal/banner"
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/version"
+	"github.com/richiejp/vmjail/internal/banner"
+	"github.com/richiejp/vmjail/internal/bundled"
+	"github.com/richiejp/vmjail/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/version"
 )
 
 // cacheSubdir is the directory we create under os.UserCacheDir for our
 // extracted artifacts. Stable so the same cache survives across runs.
-const cacheSubdir = "daft-sandboxd"
+const cacheSubdir = "vmjail-sandboxd"
 
-// NewRootCmd builds the daft-sandboxd command tree. Tests construct
+// NewRootCmd builds the vmjail-sandboxd command tree. Tests construct
 // the tree directly to exercise it without spawning a subprocess.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "daft-sandboxd",
-		Short: "darkaifactory sandbox-host (single-executable)",
+		Use:   "vmjail-sandboxd",
+		Short: "vmjail sandbox-host (single-executable)",
 		Long: banner.String +
-			"\ndaft-sandboxd is the sandbox-host stack as a single static binary.\n\n" +
+			"\nvmjail-sandboxd is the sandbox-host stack as a single static binary.\n\n" +
 			"It embeds the VMM (cloud-hypervisor), the guest kernel, and the\n" +
 			"sandbox initramfs, extracts them to the user cache directory on\n" +
 			"first run, and boots sandbox VMs from them.",
@@ -65,7 +65,7 @@ func newDebugCmd() *cobra.Command {
 func newVersionCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Print the daft-sandboxd version",
+		Short: "Print the vmjail-sandboxd version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if version.Version == "" {
@@ -91,7 +91,7 @@ func newHelloCmd() *cobra.Command {
 	}
 }
 
-// helloDeps bundles the moving parts of `daft-sandboxd hello` so unit
+// helloDeps bundles the moving parts of `vmjail-sandboxd hello` so unit
 // tests can swap each one for a fake. Production wires the real
 // implementations via defaultHelloDeps.
 type helloDeps struct {
@@ -126,8 +126,8 @@ func runHelloWith(ctx context.Context, w io.Writer, deps helloDeps) error {
 	paths, err := deps.extract(cacheDir)
 	if errors.Is(err, bundled.ErrNotBundled) {
 		return fmt.Errorf(
-			"daft-sandboxd: this binary has no bundled artifacts (built outside the Nix flake?)\n"+
-				"For dev work, use `daft sandbox hello` with %s / %s / %s set",
+			"vmjail-sandboxd: this binary has no bundled artifacts (built outside the Nix flake?)\n"+
+				"For dev work, use `vmjail sandbox hello` with %s / %s / %s set",
 			sandbox.EnvCloudHypervisor, sandbox.EnvKernel, sandbox.EnvInitramfs,
 		)
 	}
@@ -166,11 +166,11 @@ func applyObserverLog(w io.Writer, cfg *sandbox.Config, resolve func() (string, 
 	}
 	path, err := resolve()
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "daft-sandboxd: observer log disabled: %v\n", err)
+		_, _ = fmt.Fprintf(w, "vmjail-sandboxd: observer log disabled: %v\n", err)
 		return
 	}
 	cfg.ObserverLogPath = path
-	_, _ = fmt.Fprintf(w, "daft-sandboxd: observer log %s\n", path)
+	_, _ = fmt.Fprintf(w, "vmjail-sandboxd: observer log %s\n", path)
 }
 
 // userCacheDir supplies the legacy loader hint. The embedded memfd loader
@@ -178,7 +178,7 @@ func applyObserverLog(w io.Writer, cfg *sandbox.Config, resolve func() (string, 
 func userCacheDir() (string, error) {
 	base, err := os.UserCacheDir()
 	if err != nil {
-		return "", fmt.Errorf("daft-sandboxd: locate cache dir: %w", err)
+		return "", fmt.Errorf("vmjail-sandboxd: locate cache dir: %w", err)
 	}
 	return filepath.Join(base, cacheSubdir), nil
 }

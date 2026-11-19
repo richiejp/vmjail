@@ -57,7 +57,7 @@ func tarballBytes(t *testing.T) []byte {
 	if err != nil {
 		t.Fatalf("random.Image: %v", err)
 	}
-	ref, err := name.ParseReference("daft-builtin/build:test")
+	ref, err := name.ParseReference("vmjail-builtin/build:test")
 	if err != nil {
 		t.Fatalf("parse ref: %v", err)
 	}

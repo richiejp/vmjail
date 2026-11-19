@@ -12,7 +12,7 @@ const bindType = "bind"
 // (github.com/pytorch/pytorch), kept verbatim — comments, trailing
 // commas, the docker --mount workspaceMount string, a build stanza with
 // a numeric/blank arg, a feature, and a postCreateCommand. It is the
-// headline fixture: if daft can resolve this, it can resolve the bulk of
+// headline fixture: if vmjail can resolve this, it can resolve the bulk of
 // real-world configs.
 const pytorchCPU = `
 // For format details, see https://aka.ms/devcontainer.json. For config options, see the

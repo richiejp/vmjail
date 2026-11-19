@@ -10,7 +10,7 @@ func bareFor() {
 
 // suppressedFor pins that the directive silences the diagnostic.
 func suppressedFor() {
-	//daft:lint:disable=forloopbound reason="fixture exercises suppression"
+	//vmjail:lint:disable=forloopbound reason="fixture exercises suppression"
 	for {
 		break
 	}

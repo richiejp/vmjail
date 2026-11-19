@@ -39,7 +39,7 @@ func defaultSyscallDumpDeps() syscallDumpDeps {
 		mountTracefs: ensureTracefs,
 		listEnter:    func() ([]string, error) { return listSyscallEntriesAt(syscallEventsDir()) },
 		openLog: func(path string) (io.WriteCloser, error) {
-			//nolint:gosec // G304: path is the host-operator-set daft.observe.syscalls cmdline value — same trust boundary as daft.bundle.
+			//nolint:gosec // G304: path is the host-operator-set vmjail.observe.syscalls cmdline value — same trust boundary as vmjail.bundle.
 			return os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		},
 	}

@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
 const analyzerName = "commandcontext"
@@ -36,7 +36,7 @@ func run(pass *analysis.Pass) (any, error) {
 				return true
 			}
 			pass.Reportf(call.Pos(),
-				"os/exec.Command has no cancellation path; use CommandContext or //daft:lint:disable=commandcontext reason=\"…\" for an intentionally long-lived supervised process")
+				"os/exec.Command has no cancellation path; use CommandContext or //vmjail:lint:disable=commandcontext reason=\"…\" for an intentionally long-lived supervised process")
 			return true
 		})
 	}

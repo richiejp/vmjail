@@ -25,7 +25,7 @@ func withSeams(t *testing.T, deleg func() bool, look func(string) (string, error
 }
 
 func okLook(string) (string, error) { return "/usr/bin/systemd-run", nil }
-func okExe() (string, error)        { return "/path/to/daft-sandboxd", nil }
+func okExe() (string, error)        { return "/path/to/vmjail-sandboxd", nil }
 func nonRoot() int                  { return 1000 }
 func neverExec(string, []string, []string) error {
 	panic("execFn should not be called")
@@ -58,7 +58,7 @@ func TestEnsureDelegated_WrapsUnprivileged(t *testing.T) {
 	if gotPath != "/usr/bin/systemd-run" {
 		t.Errorf("exec path = %q, want systemd-run", gotPath)
 	}
-	for _, want := range []string{"--user", "--scope", "Delegate=yes", "/path/to/daft-sandboxd"} {
+	for _, want := range []string{"--user", "--scope", "Delegate=yes", "/path/to/vmjail-sandboxd"} {
 		if !slices.Contains(gotArgv, want) {
 			t.Errorf("argv %v missing %q", gotArgv, want)
 		}
@@ -69,7 +69,7 @@ func TestEnsureDelegated_WrapsUnprivileged(t *testing.T) {
 	// The "--" separator must precede the forwarded binary so systemd-run
 	// stops parsing its own flags.
 	sep := slices.Index(gotArgv, "--")
-	bin := slices.Index(gotArgv, "/path/to/daft-sandboxd")
+	bin := slices.Index(gotArgv, "/path/to/vmjail-sandboxd")
 	if sep == -1 || bin != sep+1 {
 		t.Errorf("argv %v: binary must immediately follow the -- separator", gotArgv)
 	}

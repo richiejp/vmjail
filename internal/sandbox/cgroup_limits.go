@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/richiejp/darkaifactory/internal/observability"
+	"github.com/richiejp/vmjail/internal/observability"
 )
 
 // SupervisorLeaf is the cgroup the sandbox-host process moves itself into
@@ -14,7 +14,7 @@ import (
 // enable the memory/cpu controllers per-VM cgroups need
 // (observability.PrepareDelegatedSubtree). Per-VM cgroups are this leaf's
 // siblings under the scope.
-const SupervisorLeaf = "daft-supervisor"
+const SupervisorLeaf = "vmjail-supervisor"
 
 // vmCgroupParent is the cgroup under which per-VM cgroups are created. Set
 // once at startup (SetVMCgroupParent) to the delegated scope returned by

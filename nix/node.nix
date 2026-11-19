@@ -5,32 +5,32 @@
 }:
 
 let
-  cfg = config.services.darkaifactory-node;
+  cfg = config.services.vmjail-node;
 in
 {
-  options.services.darkaifactory-node = {
-    enable = lib.mkEnableOption "a darkaifactory sandbox node";
+  options.services.vmjail-node = {
+    enable = lib.mkEnableOption "a vmjail sandbox node";
 
     package = lib.mkOption {
       type = lib.types.package;
-      description = "darkaifactory package containing daft-sandboxd.";
+      description = "vmjail package containing vmjail-sandboxd.";
     };
 
     orchestratorAddress = lib.mkOption {
       type = lib.types.str;
-      description = "HTTPS address of the darkaifactory orchestrator.";
+      description = "HTTPS address of the vmjail orchestrator.";
       example = "https://orchestrator.example:14443";
     };
 
     user = lib.mkOption {
       type = lib.types.str;
-      default = "darkaifactory-node";
+      default = "vmjail-node";
       description = "System user that owns the node state and process.";
     };
 
     group = lib.mkOption {
       type = lib.types.str;
-      default = "darkaifactory-node";
+      default = "vmjail-node";
       description = "System group for the node service.";
     };
 
@@ -42,19 +42,19 @@ in
 
     stateDirectory = lib.mkOption {
       type = lib.types.str;
-      default = "darkaifactory-node";
+      default = "vmjail-node";
       description = "StateDirectory name below /var/lib.";
     };
 
     cacheDirectory = lib.mkOption {
       type = lib.types.str;
-      default = "darkaifactory-node";
+      default = "vmjail-node";
       description = "CacheDirectory name below /var/cache.";
     };
 
     runtimeDirectory = lib.mkOption {
       type = lib.types.str;
-      default = "darkaifactory-node";
+      default = "vmjail-node";
       description = "RuntimeDirectory name below /run.";
     };
 
@@ -69,15 +69,15 @@ in
     assertions = [
       {
         assertion = !lib.hasPrefix "/" cfg.stateDirectory;
-        message = "services.darkaifactory-node.stateDirectory must be a systemd directory name, not an absolute path";
+        message = "services.vmjail-node.stateDirectory must be a systemd directory name, not an absolute path";
       }
       {
         assertion = !lib.hasPrefix "/" cfg.cacheDirectory;
-        message = "services.darkaifactory-node.cacheDirectory must be a systemd directory name, not an absolute path";
+        message = "services.vmjail-node.cacheDirectory must be a systemd directory name, not an absolute path";
       }
       {
         assertion = !lib.hasPrefix "/" cfg.runtimeDirectory;
-        message = "services.darkaifactory-node.runtimeDirectory must be a systemd directory name, not an absolute path";
+        message = "services.vmjail-node.runtimeDirectory must be a systemd directory name, not an absolute path";
       }
     ];
 
@@ -90,23 +90,23 @@ in
         group = cfg.group;
         extraGroups = [ "kvm" ];
         autoSubUidGidRange = true;
-        description = "darkaifactory sandbox node service account";
+        description = "vmjail sandbox node service account";
       };
     };
 
-    systemd.services.darkaifactory-node = {
-      description = "darkaifactory sandbox node";
+    systemd.services.vmjail-node = {
+      description = "vmjail sandbox node";
       wantedBy = [ "multi-user.target" ];
       wants = cfg.networkServices;
       after = cfg.networkServices;
       environment = {
-        DAFT_STATE_DIR = "/var/lib/${cfg.stateDirectory}";
-        DAFT_STORE_DIR = "/var/lib/${cfg.stateDirectory}/images";
+        VMJAIL_STATE_DIR = "/var/lib/${cfg.stateDirectory}";
+        VMJAIL_STORE_DIR = "/var/lib/${cfg.stateDirectory}/images";
         XDG_CACHE_HOME = "/var/cache/${cfg.cacheDirectory}";
       };
       serviceConfig = {
         ExecStart = lib.escapeShellArgs [
-          "${cfg.package}/bin/daft-sandboxd"
+          "${cfg.package}/bin/vmjail-sandboxd"
           "serve"
           "--orchestrator"
           cfg.orchestratorAddress

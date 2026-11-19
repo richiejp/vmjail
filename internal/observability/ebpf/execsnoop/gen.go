@@ -1,5 +1,5 @@
 // Package execsnoop is a Tier-2 CO-RE eBPF gadget (see OBSERVABILITY.md
-// "Tier 2"). It runs inside the guest, attached by daft-agent, and reports
+// "Tier 2"). It runs inside the guest, attached by vmjail-agent, and reports
 // every execve(2) the workload makes — the program path, its full argv, and
 // the return value — so "what is the build actually running, and what
 // failed to run" is answerable from a guest-side log. A failed exec shows

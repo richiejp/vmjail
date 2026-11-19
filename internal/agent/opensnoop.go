@@ -5,8 +5,8 @@ import (
 	"io"
 	"os"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/opensnoop"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/opensnoop"
 )
 
 // OpensnoopReportPrefix labels the open-snoop gadget's console status
@@ -53,7 +53,7 @@ func defaultOpensnoopDeps() opensnoopDeps {
 	return opensnoopDeps{
 		mountTracefs: ensureTracefs,
 		openLog: func(path string) (io.WriteCloser, error) {
-			//nolint:gosec // G304: path is the host-operator-set daft.observe.opensnoop cmdline value — same trust boundary as daft.bundle; no untrusted input.
+			//nolint:gosec // G304: path is the host-operator-set vmjail.observe.opensnoop cmdline value — same trust boundary as vmjail.bundle; no untrusted input.
 			return os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		},
 		selfPIDNS: readSelfPIDNS,

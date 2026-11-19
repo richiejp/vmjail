@@ -5,7 +5,7 @@ import (
 
 	"golang.org/x/tools/go/analysis/analysistest"
 
-	"github.com/richiejp/darkaifactory/internal/lint/analyzers/nodoubleptr"
+	"github.com/richiejp/vmjail/internal/lint/analyzers/nodoubleptr"
 )
 
 func TestAnalyzer(t *testing.T) {

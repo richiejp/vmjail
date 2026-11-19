@@ -1,4 +1,4 @@
-# Contributing to darkaifactory
+# Contributing to vmjail
 
 Thanks for working on this project. These rules apply to humans and AI agents
 alike. They exist because they were learned the hard way — please respect
@@ -296,7 +296,7 @@ missing `/dev/kvm` → `t.Fatalf`, broken Nix → the make target
 fails. And as above, `--no-verify` is never OK — if the gate is
 wrong for your change, fix the gate.
 
-Artefact resolution is automatic: env vars (`DAFT_*`) override,
+Artefact resolution is automatic: env vars (`VMJAIL_*`) override,
 otherwise the resolver looks for the `result-*` symlinks that
 `make integration-build` creates at the repo root. Silently
 skipping e2e tests is exactly the kind of "green CI, broken
@@ -414,7 +414,7 @@ default pre-commit path:
 
 - **Stress tests** measure capacity, throughput, latency under
   load, or longevity. The existing `TestWorkspace…Throughput`
-  family (gated behind `DAFT_RUN_THROUGHPUT_EXPERIMENT=1`) is the
+  family (gated behind `VMJAIL_RUN_THROUGHPUT_EXPERIMENT=1`) is the
   reference shape: opt-in, instrumented, the slowness *is the
   experiment*. A test whose purpose is "exercise the system long
   enough to learn its limits" earns its time budget.
@@ -422,7 +422,7 @@ default pre-commit path:
   (`FUZZ_TIME` in the Makefile) by design. `make fuzz` is opt-in;
   `make verify` runs only a 1 s sweep per target as a smoke check.
 
-Everything else must be fast. There is no `DAFT_RUN_*=1` escape
+Everything else must be fast. There is no `VMJAIL_RUN_*=1` escape
 hatch for "this functional test happens to be slow because of an
 unfixed bottleneck." That framing is a defect on two counts: the
 bottleneck, and the test that swallows it instead of failing on
@@ -572,7 +572,7 @@ project's vocabulary so they're greppable, formatted consistently, and
 covered by the `assertpure` analyzer (see "Power of 10 (Go)" below).
 
 ```go
-import "github.com/richiejp/darkaifactory/internal/assert"
+import "github.com/richiejp/vmjail/internal/assert"
 
 // Caller guarantees nodes is non-empty and sorted ascending by ID.
 func process(nodes []Node) {
@@ -625,7 +625,7 @@ loud panic at the offending call site.
 The canonical pattern:
 
 ```go
-import "github.com/richiejp/darkaifactory/internal/assert"
+import "github.com/richiejp/vmjail/internal/assert"
 
 func (r *Reaper) Run(ctx context.Context) {
     assert.True(ctx.Done() != nil,
@@ -728,7 +728,7 @@ mechanically enforce them in Go.
 **Every adopted rule has a static check.** If a proposed rule has
 no analyzer, it doesn't ship — review-only "rules" do not survive
 contact with deadlines. The custom analyzers live under
-`internal/lint/analyzers/`, are bundled into `cmd/daft-lint`, and
+`internal/lint/analyzers/`, are bundled into `cmd/vmjail-lint`, and
 are run by `make lint` after `golangci-lint`.
 
 #### Adopted rules
@@ -741,7 +741,7 @@ are run by `make lint` after `golangci-lint`.
 | 1d | No `unsafe.*` | `forbidigo` + `gosec` G103 |
 | 1e | No `//go:linkname` | `nolinkname` analyzer |
 | 1f | No recursion in our packages | `norecursion` analyzer (call-graph SCCs) |
-| 2 | `for {}` loops require a reasoned `//daft:lint:disable=forloopbound` annotation | `forloopbound` analyzer |
+| 2 | `for {}` loops require a reasoned `//vmjail:lint:disable=forloopbound` annotation | `forloopbound` analyzer |
 | 3a | Channel buffer sizes must be a typed constant or unbuffered | `chanconst` analyzer |
 | 3b | HTTP request bodies must be wrapped in `http.MaxBytesReader` before being read | `maxbytes` analyzer |
 | 3c | Finite subprocesses must use `exec.CommandContext`; intentionally long-lived supervised processes require a reasoned suppression | `commandcontext` analyzer |
@@ -777,7 +777,7 @@ Every analyzer that flags a pattern accepts the same suppression
 directive on the offending line or the line immediately above:
 
 ```go
-//daft:lint:disable=norecursion reason="protobuf decoder, depth-capped by Validate above"
+//vmjail:lint:disable=norecursion reason="protobuf decoder, depth-capped by Validate above"
 func decode(b []byte) (*Msg, error) { ... }
 ```
 
@@ -785,12 +785,12 @@ func decode(b []byte) (*Msg, error) { ... }
 - `reason="…"` is mandatory and must be non-empty — the
   `lintreasons` analyzer fails the build otherwise.
 - Suppressions are reviewable artefacts: every PR with a new
-  `//daft:lint:disable=` line gets the reason examined.
+  `//vmjail:lint:disable=` line gets the reason examined.
 
 `//nolint:…` (the golangci-lint form) is still allowed for the
 linters it controls, with the same one-line-comment justification
 rule from "Static analysis is not optional." The two prefixes
-coexist: `daft:lint:` for our custom analyzers, `nolint:` for
+coexist: `vmjail:lint:` for our custom analyzers, `nolint:` for
 upstream linters.
 
 #### Where it lives
@@ -798,8 +798,8 @@ upstream linters.
 - `internal/assert/` — the assertion vocabulary.
 - `internal/lint/analyzers/<name>/` — custom analyzers, one
   package each.
-- `cmd/daft-lint/` — the multichecker binary that bundles them.
-- `make lint` runs `golangci-lint` and then `daft-lint`.
+- `cmd/vmjail-lint/` — the multichecker binary that bundles them.
+- `make lint` runs `golangci-lint` and then `vmjail-lint`.
 
 New analyzers ship with `analysistest`-driven unit tests; see
 existing analyzer dirs for the pattern.

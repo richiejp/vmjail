@@ -30,7 +30,7 @@ import (
 	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/inspector"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
 // Analyzer is the assertpure analyzer entry point.
@@ -52,7 +52,7 @@ var pureBuiltins = map[string]bool{
 	"max": true,
 }
 
-// analyzerName is the value matched against //daft:lint:disable=
+// analyzerName is the value matched against //vmjail:lint:disable=
 // directives. Kept as a constant so it can't drift from the
 // Analyzer.Name field.
 const analyzerName = "assertpure"

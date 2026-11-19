@@ -11,6 +11,6 @@ func bad() {
 
 func good(ctx context.Context) {
 	_ = exec.CommandContext(ctx, "true")
-	//daft:lint:disable=commandcontext reason="fixture models an intentionally supervised daemon"
+	//vmjail:lint:disable=commandcontext reason="fixture models an intentionally supervised daemon"
 	_ = exec.Command("daemon")
 }

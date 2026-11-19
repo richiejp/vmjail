@@ -1,5 +1,5 @@
-// Package trace is daft's cross-component tracing system. Each
-// component (daft client, daft-orchestrator, daft-sandboxd, the
+// Package trace is vmjail's cross-component tracing system. Each
+// component (vmjail client, vmjail-orchestrator, vmjail-sandboxd, the
 // in-VM agent) runs one Tracer; spans accumulate in a fixed-capacity
 // in-memory ring buffer and are shipped to the orchestrator via
 // TraceService when an Exporter is configured.
@@ -26,8 +26,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/assert"
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	"github.com/richiejp/vmjail/internal/assert"
+	tracev1 "github.com/richiejp/vmjail/internal/genpb/trace/v1"
 )
 
 // DefaultCapacity sizes the ring buffer when New is called without
@@ -300,7 +300,7 @@ func WithReapInterval(d time.Duration) Option { return func(t *Tracer) { t.reapI
 func WithClock(fn func() time.Time) Option { return func(t *Tracer) { t.nowFn = fn } }
 
 // New returns a Tracer with default capacity. component identifies
-// the producer in emitted spans (e.g. "daft", "daft-orchestrator").
+// the producer in emitted spans (e.g. "vmjail", "vmjail-orchestrator").
 func New(component string, opts ...Option) *Tracer {
 	return NewWithCapacity(component, DefaultCapacity, opts...)
 }
@@ -328,7 +328,7 @@ func NewWithCapacity(component string, capacity int, opts ...Option) *Tracer {
 // Component is the identifier passed to New.
 func (t *Tracer) Component() string { return t.component }
 
-// SetExporter replaces the tracer's exporter. The daft CLI uses this
+// SetExporter replaces the tracer's exporter. The vmjail CLI uses this
 // to wire the exporter after dialing the orchestrator (the
 // chicken-and-egg of "tracer needs an exporter, exporter needs a
 // client, client needs the same TLS config the tracer's interceptor
@@ -520,7 +520,7 @@ func (t *Tracer) Run(ctx context.Context) {
 	}
 	ticker := time.NewTicker(t.reapInterval)
 	defer ticker.Stop()
-	//daft:lint:disable=forloopbound reason="exits on ctx.Done(); cancellability asserted at Run entry"
+	//vmjail:lint:disable=forloopbound reason="exits on ctx.Done(); cancellability asserted at Run entry"
 	for {
 		select {
 		case <-ctx.Done():

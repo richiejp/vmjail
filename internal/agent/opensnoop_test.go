@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/opensnoop"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/opensnoop"
 )
 
 // opensnoopCfg builds a GuestConfig carrying the open-snoop observe path.

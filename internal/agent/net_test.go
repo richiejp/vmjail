@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/sandboxnet/sandboxnettest"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/sandboxnet/sandboxnettest"
 )
 
 func TestStartNetBridgeHappyPath(t *testing.T) {

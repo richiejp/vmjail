@@ -11,8 +11,8 @@ import (
 // needs none; a token (with its optional username) is only required to
 // publish. `make update-egress-cache` sets these from `gh auth token`.
 const (
-	EnvToken = "DAFT_GHCR_TOKEN" //nolint:gosec // G101: env var name, not a credential.
-	EnvUser  = "DAFT_GHCR_USER"
+	EnvToken = "VMJAIL_GHCR_TOKEN" //nolint:gosec // G101: env var name, not a credential.
+	EnvUser  = "VMJAIL_GHCR_USER"
 )
 
 // Subcommand names, exported so tests reference them without repeating
@@ -29,7 +29,7 @@ const (
 // registry). It returns a usage error for a bad subcommand or arity.
 func Dispatch(args []string, getenv func(string) string, opts ...crane.Option) error {
 	if len(args) != 3 {
-		return fmt.Errorf("usage: daft-egress-cache pack-push <srcDir> <ref> | pull-unpack <ref> <destDir>")
+		return fmt.Errorf("usage: vmjail-egress-cache pack-push <srcDir> <ref> | pull-unpack <ref> <destDir>")
 	}
 	auth := authFromEnv(getenv)
 	switch args[0] {
@@ -38,7 +38,7 @@ func Dispatch(args []string, getenv func(string) string, opts ...crane.Option) e
 	case SubPullUnpack:
 		return Pull(args[1], args[2], auth, opts...)
 	default:
-		return fmt.Errorf("daft-egress-cache: unknown subcommand %q", args[0])
+		return fmt.Errorf("vmjail-egress-cache: unknown subcommand %q", args[0])
 	}
 }
 

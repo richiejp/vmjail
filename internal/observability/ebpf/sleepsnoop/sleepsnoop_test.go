@@ -345,7 +345,7 @@ func TestDefaultBPFDeps(t *testing.T) {
 // success path is exercised by the e2e gadget test inside a VM.
 func TestRunFailsUnprivileged(t *testing.T) {
 	// Pre-cancelled context so a *successful* load (a privileged env such
-	// as the daft self-build sandbox) returns promptly instead of blocking
+	// as the vmjail self-build sandbox) returns promptly instead of blocking
 	// forever on the ring-buffer read. The unprivileged path returns the
 	// load error before the read loop. A privileged env legitimately allows
 	// the load, so that is a skip, not a failure (mirrors the sibling

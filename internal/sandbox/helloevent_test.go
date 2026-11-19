@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/observability"
+	"github.com/richiejp/vmjail/internal/agent"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/observability"
 )
 
 // bootEventRunner is a fake VMM whose console stays open (like a real
@@ -33,7 +33,7 @@ func (b bootEventRunner) run(ctx context.Context, _ Config, _ []string, _ string
 func replyBootComplete(cfg Config) {
 	sock := configSockPath(cfg)
 	var conn net.Conn
-	//daft:lint:disable=forloopbound reason="bounded retry until the server's listener is up"
+	//vmjail:lint:disable=forloopbound reason="bounded retry until the server's listener is up"
 	for range 200 {
 		c, err := net.Dial("unix", sock)
 		if err == nil {

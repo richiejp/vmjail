@@ -9,7 +9,7 @@ import (
 // OverlayStoreRoot is the in-guest tmpfs that backs every overlay's
 // upper+work dirs. One tmpfs total; per-overlay subdirs disambiguate
 // by index. Lives under /run so it's clearly volatile.
-const OverlayStoreRoot = "/run/daft/overlay"
+const OverlayStoreRoot = "/run/vmjail/overlay"
 
 // OverlayReportPrefix tags console lines about overlay setup —
 // mount/mkdir failures. Same convention as ShareReportPrefix so the

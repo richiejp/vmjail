@@ -10,9 +10,9 @@ state machine or a completed replacement CLI. See the
 
 | Stage | Work |
 | --- | --- |
-| Prepare | Validate configuration, assemble the image bundle and shares, prepare namespaces and cgroups. |
+| Prepare | Validate required artifacts, shares, devices and resource configuration; assemble the image bundle and prepare namespaces and cgroups. |
 | Start | Start virtiofsd sidecars, host control listeners and the VMM. |
-| Configure guest | Deliver configuration over vsock; mount shares and start requested instrumentation. |
+| Configure guest | Deliver configuration over vsock; mount shares, start requested listeners and wait for instrumentation readiness. |
 | Execute | Run the OCI workload with crun. |
 | Finish or cancel | Choose completion-driven or persistent-VM behavior; close listeners and reap children. |
 | Retain diagnostics | Remove the empty cgroup and temporary resources; leave observation files for inspection. |
@@ -24,11 +24,19 @@ choose its intended behavior explicitly.
 
 ## Initial invariants to formalise
 
-- A failed preparation step must not leave unmanaged child processes.
-- VMM and virtiofsd accounting belongs to the same sandbox cgroup.
-- A failure while reaping one child must not prevent reaping its siblings.
-- Cgroup removal follows child-process cleanup.
-- A guest IO summary is diagnostic evidence, not a complete filesystem audit.
+Validate launch prerequisites before workload execution. A failed preparation
+step must not leave unmanaged child processes. Guest attach and port-forward
+listeners must be ready before a long-running container can block startup.
+
+On completion or cancellation, close listeners first and reap children
+concurrently so one stuck child cannot prevent cleanup of its siblings. Retain
+watchdog diagnostics for stalled teardown, and remove the cgroup only after
+child-process cleanup. Finish draining process output before reporting
+completion, while keeping cancellation paths bounded.
+
+The replacement local launcher must preserve this ordering and its tests.
+[Observability](../../OBSERVABILITY.md) describes cgroup membership,
+instrumentation readiness and diagnostic retention.
 
 ## Implementation map
 

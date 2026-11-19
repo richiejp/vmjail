@@ -8,15 +8,15 @@ import (
 // Env var names. Stable so external scripting (and our integration
 // tests) can rely on them.
 const (
-	EnvCloudHypervisor = "DAFT_CLOUD_HYPERVISOR"
-	EnvKernel          = "DAFT_KERNEL"
-	EnvInitramfs       = "DAFT_INITRAMFS"
-	EnvVirtiofsd       = "DAFT_VIRTIOFSD"
+	EnvCloudHypervisor = "VMJAIL_CLOUD_HYPERVISOR"
+	EnvKernel          = "VMJAIL_KERNEL"
+	EnvInitramfs       = "VMJAIL_INITRAMFS"
+	EnvVirtiofsd       = "VMJAIL_VIRTIOFSD"
 	// EnvBundle is consulted only by the integration test to point at
 	// a host-side OCI bundle. The bundle is copied into the share dir
-	// and then surfaced inside the VM via daft.bundle=/share/bundle.
+	// and then surfaced inside the VM via vmjail.bundle=/share/bundle.
 	// Not part of the production Config; ConfigFromEnv ignores it.
-	EnvBundle = "DAFT_BUNDLE"
+	EnvBundle = "VMJAIL_BUNDLE"
 )
 
 // ConfigFromEnv builds a Config from environment variables. Returns an
@@ -25,14 +25,14 @@ const (
 //
 // requireArtefacts controls whether the artefact paths are mandatory.
 // Pass true when the artefacts can only come from the environment (e.g.
-// `daft sandbox hello`, or a plain `go build` daft-sandboxd with no
+// `vmjail sandbox hello`, or a plain `go build` vmjail-sandboxd with no
 // embedded assets). Pass false when the binary has the artefacts
 // embedded via internal/bundled: the path vars are then read as an
 // override if present, but their absence is not an error because the
 // bundled assets are the source of truth at dispatch.
 //
-// Required (requireArtefacts): DAFT_CLOUD_HYPERVISOR, DAFT_KERNEL, DAFT_INITRAMFS
-// Optional: DAFT_VIRTIOFSD
+// Required (requireArtefacts): VMJAIL_CLOUD_HYPERVISOR, VMJAIL_KERNEL, VMJAIL_INITRAMFS
+// Optional: VMJAIL_VIRTIOFSD
 func ConfigFromEnv(requireArtefacts bool) (Config, error) {
 	cfg := Config{
 		CloudHypervisor: os.Getenv(EnvCloudHypervisor),

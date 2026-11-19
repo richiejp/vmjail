@@ -20,13 +20,13 @@ jobs:
       - name: Build default package
         run: nix build
       - name: Run version
-        run: result/bin/daft version
-      - name: Check tag against daft version
+        run: result/bin/vmjail-sandboxd version
+      - name: Check tag against vmjail version
         run: |
           TAG_NAME=${GITHUB_REF#refs/tags/}
-          VERSION=$(./result/bin/daft version | tr -d '[:space:]')
+          VERSION=$(./result/bin/vmjail-sandboxd version | tr -d '[:space:]')
           if [ "$TAG_NAME" != "$VERSION" ]; then
-            echo "Error: Tag '$TAG_NAME' does not match daft version output '$VERSION'"
+            echo "Error: Tag '$TAG_NAME' does not match vmjail version output '$VERSION'"
             exit 1
           fi
       - name: Build and smoke-test portable archive

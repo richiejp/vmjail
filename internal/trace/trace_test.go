@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	tracev1 "github.com/richiejp/vmjail/internal/genpb/trace/v1"
 )
 
 func TestStartAndEndAppendsToBuffer(t *testing.T) {
@@ -427,12 +427,12 @@ func TestNewWithCapacityZeroFallsBack(t *testing.T) {
 }
 
 func TestComponentField(t *testing.T) {
-	tr := New("daft-orchestrator")
-	if tr.Component() != "daft-orchestrator" {
+	tr := New("vmjail-orchestrator")
+	if tr.Component() != "vmjail-orchestrator" {
 		t.Errorf("Component = %q", tr.Component())
 	}
 	_, s := tr.Start(context.Background(), "op")
-	if s.Component() != "daft-orchestrator" {
+	if s.Component() != "vmjail-orchestrator" {
 		t.Errorf("span Component = %q", s.Component())
 	}
 }
@@ -502,7 +502,7 @@ func TestFormatTextEmpty(t *testing.T) {
 }
 
 func TestFormatTextTreeShape(t *testing.T) {
-	tr := New("daft")
+	tr := New("vmjail")
 	ctx, root := tr.Start(context.Background(), "root.op")
 	_, child := tr.Start(ctx, "child.op", WithKind(SpanKindClient))
 	child.SetAttribute("rpc.method", "Ping")
@@ -524,7 +524,7 @@ func TestFormatTextTreeShape(t *testing.T) {
 func TestFormatTextOrphanRoot(t *testing.T) {
 	// A span with parent_span_id pointing at a span not in the
 	// snapshot should render as a root, not silently drop.
-	tr := New("daft")
+	tr := New("vmjail")
 	_, span := tr.Start(
 		context.Background(), "orphan",
 		WithParent(strings.Repeat("a", 32), strings.Repeat("b", 16)),
@@ -540,7 +540,7 @@ func TestFormatTextOrphanRoot(t *testing.T) {
 }
 
 func TestFormatTextErrorStatus(t *testing.T) {
-	tr := New("daft")
+	tr := New("vmjail")
 	_, s := tr.Start(context.Background(), "fail")
 	_ = s.RecordError(errors.New("kaboom"))
 	s.End()

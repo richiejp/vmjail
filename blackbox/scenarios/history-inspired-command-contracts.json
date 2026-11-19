@@ -4,28 +4,28 @@
   "steps": [
     {
       "name": "direct-image-help-exposes-persistent-opt-out",
-      "argv": ["daft", "workspace", "image", "--help"],
+      "argv": ["vmjail", "workspace", "image", "--help"],
       "timeout_seconds": 5,
       "want_exit": 0,
       "stdout_contains": ["--preserve-command"]
     },
     {
       "name": "delete-help-exposes-bounded-control",
-      "argv": ["daft", "workspace", "delete", "--help"],
+      "argv": ["vmjail", "workspace", "delete", "--help"],
       "timeout_seconds": 5,
       "want_exit": 0,
       "stdout_contains": ["Permanently delete", "--timeout"]
     },
     {
       "name": "changes-group-rejects-unknown-command",
-      "argv": ["daft", "workspace", "changes", "definitely-not-a-command"],
+      "argv": ["vmjail", "workspace", "changes", "definitely-not-a-command"],
       "timeout_seconds": 5,
       "want_exit": 1,
       "stderr_contains": ["unknown command"]
     },
     {
       "name": "sandbox-group-rejects-unknown-command",
-      "argv": ["daft", "sandbox", "definitely-not-a-command"],
+      "argv": ["vmjail", "sandbox", "definitely-not-a-command"],
       "timeout_seconds": 5,
       "want_exit": 1,
       "stderr_contains": ["unknown command"]

@@ -12,33 +12,33 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/richiejp/darkaifactory/internal/imagestore"
+	"github.com/richiejp/vmjail/internal/imagestore"
 )
 
 // Env vars for image-store configuration. Stable so external scripts
 // can rely on them.
 const (
 	// EnvStoreDir is the directory the image store roots at. When
-	// unset, derives from os.UserCacheDir + "daft-sandboxd-images".
-	EnvStoreDir = "DAFT_STORE_DIR"
+	// unset, derives from os.UserCacheDir + "vmjail-sandboxd-images".
+	EnvStoreDir = "VMJAIL_STORE_DIR"
 	// EnvStoreQuota is the byte cap on the layer cache. Accepts
 	// integer bytes or a suffix-tagged value: 50G, 1T, 100M, 4K.
 	// Empty or "0" disables quota enforcement.
-	EnvStoreQuota = "DAFT_STORE_QUOTA"
+	EnvStoreQuota = "VMJAIL_STORE_QUOTA"
 )
 
 // storeSubdir is the default directory under the user cache for the
 // image store. Distinct from cacheSubdir so the bundled-artifact
 // extract dir and the image cache don't share a parent (they have
 // very different size profiles and pruning rules).
-const storeSubdir = "daft-sandboxd-images"
+const storeSubdir = "vmjail-sandboxd-images"
 
 func newImagesCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "images",
 		Short: "Manage the local OCI image cache",
 		Long: "Sub-commands inspect and prune the content-addressable image\n" +
-			"and bundle cache used by daft-sandboxd. Quota and root directory\n" +
+			"and bundle cache used by vmjail-sandboxd. Quota and root directory\n" +
 			"can be set via the " + EnvStoreDir + " / " + EnvStoreQuota + " env\n" +
 			"vars; default quota is 50 GiB and default root is the user\n" +
 			"cache directory.",
@@ -113,13 +113,13 @@ func newImagesRmCmd() *cobra.Command {
 			for _, target := range args {
 				digest, ok := resolveTarget(entries, target)
 				if !ok {
-					return fmt.Errorf("daft-sandboxd: no image matching %q", target)
+					return fmt.Errorf("vmjail-sandboxd: no image matching %q", target)
 				}
 				if err := store.Remove(digest); err != nil {
 					return err
 				}
 				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Removed %s\n", digest); err != nil {
-					return fmt.Errorf("daft-sandboxd: write rm result: %w", err)
+					return fmt.Errorf("vmjail-sandboxd: write rm result: %w", err)
 				}
 			}
 			return nil
@@ -139,7 +139,7 @@ func newImagesPruneCmd() *cobra.Command {
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if olderThan <= 0 {
-				return fmt.Errorf("daft-sandboxd: --older-than must be > 0")
+				return fmt.Errorf("vmjail-sandboxd: --older-than must be > 0")
 			}
 			store, err := openStore()
 			if err != nil {
@@ -151,7 +151,7 @@ func newImagesPruneCmd() *cobra.Command {
 			}
 			for _, d := range pruned {
 				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "Pruned %s\n", d); err != nil {
-					return fmt.Errorf("daft-sandboxd: write prune result: %w", err)
+					return fmt.Errorf("vmjail-sandboxd: write prune result: %w", err)
 				}
 			}
 			_, err = fmt.Fprintf(cmd.OutOrStdout(),
@@ -181,13 +181,13 @@ func openStore() (*imagestore.Store, error) {
 func storeRoot() (string, error) {
 	if v := os.Getenv(EnvStoreDir); v != "" {
 		if !filepath.IsAbs(v) {
-			return "", fmt.Errorf("daft-sandboxd: %s %q must be absolute", EnvStoreDir, v)
+			return "", fmt.Errorf("vmjail-sandboxd: %s %q must be absolute", EnvStoreDir, v)
 		}
 		return v, nil
 	}
 	base, err := os.UserCacheDir()
 	if err != nil {
-		return "", fmt.Errorf("daft-sandboxd: locate cache dir: %w", err)
+		return "", fmt.Errorf("vmjail-sandboxd: locate cache dir: %w", err)
 	}
 	return filepath.Join(base, storeSubdir), nil
 }
@@ -226,10 +226,10 @@ func parseBytes(s string) (int64, error) {
 	}
 	n, err := strconv.ParseInt(num, 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("daft-sandboxd: invalid byte size %q: %w", s, err)
+		return 0, fmt.Errorf("vmjail-sandboxd: invalid byte size %q: %w", s, err)
 	}
 	if n < 0 {
-		return 0, fmt.Errorf("daft-sandboxd: byte size %q is negative", s)
+		return 0, fmt.Errorf("vmjail-sandboxd: byte size %q is negative", s)
 	}
 	return n * mult, nil
 }

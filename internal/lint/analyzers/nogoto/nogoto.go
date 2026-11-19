@@ -8,7 +8,7 @@
 // keyword still exists and the analyzer still has to enforce its
 // absence in our packages.
 //
-// Suppression: `//daft:lint:disable=nogoto reason="…"` on the goto
+// Suppression: `//vmjail:lint:disable=nogoto reason="…"` on the goto
 // line or the line above. The reason has to justify why the
 // jump-target structure is genuinely necessary; review pushes back
 // on lazy ones.
@@ -20,10 +20,10 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
-// analyzerName is the value matched against //daft:lint:disable=
+// analyzerName is the value matched against //vmjail:lint:disable=
 // directives; kept as a constant so it cannot drift from
 // Analyzer.Name.
 const analyzerName = "nogoto"

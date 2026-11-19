@@ -8,11 +8,11 @@ import (
 )
 
 func main() {
-	bytes, err := strconv.ParseInt(os.Getenv("DAFT_WRITE_BYTES"), 10, 64)
+	bytes, err := strconv.ParseInt(os.Getenv("VMJAIL_WRITE_BYTES"), 10, 64)
 	if err != nil || bytes < 0 {
-		panic("DAFT_WRITE_BYTES must be a non-negative integer")
+		panic("VMJAIL_WRITE_BYTES must be a non-negative integer")
 	}
-	path := os.Getenv("DAFT_WRITE_PATH")
+	path := os.Getenv("VMJAIL_WRITE_PATH")
 	if path == "" {
 		path = "payload.bin"
 	}

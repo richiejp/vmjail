@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/vmjail/internal/agent"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/oops"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // standaloneGuestCID is the AF_VSOCK context ID handed to a standalone
@@ -24,14 +24,14 @@ import (
 const standaloneGuestCID uint32 = 3
 
 // NewStandaloneVsock mints a hybrid-vsock device for the standalone CLI
-// boot paths (daft sandbox, daft-sandboxd) so they deliver per-VM config
+// boot paths (vmjail sandbox, vmjail-sandboxd) so they deliver per-VM config
 // and stream status events over the control channel like the orchestrated
 // executor, instead of the world-readable kernel cmdline. The socket
 // lives in a fresh temp dir that cleanup removes once the VM is gone;
 // callers defer it. Always-on means every boot path gets a device — see
 // the orchestrated counterpart, Executor.assignVsock.
 func NewStandaloneVsock() (cfg *VsockConfig, cleanup func(), err error) {
-	dir, err := os.MkdirTemp("", "daft-vsock-")
+	dir, err := os.MkdirTemp("", "vmjail-vsock-")
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("sandbox: vsock socket dir: %w", err)
 	}
@@ -157,7 +157,7 @@ func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootC
 // (with its overlay flag), the per-workspace port-forward table, the
 // Tier-2 observe-gadget paths, and the trace/attach/net feature toggles.
 // This is the sole channel for per-VM settings — the kernel cmdline
-// carries no daft.* tokens at all.
+// carries no vmjail.* tokens at all.
 func buildGuestConfig(cfg Config) *agentv1.GuestConfig {
 	gc := &agentv1.GuestConfig{
 		Bundle:              cfg.Bundle,
@@ -225,7 +225,7 @@ func serveControl(ctx context.Context, listener net.Listener, cfg *agentv1.Guest
 		<-ctx.Done()
 		_ = listener.Close()
 	}()
-	//daft:lint:disable=forloopbound reason="exits when listener.Close drives Accept to return net.ErrClosed"
+	//vmjail:lint:disable=forloopbound reason="exits when listener.Close drives Accept to return net.ErrClosed"
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -263,7 +263,7 @@ func handleControlConn(ctx context.Context, conn net.Conn, cfg *agentv1.GuestCon
 	}
 
 	_ = conn.SetDeadline(time.Time{})
-	//daft:lint:disable=forloopbound reason="exits on conn close (agent EOF or server stop) driving ReadAgentEvent to error"
+	//vmjail:lint:disable=forloopbound reason="exits on conn close (agent EOF or server stop) driving ReadAgentEvent to error"
 	for {
 		ev, err := agent.ReadAgentEvent(conn)
 		if err != nil {

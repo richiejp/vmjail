@@ -6,8 +6,8 @@ import (
 	"io"
 	"os"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/execsnoop"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/execsnoop"
 )
 
 // ExecsnoopReportPrefix labels the exec-snoop gadget's console status line.
@@ -41,7 +41,7 @@ func defaultExecsnoopDeps() execsnoopDeps {
 	return execsnoopDeps{
 		mountTracefs: ensureTracefs,
 		openLog: func(path string) (io.WriteCloser, error) {
-			//nolint:gosec // G304: path is the host-operator-set daft.observe.execsnoop cmdline value — same trust boundary as daft.bundle.
+			//nolint:gosec // G304: path is the host-operator-set vmjail.observe.execsnoop cmdline value — same trust boundary as vmjail.bundle.
 			return os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 		},
 		selfPIDNS: readSelfPIDNS,

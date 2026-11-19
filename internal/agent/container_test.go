@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
 )
 
 // fakeCrunEnv is the env var that turns the test binary into a fake
@@ -17,12 +17,12 @@ import (
 // env var, point execContainerLinux at os.Args[0], and assert that
 // the Wait/stdout-pipe path is exercised end-to-end without needing
 // the real crun binary or root.
-const fakeCrunEnv = "DAFT_TEST_FAKE_CRUN_OUTPUT"
+const fakeCrunEnv = "VMJAIL_TEST_FAKE_CRUN_OUTPUT"
 
 // fakeCrunExitEnv asks the fake crun to exit non-zero so the
 // "wait: exit status N" error path is exercised. The value is the
 // desired exit code as a literal integer.
-const fakeCrunExitEnv = "DAFT_TEST_FAKE_CRUN_EXIT"
+const fakeCrunExitEnv = "VMJAIL_TEST_FAKE_CRUN_EXIT"
 
 // fakeContainerDeps records exec invocations and lets tests script
 // stdout / errors per call.
@@ -255,7 +255,7 @@ func TestRunWithoutBundleSkipsContainer(t *testing.T) {
 	_ = runWith(ctx, &buf, deps)
 
 	if f.calls != 0 {
-		t.Errorf("Exec called %d times, want 0 when daft.bundle absent", f.calls)
+		t.Errorf("Exec called %d times, want 0 when vmjail.bundle absent", f.calls)
 	}
 	if strings.Contains(buf.String(), ContainerReportPrefix) {
 		t.Errorf("unexpected container line: %q", buf.String())

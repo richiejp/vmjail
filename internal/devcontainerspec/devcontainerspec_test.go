@@ -5,8 +5,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/devcontainer"
-	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
+	"github.com/richiejp/vmjail/internal/devcontainer"
+	sandboxv1 "github.com/richiejp/vmjail/internal/genpb/sandbox/v1"
 )
 
 // resolve is a test helper: parse+resolve a devcontainer.json body with

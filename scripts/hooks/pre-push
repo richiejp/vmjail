@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# darkaifactory pre-push hook.
+# vmjail pre-push hook.
 #
 # Runs `nix flake check`, which builds every flake package output (the
 # Go binaries, kernel, cloud-hypervisor, virtiofsd, crun, u-root,
-# initramfs, hello-bundle, the //go:embed-bundled daft-sandboxd, and
+# initramfs, hello-bundle, the //go:embed-bundled vmjail-sandboxd, and
 # the test-fixture images) and evaluates the flake's checks.
 #
 # This is the RELEASE build path, and it is deliberately NOT in the
 # pre-commit gate. `make verify` (pre-commit) builds our Go binaries
 # with `go build` and assembles the initramfs/bundle via Make recipes
 # that run *parallel* to the corresponding Nix derivations — so a
-# break in `nix build .#daft` / `.#initramfs` / etc. stays invisible
+# break in `nix build .#vmjail` / `.#initramfs` / etc. stays invisible
 # to a commit. Gating it on push catches that before it reaches CI
 # (.github/workflows/validate-build.yml runs the same check).
 #

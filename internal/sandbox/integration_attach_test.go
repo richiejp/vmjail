@@ -18,18 +18,18 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/agentcredential"
-	"github.com/richiejp/darkaifactory/internal/nodejob"
-	"github.com/richiejp/darkaifactory/internal/sandboxattach"
-	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
-	"github.com/richiejp/darkaifactory/internal/sandboxjob"
-	"github.com/richiejp/darkaifactory/internal/sandboxsecret"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/agentcredential"
+	"github.com/richiejp/vmjail/internal/nodejob"
+	"github.com/richiejp/vmjail/internal/sandboxattach"
+	"github.com/richiejp/vmjail/internal/sandboxgateway"
+	"github.com/richiejp/vmjail/internal/sandboxjob"
+	"github.com/richiejp/vmjail/internal/sandboxsecret"
 )
 
 // TestAttachExecE2E is the D2 attach end-to-end proof: boot a
 // real Cloud Hypervisor VM with a long-running container as PID
-// 1, dial the in-VM daft-agent's attach listener over hybrid-
+// 1, dial the in-VM vmjail-agent's attach listener over hybrid-
 // vsock, execute `/hello` inside the running container via the
 // attach session, and assert the container's banner round-trips
 // back over the PTY tunnel. Every layer is real — KVM, CH,
@@ -82,7 +82,7 @@ func TestAttachExecE2E(t *testing.T) {
 	// production AgentRuns use. The helper command below proves the token is
 	// readable through fixed CODEX_HOME without reflecting it (or a digest) into
 	// stdout/stderr. It is intentionally not a real subscription credential.
-	const secretMarker = "daft-e2e-oauth-marker-74f88cb4"
+	const secretMarker = "vmjail-e2e-oauth-marker-74f88cb4"
 	auth := []byte(`{"tokens":{"access_token":"` + secretMarker + `"}}`)
 	deliverer, err := sandboxsecret.New(func(ctx context.Context, sandboxUID string, port uint32) (net.Conn, error) {
 		if sandboxUID != "d2d-sandbox" {
@@ -103,7 +103,7 @@ func TestAttachExecE2E(t *testing.T) {
 
 	// Open the attach channel: dial guest vsock at AttachPort,
 	// send the Hello with Command=["/hello"]. The agent will
-	// `crun exec daft-container /hello`.
+	// `crun exec vmjail-container /hello`.
 	dialCtx, dialCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer dialCancel()
 	conn, err := DialGuestVsock(dialCtx, cfg.Vsock.HostSocket, agent.DefaultAttachVsockPort)
@@ -166,7 +166,7 @@ func TestAttachExecE2E(t *testing.T) {
 	}
 	var finished nodejob.Snapshot
 	jobDeadline := time.Now().Add(10 * time.Second)
-	//daft:lint:disable=forloopbound reason="bounded by the ten-second real-VM job deadline"
+	//vmjail:lint:disable=forloopbound reason="bounded by the ten-second real-VM job deadline"
 	for time.Now().Before(jobDeadline) {
 		finished, err = manager.Get(started.ID, 0, 0, nodejob.DefaultMaxReadBytes)
 		if err != nil {
@@ -200,7 +200,7 @@ func TestAttachExecE2E(t *testing.T) {
 	}
 	var proofResult nodejob.Snapshot
 	proofDeadline := time.Now().Add(10 * time.Second)
-	//daft:lint:disable=forloopbound reason="bounded by the ten-second real-VM credential proof deadline"
+	//vmjail:lint:disable=forloopbound reason="bounded by the ten-second real-VM credential proof deadline"
 	for time.Now().Before(proofDeadline) {
 		proofResult, err = manager.Get(proof.ID, 0, 0, nodejob.DefaultMaxReadBytes)
 		if err != nil {
@@ -342,7 +342,7 @@ func (b *syncBuf) String() string {
 func waitForLine(t *testing.T, b *syncBuf, target string, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
-	//daft:lint:disable=forloopbound reason="bounded by deadline via the if-return below"
+	//vmjail:lint:disable=forloopbound reason="bounded by deadline via the if-return below"
 	for {
 		if strings.Contains(b.String(), target) {
 			return

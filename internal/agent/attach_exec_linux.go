@@ -18,7 +18,7 @@ import (
 // triggers ptmx_open() in the kernel, which allocates a master
 // from the current mount namespace's devpts — no per-mount perm
 // checks, no CAP_SYS_ADMIN required. u-root's libinit.CreateRootfs
-// (run as PID 1 in our initramfs before exec'ing daft-agent) mounts
+// (run as PID 1 in our initramfs before exec'ing vmjail-agent) mounts
 // devpts with newinstance + ptmxmode=666 and symlinks /dev/ptmx
 // here, so this path works equally on the agent and on any Linux
 // host running the unit tests.

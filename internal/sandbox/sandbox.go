@@ -1,6 +1,6 @@
 // Package sandbox boots and supervises sandbox VMs by driving the
 // configured VMM (Cloud Hypervisor in v1) and ferrying their console
-// output back to the caller. The host-side `daft sandbox` commands in
+// output back to the caller. The host-side `vmjail sandbox` commands in
 // local launchers call into this package.
 //
 // The public surface is deliberately VMM-agnostic so we can swap the
@@ -27,11 +27,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/assert"
-	"github.com/richiejp/darkaifactory/internal/observability"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/assert"
+	"github.com/richiejp/vmjail/internal/observability"
+	"github.com/richiejp/vmjail/internal/oops"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // HelloTimeout caps how long we wait for the in-VM agent to print its
@@ -154,7 +154,7 @@ type Config struct {
 	// internal/observability and docs/observability.md for the data
 	// schema and rotation behaviour. Empty disables the observer
 	// (only for callers that have a reason — every sandbox-test
-	// and user-facing daft-sandboxd launch should set this).
+	// and user-facing vmjail-sandboxd launch should set this).
 	ObserverLogPath string
 	// ObserverMaxBytes caps the on-disk footprint at roughly this
 	// many bytes (one current file + one rotated backup). Zero
@@ -200,7 +200,7 @@ type Config struct {
 	// the agent atomically rewrites the live build-progress summary to
 	// (~1 Hz JSON: openat total/rate/last-activity-age + top processes,
 	// paths, and dirs). Set it to a path on a writable virtiofs share so
-	// the host-side `daft sandbox observe` can read it while the workload
+	// the host-side `vmjail sandbox observe` can read it while the workload
 	// runs. The summary is fed by the open-snoop gadget, so it only
 	// produces output when OpensnoopLogPath is also set. Empty (the
 	// default) leaves it off. See OBSERVABILITY.md roadmap #6.
@@ -262,7 +262,7 @@ type ShareConfig struct {
 	// `<Mountpoint>.lower`; the container sees a writable view at
 	// `<Mountpoint>`. Container writes go to an in-VM tmpfs and
 	// vanish with the VM. Useful when the underlying share is
-	// either daft-fuse (read-only by construction) or a host dir
+	// either vmjail-fuse (read-only by construction) or a host dir
 	// we don't want the container mutating directly.
 	Overlay bool
 	// ReadOnly mounts the virtiofs export read-only inside the guest.
@@ -273,9 +273,9 @@ type ShareConfig struct {
 	// to map guest-side writes back to that host owner. This lets a
 	// non-root container, running as the image's USER uid:gid, read
 	// and write a host-backed workspace whose files belong to the dev
-	// who launched daft. It assumes the share's host files are owned
+	// who launched vmjail. It assumes the share's host files are owned
 	// by the uid that maps to ns-uid 0 (the sandboxd user), which is
-	// the common "dev runs daft on their own files" case.
+	// the common "dev runs vmjail on their own files" case.
 	//
 	// nil (the default) is identity passthrough, which is correct for
 	// the bundle/rootfs share whose tree legitimately carries many
@@ -483,7 +483,7 @@ type virtiofsdSidecar struct{}
 // kernelCmdlineBase is the static prefix of the boot cmdline we pass to
 // every sandbox VM. console drives kernel logs and our agent's stdout
 // to the host's controlling terminal; reboot=t/panic=-1 ensures the
-// guest doesn't hang on a panic. helloWith appends `daft.share=...` on
+// guest doesn't hang on a panic. helloWith appends `vmjail.share=...` on
 // top when Share is configured.
 const kernelCmdlineBase = "console=hvc0 reboot=t panic=-1 cgroup_no_v1=all"
 
@@ -567,7 +567,7 @@ func translateArgs(t *ShareTranslate) []string {
 // per-VM cgroup (CLONE_INTO_CGROUP) so its resource use rolls up
 // into the same accounting as CH; empty is a no-op.
 func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig, cgroupDir string, artifacts ...[4]*os.File) (socket string, stop func(), err error) {
-	dir, err := os.MkdirTemp("", "daft-virtiofs-")
+	dir, err := os.MkdirTemp("", "vmjail-virtiofs-")
 	if err != nil {
 		return "", nil, fmt.Errorf("tmpdir: %w", err)
 	}
@@ -582,7 +582,7 @@ func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig, c
 	socket = filepath.Join(dir, "vhost.sock")
 
 	// --sandbox=none keeps virtiofsd from trying to chroot/setuid;
-	// we run it inside daft-sandboxd's user namespace (set up by
+	// we run it inside vmjail-sandboxd's user namespace (set up by
 	// the userns re-exec scaffold at startup), where it has the
 	// CAP_CHOWN it needs to satisfy container-side chowns into the
 	// subordinate id range. No `--uid-map` / `--gid-map` is needed:
@@ -601,7 +601,7 @@ func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig, c
 	args = append(args, translateArgs(share.Translate)...)
 	// #nosec G204 — `binary` is cfg.Virtiofsd, an absolute path passed
 	// by the host operator who's already trusted to spawn the VMM, and
-	// every argv element is either a const flag or a daft-derived path /
+	// every argv element is either a const flag or a vmjail-derived path /
 	// numeric id. There's no untrusted user input on the argv here.
 	cmd := exec.CommandContext(ctx, binary, args...)
 	if len(artifacts) > 0 {
@@ -665,7 +665,7 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 	assert.True(done != nil,
 		"waitForSocket requires a cancellable context (Background/TODO would only bound on the timeout, missing the operator-cancel signal)")
 	deadline := time.Now().Add(timeout)
-	//daft:lint:disable=forloopbound reason="exits when the socket appears, the deadline passes, or ctx.Done() fires; ctx cancellability asserted at entry"
+	//vmjail:lint:disable=forloopbound reason="exits when the socket appears, the deadline passes, or ctx.Done() fires; ctx cancellability asserted at entry"
 	for {
 		if info, err := os.Stat(path); err == nil && info.Mode()&os.ModeSocket != 0 {
 			return nil
@@ -682,7 +682,7 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 }
 
 // buildKernelCmdline returns the cmdline string CH boots with. As of the
-// slice-3 cutover it carries **zero `daft.*` tokens**: every per-VM
+// slice-3 cutover it carries **zero `vmjail.*` tokens**: every per-VM
 // operational setting (shares, bundle, port-forwards, overlays, observe
 // paths, and the trace/attach/net feature toggles) now travels over the
 // vsock control channel as a GuestConfig (see buildGuestConfig), which —
@@ -983,8 +983,8 @@ func benignReapError(err error) bool {
 // uninterruptible kernel sleep (D-state) can't be killed, and giving up
 // reclaims nothing: the cgroup rmdir EBUSYs while the task lingers and
 // the PID stays unreapable, so abandoning would only discard the one
-// signal that points at daft as the holder of those resources while the
-// host slowly leaks them. So daft keeps waiting and keeps complaining,
+// signal that points at vmjail as the holder of those resources while the
+// host slowly leaks them. So vmjail keeps waiting and keeps complaining,
 // loudly enough that the cause is attributable instead of mysterious.
 func reapWithWatchdog(what string, pid int, first, maxInterval time.Duration, wait func()) {
 	done := make(chan struct{})
@@ -996,7 +996,7 @@ func reapWithWatchdog(what string, pid int, first, maxInterval time.Duration, wa
 	waited := time.Duration(0)
 	timer := time.NewTimer(interval)
 	defer timer.Stop()
-	//daft:lint:disable=forloopbound reason="returns when the reap goroutine closes done; intentionally unbounded otherwise — a D-state reap is meant to be waited on forever (see doc comment)"
+	//vmjail:lint:disable=forloopbound reason="returns when the reap goroutine closes done; intentionally unbounded otherwise — a D-state reap is meant to be waited on forever (see doc comment)"
 	for {
 		select {
 		case <-done:
@@ -1006,7 +1006,7 @@ func reapWithWatchdog(what string, pid int, first, maxInterval time.Duration, wa
 			oops.Log("sandbox: reap stalled", fmt.Errorf(
 				"still waiting to reap %s (pid %d) after %s — likely wedged in "+
 					"uninterruptible kernel sleep (D-state); its cgroup, memory and "+
-					"vCPU threads stay held until the kernel releases it, and daft "+
+					"vCPU threads stay held until the kernel releases it, and vmjail "+
 					"will keep waiting", what, pid, waited,
 			))
 			if interval < maxInterval {
@@ -1042,7 +1042,7 @@ func (td *vmTeardown) run() {
 	}
 	// Reap concurrently so a child wedged in uninterruptible sleep
 	// can't strand the reap of a healthy sibling. run() still blocks
-	// until every reap returns, so a wedged VMM keeps daft visibly
+	// until every reap returns, so a wedged VMM keeps vmjail visibly
 	// waiting (and, via reapWithWatchdog, loudly complaining) rather
 	// than silently leaking.
 	var wg sync.WaitGroup
@@ -1159,7 +1159,7 @@ func vmCgroupName(cfg Config) string {
 	seq := vmCgroupSeq.Add(1)
 	h := fnv.New64a()
 	_, _ = h.Write([]byte(cfg.ObserverLogPath))
-	return fmt.Sprintf("daft-vm-%016x-%d", h.Sum64(), seq)
+	return fmt.Sprintf("vmjail-vm-%016x-%d", h.Sum64(), seq)
 }
 
 // Hello boots a minimal sandbox VM with the given Config, mirrors its
@@ -1167,7 +1167,7 @@ func vmCgroupName(cfg Config) string {
 // The VM is killed before Hello returns regardless of outcome.
 //
 // This is the smoke test for the microVM stack — kernel decompresses,
-// initramfs unpacks, /init (daft-agent) runs and prints, we see it.
+// initramfs unpacks, /init (vmjail-agent) runs and prints, we see it.
 // When Config.Share is set, virtiofsd is started alongside CH so the
 // guest can mount the share.
 func Hello(ctx context.Context, w io.Writer, cfg Config) error {

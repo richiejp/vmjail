@@ -165,7 +165,7 @@ func TestImagesPruneSuccess(t *testing.T) {
 }
 
 // TestStoreRootDefault exercises the os.UserCacheDir branch of
-// storeRoot when DAFT_STORE_DIR is unset. We can't predict the
+// storeRoot when VMJAIL_STORE_DIR is unset. We can't predict the
 // exact path (it depends on $XDG_CACHE_HOME / $HOME) but we can
 // assert it's non-empty and ends with our subdir name.
 func TestStoreRootDefault(t *testing.T) {

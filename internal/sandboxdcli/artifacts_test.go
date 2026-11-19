@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/imagestore"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/bundled"
+	"github.com/richiejp/vmjail/internal/imagestore"
+	"github.com/richiejp/vmjail/internal/sandbox"
 )
 
 func TestLaunchOwnsArtifactLifetime(t *testing.T) {

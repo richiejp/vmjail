@@ -172,7 +172,7 @@ type opener func() (rd recordReader, cleanup func() error, err error)
 
 // Run loads the open-snoop gadget, attaches it to the openat tracepoint,
 // and writes one line per openat(2) to w until ctx is cancelled. It is
-// the entry point daft-agent calls in the guest. Cancelling ctx is the
+// the entry point vmjail-agent calls in the guest. Cancelling ctx is the
 // normal stop and returns nil.
 //
 // selfPidns is the caller's own PID-namespace inode number: when non-zero
@@ -231,7 +231,7 @@ func run(ctx context.Context, w io.Writer, agg *Aggregator, open opener) error {
 		}
 	}()
 
-	//daft:lint:disable=forloopbound reason="drains the ring buffer until the read fails — ctx cancel closes the reader (ringbuf.ErrClosed) or the writer errors; an open-ended tail of a live ring buffer is the intended behaviour"
+	//vmjail:lint:disable=forloopbound reason="drains the ring buffer until the read fails — ctx cancel closes the reader (ringbuf.ErrClosed) or the writer errors; an open-ended tail of a live ring buffer is the intended behaviour"
 	for {
 		rec, err := rd.Read()
 		if err != nil {

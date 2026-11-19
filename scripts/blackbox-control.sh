@@ -2,7 +2,7 @@
 # Narrow fault-injection control supplied only to disposable blackbox campaigns.
 set -euo pipefail
 
-pid=${DAFT_BLACKBOX_NODE_PID:-}
+pid=${VMJAIL_BLACKBOX_NODE_PID:-}
 [[ "$pid" =~ ^[1-9][0-9]*$ ]] || {
 	echo "campaign-control: disposable Node PID is unavailable" >&2
 	exit 2

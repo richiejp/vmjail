@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
 )
 
 // Tracefs syscall-events entry names reused across the table cases.

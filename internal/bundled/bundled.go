@@ -1,5 +1,5 @@
 // Package bundled embeds the sandbox-host artifacts (cloud-hypervisor,
-// the guest kernel bzImage, the initramfs cpio) into the daft-sandboxd
+// the guest kernel bzImage, the initramfs cpio) into the vmjail-sandboxd
 // binary so it can be shipped as a single static executable.
 //
 // Builds outside the project's Nix flake see empty stub files in

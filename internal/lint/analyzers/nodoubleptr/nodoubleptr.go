@@ -13,7 +13,7 @@
 // dedicated wrapper type) for every legitimate case I can think
 // of.
 //
-// Suppression: `//daft:lint:disable=nodoubleptr reason="…"`. The
+// Suppression: `//vmjail:lint:disable=nodoubleptr reason="…"`. The
 // reason should name the legitimate case — the most common is C
 // interop where the underlying API demands it.
 package nodoubleptr
@@ -23,10 +23,10 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
-// analyzerName drives both Analyzer.Name and the //daft:lint:disable=
+// analyzerName drives both Analyzer.Name and the //vmjail:lint:disable=
 // match; one constant keeps them in lock-step.
 const analyzerName = "nodoubleptr"
 

@@ -1,15 +1,15 @@
 // Package buildimage embeds the devcontainer build image (the buildah-based
-// in-sandbox image builder) into the daft-orchestrator binary, so the
+// in-sandbox image builder) into the vmjail-orchestrator binary, so the
 // orchestrator can auto-seed it into its embedded OCI registry at startup
-// and a build-based devcontainer needs no DAFT_BUILD_IMAGE_REF.
+// and a build-based devcontainer needs no VMJAIL_BUILD_IMAGE_REF.
 //
 // Builds outside the project's Nix flake see an empty stub file in assets/,
 // so plain `go build` still compiles — but IsBundled() then reports false
 // and Image() returns ErrNotBundled. The flake overwrites the stub with the
-// real `daft-build-image` tarball at build time (see flake.nix).
+// real `vmjail-build-image` tarball at build time (see flake.nix).
 //
 // This mirrors internal/bundled (the VM artefacts embedded into
-// daft-sandboxd), but the payload is an OCI image consumed through the
+// vmjail-sandboxd), but the payload is an OCI image consumed through the
 // registry rather than files extracted to a cache dir.
 package buildimage
 
@@ -20,7 +20,7 @@ import (
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/richiejp/darkaifactory/internal/ociregistry"
+	"github.com/richiejp/vmjail/internal/ociregistry"
 )
 
 //go:embed assets/build-image.tar.gz
@@ -29,7 +29,7 @@ var buildImageTar []byte
 // ErrNotBundled is returned by Image when the binary was built without the
 // build image embedded (e.g. plain `go build` outside Nix). Callers fall
 // back to leaving the registry unseeded — a build-based devcontainer then
-// fails loudly at dispatch unless DAFT_BUILD_IMAGE_REF points elsewhere.
+// fails loudly at dispatch unless VMJAIL_BUILD_IMAGE_REF points elsewhere.
 var ErrNotBundled = errors.New("buildimage: build image not embedded in this binary")
 
 // minBundledSize is the threshold below which the embedded asset is treated

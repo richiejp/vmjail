@@ -40,7 +40,7 @@ const prefix = "assert: "
 // no channel receives, no map writes. Compute any value the
 // condition depends on first, bind it to a local, and assert on
 // that local. The assertpure analyzer enforces this; bypassing it
-// requires `//daft:lint:disable=assertpure reason="…"`.
+// requires `//vmjail:lint:disable=assertpure reason="…"`.
 func True(cond bool, format string, args ...any) {
 	if cond {
 		return

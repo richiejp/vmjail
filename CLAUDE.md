@@ -18,10 +18,10 @@ the same change.
 
 ## Repository layout
 
-- `cmd/daft/` — the `daft` CLI entry point.
+- `cmd/vmjail/` — the `vmjail` CLI entry point.
 - `internal/` — all reusable Go code. **No `.go` files at the repo root.**
 - `version.txt` — single source of truth for the version number. Bumping it
-  bumps the Nix package version and the `daft version` output.
+  bumps the Nix package version and the `vmjail version` output.
 - `flake.nix` / `.envrc` — Nix dev shell + direnv. `direnv allow` to enter.
 - `Makefile` — common dev targets. `make help` lists them all.
 - `scripts/hooks/` — git hooks installed by `make hooks`.

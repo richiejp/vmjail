@@ -8,10 +8,10 @@ import (
 	"os"
 	"sync"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/observability"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/sandboxnet"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/observability"
+	"github.com/richiejp/vmjail/internal/oops"
+	"github.com/richiejp/vmjail/internal/sandboxnet"
 )
 
 // startVsockNetReceiver opens a UDS listener at
@@ -114,7 +114,7 @@ func (s *connSet) closeAll() {
 func acceptVsockNetConns(ctx context.Context, listener net.Listener, network *sandboxnet.Network, conns *connSet) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	//daft:lint:disable=forloopbound reason="bounded by listener.Close() in stop() — Accept returns ErrClosed"
+	//vmjail:lint:disable=forloopbound reason="bounded by listener.Close() in stop() — Accept returns ErrClosed"
 	for {
 		conn, err := listener.Accept()
 		if err != nil {

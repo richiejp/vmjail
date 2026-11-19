@@ -5,8 +5,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/assert"
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	"github.com/richiejp/vmjail/internal/assert"
+	tracev1 "github.com/richiejp/vmjail/internal/genpb/trace/v1"
 )
 
 // DefaultIngressQuietAfter is how long a trace_id may go without
@@ -90,7 +90,7 @@ func (r *IngressReaper) Run(ctx context.Context) {
 	}
 	ticker := time.NewTicker(r.scanInterval)
 	defer ticker.Stop()
-	//daft:lint:disable=forloopbound reason="exits on ctx.Done(); cancellability asserted at Run entry"
+	//vmjail:lint:disable=forloopbound reason="exits on ctx.Done(); cancellability asserted at Run entry"
 	for {
 		select {
 		case <-ctx.Done():

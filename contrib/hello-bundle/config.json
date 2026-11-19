@@ -16,7 +16,7 @@
     "noNewPrivileges": true
   },
   "root": {"path": "rootfs", "readonly": true},
-  "hostname": "daft-container",
+  "hostname": "vmjail-container",
   "mounts": [
     {
       "destination": "/proc",

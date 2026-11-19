@@ -45,14 +45,14 @@ func bad(s []int, _ int) {
 	assert.True(len(getSlice()) > 0, "") // want `side-effect free`
 }
 
-// suppressed pins that //daft:lint:disable=assertpure with a valid
+// suppressed pins that //vmjail:lint:disable=assertpure with a valid
 // reason silences the diagnostic. Used as the integration test for
 // the suppress.Set machinery — if the suppression stops working,
 // these lines start failing analysistest.
 func suppressed() {
-	//daft:lint:disable=assertpure reason="documenting trivially-true literal in fixture"
+	//vmjail:lint:disable=assertpure reason="documenting trivially-true literal in fixture"
 	assert.True(true, "")
 
 	// Same-line directive form.
-	assert.NoErr(nil, "") //daft:lint:disable=assertpure reason="exercises trivial-nil path"
+	assert.NoErr(nil, "") //vmjail:lint:disable=assertpure reason="exercises trivial-nil path"
 }

@@ -9,7 +9,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
 )
 
 // DefaultConfigVsockPort is the AF_VSOCK port the host's per-VM config

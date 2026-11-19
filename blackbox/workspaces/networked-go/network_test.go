@@ -9,9 +9,9 @@ import (
 )
 
 func TestConfiguredEndpoint(t *testing.T) {
-	endpoint := os.Getenv("DAFT_TEST_ENDPOINT")
+	endpoint := os.Getenv("VMJAIL_TEST_ENDPOINT")
 	if endpoint == "" {
-		t.Fatal("DAFT_TEST_ENDPOINT is required")
+		t.Fatal("VMJAIL_TEST_ENDPOINT is required")
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	response, err := client.Get(endpoint)

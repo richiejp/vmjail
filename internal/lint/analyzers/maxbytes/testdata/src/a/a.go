@@ -39,7 +39,7 @@ func responseFine() {
 
 // suppressed pins the directive silences the diagnostic.
 func suppressed(_ http.ResponseWriter, r *http.Request) {
-	//daft:lint:disable=maxbytes reason="fixture exercises suppression"
+	//vmjail:lint:disable=maxbytes reason="fixture exercises suppression"
 	_, _ = io.ReadAll(r.Body)
 }
 

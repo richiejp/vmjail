@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/oops"
+	"github.com/richiejp/vmjail/internal/oops"
 )
 
 // dialReplyLineLimit bounds the OK/REJECT reply line Cloud
@@ -45,7 +45,7 @@ const dialConnectFmt = "CONNECT %d\n"
 // sandboxd from the orchestrator on a per-port labeled stream is
 // bridged into the running VM's agent (which is listening on the
 // guest-side AF_VSOCK port written into the kernel cmdline via
-// daft.port=) through this dialer.
+// vmjail.port=) through this dialer.
 func DialGuestVsock(ctx context.Context, hostSocket string, port uint32) (net.Conn, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", hostSocket)
@@ -85,7 +85,7 @@ func DialGuestVsock(ctx context.Context, hostSocket string, port uint32) (net.Co
 // happily wait for ever otherwise.
 func readBoundedLine(br *bufio.Reader, limit int) (string, error) {
 	var sb strings.Builder
-	//daft:lint:disable=forloopbound reason="bounded by limit via the if-break below"
+	//vmjail:lint:disable=forloopbound reason="bounded by limit via the if-break below"
 	for {
 		b, err := br.ReadByte()
 		if err != nil {

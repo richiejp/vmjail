@@ -4,13 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/imagestore"
+	"github.com/richiejp/vmjail/internal/imagestore"
 )
 
 func TestImagesIsRegistered(t *testing.T) {
 	stdout, _, err := runCmd(t, "images", "--help")
 	if err != nil {
-		t.Fatalf("daft-sandboxd images --help: %v", err)
+		t.Fatalf("vmjail-sandboxd images --help: %v", err)
 	}
 	for _, sub := range []string{"ls", "rm", "prune"} {
 		if !strings.Contains(stdout, sub) {
@@ -22,7 +22,7 @@ func TestImagesIsRegistered(t *testing.T) {
 func TestPullIsRegistered(t *testing.T) {
 	stdout, _, err := runCmd(t, "--help")
 	if err != nil {
-		t.Fatalf("daft-sandboxd --help: %v", err)
+		t.Fatalf("vmjail-sandboxd --help: %v", err)
 	}
 	if !strings.Contains(stdout, "pull") {
 		t.Errorf("root help missing pull command:\n%s", stdout)
@@ -65,7 +65,7 @@ func TestParseBytes(t *testing.T) {
 }
 
 // FuzzParseBytes exercises parseBytes with arbitrary inputs. The
-// production caller reads from $DAFT_STORE_QUOTA — bytes-shaped
+// production caller reads from $VMJAIL_STORE_QUOTA — bytes-shaped
 // untrusted input — so the parser must never panic on a malicious
 // or just typo'd value.
 //
@@ -111,7 +111,7 @@ func TestOpenStoreRejectsBadQuota(t *testing.T) {
 	t.Setenv(EnvStoreDir, t.TempDir())
 	t.Setenv(EnvStoreQuota, "not-a-number")
 	if _, err := openStore(); err == nil {
-		t.Fatal("openStore should reject malformed DAFT_STORE_QUOTA")
+		t.Fatal("openStore should reject malformed VMJAIL_STORE_QUOTA")
 	}
 }
 
@@ -129,7 +129,7 @@ func TestStoreRootHonoursEnv(t *testing.T) {
 func TestStoreRootRejectsRelativeEnv(t *testing.T) {
 	t.Setenv(EnvStoreDir, "relative/store")
 	if _, err := storeRoot(); err == nil {
-		t.Fatal("storeRoot should reject a relative DAFT_STORE_DIR")
+		t.Fatal("storeRoot should reject a relative VMJAIL_STORE_DIR")
 	}
 }
 

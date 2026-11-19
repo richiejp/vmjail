@@ -21,7 +21,7 @@ var sliceOfDoubleP []**int // want `double-pointer`
 // Suppressed shows the directive silences the diagnostic when
 // placed directly above the offending type expression.
 type Suppressed struct {
-	//daft:lint:disable=nodoubleptr reason="fixture exercises suppression"
+	//vmjail:lint:disable=nodoubleptr reason="fixture exercises suppression"
 	p **int
 }
 

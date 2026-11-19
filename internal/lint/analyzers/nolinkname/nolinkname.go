@@ -4,7 +4,7 @@
 // the language's normal visibility rules and the static call-graph
 // guarantees that build on them.
 //
-// Suppression: `//daft:lint:disable=nolinkname reason="…"` on the
+// Suppression: `//vmjail:lint:disable=nolinkname reason="…"` on the
 // same line as the pragma or the line above. Review pushes back on
 // suppressions that don't justify why hiding the cross-package
 // dependency from static analysis is worth the cost.
@@ -15,10 +15,10 @@ import (
 
 	"golang.org/x/tools/go/analysis"
 
-	"github.com/richiejp/darkaifactory/internal/lint/suppress"
+	"github.com/richiejp/vmjail/internal/lint/suppress"
 )
 
-// analyzerName matches the //daft:lint:disable= NAMES entry and the
+// analyzerName matches the //vmjail:lint:disable= NAMES entry and the
 // Analyzer.Name field; one constant for both keeps them in sync.
 const analyzerName = "nolinkname"
 

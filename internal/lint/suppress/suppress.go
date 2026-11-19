@@ -1,5 +1,5 @@
 // Package suppress is the shared library used by every custom
-// analyzer to honour `//daft:lint:disable=<names> reason="…"`
+// analyzer to honour `//vmjail:lint:disable=<names> reason="…"`
 // directives.
 //
 // Two surfaces:
@@ -31,7 +31,7 @@ import (
 
 // directivePrefix is the prefix that, anchored at the start of a
 // comment's body, marks the comment as a suppression directive.
-const directivePrefix = "daft:lint:disable="
+const directivePrefix = "vmjail:lint:disable="
 
 // reasonRE captures the contents of reason="…". The contents may
 // be empty per regex; the caller distinguishes empty-reason from
@@ -39,7 +39,7 @@ const directivePrefix = "daft:lint:disable="
 var reasonRE = regexp.MustCompile(`reason="([^"]*)"`)
 
 // ParseDirective parses raw — the literal comment text including
-// its leading `//` or `/*` — as a daft:lint:disable= directive.
+// its leading `//` or `/*` — as a vmjail:lint:disable= directive.
 //
 // Outcomes:
 //
@@ -97,7 +97,7 @@ type Set struct {
 	byLine map[lineKey]map[string]struct{}
 }
 
-// New scans pass.Files for well-formed daft:lint:disable=
+// New scans pass.Files for well-formed vmjail:lint:disable=
 // directives and returns a Set ready for Disabled queries.
 // Malformed directives (missing or empty reason) are ignored here
 // — they do not suppress diagnostics. lintreasons reports them

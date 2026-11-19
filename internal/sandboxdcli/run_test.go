@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/imagestore"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/bundled"
+	"github.com/richiejp/vmjail/internal/imagestore"
+	"github.com/richiejp/vmjail/internal/sandbox"
 )
 
 const testImageRef = "img:1"
@@ -18,14 +18,14 @@ const testImageRef = "img:1"
 func TestRunIsRegisteredUnderDebug(t *testing.T) {
 	rootHelp, _, err := runCmd(t, "--help")
 	if err != nil {
-		t.Fatalf("daft-sandboxd --help: %v", err)
+		t.Fatalf("vmjail-sandboxd --help: %v", err)
 	}
 	if !strings.Contains(rootHelp, "debug ") {
 		t.Errorf("root help missing debug parent:\n%s", rootHelp)
 	}
 	debugHelp, _, err := runCmd(t, "debug", "--help")
 	if err != nil {
-		t.Fatalf("daft-sandboxd debug --help: %v", err)
+		t.Fatalf("vmjail-sandboxd debug --help: %v", err)
 	}
 	if !strings.Contains(debugHelp, "run ") {
 		t.Errorf("debug help missing run subcommand:\n%s", debugHelp)
@@ -111,7 +111,7 @@ func runDepsForTest(store storeAPI) runDeps {
 
 func TestRunWiresBundleShareAndBundlePath(t *testing.T) {
 	digest := testDigest
-	bundlePath := "/var/lib/daft-sandboxd-images/bundles/sha256_abc"
+	bundlePath := "/var/lib/vmjail-sandboxd-images/bundles/sha256_abc"
 	store := &fakeStore{
 		pulledImage: &imagestore.Image{Ref: testImageRef, Digest: digest, Size: 1024},
 		bundle:      &imagestore.Bundle{Digest: digest, Path: bundlePath},
@@ -317,12 +317,12 @@ func TestDefaultRunDeps(t *testing.T) {
 }
 
 // TestDefaultOpenStoreClosureExecutes drives the openStore closure
-// inside defaultRunDeps. It will fail (no DAFT_STORE_DIR is set in
+// inside defaultRunDeps. It will fail (no VMJAIL_STORE_DIR is set in
 // tests, the default cache dir may not exist), but invoking it
 // covers the closure body. We don't care about the result, only
 // that the closure runs without panicking.
 func TestDefaultOpenStoreClosureExecutes(t *testing.T) {
-	t.Setenv("DAFT_STORE_DIR", t.TempDir())
+	t.Setenv("VMJAIL_STORE_DIR", t.TempDir())
 	deps := defaultRunDeps()
 	store, err := deps.openStore()
 	if err != nil {

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/agent"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
 )
 
 // configSockPath is the UDS the config server binds for a given cfg —
@@ -192,8 +192,8 @@ func TestBuildGuestConfigProjectsConfig(t *testing.T) {
 	cfg.Shares = []*ShareConfig{{Tag: "t", Mountpoint: "/m", Overlay: true}}
 	cfg.PortForwards = []PortForward{{VsockPort: 10001, ContainerPort: 8080}}
 	cfg.PostStartCommands = [][]string{{"/bin/sh", "-c", "bun run dev"}, nil, {"echo", "hi"}}
-	cfg.OpensnoopLogPath = "/run/daft/observe/opensnoop.log"
-	cfg.ObserveSummaryPath = "/run/daft/observe/progress.json"
+	cfg.OpensnoopLogPath = "/run/vmjail/observe/opensnoop.log"
+	cfg.ObserveSummaryPath = "/run/vmjail/observe/progress.json"
 	gc := buildGuestConfig(cfg)
 	if gc.GetBundle() != "/b" {
 		t.Errorf("bundle = %q, want /b", gc.GetBundle())
@@ -211,7 +211,7 @@ func TestBuildGuestConfigProjectsConfig(t *testing.T) {
 		t.Errorf("post_start_commands = %v, want [sh -c 'bun run dev', echo hi]", gc.GetPostStartCommands())
 	}
 	obs := gc.GetObserve()
-	if obs.GetOpensnoop() != "/run/daft/observe/opensnoop.log" || obs.GetSummary() != "/run/daft/observe/progress.json" {
+	if obs.GetOpensnoop() != "/run/vmjail/observe/opensnoop.log" || obs.GetSummary() != "/run/vmjail/observe/progress.json" {
 		t.Errorf("observe = %v, want opensnoop+summary set", obs)
 	}
 	// Paths left unset stay empty rather than echoing another gadget's.

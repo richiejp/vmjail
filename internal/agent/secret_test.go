@@ -15,7 +15,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
 )
 
 type memoryCredentialStore struct {

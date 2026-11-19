@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	tracev1 "github.com/richiejp/vmjail/internal/genpb/trace/v1"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // Fixed absolute path used by validate-only tests that don't open
@@ -61,7 +61,7 @@ func TestBuildCloudHypervisorArgsOmitsVsockWhenAbsent(t *testing.T) {
 
 // TestBuildGuestConfigProjectsFeatureToggles confirms the trace/attach/net
 // feature bits ride the vsock payload (the VsockConfig's per-feature bool),
-// replacing the daft.vsock.trace_port / daft.attach_port / daft.net_port
+// replacing the vmjail.vsock.trace_port / vmjail.attach_port / vmjail.net_port
 // cmdline tokens. The agent brings each up on its fixed constant port, so
 // only the bit travels.
 func TestBuildGuestConfigProjectsFeatureToggles(t *testing.T) {
@@ -196,7 +196,7 @@ func TestStartVsockTraceReceiverRoundTrip(t *testing.T) {
 			TraceId:   traceID,
 			SpanId:    strings.Repeat("b", 16),
 			Name:      "agent.boot",
-			Component: "daft-agent",
+			Component: "vmjail-agent",
 		},
 	}); err != nil {
 		t.Fatalf("Export: %v", err)

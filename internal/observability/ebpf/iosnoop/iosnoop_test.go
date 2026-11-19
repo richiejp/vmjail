@@ -433,7 +433,7 @@ func TestCollectSample(t *testing.T) {
 // load path, mirroring the sibling gadgets' coverage seam. The real attach +
 // map reads run only in the guest under the e2e.
 func TestRunRealLoadFails(t *testing.T) {
-	// Pre-cancelled context: a privileged env (e.g. the daft self-build
+	// Pre-cancelled context: a privileged env (e.g. the vmjail self-build
 	// sandbox with CAP_SYS_ADMIN) lets the load succeed, and without a
 	// cancelled ctx Run would block forever on the ring-buffer read. The
 	// unprivileged path returns the load error before the read loop.

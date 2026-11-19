@@ -1,11 +1,11 @@
-// Package agent is the daft sandbox-agent. It runs as PID 1's child inside
+// Package agent is the vmjail sandbox-agent. It runs as PID 1's child inside
 // the sandbox VM, brings up vsock RPC, and supervises the workload
 // container. In v0 it just prints a hello banner and blocks until its
 // context is cancelled — enough to verify that the VM boots, the kernel
 // hands control to user space, and our binary's stdout reaches the host
 // serial console.
 //
-// As of v0.1 the agent also honours `daft.share=<tag>:<mountpoint>` on
+// As of v0.1 the agent also honours `vmjail.share=<tag>:<mountpoint>` on
 // the kernel cmdline: it mounts the named virtio-fs share, reads the
 // marker file, and reports the contents on the same console stream.
 // Sharing is best-effort — failure does not bring the agent down.
@@ -23,19 +23,19 @@ import (
 	"sync"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/component"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	"github.com/richiejp/vmjail/internal/component"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/oops"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // Banner is the line Run prints on start-up. The sandbox package matches
 // against this exact string on the VM console.
-const Banner = "hello world from daft-agent"
+const Banner = "hello world from vmjail-agent"
 
 const traceAttrVsockPort = "vsock_port"
 
-// ContainerBanner is the exact line cmd/daft-hello-container prints
+// ContainerBanner is the exact line cmd/vmjail-hello-container prints
 // when run inside the sandbox VM. The host's banner-scanner watches for
 // it (prefixed with ContainerReportPrefix) to confirm crun successfully
 // launched the workload container.
@@ -54,7 +54,7 @@ const ContainerReportPrefix = "container: "
 const TraceReportPrefix = "trace: "
 
 // Workspace round-trip in-VM helper paths and marker. The
-// daft-hello-container binary uses these to read input the user-host
+// vmjail-hello-container binary uses these to read input the user-host
 // pushed in and write output the host can later pull back — that's
 // what the workspace-round-trip e2e test asserts on. Lives here
 // rather than in the cmd/ binary so both producer and consumer
@@ -490,7 +490,7 @@ func applyShares(w io.Writer, d runDeps, cfg *agentv1.GuestConfig, haveBundle bo
 	}
 }
 
-// Main is the agent's process entry point, factored out of cmd/daft-agent
+// Main is the agent's process entry point, factored out of cmd/vmjail-agent
 // so the lifecycle plumbing (signal context, error reporting, exit code)
 // can be tested directly without spawning a subprocess. It returns the
 // process exit code: 0 on graceful shutdown, 1 if Run reported a real
@@ -504,7 +504,7 @@ func Main(parent context.Context, stdout, stderr io.Writer, signals ...os.Signal
 	if err == nil || errors.Is(err, context.Canceled) {
 		return 0
 	}
-	_, werr := fmt.Fprintln(stderr, "daft-agent:", err)
+	_, werr := fmt.Fprintln(stderr, "vmjail-agent:", err)
 	oops.Must("agent: write Main error", werr)
 	return 1
 }

@@ -11,8 +11,8 @@ import (
 
 	"connectrpc.com/connect"
 
-	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/trace/v1/tracev1connect"
+	tracev1 "github.com/richiejp/vmjail/internal/genpb/trace/v1"
+	"github.com/richiejp/vmjail/internal/genpb/trace/v1/tracev1connect"
 )
 
 type failAtWriter struct {

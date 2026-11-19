@@ -1,4 +1,0 @@
-interface:
-  display_name: "Develop in daft"
-  short_description: "Run a project through a remote daft agent"
-  default_prompt: "Use $develop-daft-project to develop /project/path on user@node."

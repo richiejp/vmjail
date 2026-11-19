@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/bundled"
+	"github.com/richiejp/vmjail/internal/sandbox"
 )
 
 func TestFormatBytes(t *testing.T) {
@@ -50,7 +50,7 @@ func TestResolveVsockDirDefaultCreatesTempSubdir(t *testing.T) {
 }
 
 func TestResolveVsockDirPrefersSystemdRuntimeDirectory(t *testing.T) {
-	runtimeDir := filepath.Join(os.TempDir(), fmt.Sprintf("daft-systemd-%d", os.Getpid()))
+	runtimeDir := filepath.Join(os.TempDir(), fmt.Sprintf("vmjail-systemd-%d", os.Getpid()))
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
 	t.Setenv("RUNTIME_DIRECTORY", runtimeDir)
 	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
@@ -66,7 +66,7 @@ func TestResolveVsockDirPrefersSystemdRuntimeDirectory(t *testing.T) {
 }
 
 func TestResolveVsockDirUsesXDGRuntimeDirectory(t *testing.T) {
-	runtimeDir := filepath.Join(os.TempDir(), fmt.Sprintf("daft-xdg-%d", os.Getpid()))
+	runtimeDir := filepath.Join(os.TempDir(), fmt.Sprintf("vmjail-xdg-%d", os.Getpid()))
 	t.Cleanup(func() { _ = os.RemoveAll(runtimeDir) })
 	t.Setenv("RUNTIME_DIRECTORY", "relative")
 	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
@@ -75,7 +75,7 @@ func TestResolveVsockDirUsesXDGRuntimeDirectory(t *testing.T) {
 		t.Fatalf("resolveVsockDir: %v", err)
 	}
 	defer cleanup()
-	want := filepath.Join(runtimeDir, "daft-vsock")
+	want := filepath.Join(runtimeDir, "vmjail-vsock")
 	if dir != want {
 		t.Errorf("runtime dir = %q, want %q", dir, want)
 	}
@@ -95,7 +95,7 @@ func TestResolveVsockDirRejectsPathTooLongForSockets(t *testing.T) {
 }
 
 func TestResolveVsockDirAbsoluteOverride(t *testing.T) {
-	override := filepath.Join(os.TempDir(), fmt.Sprintf("daft-override-%d", os.Getpid()))
+	override := filepath.Join(os.TempDir(), fmt.Sprintf("vmjail-override-%d", os.Getpid()))
 	t.Cleanup(func() { _ = os.RemoveAll(override) })
 	got, cleanup, err := resolveVsockDir(override)
 	if err != nil {

@@ -144,7 +144,7 @@ func run(ctx context.Context, w io.Writer, agg *Aggregator, open opener) error {
 		}
 	}()
 
-	//daft:lint:disable=forloopbound reason="drains the ring buffer until the read fails — ctx cancel closes the reader (ringbuf.ErrClosed) or the writer errors; an open-ended tail of a live ring buffer is the intended behaviour"
+	//vmjail:lint:disable=forloopbound reason="drains the ring buffer until the read fails — ctx cancel closes the reader (ringbuf.ErrClosed) or the writer errors; an open-ended tail of a live ring buffer is the intended behaviour"
 	for {
 		rec, err := rd.Read()
 		if err != nil {

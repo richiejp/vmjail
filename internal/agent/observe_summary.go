@@ -5,12 +5,12 @@ import (
 	"io"
 	"time"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/execsnoop"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/iosnoop"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/opensnoop"
-	"github.com/richiejp/darkaifactory/internal/observability/ebpf/sleepsnoop"
-	"github.com/richiejp/darkaifactory/internal/observability/progress"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/execsnoop"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/iosnoop"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/opensnoop"
+	"github.com/richiejp/vmjail/internal/observability/ebpf/sleepsnoop"
+	"github.com/richiejp/vmjail/internal/observability/progress"
 )
 
 // SummaryReportPrefix labels the build-progress summary writer's console
@@ -141,7 +141,7 @@ func runSummaryLoop(ctx context.Context, d summaryDeps, path string, osAgg *open
 	_ = d.write(path, build())
 	t := time.NewTicker(d.interval)
 	defer t.Stop()
-	//daft:lint:disable=forloopbound reason="rewrites the summary once per tick for the agent's lifetime; ctx cancel is the termination signal (writes a final snapshot and returns)"
+	//vmjail:lint:disable=forloopbound reason="rewrites the summary once per tick for the agent's lifetime; ctx cancel is the termination signal (writes a final snapshot and returns)"
 	for {
 		select {
 		case <-ctx.Done():

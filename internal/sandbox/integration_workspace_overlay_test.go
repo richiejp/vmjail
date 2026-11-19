@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/imagestore"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/imagestore"
 )
 
 // TestWorkspaceOverlayE2E boots a real VM with the workspace share
@@ -18,7 +18,7 @@ import (
 // container that writes /workspace/out.txt, and asserts:
 //
 //   - The container's write succeeded (the agent's
-//     daft-hello-container exits 2 on write failure; we'd see that
+//     vmjail-hello-container exits 2 on write failure; we'd see that
 //     in the console). The container banner being printed is the
 //     positive signal.
 //   - The underlying workspace dir on the sandbox-host is
@@ -88,7 +88,7 @@ func TestWorkspaceOverlayE2E(t *testing.T) {
 
 	// The container banner is the only positive signal we have
 	// that crun executed AND the in-VM write didn't trip
-	// daft-hello-container's error path.
+	// vmjail-hello-container's error path.
 	if !strings.Contains(console.String(),
 		agent.ContainerReportPrefix+agent.ContainerBanner) {
 		t.Errorf("container banner missing — overlay setup likely broke container")

@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/sandbox"
 )
 
 // Exercise production sealing and child descriptor inheritance using current
@@ -37,7 +37,7 @@ func TestSealedAssetsBootContainer(t *testing.T) {
 	defer p.Close()
 	bundle := os.Getenv(sandbox.EnvBundle)
 	if bundle == "" {
-		t.Fatal("set DAFT_BUNDLE to the hello bundle")
+		t.Fatal("set VMJAIL_BUNDLE to the hello bundle")
 	}
 	vsock, cleanup, err := sandbox.NewStandaloneVsock()
 	if err != nil {

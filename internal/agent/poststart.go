@@ -30,7 +30,7 @@ var postStartReadyTimeout = 30 * time.Second
 //nolint:gochecknoglobals // test-tunable poll cadence; never mutated in production.
 var postStartPollInterval = 200 * time.Millisecond
 
-// containerRunning reports whether the daft container is in crun's
+// containerRunning reports whether the vmjail container is in crun's
 // "running" state. Production shells `crun state <id>` and reads the
 // status field; a package var so tests can stub readiness without crun.
 //
@@ -76,7 +76,7 @@ func startPostStart(ctx context.Context, w io.Writer, d runDeps) {
 // runPostStart waits for the container to be running, then crun-execs each
 // post-start command in order, streaming its output to w. It reuses the
 // attach exec primitive (d.attach.exec) — the same crun-exec path
-// `daft workspace exec` uses — so there's one way to run a command in the
+// `vmjail workspace exec` uses — so there's one way to run a command in the
 // container.
 func runPostStart(ctx context.Context, w io.Writer, d runDeps, cp containerProcess) {
 	if !awaitContainerRunning(ctx, w, PostStartReportPrefix,
@@ -100,7 +100,7 @@ func awaitContainerRunning(ctx context.Context, w io.Writer, reportPrefix, timeo
 	deadline := time.Now().Add(postStartReadyTimeout)
 	tick := time.NewTicker(postStartPollInterval)
 	defer tick.Stop()
-	//daft:lint:disable=forloopbound reason="bounded by the postStartReadyTimeout deadline + ctx.Done() below"
+	//vmjail:lint:disable=forloopbound reason="bounded by the postStartReadyTimeout deadline + ctx.Done() below"
 	for {
 		if containerRunning(ctx) {
 			return true

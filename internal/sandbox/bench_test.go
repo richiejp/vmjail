@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
+	"github.com/richiejp/vmjail/internal/agent"
 )
 
 // realisticBootLog approximates the volume and shape of kernel boot

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/observability/progress"
+	"github.com/richiejp/vmjail/internal/observability/progress"
 )
 
 // observeFixedNow is an arbitrary fixed clock; summaries below are

@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/richiejp/darkaifactory/internal/devcontainer"
-	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/sandboxboot"
+	"github.com/richiejp/vmjail/internal/devcontainer"
+	sandboxv1 "github.com/richiejp/vmjail/internal/genpb/sandbox/v1"
+	"github.com/richiejp/vmjail/internal/sandbox"
+	"github.com/richiejp/vmjail/internal/sandboxboot"
 )
 
 // In-VM mount points + artefact names the in-sandbox image builder agrees
@@ -27,7 +27,7 @@ const (
 	buildOutTarball   = "image.tar"
 	// buildLocalTag is buildah's in-storage tag for the freshly built
 	// image; it never leaves the VM (the push is to a docker-archive).
-	buildLocalTag = "daft-build"
+	buildLocalTag = "vmjail-build"
 	// defaultDockerfile is the devcontainer spec's default when `build`
 	// names no dockerfile.
 	defaultDockerfile = "Dockerfile"
@@ -204,9 +204,9 @@ func sortedKeys(m map[string]string) []string {
 // sandbox produces no tarball, which surfaces here as an error.
 func (e *Executor) buildDevcontainerImage(ctx context.Context, uid string, spec *sandboxv1.SandboxSpec, plan *devcontainerBuildPlan) (string, error) {
 	if e.buildImageRef == "" {
-		return "", errors.New("sandboxexec: build-based devcontainer needs a build image; set DAFT_BUILD_IMAGE_REF on the node")
+		return "", errors.New("sandboxexec: build-based devcontainer needs a build image; set VMJAIL_BUILD_IMAGE_REF on the node")
 	}
-	outDir, err := os.MkdirTemp("", "daft-build-out-")
+	outDir, err := os.MkdirTemp("", "vmjail-build-out-")
 	if err != nil {
 		return "", fmt.Errorf("sandboxexec: build output dir: %w", err)
 	}
@@ -253,7 +253,7 @@ func (e *Executor) buildDevcontainerImage(ctx context.Context, uid string, spec 
 		buildCtx, cancel = context.WithTimeout(ctx, e.buildTimeout)
 		defer cancel()
 	}
-	_, _ = fmt.Fprintf(e.stdout, "daft-sandboxd: building devcontainer image for %s (context %s)\n", uid, plan.contextDir)
+	_, _ = fmt.Fprintf(e.stdout, "vmjail-sandboxd: building devcontainer image for %s (context %s)\n", uid, plan.contextDir)
 	if err := e.buildRunner(buildCtx, e.stdout, cfg); err != nil {
 		return "", fmt.Errorf("sandboxexec: build sandbox: %w", err)
 	}
@@ -266,7 +266,7 @@ func (e *Executor) buildDevcontainerImage(ctx context.Context, uid string, spec 
 	if err != nil {
 		return "", fmt.Errorf("sandboxexec: push built image: %w", err)
 	}
-	_, _ = fmt.Fprintf(e.stdout, "daft-sandboxd: built devcontainer image %s\n", ref)
+	_, _ = fmt.Fprintf(e.stdout, "vmjail-sandboxd: built devcontainer image %s\n", ref)
 	return ref, nil
 }
 
@@ -284,9 +284,9 @@ func applyBuildResourceSizing(cfg *sandbox.Config, spec *sandboxv1.SandboxSpec) 
 // keeps concurrent / repeat builds from clobbering each other.
 func buildRepo(workspaceUUID string) string {
 	if workspaceUUID == "" {
-		return "daft-build/anon"
+		return "vmjail-build/anon"
 	}
-	return "daft-build/" + sanitizeRef(workspaceUUID)
+	return "vmjail-build/" + sanitizeRef(workspaceUUID)
 }
 
 func buildTag(uid string) string {

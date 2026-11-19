@@ -429,7 +429,7 @@ func TestDefaultBPFDeps(t *testing.T) {
 // rather than panic — and this covers openSource's load + error path.
 // The success path is exercised by the e2e gadget test inside a VM.
 func TestRunWithRealOpenSourceFailsUnprivileged(t *testing.T) {
-	// Pre-cancelled context: a privileged env (e.g. the daft self-build
+	// Pre-cancelled context: a privileged env (e.g. the vmjail self-build
 	// sandbox, CAP_SYS_ADMIN) lets the load succeed, and without a cancelled
 	// ctx Run blocks forever on the ring-buffer read. The unprivileged path
 	// returns the load error before the read loop.

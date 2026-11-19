@@ -17,7 +17,7 @@ jobs:
         uses: DeterminateSystems/determinate-nix-action@v3.19.0
       # nix flake check builds every flake package output — the Go
       # binaries, the VM toolchain (kernel/CH/virtiofsd/crun/u-root),
-      # initramfs, hello-bundle, the bundled daft-sandboxd, and the
+      # initramfs, hello-bundle, the bundled vmjail-sandboxd, and the
       # test-fixture images — and evaluates the flake's checks. This
       # gates the full release build, which `make verify` (pre-commit)
       # does not: that path builds our Go code via `go build` + Make
@@ -25,8 +25,8 @@ jobs:
       # hook (scripts/hooks/pre-push).
       - name: Build all flake outputs
         run: nix flake check -L
-      - name: Smoke-test daft binary
-        run: nix build && result/bin/daft version
+      - name: Smoke-test vmjail binary
+        run: nix build && result/bin/vmjail-sandboxd version
       - name: Smoke-test portable archive on Ubuntu
         run: |
           nix build .#release-archive -o result-release

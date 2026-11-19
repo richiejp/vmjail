@@ -11,9 +11,9 @@ import (
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/richiejp/darkaifactory/internal/agent"
-	"github.com/richiejp/darkaifactory/internal/agentcredential"
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/agentcredential"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
 )
 
 type Dialer func(context.Context, string, uint32) (net.Conn, error)

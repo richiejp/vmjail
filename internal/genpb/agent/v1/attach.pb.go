@@ -1,6 +1,6 @@
-// Wire format for the in-VM daft-agent's attach listener. The
+// Wire format for the in-VM vmjail-agent's attach listener. The
 // sandboxd host dials the agent's AF_VSOCK attach port (configured
-// via `daft.attach_port=<n>` on the kernel cmdline), writes one
+// via `vmjail.attach_port=<n>` on the kernel cmdline), writes one
 // length-prefixed AgentAttachHello, then exchanges length-prefixed
 // AgentAttachFrame messages bidirectionally until either side
 // closes. Framing is the same 4-byte big-endian length prefix the
@@ -330,23 +330,23 @@ var File_agent_v1_attach_proto protoreflect.FileDescriptor
 
 const file_agent_v1_attach_proto_rawDesc = "" +
 	"\n" +
-	"\x15agent/v1/attach.proto\x12\rdaft.agent.v1\"f\n" +
+	"\x15agent/v1/attach.proto\x12\x0fvmjail.agent.v1\"f\n" +
 	"\x10AgentAttachHello\x12\x18\n" +
 	"\acommand\x18\x01 \x03(\tR\acommand\x12\x10\n" +
 	"\x03tty\x18\x02 \x01(\bR\x03tty\x12\x12\n" +
 	"\x04cols\x18\x03 \x01(\rR\x04cols\x12\x12\n" +
-	"\x04rows\x18\x04 \x01(\rR\x04rows\"\xa2\x01\n" +
+	"\x04rows\x18\x04 \x01(\rR\x04rows\"\xa6\x01\n" +
 	"\x10AgentAttachFrame\x12\x14\n" +
-	"\x04data\x18\x01 \x01(\fH\x00R\x04data\x12:\n" +
-	"\x06resize\x18\x02 \x01(\v2 .daft.agent.v1.AgentAttachResizeH\x00R\x06resize\x124\n" +
-	"\x04exit\x18\x03 \x01(\v2\x1e.daft.agent.v1.AgentAttachExitH\x00R\x04exitB\x06\n" +
+	"\x04data\x18\x01 \x01(\fH\x00R\x04data\x12<\n" +
+	"\x06resize\x18\x02 \x01(\v2\".vmjail.agent.v1.AgentAttachResizeH\x00R\x06resize\x126\n" +
+	"\x04exit\x18\x03 \x01(\v2 .vmjail.agent.v1.AgentAttachExitH\x00R\x04exitB\x06\n" +
 	"\x04body\";\n" +
 	"\x11AgentAttachResize\x12\x12\n" +
 	"\x04cols\x18\x01 \x01(\rR\x04cols\x12\x12\n" +
 	"\x04rows\x18\x02 \x01(\rR\x04rows\";\n" +
 	"\x0fAgentAttachExit\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\x05R\x04code\x12\x14\n" +
-	"\x05error\x18\x02 \x01(\tR\x05errorBCZAgithub.com/richiejp/darkaifactory/internal/genpb/agent/v1;agentv1b\x06proto3"
+	"\x05error\x18\x02 \x01(\tR\x05errorB<Z:github.com/richiejp/vmjail/internal/genpb/agent/v1;agentv1b\x06proto3"
 
 var (
 	file_agent_v1_attach_proto_rawDescOnce sync.Once
@@ -362,14 +362,14 @@ func file_agent_v1_attach_proto_rawDescGZIP() []byte {
 
 var file_agent_v1_attach_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_agent_v1_attach_proto_goTypes = []any{
-	(*AgentAttachHello)(nil),  // 0: daft.agent.v1.AgentAttachHello
-	(*AgentAttachFrame)(nil),  // 1: daft.agent.v1.AgentAttachFrame
-	(*AgentAttachResize)(nil), // 2: daft.agent.v1.AgentAttachResize
-	(*AgentAttachExit)(nil),   // 3: daft.agent.v1.AgentAttachExit
+	(*AgentAttachHello)(nil),  // 0: vmjail.agent.v1.AgentAttachHello
+	(*AgentAttachFrame)(nil),  // 1: vmjail.agent.v1.AgentAttachFrame
+	(*AgentAttachResize)(nil), // 2: vmjail.agent.v1.AgentAttachResize
+	(*AgentAttachExit)(nil),   // 3: vmjail.agent.v1.AgentAttachExit
 }
 var file_agent_v1_attach_proto_depIdxs = []int32{
-	2, // 0: daft.agent.v1.AgentAttachFrame.resize:type_name -> daft.agent.v1.AgentAttachResize
-	3, // 1: daft.agent.v1.AgentAttachFrame.exit:type_name -> daft.agent.v1.AgentAttachExit
+	2, // 0: vmjail.agent.v1.AgentAttachFrame.resize:type_name -> vmjail.agent.v1.AgentAttachResize
+	3, // 1: vmjail.agent.v1.AgentAttachFrame.exit:type_name -> vmjail.agent.v1.AgentAttachExit
 	2, // [2:2] is the sub-list for method output_type
 	2, // [2:2] is the sub-list for method input_type
 	2, // [2:2] is the sub-list for extension type_name

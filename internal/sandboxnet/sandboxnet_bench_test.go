@@ -7,8 +7,8 @@ import (
 	"net"
 	"testing"
 
-	"github.com/richiejp/darkaifactory/internal/sandboxnet"
-	"github.com/richiejp/darkaifactory/internal/sandboxnet/sandboxnettest"
+	"github.com/richiejp/vmjail/internal/sandboxnet"
+	"github.com/richiejp/vmjail/internal/sandboxnet/sandboxnettest"
 )
 
 // BenchmarkAcceptARPRoundTrip measures the gvisor-tap-vsock
@@ -58,7 +58,7 @@ func BenchmarkAcceptARPRoundTrip(b *testing.B) {
 		defer close(drainerDone)
 		hdr := make([]byte, 2)
 		body := make([]byte, sandboxnettest.MaxFrameSize)
-		//daft:lint:disable=forloopbound reason="exits on guestSide close from b.Cleanup; pump for b.N iterations is upstream"
+		//vmjail:lint:disable=forloopbound reason="exits on guestSide close from b.Cleanup; pump for b.N iterations is upstream"
 		for {
 			if _, rerr := io.ReadFull(guestSide, hdr); rerr != nil {
 				return

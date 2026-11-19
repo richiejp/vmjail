@@ -1,4 +1,4 @@
-// Package userns lifts daft-sandboxd into its own user namespace
+// Package userns lifts vmjail-sandboxd into its own user namespace
 // at startup so it has the host capabilities needed to manage
 // bundles, share filesystems via virtiofsd, and orchestrate the
 // container's ownership without the binary itself being setuid

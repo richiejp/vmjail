@@ -1,8 +1,8 @@
-.PHONY: all check check-submodule-revs check-deploy-skill check-agent-tools check-architecture-docs verify fmt check-fmt lint lint-golangci lint-daft test cover cover-check bench bench-check fuzz hooks build build-daft-agent build-daft-hello-container build-daft-sandboxd build-artefacts build-initramfs build-hello-bundle dev integration integration-build proto gen-bpf clean help
+.PHONY: all check check-submodule-revs check-agent-tools check-architecture-docs verify fmt check-fmt lint lint-golangci lint-vmjail test cover cover-check bench bench-check fuzz hooks build build-vmjail-agent build-vmjail-hello-container build-vmjail-sandboxd build-artefacts build-initramfs build-hello-bundle dev integration integration-build proto gen-bpf clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
-LDFLAGS := -X github.com/richiejp/darkaifactory/internal/version.Version=$(VERSION)
+LDFLAGS := -X github.com/richiejp/vmjail/internal/version.Version=$(VERSION)
 
 # Our own Go code lives under cmd/ and internal/. third_party/ holds
 # vendored upstream sources (Linux kernel, Cloud Hypervisor, u-root) that
@@ -26,7 +26,7 @@ all: build check
 # check is the fast pre-flight: fmt, lint, unit tests, coverage gate.
 # Reproducer corpora under testdata/fuzz/ are replayed automatically
 # by `go test`, so any committed crash surfaces here too.
-check: check-fmt check-submodule-revs check-deploy-skill check-agent-tools check-architecture-docs lint test cover-check
+check: check-fmt check-submodule-revs check-agent-tools check-architecture-docs lint test cover-check
 
 # Keep third_party/submodule-revs.json in sync with `git submodule
 # status` + .gitmodules. The flake reads that file via
@@ -34,11 +34,6 @@ check: check-fmt check-submodule-revs check-deploy-skill check-agent-tools check
 # or URL. Fails the gate and regenerates the file on mismatch.
 check-submodule-revs:
 	@scripts/check-submodule-revs.sh
-
-# The deployment skill is executable product surface even though it is not Go.
-# Keep its POSIX-shell install/upgrade/rollback contract in the fast gate.
-check-deploy-skill:
-	@.agents/skills/deploy-daft-node/scripts/test-scripts.sh
 
 # Agent-facing helpers are part of the development surface. Keep their shell
 # syntax valid without requiring gopls to be installed in release builders.
@@ -86,7 +81,7 @@ help:
 	@echo "  proto       - regenerate Go code from proto/*.proto"
 	@echo "  gen-bpf     - regenerate Tier-2 eBPF gadget loaders (bpf2go)"
 	@echo "  hooks       - install git pre-commit (make verify) + pre-push (nix flake check) hooks into .git/hooks"
-	@echo "  build       - build daft, daft-agent, daft-sandboxd, daft-orchestrator into ./bin/ (dev only)"
+	@echo "  build       - build vmjail, vmjail-agent, vmjail-sandboxd, vmjail-orchestrator into ./bin/ (dev only)"
 	@echo "  dev         - build everything in the dev shell: Go binaries + VM toolchain (kernel/CH/virtiofsd/crun/u-root) + initramfs + bundle"
 
 ## Formatting ----------------------------------------------------------------
@@ -106,24 +101,24 @@ check-fmt:
 ## Linting -------------------------------------------------------------------
 #
 # Two-stage: upstream golangci-lint first (broad coverage, well-known
-# rules), then our own daft-lint binary (custom analyzers under
-# internal/lint/analyzers/, bundled by cmd/daft-lint). The order is
+# rules), then our own vmjail-lint binary (custom analyzers under
+# internal/lint/analyzers/, bundled by cmd/vmjail-lint). The order is
 # load-bearing — golangci-lint's diagnostics overlap with parts of
 # what our custom analyzers check, so running it first surfaces the
 # generic-named issues with the more recognisable tool. See
 # CONTRIBUTING.md "Power of 10 (Go)" for the per-analyzer policy.
 
-lint: lint-golangci lint-daft
+lint: lint-golangci lint-vmjail
 
 lint-golangci:
 	golangci-lint run $(OUR_GO_PKGS)
 
-# daft-lint is `go run`-invoked rather than pre-built; the cost is
+# vmjail-lint is `go run`-invoked rather than pre-built; the cost is
 # trivial (under a second) and the alternative would require a
 # build-then-run dance that desyncs from go.mod whenever the
 # analyzer package changes.
-lint-daft:
-	@go run ./cmd/daft-lint $(OUR_GO_PKGS)
+lint-vmjail:
+	@go run ./cmd/vmjail-lint $(OUR_GO_PKGS)
 
 ## Testing ------------------------------------------------------------------
 
@@ -165,7 +160,7 @@ cover-check:
 # `make bench` updates the baseline; `make bench-check` runs the
 # benchmarks and compares them to the baseline (>2x fails, >1.1x warns).
 # The integration boot benchmark (BenchmarkHelloBoot) is gated on the
-# DAFT_* artifact env vars and /dev/kvm; without them it self-skips and
+# VMJAIL_* artifact env vars and /dev/kvm; without them it self-skips and
 # we just compare whichever benches did run.
 
 BENCH_BASELINE := bench.txt
@@ -202,7 +197,7 @@ fuzz:
 # OCI bundle artefacts.
 #
 # Slow-moving artefacts (cloud-hypervisor, kernel, virtiofsd, crun,
-# u-root) come from the Nix dev shell via DAFT_* env vars — pinned
+# u-root) come from the Nix dev shell via VMJAIL_* env vars — pinned
 # in flake.nix, only realised when their sources change. Per-commit
 # artefacts (the initramfs and the hello-bundle, both of which embed
 # our own Go binaries) assemble locally under bin/ via `go build` +
@@ -242,10 +237,10 @@ build-artefacts:
 	@nix build .#u-root-src       -o $(NIX_UROOT_SRC_OUT)
 
 # build-initramfs assembles the sandbox-VM initramfs locally with
-# u-root, using daft-agent + crun. Mirrors the layout produced by the
-# flake's `initramfs` derivation (which the `daft-sandboxd` build still
+# u-root, using vmjail-agent + crun. Mirrors the layout produced by the
+# flake's `initramfs` derivation (which the `vmjail-sandboxd` build still
 # uses). u-root, its source, and crun come from build-artefacts.
-build-initramfs: build-daft-agent build-artefacts
+build-initramfs: build-vmjail-agent build-artefacts
 	@echo "[initramfs] assembling $(INITRAMFS_OUT)"
 	@rm -rf $(BIN_DIR)/initramfs-work && mkdir -p $(BIN_DIR)/initramfs-work
 	@cp -r --no-preserve=mode $(CURDIR)/$(NIX_UROOT_SRC_OUT)/. $(BIN_DIR)/initramfs-work/
@@ -257,9 +252,9 @@ build-initramfs: build-daft-agent build-artefacts
 		-o ../initramfs.cpio \
 		-defaultsh="" \
 		-base=/dev/null \
-		-files "$(CURDIR)/$(BIN_DIR)/daft-agent:bin/daft-agent" \
+		-files "$(CURDIR)/$(BIN_DIR)/vmjail-agent:bin/vmjail-agent" \
 		-files "$(CURDIR)/$(NIX_CRUN_OUT)/bin/crun:bin/crun" \
-		-uinitcmd=/bin/daft-agent \
+		-uinitcmd=/bin/vmjail-agent \
 		./cmds/core/init
 	@gzip -f -n $(BIN_DIR)/initramfs.cpio
 	@rm -rf $(BIN_DIR)/initramfs-work
@@ -267,11 +262,11 @@ build-initramfs: build-daft-agent build-artefacts
 # build-hello-bundle assembles the OCI bundle the integration test
 # feeds to crun. Mirrors the flake's `hello-bundle` derivation
 # layout — one binary in rootfs/ plus the checked-in config.json.
-build-hello-bundle: build-daft-hello-container
+build-hello-bundle: build-vmjail-hello-container
 	@echo "[hello-bundle] assembling $(BUNDLE_OUT)"
 	@rm -rf $(BUNDLE_OUT)
 	@mkdir -p $(BUNDLE_OUT)/rootfs
-	@cp $(BIN_DIR)/daft-hello-container $(BUNDLE_OUT)/rootfs/hello
+	@cp $(BIN_DIR)/vmjail-hello-container $(BUNDLE_OUT)/rootfs/hello
 	@chmod +x $(BUNDLE_OUT)/rootfs/hello
 	@cp contrib/hello-bundle/config.json $(BUNDLE_OUT)/config.json
 
@@ -285,7 +280,7 @@ integration-build: dev
 # second invocation fail fast with a clear message naming the
 # holder instead. See CONTRIBUTING.md "Concurrent integration runs
 # are gated".
-INTEGRATION_LOCK := $(CURDIR)/.git/daft-integration.lock
+INTEGRATION_LOCK := $(CURDIR)/.git/vmjail-integration.lock
 
 integration: integration-build
 	@command -v flock >/dev/null || { echo "flock(1) not on PATH — install util-linux"; exit 1; }
@@ -305,15 +300,15 @@ integration: integration-build
 		else \
 			echo "[e2e] cgroup delegation off — no --user scope: the sandbox in-process host needs one, so e2e will fail (enable-linger / run under a Delegate=yes unit)"; \
 		fi; \
-		export DAFT_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT); \
-			export DAFT_BUNDLE=$(CURDIR)/$(BUNDLE_OUT); \
-			export DAFT_KERNEL=$(CURDIR)/$(NIX_KERNEL_OUT)/bzImage; \
-			export DAFT_CLOUD_HYPERVISOR=$(CURDIR)/$(NIX_CHV_OUT)/bin/cloud-hypervisor; \
-			export DAFT_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd; \
+		export VMJAIL_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT); \
+			export VMJAIL_BUNDLE=$(CURDIR)/$(BUNDLE_OUT); \
+			export VMJAIL_KERNEL=$(CURDIR)/$(NIX_KERNEL_OUT)/bzImage; \
+			export VMJAIL_CLOUD_HYPERVISOR=$(CURDIR)/$(NIX_CHV_OUT)/bin/cloud-hypervisor; \
+			export VMJAIL_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd; \
 			runflag=""; [ -n "$$INTEGRATION_RUN" ] && runflag="-run $$INTEGRATION_RUN"; \
 			rc=0; \
 			echo "[e2e] sandbox + sealed assets — in-process host shares the delegated scope: per-VM accounting, limits off"; \
-			sandbox_log=$$(mktemp /tmp/daft-integration-sandbox.XXXXXX.log); \
+			sandbox_log=$$(mktemp /tmp/vmjail-integration-sandbox.XXXXXX.log); \
 			if $$delegate go test -v -tags=integration -count=1 -timeout 20m $$runflag -p 1 ./internal/sandbox/ ./internal/bundled/ 9>&- >$$sandbox_log 2>&1; then \
 				tail -2 $$sandbox_log; rm -f $$sandbox_log; \
 			else \
@@ -339,17 +334,17 @@ hooks:
 # build: produce all shipped binaries, statically linked (CGO=0).
 # Output lands under bin/ — never the repo root — so there's no
 # confusion between a dev `make build` and a release artefact:
-#   - daft:           host-side client CLI
-#   - daft-agent:     in-VM PID-1 agent
-#   - daft-sandboxd:  sandbox-host single executable. Note: a `make
-#     build` produces a daft-sandboxd with STUB embedded artifacts —
+#   - vmjail:           host-side client CLI
+#   - vmjail-agent:     in-VM PID-1 agent
+#   - vmjail-sandboxd:  sandbox-host single executable. Note: a `make
+#     build` produces a vmjail-sandboxd with STUB embedded artifacts —
 #     the real cloud-hypervisor / kernel / initramfs are pulled in
-#     only by the Nix build (`nix build .#daft-sandboxd`). Use Nix
+#     only by the Nix build (`nix build .#vmjail-sandboxd`). Use Nix
 #     for any release artefact.
 
-build: build-daft-agent build-daft-sandboxd
+build: build-vmjail-agent build-vmjail-sandboxd
 
-# dev builds every artefact daft produces, entirely within the Nix
+# dev builds every artefact vmjail produces, entirely within the Nix
 # dev shell: the host-side Go binaries (build), the sandbox-VM
 # toolchain (build-artefacts: kernel, cloud-hypervisor, virtiofsd,
 # crun, u-root), and the assembled VM initramfs + hello-bundle. The
@@ -357,27 +352,27 @@ build: build-daft-agent build-daft-sandboxd
 # sandbox — which carries the same dev shell — so `nix develop` then
 # `make dev` builds the lot.
 #
-# Note: `build` produces a daft-sandboxd with STUB embedded artefacts
+# Note: `build` produces a vmjail-sandboxd with STUB embedded artefacts
 # (see the `build` target). For a runnable, asset-embedded sandboxd,
-# use `nix build .#daft-sandboxd` (what `make integration-build` does).
+# use `nix build .#vmjail-sandboxd` (what `make integration-build` does).
 dev: build build-artefacts build-initramfs build-hello-bundle
 	@echo "[dev] full build complete — artefacts under $(BIN_DIR)/"
 
-build-daft-agent:
+build-vmjail-agent:
 	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-agent ./cmd/daft-agent
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/vmjail-agent ./cmd/vmjail-agent
 
-# daft-hello-container is the workload binary that runs *inside the
+# vmjail-hello-container is the workload binary that runs *inside the
 # container*. The integration test's hello-bundle rootfs/hello is a
 # copy of this. Statically linked: it runs against the VM's minimal
 # initramfs, no host libc.
-build-daft-hello-container:
+build-vmjail-hello-container:
 	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-hello-container ./cmd/daft-hello-container
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/vmjail-hello-container ./cmd/vmjail-hello-container
 
-build-daft-sandboxd:
+build-vmjail-sandboxd:
 	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/daft-sandboxd ./cmd/daft-sandboxd
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/vmjail-sandboxd ./cmd/vmjail-sandboxd
 
 ## Codegen -------------------------------------------------------------------
 
@@ -415,7 +410,7 @@ clean:
 	rm -rf $(BIN_DIR) $(COVER_OUT_PREFIX) $(COVER_OUT_PREFIX).*
 	@# Legacy: earlier builds put binaries at the repo root. Clean
 	@# those too in case someone is upgrading from an older Makefile.
-	rm -f daft daft-agent daft-sandboxd
+	rm -f vmjail vmjail-agent vmjail-sandboxd
 	@# Legacy: pre-2026-05-13 `make integration-build` planted
 	@# result-* symlinks at the repo root. We no longer create them
 	@# (the dev shell pins the same store paths), but keep the rm so

@@ -1,6 +1,6 @@
 // Package opensnoop is the first Tier-2 CO-RE eBPF gadget (see
 // OBSERVABILITY.md "Tier 2"). It runs inside the guest, attached by
-// daft-agent, and reports every openat(2) the workload makes — the
+// vmjail-agent, and reports every openat(2) the workload makes — the
 // diagnostic that would have turned a silent lint cache miss (an
 // openat returning ENOENT on a path the test cared about) into one
 // guest-side log line.

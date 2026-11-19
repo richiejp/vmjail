@@ -12,9 +12,9 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
-	agentv1 "github.com/richiejp/darkaifactory/internal/genpb/agent/v1"
-	"github.com/richiejp/darkaifactory/internal/oops"
-	"github.com/richiejp/darkaifactory/internal/trace"
+	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
+	"github.com/richiejp/vmjail/internal/oops"
+	"github.com/richiejp/vmjail/internal/trace"
 )
 
 // DefaultJobVsockPort is dedicated to non-PTY detached command sessions.
@@ -86,7 +86,7 @@ func runJobListener(ctx context.Context, w io.Writer, port uint32, d jobDeps, pr
 		<-ctx.Done()
 		oops.Skip("agent: close job listener", ln.Close(), net.ErrClosed)
 	}()
-	//daft:lint:disable=forloopbound reason="bounded by listener Close on ctx cancellation or an Accept error"
+	//vmjail:lint:disable=forloopbound reason="bounded by listener Close on ctx cancellation or an Accept error"
 	for {
 		conn, acceptErr := ln.Accept()
 		if acceptErr != nil {
@@ -158,7 +158,7 @@ func handleJob(ctx context.Context, w io.Writer, conn net.Conn, executor ExecJob
 func pumpJobOutput(src io.Reader, stdout bool, conn net.Conn, writeMu *sync.Mutex, process JobProcess, done *sync.WaitGroup) {
 	defer done.Done()
 	buf := make([]byte, jobCopyBufSize)
-	//daft:lint:disable=forloopbound reason="bounded by process pipe EOF or cancellation closing the pipe"
+	//vmjail:lint:disable=forloopbound reason="bounded by process pipe EOF or cancellation closing the pipe"
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
