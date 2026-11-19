@@ -118,10 +118,7 @@ func Skip(label string, err error, expected ...error) {
 //
 // Used at every pump-loop exit to distinguish "the other side
 // hung up" (return nil) from "something actually broke" (return
-// err). Centralised here so the four bidi pumps in the codebase
-// (sandboxgateway.Bridger, orchestrator port + attach pumps,
-// nodectrlclient port + attach pumps, cli forward pump) share
-// one allowlist.
+// err). Centralised here so stream pumps share one allowlist.
 func IsExpectedPumpExit(err error) bool {
 	return errors.Is(err, io.EOF) ||
 		errors.Is(err, net.ErrClosed) ||

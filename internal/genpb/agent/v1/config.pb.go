@@ -192,11 +192,8 @@ type GuestConfig struct {
 	// misleading boot-complete state and remaining reachable without a target
 	// for attach/job requests.
 	ContainerPersistent bool `protobuf:"varint,11,opt,name=container_persistent,json=containerPersistent,proto3" json:"container_persistent,omitempty"`
-	// Retained writable workspace block device. The host removes these targets
-	// from virtiofs only when this block device is attached.
-	WorkspaceDisk *GuestConfig_WorkspaceDisk `protobuf:"bytes,10,opt,name=workspace_disk,json=workspaceDisk,proto3" json:"workspace_disk,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *GuestConfig) Reset() {
@@ -297,13 +294,6 @@ func (x *GuestConfig) GetContainerPersistent() bool {
 		return x.ContainerPersistent
 	}
 	return false
-}
-
-func (x *GuestConfig) GetWorkspaceDisk() *GuestConfig_WorkspaceDisk {
-	if x != nil {
-		return x.WorkspaceDisk
-	}
-	return nil
 }
 
 // AgentEvent is a status milestone the agent streams to the host over
@@ -486,58 +476,6 @@ func (x *GuestConfig_PortForward) GetContainerPort() uint32 {
 	return 0
 }
 
-type GuestConfig_WorkspaceDisk struct {
-	state         protoimpl.MessageState             `protogen:"open.v1"`
-	Device        string                             `protobuf:"bytes,1,opt,name=device,proto3" json:"device,omitempty"`
-	Mounts        []*GuestConfig_WorkspaceDisk_Mount `protobuf:"bytes,2,rep,name=mounts,proto3" json:"mounts,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GuestConfig_WorkspaceDisk) Reset() {
-	*x = GuestConfig_WorkspaceDisk{}
-	mi := &file_agent_v1_config_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GuestConfig_WorkspaceDisk) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GuestConfig_WorkspaceDisk) ProtoMessage() {}
-
-func (x *GuestConfig_WorkspaceDisk) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_config_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GuestConfig_WorkspaceDisk.ProtoReflect.Descriptor instead.
-func (*GuestConfig_WorkspaceDisk) Descriptor() ([]byte, []int) {
-	return file_agent_v1_config_proto_rawDescGZIP(), []int{1, 2}
-}
-
-func (x *GuestConfig_WorkspaceDisk) GetDevice() string {
-	if x != nil {
-		return x.Device
-	}
-	return ""
-}
-
-func (x *GuestConfig_WorkspaceDisk) GetMounts() []*GuestConfig_WorkspaceDisk_Mount {
-	if x != nil {
-		return x.Mounts
-	}
-	return nil
-}
-
 // PostStartCommand is one resolved lifecycle command: a full argv the
 // agent crun-execs in the running container.
 type GuestConfig_PostStartCommand struct {
@@ -549,7 +487,7 @@ type GuestConfig_PostStartCommand struct {
 
 func (x *GuestConfig_PostStartCommand) Reset() {
 	*x = GuestConfig_PostStartCommand{}
-	mi := &file_agent_v1_config_proto_msgTypes[6]
+	mi := &file_agent_v1_config_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -561,7 +499,7 @@ func (x *GuestConfig_PostStartCommand) String() string {
 func (*GuestConfig_PostStartCommand) ProtoMessage() {}
 
 func (x *GuestConfig_PostStartCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_config_proto_msgTypes[6]
+	mi := &file_agent_v1_config_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -574,7 +512,7 @@ func (x *GuestConfig_PostStartCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuestConfig_PostStartCommand.ProtoReflect.Descriptor instead.
 func (*GuestConfig_PostStartCommand) Descriptor() ([]byte, []int) {
-	return file_agent_v1_config_proto_rawDescGZIP(), []int{1, 3}
+	return file_agent_v1_config_proto_rawDescGZIP(), []int{1, 2}
 }
 
 func (x *GuestConfig_PostStartCommand) GetArgv() []string {
@@ -602,7 +540,7 @@ type GuestConfig_Observe struct {
 
 func (x *GuestConfig_Observe) Reset() {
 	*x = GuestConfig_Observe{}
-	mi := &file_agent_v1_config_proto_msgTypes[7]
+	mi := &file_agent_v1_config_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -614,7 +552,7 @@ func (x *GuestConfig_Observe) String() string {
 func (*GuestConfig_Observe) ProtoMessage() {}
 
 func (x *GuestConfig_Observe) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_config_proto_msgTypes[7]
+	mi := &file_agent_v1_config_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -627,7 +565,7 @@ func (x *GuestConfig_Observe) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GuestConfig_Observe.ProtoReflect.Descriptor instead.
 func (*GuestConfig_Observe) Descriptor() ([]byte, []int) {
-	return file_agent_v1_config_proto_rawDescGZIP(), []int{1, 4}
+	return file_agent_v1_config_proto_rawDescGZIP(), []int{1, 3}
 }
 
 func (x *GuestConfig_Observe) GetOpensnoop() string {
@@ -672,73 +610,13 @@ func (x *GuestConfig_Observe) GetSummary() string {
 	return ""
 }
 
-type GuestConfig_WorkspaceDisk_Mount struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Target        string                 `protobuf:"bytes,1,opt,name=target,proto3" json:"target,omitempty"`
-	Directory     string                 `protobuf:"bytes,2,opt,name=directory,proto3" json:"directory,omitempty"`
-	SeedPort      uint32                 `protobuf:"varint,4,opt,name=seed_port,json=seedPort,proto3" json:"seed_port,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *GuestConfig_WorkspaceDisk_Mount) Reset() {
-	*x = GuestConfig_WorkspaceDisk_Mount{}
-	mi := &file_agent_v1_config_proto_msgTypes[8]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *GuestConfig_WorkspaceDisk_Mount) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*GuestConfig_WorkspaceDisk_Mount) ProtoMessage() {}
-
-func (x *GuestConfig_WorkspaceDisk_Mount) ProtoReflect() protoreflect.Message {
-	mi := &file_agent_v1_config_proto_msgTypes[8]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use GuestConfig_WorkspaceDisk_Mount.ProtoReflect.Descriptor instead.
-func (*GuestConfig_WorkspaceDisk_Mount) Descriptor() ([]byte, []int) {
-	return file_agent_v1_config_proto_rawDescGZIP(), []int{1, 2, 0}
-}
-
-func (x *GuestConfig_WorkspaceDisk_Mount) GetTarget() string {
-	if x != nil {
-		return x.Target
-	}
-	return ""
-}
-
-func (x *GuestConfig_WorkspaceDisk_Mount) GetDirectory() string {
-	if x != nil {
-		return x.Directory
-	}
-	return ""
-}
-
-func (x *GuestConfig_WorkspaceDisk_Mount) GetSeedPort() uint32 {
-	if x != nil {
-		return x.SeedPort
-	}
-	return 0
-}
-
 var File_agent_v1_config_proto protoreflect.FileDescriptor
 
 const file_agent_v1_config_proto_rawDesc = "" +
 	"\n" +
 	"\x15agent/v1/config.proto\x12\rdaft.agent.v1\"9\n" +
 	"\x12GuestConfigRequest\x12#\n" +
-	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xe4\t\n" +
+	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xd5\a\n" +
 	"\vGuestConfig\x12\x16\n" +
 	"\x06bundle\x18\x01 \x01(\tR\x06bundle\x128\n" +
 	"\x06shares\x18\x02 \x03(\v2 .daft.agent.v1.GuestConfig.ShareR\x06shares\x12K\n" +
@@ -750,9 +628,7 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\rtrace_enabled\x18\a \x01(\bR\ftraceEnabled\x12[\n" +
 	"\x13post_start_commands\x18\b \x03(\v2+.daft.agent.v1.GuestConfig.PostStartCommandR\x11postStartCommands\x12/\n" +
 	"\x13credential_provider\x18\t \x01(\tR\x12credentialProvider\x121\n" +
-	"\x14container_persistent\x18\v \x01(\bR\x13containerPersistent\x12O\n" +
-	"\x0eworkspace_disk\x18\n" +
-	" \x01(\v2(.daft.agent.v1.GuestConfig.WorkspaceDiskR\rworkspaceDisk\x1ap\n" +
+	"\x14container_persistent\x18\v \x01(\bR\x13containerPersistent\x1ap\n" +
 	"\x05Share\x12\x10\n" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x1e\n" +
 	"\n" +
@@ -763,14 +639,7 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\vPortForward\x12\x1d\n" +
 	"\n" +
 	"vsock_port\x18\x01 \x01(\rR\tvsockPort\x12%\n" +
-	"\x0econtainer_port\x18\x02 \x01(\rR\rcontainerPort\x1a\xd1\x01\n" +
-	"\rWorkspaceDisk\x12\x16\n" +
-	"\x06device\x18\x01 \x01(\tR\x06device\x12F\n" +
-	"\x06mounts\x18\x02 \x03(\v2..daft.agent.v1.GuestConfig.WorkspaceDisk.MountR\x06mounts\x1a`\n" +
-	"\x05Mount\x12\x16\n" +
-	"\x06target\x18\x01 \x01(\tR\x06target\x12\x1c\n" +
-	"\tdirectory\x18\x02 \x01(\tR\tdirectory\x12\x1b\n" +
-	"\tseed_port\x18\x04 \x01(\rR\bseedPortJ\x04\b\x03\x10\x04\x1a&\n" +
+	"\x0econtainer_port\x18\x02 \x01(\rR\rcontainerPort\x1a&\n" +
 	"\x10PostStartCommand\x12\x12\n" +
 	"\x04argv\x18\x01 \x03(\tR\x04argv\x1a\xb5\x01\n" +
 	"\aObserve\x12\x1c\n" +
@@ -781,7 +650,8 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"sleepsnoop\x12\x18\n" +
 	"\aiosnoop\x18\x04 \x01(\tR\aiosnoop\x12\x1a\n" +
 	"\bsyscalls\x18\x05 \x01(\tR\bsyscalls\x12\x18\n" +
-	"\asummary\x18\x06 \x01(\tR\asummary\"q\n" +
+	"\asummary\x18\x06 \x01(\tR\asummaryJ\x04\b\n" +
+	"\x10\vR\x0eworkspace_disk\"q\n" +
 	"\n" +
 	"AgentEvent\x122\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x1e.daft.agent.v1.AgentEvent.KindR\x04kind\"/\n" +
@@ -802,32 +672,28 @@ func file_agent_v1_config_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_v1_config_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_agent_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_agent_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
 var file_agent_v1_config_proto_goTypes = []any{
-	(AgentEvent_Kind)(0),                    // 0: daft.agent.v1.AgentEvent.Kind
-	(*GuestConfigRequest)(nil),              // 1: daft.agent.v1.GuestConfigRequest
-	(*GuestConfig)(nil),                     // 2: daft.agent.v1.GuestConfig
-	(*AgentEvent)(nil),                      // 3: daft.agent.v1.AgentEvent
-	(*GuestConfig_Share)(nil),               // 4: daft.agent.v1.GuestConfig.Share
-	(*GuestConfig_PortForward)(nil),         // 5: daft.agent.v1.GuestConfig.PortForward
-	(*GuestConfig_WorkspaceDisk)(nil),       // 6: daft.agent.v1.GuestConfig.WorkspaceDisk
-	(*GuestConfig_PostStartCommand)(nil),    // 7: daft.agent.v1.GuestConfig.PostStartCommand
-	(*GuestConfig_Observe)(nil),             // 8: daft.agent.v1.GuestConfig.Observe
-	(*GuestConfig_WorkspaceDisk_Mount)(nil), // 9: daft.agent.v1.GuestConfig.WorkspaceDisk.Mount
+	(AgentEvent_Kind)(0),                 // 0: daft.agent.v1.AgentEvent.Kind
+	(*GuestConfigRequest)(nil),           // 1: daft.agent.v1.GuestConfigRequest
+	(*GuestConfig)(nil),                  // 2: daft.agent.v1.GuestConfig
+	(*AgentEvent)(nil),                   // 3: daft.agent.v1.AgentEvent
+	(*GuestConfig_Share)(nil),            // 4: daft.agent.v1.GuestConfig.Share
+	(*GuestConfig_PortForward)(nil),      // 5: daft.agent.v1.GuestConfig.PortForward
+	(*GuestConfig_PostStartCommand)(nil), // 6: daft.agent.v1.GuestConfig.PostStartCommand
+	(*GuestConfig_Observe)(nil),          // 7: daft.agent.v1.GuestConfig.Observe
 }
 var file_agent_v1_config_proto_depIdxs = []int32{
 	4, // 0: daft.agent.v1.GuestConfig.shares:type_name -> daft.agent.v1.GuestConfig.Share
 	5, // 1: daft.agent.v1.GuestConfig.port_forwards:type_name -> daft.agent.v1.GuestConfig.PortForward
-	8, // 2: daft.agent.v1.GuestConfig.observe:type_name -> daft.agent.v1.GuestConfig.Observe
-	7, // 3: daft.agent.v1.GuestConfig.post_start_commands:type_name -> daft.agent.v1.GuestConfig.PostStartCommand
-	6, // 4: daft.agent.v1.GuestConfig.workspace_disk:type_name -> daft.agent.v1.GuestConfig.WorkspaceDisk
-	0, // 5: daft.agent.v1.AgentEvent.kind:type_name -> daft.agent.v1.AgentEvent.Kind
-	9, // 6: daft.agent.v1.GuestConfig.WorkspaceDisk.mounts:type_name -> daft.agent.v1.GuestConfig.WorkspaceDisk.Mount
-	7, // [7:7] is the sub-list for method output_type
-	7, // [7:7] is the sub-list for method input_type
-	7, // [7:7] is the sub-list for extension type_name
-	7, // [7:7] is the sub-list for extension extendee
-	0, // [0:7] is the sub-list for field type_name
+	7, // 2: daft.agent.v1.GuestConfig.observe:type_name -> daft.agent.v1.GuestConfig.Observe
+	6, // 3: daft.agent.v1.GuestConfig.post_start_commands:type_name -> daft.agent.v1.GuestConfig.PostStartCommand
+	0, // 4: daft.agent.v1.AgentEvent.kind:type_name -> daft.agent.v1.AgentEvent.Kind
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_agent_v1_config_proto_init() }
@@ -841,7 +707,7 @@ func file_agent_v1_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_v1_config_proto_rawDesc), len(file_agent_v1_config_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   7,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

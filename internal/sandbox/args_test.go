@@ -12,8 +12,6 @@ import (
 const testTagWorkspace = "workspace"
 
 const (
-	testDiskPath        = "/var/lib/daft/workspace.qcow2"
-	testDiskID          = "wsdisk"
 	testAPISocket       = "/run/daft/vm.sock"
 	testErrMustAbsolute = "must be absolute"
 	testWorkspaceMount  = "/workspace"
@@ -30,51 +28,6 @@ func TestBuildCloudHypervisorArgsNoShares(t *testing.T) {
 	}
 	if !slices.Contains(args, "--kernel") {
 		t.Errorf("missing --kernel: %v", args)
-	}
-}
-
-func TestBuildCloudHypervisorArgsWorkspaceDisk(t *testing.T) {
-	cfg := validCfg().withDefaults()
-	cfg.APISocket = testAPISocket
-	cfg.WorkspaceDisk = &DiskConfig{Path: testDiskPath, ID: testDiskID}
-	args := buildCloudHypervisorArgs(cfg, nil)
-	want := map[string]string{
-		"--disk":       "path=/var/lib/daft/workspace.qcow2,id=wsdisk,image_type=qcow2",
-		"--api-socket": "path=/run/daft/vm.sock",
-	}
-	for flag, value := range want {
-		at := slices.Index(args, flag)
-		if at < 0 {
-			t.Errorf("args missing %q: %v", flag, args)
-			continue
-		}
-		if at+1 >= len(args) || args[at+1] != value {
-			t.Errorf("args missing %q %q: %v", flag, value, args)
-		}
-	}
-}
-
-func TestConfigValidatesWorkspaceDisk(t *testing.T) {
-	tests := []struct {
-		name string
-		cfg  Config
-		want string
-	}{
-		{name: "missing api socket", cfg: Config{WorkspaceDisk: &DiskConfig{Path: testDiskPath, ID: testDiskID}}, want: "APISocket is required"},
-		{name: "relative api socket", cfg: Config{APISocket: "api.sock"}, want: testErrMustAbsolute},
-		{name: "relative disk", cfg: Config{APISocket: testAPISocket, WorkspaceDisk: &DiskConfig{Path: "disk", ID: testDiskID}}, want: testErrMustAbsolute},
-		{name: "missing disk id", cfg: Config{APISocket: testAPISocket, WorkspaceDisk: &DiskConfig{Path: testDiskPath}}, want: "ID is required"},
-		{name: "unsafe disk id", cfg: Config{APISocket: testAPISocket, WorkspaceDisk: &DiskConfig{Path: testDiskPath, ID: "bad,id"}}, want: "reserved character"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := validCfg().withDefaults()
-			cfg.APISocket = tc.cfg.APISocket
-			cfg.WorkspaceDisk = tc.cfg.WorkspaceDisk
-			if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("validate error = %v, want substring %q", err, tc.want)
-			}
-		})
 	}
 }
 
@@ -133,5 +86,19 @@ func TestBuildCloudHypervisorArgsSingleShare(t *testing.T) {
 	}
 	if !strings.Contains(args[idx+1], "tag=only,socket=/tmp/only.sock") {
 		t.Errorf("--fs token = %q", args[idx+1])
+	}
+}
+
+func TestAPISocket(t *testing.T) {
+	cfg := validCfg().withDefaults()
+	cfg.APISocket = testAPISocket
+	args := buildCloudHypervisorArgs(cfg, nil)
+	at := slices.Index(args, "--api-socket")
+	if at < 0 || at+1 >= len(args) || args[at+1] != "path="+testAPISocket {
+		t.Fatalf("API socket args = %v", args)
+	}
+	cfg.APISocket = "relative.sock"
+	if err := cfg.validate(); err == nil || !strings.Contains(err.Error(), testErrMustAbsolute) {
+		t.Fatalf("validate = %v, want absolute API socket path", err)
 	}
 }

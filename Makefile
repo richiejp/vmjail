@@ -227,7 +227,6 @@ NIX_VIRTIOFSD_OUT := $(BIN_DIR)/virtiofsd
 NIX_CRUN_OUT      := $(BIN_DIR)/crun
 NIX_UROOT_OUT     := $(BIN_DIR)/u-root
 NIX_UROOT_SRC_OUT := $(BIN_DIR)/u-root-src
-NIX_XFS_TOOLS_OUT := $(BIN_DIR)/guest-xfs-tools
 # build-artefacts realises the sandbox-VM toolchain from the flake into
 # bin/ (a cache hit when nothing changed). These used to be exported by
 # the dev shell at entry; building them here on demand keeps the shell
@@ -241,7 +240,6 @@ build-artefacts:
 	@nix build .#crun             -o $(NIX_CRUN_OUT)
 	@nix build .#u-root           -o $(NIX_UROOT_OUT)
 	@nix build .#u-root-src       -o $(NIX_UROOT_SRC_OUT)
-	@nix build .#guest-xfs-tools  -o $(NIX_XFS_TOOLS_OUT)
 
 # build-initramfs assembles the sandbox-VM initramfs locally with
 # u-root, using daft-agent + crun. Mirrors the layout produced by the
@@ -261,8 +259,6 @@ build-initramfs: build-daft-agent build-artefacts
 		-base=/dev/null \
 		-files "$(CURDIR)/$(BIN_DIR)/daft-agent:bin/daft-agent" \
 		-files "$(CURDIR)/$(NIX_CRUN_OUT)/bin/crun:bin/crun" \
-		-files "$(CURDIR)/$(NIX_XFS_TOOLS_OUT)/bin:bin" \
-		-files "$(CURDIR)/$(NIX_XFS_TOOLS_OUT)/lib:lib" \
 		-uinitcmd=/bin/daft-agent \
 		./cmds/core/init
 	@gzip -f -n $(BIN_DIR)/initramfs.cpio

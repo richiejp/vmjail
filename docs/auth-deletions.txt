@@ -1,0 +1,15 @@
+internal/identity/fingerprint.go
+internal/identity/fingerprint_test.go
+internal/identity/helpers_test.go
+internal/identity/identity.go
+internal/identity/identity_test.go
+internal/identity/peers.go
+internal/identity/peers_test.go
+internal/identity/relations.go
+internal/identity/relations_test.go
+internal/identity/tls.go
+internal/identity/tls_test.go
+internal/sandboxdcli/auth.go
+internal/sandboxdcli/auth_test.go
+internal/sandboxdcli/identity.go
+internal/sandboxdcli/identity_test.go

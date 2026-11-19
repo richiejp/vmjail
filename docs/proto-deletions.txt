@@ -1,0 +1,6 @@
+internal/genpb/health/v1/health.pb.go
+internal/genpb/health/v1/healthv1connect/health.connect.go
+internal/genpb/nodectrl/v1/nodectrl.pb.go
+internal/genpb/nodectrl/v1/nodectrlv1connect/nodectrl.connect.go
+proto/health/v1/health.proto
+proto/nodectrl/v1/nodectrl.proto

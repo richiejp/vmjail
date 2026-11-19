@@ -4,33 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/richiejp/darkaifactory/internal/bundled"
-	"github.com/richiejp/darkaifactory/internal/identity"
 	"github.com/richiejp/darkaifactory/internal/imagestore"
 	"github.com/richiejp/darkaifactory/internal/ociregistry"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/workspacedisk"
 )
-
-const envWorkspaceDiskDefaultBytes = "DAFT_WORKSPACE_DISK_DEFAULT_BYTES"
-
-func workspaceDiskDefaultFromEnv() (uint64, error) {
-	raw := os.Getenv(envWorkspaceDiskDefaultBytes)
-	if raw == "" {
-		return workspacedisk.DefaultDiskBytes, nil
-	}
-	value, err := strconv.ParseUint(raw, 10, 64)
-	if err != nil || value == 0 {
-		return 0, fmt.Errorf("daft-sandboxd: %s must be a positive byte count", envWorkspaceDiskDefaultBytes)
-	}
-	return value, nil
-}
 
 // envBuildImageRef names the orchestrator-hosted ref of the static image
 // builder VM (buildah + dash + a CA bundle). A build-based devcontainer is
@@ -194,26 +176,6 @@ func openSandboxbootStore(hostedRT http.RoundTripper) (*imagestore.Store, error)
 		st.UseHostedRegistry(hostedRT)
 	}
 	return st, nil
-}
-
-// hostedRegistryTransport builds the mTLS transport the imagestore uses
-// to pull image refs hosted on the orchestrator's embedded registry: it
-// carries the sandbox-host client cert and redirects the dial to the
-// orchestrator's address (see internal/ociregistry). Returns nil — which
-// disables the hosted-pull path — on the (practically unreachable) errors
-// from parsing the already-validated orchestrator URL or building the
-// client TLS config; the same ClientTLSConfig is rebuilt immediately
-// after by nodectrlclient.New, which surfaces any real failure there.
-func hostedRegistryTransport(orchestratorURL string, id *identity.Identity, peers *identity.PeerStore) http.RoundTripper {
-	u, err := url.Parse(orchestratorURL)
-	if err != nil {
-		return nil
-	}
-	tlsCfg, err := identity.ClientTLSConfig(id, peers, "")
-	if err != nil {
-		return nil
-	}
-	return ociregistry.Transport(u.Host, tlsCfg)
 }
 
 // formatBytes is a small KiB/MiB/GiB renderer for the startup

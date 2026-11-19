@@ -17,14 +17,12 @@ import (
 	"time"
 
 	"github.com/richiejp/darkaifactory/internal/agent"
-	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/richiejp/darkaifactory/internal/nodectrl"
+	"github.com/richiejp/darkaifactory/internal/hostresources"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
 	"github.com/richiejp/darkaifactory/internal/sandboxboot"
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/sandboxnet"
-	"github.com/richiejp/darkaifactory/internal/workspacedisk"
 )
 
 const (
@@ -54,8 +52,8 @@ func noopRunner() Runner {
 
 // addedEvent wraps a SandboxSpec in a freshly-minted SandboxWatchEvent
 // of type ADDED for tests that exercise the executor's ADDED path.
-func addedEvent(uid string, spec *sandboxv1.SandboxSpec) *nodectrlv1.SandboxWatchEvent {
-	return &nodectrlv1.SandboxWatchEvent{
+func addedEvent(uid string, spec *sandboxv1.SandboxSpec) *SandboxWatchEvent {
+	return &SandboxWatchEvent{
 		Type: sandboxv1.EventType_EVENT_TYPE_ADDED,
 		Sandbox: &sandboxv1.Sandbox{
 			Metadata: &sandboxv1.SandboxMetadata{Uid: uid},
@@ -64,8 +62,8 @@ func addedEvent(uid string, spec *sandboxv1.SandboxSpec) *nodectrlv1.SandboxWatc
 	}
 }
 
-func deletedEvent(uid string) *nodectrlv1.SandboxWatchEvent {
-	return &nodectrlv1.SandboxWatchEvent{
+func deletedEvent(uid string) *SandboxWatchEvent {
+	return &SandboxWatchEvent{
 		Type: sandboxv1.EventType_EVENT_TYPE_DELETED,
 		Sandbox: &sandboxv1.Sandbox{
 			Metadata: &sandboxv1.SandboxMetadata{Uid: uid},
@@ -668,85 +666,6 @@ func TestHandleSandboxEventPropagatesMounts(t *testing.T) {
 	}
 }
 
-type fakeDiskPreparer struct {
-	workspace string
-	size      uint64
-	path      string
-	err       error
-	retained  bool
-}
-
-func (f *fakeDiskPreparer) Prepare(workspaceID string, virtualSize uint64) (path string, created bool, err error) {
-	f.workspace = workspaceID
-	f.size = virtualSize
-	return f.path, !f.retained, f.err
-}
-
-func TestApplyWorkspaceDiskDefaultsAndConfiguresVMM(t *testing.T) {
-	preparer := &fakeDiskPreparer{path: testControlDiskPath}
-	e := &Executor{workspaceDisks: preparer, vsockDir: testVsockDir}
-	cfg := sandbox.Config{Shares: []*sandbox.ShareConfig{
-		{Tag: "bundles", Mountpoint: "/bundles"},
-		{Tag: "rw", Mountpoint: mntWorkspace},
-		{Tag: "ro", Mountpoint: mntReference},
-	}}
-	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{
-		{Target: mntWorkspace}, {Target: mntReference, ReadOnly: true},
-	}}
-	if err := e.applyWorkspaceDisk(&cfg, testSandboxID, spec); err != nil {
-		t.Fatal(err)
-	}
-	if preparer.workspace != testWSUUID || preparer.size != workspacedisk.DefaultDiskBytes {
-		t.Errorf("Prepare = (%q, %d)", preparer.workspace, preparer.size)
-	}
-	if cfg.WorkspaceDisk == nil || cfg.WorkspaceDisk.Path != preparer.path || cfg.WorkspaceDisk.ID != workspaceDiskID {
-		t.Errorf("WorkspaceDisk = %#v", cfg.WorkspaceDisk)
-	}
-	if cfg.APISocket != filepath.Join(testVsockDir, testSandboxID+".api.sock") {
-		t.Errorf("APISocket = %q", cfg.APISocket)
-	}
-	if len(cfg.WorkspaceMounts) != 0 || len(cfg.WorkspaceSeeds) != 0 || len(cfg.Shares) != 3 {
-		t.Fatalf("retained disk must leave direct shares unchanged: %#v", cfg)
-	}
-}
-
-func TestWorkspaceDiskAllowanceUsesConfiguredDefault(t *testing.T) {
-	e := &Executor{workspaceDiskDefaultBytes: 1 << 30}
-	if got := e.workspaceDiskAllowance(&sandboxv1.SandboxSpec{}); got != 1<<30 {
-		t.Fatalf("default allowance = %d", got)
-	}
-	if got := e.workspaceDiskAllowance(&sandboxv1.SandboxSpec{DiskBytes: 2 << 30}); got != 2<<30 {
-		t.Fatalf("explicit allowance = %d", got)
-	}
-}
-
-func TestApplyWorkspaceDiskUsesExplicitSizeAndPropagatesErrors(t *testing.T) {
-	want := errors.New("disk unavailable")
-	preparer := &fakeDiskPreparer{err: want}
-	e := &Executor{workspaceDisks: preparer, vsockDir: testVsockDir}
-	err := e.applyWorkspaceDisk(&sandbox.Config{}, testSandboxID,
-		&sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, DiskBytes: 24 << 30})
-	if !errors.Is(err, want) || preparer.size != 24<<30 {
-		t.Fatalf("applyWorkspaceDisk = %v, size %d", err, preparer.size)
-	}
-	if err := e.applyWorkspaceDisk(&sandbox.Config{}, testSandboxID, &sandboxv1.SandboxSpec{}); err == nil {
-		t.Fatal("missing workspace UUID accepted")
-	}
-}
-
-func TestApplyWorkspaceDiskDoesNotSeedRetainedImage(t *testing.T) {
-	preparer := &fakeDiskPreparer{path: testControlDiskPath, retained: true}
-	e := &Executor{workspaceDisks: preparer, vsockDir: testVsockDir}
-	cfg := sandbox.Config{}
-	spec := &sandboxv1.SandboxSpec{WorkspaceUuid: testWSUUID, Mounts: []*sandboxv1.Mount{{Target: mntWorkspace}}}
-	if err := e.applyWorkspaceDisk(&cfg, testSandboxID, spec); err != nil {
-		t.Fatal(err)
-	}
-	if len(cfg.WorkspaceMounts) != 0 || len(cfg.WorkspaceSeeds) != 0 {
-		t.Fatalf("retained disk seed config = mounts %#v seeds %#v", cfg.WorkspaceMounts, cfg.WorkspaceSeeds)
-	}
-}
-
 // TestHandleSandboxEventDevcontainerOverlay pins the node-side slice-2d
 // resolve+overlay: a devcontainer-only spec (no explicit image_ref) boots
 // the image the devcontainer names, read from the materialised workspace
@@ -1298,7 +1217,7 @@ func TestHandleSandboxEventPanicsWithoutSpec(t *testing.T) {
 			t.Errorf("panic = %q, want substring 'without a Spec'", msg)
 		}
 	}()
-	_ = e.HandleSandboxEvent(t.Context(), &nodectrlv1.SandboxWatchEvent{
+	_ = e.HandleSandboxEvent(t.Context(), &SandboxWatchEvent{
 		Type:    sandboxv1.EventType_EVENT_TYPE_ADDED,
 		Sandbox: &sandboxv1.Sandbox{Metadata: &sandboxv1.SandboxMetadata{Uid: testSandboxID}},
 	})
@@ -1337,7 +1256,7 @@ func TestLiveSnapshotTracksLifecycle(t *testing.T) {
 		t.Fatalf("HandleSandboxEvent: %v", err)
 	}
 	snap := e.LiveSnapshot()
-	if len(snap) != 1 || snap[0].GetUid() != "sb-live-1" || snap[0].GetPhase() != "Exited" {
+	if len(snap) != 1 || snap[0].UID != "sb-live-1" || snap[0].Phase != "Exited" {
 		t.Fatalf("snapshot[0] = %+v, want sb-live-1 Exited", snap[0])
 	}
 	// Terminal entries drop on the next snapshot — the
@@ -1375,7 +1294,7 @@ func TestLiveSnapshotReportsPendingDuringPreparation(t *testing.T) {
 	}()
 	<-assembling
 	snap := e.LiveSnapshot()
-	if len(snap) != 1 || snap[0].GetUid() != "sb-preparing" || snap[0].GetPhase() != phasePending {
+	if len(snap) != 1 || snap[0].UID != "sb-preparing" || snap[0].Phase != phasePending {
 		t.Fatalf("snapshot = %+v, want sb-preparing Pending", snap)
 	}
 	close(release)
@@ -1394,7 +1313,7 @@ func TestLiveSnapshotReportsKilledOnRunnerError(t *testing.T) {
 	_ = e.HandleSandboxEvent(t.Context(),
 		addedEvent("sb-live-bad", &sandboxv1.SandboxSpec{}))
 	snap := e.LiveSnapshot()
-	if len(snap) != 1 || snap[0].GetPhase() != "Killed" || !strings.Contains(snap[0].GetMessage(), want.Error()) {
+	if len(snap) != 1 || snap[0].Phase != "Killed" || !strings.Contains(snap[0].Message, want.Error()) {
 		t.Fatalf("snapshot = %+v, want one Killed entry", snap)
 	}
 }
@@ -1422,7 +1341,7 @@ func TestLiveSnapshotIsSortedByUID(t *testing.T) {
 		e.markPhase(uid, "Running", 0, "")
 	}
 	snap := e.LiveSnapshot()
-	if len(snap) != 3 || snap[0].GetUid() != "sb-a" || snap[1].GetUid() != "sb-b" || snap[2].GetUid() != "sb-c" {
+	if len(snap) != 3 || snap[0].UID != "sb-a" || snap[1].UID != "sb-b" || snap[2].UID != "sb-c" {
 		t.Errorf("snapshot order = %+v, want sb-a, sb-b, sb-c", snap)
 	}
 }
@@ -1530,11 +1449,11 @@ func TestDefaultWorkspaceMemoryScalesAndClamps(t *testing.T) {
 	t.Cleanup(func() { detectHostResources = orig })
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			detectHostResources = func() (nodectrl.Resources, error) {
+			detectHostResources = func() (hostresources.Resources, error) {
 				if tc.fail {
-					return nodectrl.Resources{}, errors.New("no /proc/meminfo")
+					return hostresources.Resources{}, errors.New("no /proc/meminfo")
 				}
-				return nodectrl.Resources{MemoryBytes: tc.memGiB * gib}, nil
+				return hostresources.Resources{MemoryBytes: tc.memGiB * gib}, nil
 			}
 			if got := defaultWorkspaceMemory(); got != tc.wantMiB {
 				t.Errorf("defaultWorkspaceMemory() = %q, want %q", got, tc.wantMiB)

@@ -39,24 +39,6 @@ type fakeStore struct {
 	lock   func(string) (func(), error)
 }
 
-func TestGuestOnlyWorkspaceMountSkipsVirtiofsButKeepsOCIBind(t *testing.T) {
-	mounts := []Mount{
-		{Target: testMountTarget1, GuestOnly: true},
-		{Target: testMountTarget2, Source: testMountSource, ReadOnly: true},
-	}
-	if err := validateMounts(mounts); err != nil {
-		t.Fatal(err)
-	}
-	shares := buildShares(&imagestore.Bundle{Path: "/bundles/digest"}, mounts)
-	if len(shares) != 2 || shares[1].Mountpoint != testMountTarget2 {
-		t.Fatalf("shares = %#v", shares)
-	}
-	bundleMounts := bundleMountsFromSpec(mounts)
-	if len(bundleMounts) != 2 || bundleMounts[0].Destination != testMountTarget1 || bundleMounts[0].Source != testMountTarget1 {
-		t.Fatalf("OCI mounts = %#v", bundleMounts)
-	}
-}
-
 func (f *fakeStore) Pull(ctx context.Context, ref string) (*imagestore.Image, error) {
 	return f.pull(ctx, ref)
 }

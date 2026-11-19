@@ -117,10 +117,6 @@ func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootC
 	if cfg.Vsock == nil || cfg.Vsock.HostSocket == "" {
 		return func() {}, nil, nil
 	}
-	stopSeeds, err := startWorkspaceSeedServers(ctx, cfg)
-	if err != nil {
-		return func() {}, nil, err
-	}
 	sockPath := fmt.Sprintf("%s_%d", cfg.Vsock.HostSocket, agent.DefaultConfigVsockPort)
 	// Pre-clean a stale socket from a crashed previous run; Listen
 	// would otherwise EADDRINUSE.
@@ -128,7 +124,6 @@ func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootC
 
 	listener, err := net.Listen("unix", sockPath)
 	if err != nil {
-		stopSeeds()
 		return func() {}, nil, fmt.Errorf("sandbox: listen %s: %w", sockPath, err)
 	}
 
@@ -151,7 +146,6 @@ func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootC
 		cancel()
 		_ = listener.Close()
 		<-done
-		stopSeeds()
 		oops.Skip("remove vsock config socket on shutdown",
 			os.Remove(sockPath), fs.ErrNotExist)
 	}
@@ -164,20 +158,11 @@ func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootC
 // Tier-2 observe-gadget paths, and the trace/attach/net feature toggles.
 // This is the sole channel for per-VM settings — the kernel cmdline
 // carries no daft.* tokens at all.
-const workspaceDiskGuestDevice = "/dev/vda"
-
 func buildGuestConfig(cfg Config) *agentv1.GuestConfig {
 	gc := &agentv1.GuestConfig{
 		Bundle:              cfg.Bundle,
 		CredentialProvider:  cfg.CredentialProvider,
 		ContainerPersistent: cfg.ContainerPersistent,
-	}
-	if cfg.WorkspaceDisk != nil {
-		gc.WorkspaceDisk = &agentv1.GuestConfig_WorkspaceDisk{Device: workspaceDiskGuestDevice}
-		for _, mount := range cfg.WorkspaceMounts {
-			gc.WorkspaceDisk.Mounts = append(gc.WorkspaceDisk.Mounts,
-				&agentv1.GuestConfig_WorkspaceDisk_Mount{Target: mount.Target, Directory: mount.Directory, SeedPort: mount.SeedPort})
-		}
 	}
 	for _, s := range cfg.Shares {
 		gc.Shares = append(gc.Shares, &agentv1.GuestConfig_Share{

@@ -14,18 +14,8 @@ root=$(find "$work" -mindepth 1 -maxdepth 1 -type d -name 'darkaifactory-*' -pri
 test -n "$root"
 test "$(printf '%s\n' "$root" | wc -l)" -eq 1
 
-for binary in daft daft-orchestrator daft-sandboxd; do
-	test -x "$root/bin/$binary"
-	"$root/bin/$binary" version >/dev/null
-done
-
-test -f "$root/systemd/darkaifactory-orchestrator.service"
-test -f "$root/systemd/darkaifactory-node.service"
-test -f "$root/systemd/orchestrator.env.example"
-test -f "$root/systemd/node.env.example"
-
-"$root/bin/daft" auth show --config-dir "$work/client" >/dev/null
-"$root/bin/daft-orchestrator" auth show --config-dir "$work/orchestrator" >/dev/null
-"$root/bin/daft-sandboxd" auth show --config-dir "$work/node" >/dev/null
+test -x "$root/bin/daft-sandboxd"
+"$root/bin/daft-sandboxd" version >/dev/null
+"$root/bin/daft-sandboxd" --help >/dev/null
 
 echo "portable release smoke passed"

@@ -82,7 +82,6 @@ func Run(ctx context.Context, w io.Writer) error {
 			return cc, nil
 		},
 		share:       defaultShareDeps(),
-		workspace:   defaultWorkspaceDiskDeps(),
 		container:   defaultContainerDeps(),
 		dialVsock:   DialHostVsock,
 		portForward: defaultPortForwardDeps(),
@@ -129,7 +128,6 @@ type runDeps struct {
 	// entirely — tests that exercise the no-config path leave it unset.
 	openControl func(context.Context) (controlChannel, error)
 	share       ShareDeps
-	workspace   workspaceDiskDeps
 	container   ContainerDeps
 	// dialVsock dials the host on the given AF_VSOCK port. Returned
 	// as a net.Conn so the trace package's StreamExporter can write
@@ -197,10 +195,6 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	ctx, bootSpan := trace.Start(ctx, "agent.boot")
 	bundle := resolveBundle(w, cfg)
 	applyShares(w, d, cfg, bundle != "")
-	if err := applyWorkspaceDisk(ctx, w, d.workspace, cfg, d.dialVsock); err != nil {
-		return err
-	}
-	startWorkspaceSnapshotListener(ctx, w, cfg, d.workspace)
 	secretCleanup, err := startSecretListener(ctx, w, d)
 	if err != nil {
 		return err

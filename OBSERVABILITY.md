@@ -75,12 +75,6 @@ sources, generated Go loaders and committed `*_bpfel.o` objects. Normal builds
 consume the committed objects. `make gen-bpf` regenerates them with the BPF
 compiler toolchain; runtime gadget loading happens inside the guest.
 
-Guest operation-specific trace profiles in `internal/agent/kernel_trace_linux.go`
-remain available for retained filesystem operations such as XFS growth. They
-are separate from direct host mounts, which do not require an XFS workspace
-disk. Preserve bounded trace buffers and named event allowlists if that optional
-functionality is kept.
-
 ## Tests
 
 Retain host observer/cgroup tests, all eBPF aggregator/progress tests, guest

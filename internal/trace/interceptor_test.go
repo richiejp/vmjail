@@ -9,41 +9,37 @@ import (
 
 	"connectrpc.com/connect"
 
-	healthv1 "github.com/richiejp/darkaifactory/internal/genpb/health/v1"
-	"github.com/richiejp/darkaifactory/internal/genpb/health/v1/healthv1connect"
 	tracev1 "github.com/richiejp/darkaifactory/internal/genpb/trace/v1"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
-// pingHandler is a minimal HealthService implementation that
-// records the trace headers it sees so the interceptor tests can
-// assert on them. We don't import orchestrator's HealthHandler to
-// avoid the cycle.
+const testPingProcedure = "/test.TraceService/Ping"
+
+// pingHandler records trace headers for the interceptor tests.
 type pingHandler struct {
-	healthv1connect.UnimplementedHealthServiceHandler
 	gotTrace  string
 	gotParent string
 	failWith  error
 }
 
-func (p *pingHandler) Ping(_ context.Context, req *connect.Request[healthv1.PingRequest]) (*connect.Response[healthv1.PingResponse], error) {
+func (p *pingHandler) Ping(_ context.Context, req *connect.Request[wrapperspb.StringValue]) (*connect.Response[wrapperspb.StringValue], error) {
 	p.gotTrace = req.Header().Get(HeaderTraceID)
 	p.gotParent = req.Header().Get(HeaderParentSpanID)
 	if p.failWith != nil {
 		return nil, p.failWith
 	}
-	return connect.NewResponse(&healthv1.PingResponse{Message: req.Msg.GetMessage()}), nil
+	return connect.NewResponse(&wrapperspb.StringValue{Value: req.Msg.GetValue()}), nil
 }
 
-// startInprocessServer spins up a Health service in-process over
-// HTTP/1.1 (no mTLS overhead) for interceptor unit tests. Returns
+// startInprocessServer runs a unary test RPC over HTTP/1.1. Returns
 // the URL and the handler so tests can inspect headers it saw.
 func startInprocessServer(t *testing.T, srv *Tracer) (string, *pingHandler) {
 	t.Helper()
 	h := &pingHandler{}
 	mux := http.NewServeMux()
-	path, handler := healthv1connect.NewHealthServiceHandler(h,
+	handler := connect.NewUnaryHandler(testPingProcedure, h.Ping,
 		connect.WithInterceptors(srv.ServerInterceptor()))
-	mux.Handle(path, handler)
+	mux.Handle(testPingProcedure, handler)
 	ts := httptest.NewServer(mux)
 	t.Cleanup(ts.Close)
 	return ts.URL, h
@@ -54,10 +50,10 @@ func TestClientInterceptorInjectsHeaders(t *testing.T) {
 	url, h := startInprocessServer(t, srvTracer)
 
 	cliTracer := New("client")
-	client := healthv1connect.NewHealthServiceClient(http.DefaultClient, url,
+	client := connect.NewClient[wrapperspb.StringValue, wrapperspb.StringValue](http.DefaultClient, url+testPingProcedure,
 		connect.WithInterceptors(cliTracer.ClientInterceptor()))
-	if _, err := client.Ping(context.Background(),
-		connect.NewRequest(&healthv1.PingRequest{Message: "x"})); err != nil {
+	if _, err := client.CallUnary(context.Background(),
+		connect.NewRequest(&wrapperspb.StringValue{Value: "x"})); err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
 	if !IsValidTraceID(h.gotTrace) {
@@ -92,11 +88,11 @@ func TestServerInterceptorIgnoresMalformedHeaders(t *testing.T) {
 	// Direct call without the client interceptor: send a malformed
 	// trace header. The server should start a fresh trace rather
 	// than parent off the bogus value.
-	client := healthv1connect.NewHealthServiceClient(http.DefaultClient, url)
-	req := connect.NewRequest(&healthv1.PingRequest{Message: "x"})
+	client := connect.NewClient[wrapperspb.StringValue, wrapperspb.StringValue](http.DefaultClient, url+testPingProcedure)
+	req := connect.NewRequest(&wrapperspb.StringValue{Value: "x"})
 	req.Header().Set(HeaderTraceID, "not-hex")
 	req.Header().Set(HeaderParentSpanID, "not-hex")
-	if _, err := client.Ping(context.Background(), req); err != nil {
+	if _, err := client.CallUnary(context.Background(), req); err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
 	srvSnap := srvTracer.Snapshot()
@@ -118,10 +114,10 @@ func TestClientInterceptorRecordsErrors(t *testing.T) {
 	h.failWith = connect.NewError(connect.CodeUnavailable, errors.New("nope"))
 
 	cliTracer := New("client")
-	client := healthv1connect.NewHealthServiceClient(http.DefaultClient, url,
+	client := connect.NewClient[wrapperspb.StringValue, wrapperspb.StringValue](http.DefaultClient, url+testPingProcedure,
 		connect.WithInterceptors(cliTracer.ClientInterceptor()))
-	if _, err := client.Ping(context.Background(),
-		connect.NewRequest(&healthv1.PingRequest{Message: "x"})); err == nil {
+	if _, err := client.CallUnary(context.Background(),
+		connect.NewRequest(&wrapperspb.StringValue{Value: "x"})); err == nil {
 		t.Fatal("expected Ping error")
 	}
 	cliSnap := cliTracer.Snapshot()

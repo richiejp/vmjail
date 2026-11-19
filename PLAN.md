@@ -86,7 +86,54 @@ work. Go module paths and retained executable names remain unchanged until after
 - Added seal/descriptor-lifetime tests and a real VM/container boot test using
   all four sealed assets; wired the latter into make integration.
 
+- Removed unused mTLS, node registration/client, agent-run catalog/profile
+  packages, plus the agentrun/operator/secretdelivery/workspace/workspacebroker
+  proto sources and generated APIs. See docs/unused-package-deletions.txt.
+- Moved the CPU/memory probe and its tests into internal/hostresources so the
+  retained executor no longer depends on the distributed client or registry.
+  Kept local runtime helpers, build-image support and generic test tooling.
+
+- Removed the remaining nodectrl and health proto sources and generated APIs
+  (docs/proto-deletions.txt). Executor lifecycle events/status now use local
+  structs; trace interceptor tests use a generic unary RPC fixture. Sandbox
+  launch data still uses the sandbox schema; agent and trace protocols remain
+  for guest communication and observability.
+
+- Removed the obsolete sandboxd auth commands, identity/peer trust package
+  and unused mTLS hosted-registry transport constructor, plus their tests
+  (docs/auth-deletions.txt). Retained image-store transport coverage using a
+  standard HTTP transport. Release smoke checks now target the surviving
+  local binary, without deleted client/orchestrator services or auth commands.
+
+- Removed private workspace QCOW2 disks, snapshot/seed transfers, disk-pressure
+  control, guest XFS tools and resize tracing. Removed the unused Cloud
+  Hypervisor disk-control client and guest-only mount option. Host virtiofs
+  mounts and container rootfs cloning remain. Proto fields are reserved to
+  prevent accidental reuse. See docs/private-disk-deletions.txt.
+
 ## Current validation
+
+Private-disk removal passes full `make verify`: lint, unit tests, coverage
+(94.80%, unchanged 94.43% baseline; all files meet 80%), real VM tests with
+the rebuilt initramfs, benchmarks and all five fuzz targets. Guest protobufs
+were regenerated with `make proto`. Log: `/tmp/vmjail-disk-verify.log`.
+
+Auth/identity removal passes full `make verify`: lint, unit tests, coverage
+(94.86%, unchanged 94.43% baseline), real VM tests, benchmarks and all five
+remaining fuzz targets. The removed sixth target tested identity fingerprints.
+Log: `/tmp/vmjail-auth-verify.log`. Release smoke script passes shell syntax
+checks; no release archive was built for this cleanup.
+
+The nodectrl/health protobuf cleanup also passes full `make verify`: lint,
+default tests, coverage (94.81%), real VM tests, benchmarks and all six fuzz
+targets. Log: `/tmp/vmjail-proto-verify.log`.
+
+The unused-package cleanup passes lint, default tests and coverage: 94.81%
+against the unchanged 94.43% baseline, with every file meeting 80%. Real VM
+integration tests pass, including sealed-asset container boot. Benchmark checks
+and all six fuzz targets also pass; full `make verify` completed successfully.
+The run is recorded in `/tmp/vmjail-unused-verify.log`.
+
 
 For the sealed-asset change, `make check` passes in the Nix dev shell: formatting,
 repository checks, lint, default tests and coverage. Coverage is 94.64% against
@@ -101,10 +148,9 @@ boot test passed again. External development artifact paths remain supported.
 Logs: `/tmp/vmjail-memfd-check.log`, `/tmp/vmjail-memfd-integration.log`,
 `/tmp/vmjail-memfd-boot.log`, `/tmp/vmjail-memfd-race.log`.
 
-The preceding reduction commit passed the complete pre-commit `make verify`
-pipeline (including benchmarks and fuzzing) in the Nix shell. Benchmarks and
-active fuzzing have not been rerun for the sealed-asset change. Pre-commit and
-pre-push hooks are installed. All verification thresholds remain unchanged.
+The sealed-asset commit also passed the complete pre-commit `make verify`
+pipeline in the Nix shell. Pre-commit and pre-push hooks are installed. All
+verification thresholds remain unchanged.
 
 ## Next implementation work
 
@@ -127,6 +173,7 @@ pre-push hooks are installed. All verification thresholds remain unchanged.
   remain to be reviewed with the launcher.
   Sandboxd no longer creates a proxy or injects its CA; the existing no-proxy
   network path permits direct egress when networking is enabled.
-- Devcontainer builds, private scratch disks and credential injection.
+- Devcontainer builds and credential injection. Private scratch disks are
+  removed; host-directory mounts are the storage model.
 - Diagnostic IO summaries versus additional instrumentation for a complete
   filesystem audit. Existing guest summaries do not provide the latter.

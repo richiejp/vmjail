@@ -21,9 +21,7 @@ import (
 // busy-spinning.
 const DefaultPollInterval = 200 * time.Millisecond
 
-// readBufSize is the per-Stream read buffer. 32 KiB matches the
-// pump buffers elsewhere (orchestrator.observerCopyBufSize,
-// nodectrlclient.attachStreamBufSize): big enough to bypass bufio's
+// readBufSize is the per-Stream read buffer: big enough to bypass bufio's
 // small-buffer path, small enough not to over-read a stalled log.
 const readBufSize = 32 * 1024
 

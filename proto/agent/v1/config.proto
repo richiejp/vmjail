@@ -110,21 +110,8 @@ message GuestConfig {
   // for attach/job requests.
   bool container_persistent = 11;
 
-  // Retained writable workspace block device. The host removes these targets
-  // from virtiofs only when this block device is attached.
-  WorkspaceDisk workspace_disk = 10;
-
-  message WorkspaceDisk {
-    string device = 1;
-    repeated Mount mounts = 2;
-
-    message Mount {
-      string target = 1;
-      string directory = 2;
-      reserved 3;
-      uint32 seed_port = 4;
-    }
-  }
+  reserved 10;
+  reserved "workspace_disk";
 
   // PostStartCommand is one resolved lifecycle command: a full argv the
   // agent crun-execs in the running container.

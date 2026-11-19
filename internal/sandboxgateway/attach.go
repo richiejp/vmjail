@@ -31,10 +31,7 @@ func (e *AttachExitError) Error() string {
 
 func (*AttachExitError) Unwrap() error { return io.EOF }
 
-// AttachRequest is the dispatch payload carried from the
-// orchestrator's AttachRequest event through to the sandboxd's
-// AttachBridger.Attach call. Mirrors nodectrlv1.AttachRequest
-// but is wire-free so this package stays transport-agnostic.
+// AttachRequest is the local payload for AttachBridger.Attach.
 type AttachRequest struct {
 	SessionID  string
 	SandboxUID string

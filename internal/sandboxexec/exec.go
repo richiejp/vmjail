@@ -29,9 +29,8 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/agent"
 	"github.com/richiejp/darkaifactory/internal/assert"
-	nodectrlv1 "github.com/richiejp/darkaifactory/internal/genpb/nodectrl/v1"
 	sandboxv1 "github.com/richiejp/darkaifactory/internal/genpb/sandbox/v1"
-	"github.com/richiejp/darkaifactory/internal/nodectrlclient"
+	"github.com/richiejp/darkaifactory/internal/hostresources"
 	"github.com/richiejp/darkaifactory/internal/observability"
 	"github.com/richiejp/darkaifactory/internal/ociregistry"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
@@ -40,8 +39,6 @@ import (
 	"github.com/richiejp/darkaifactory/internal/sandboxgateway"
 	"github.com/richiejp/darkaifactory/internal/sandboxnet"
 	"github.com/richiejp/darkaifactory/internal/trace"
-	"github.com/richiejp/darkaifactory/internal/workspacedisk"
-	"github.com/richiejp/darkaifactory/internal/workspacesnapshot"
 )
 
 // Phase tokens reported on heartbeat. Match the PascalCase values
@@ -61,12 +58,6 @@ const (
 // that don't touch the imagestore.
 type Assembler func(ctx context.Context, ref string, opts sandboxboot.BootOptions) (sandbox.Config, func(), error)
 
-// WorkspaceDiskPreparer atomically creates or reopens the retained qcow2
-// image keyed by Workspace UUID.
-type WorkspaceDiskPreparer interface {
-	Prepare(workspaceID string, virtualSize uint64) (path string, created bool, err error)
-}
-
 // Runner is the function the Executor calls to boot a VM. The
 // default in production is sandbox.Serve — the long-running
 // variant that blocks on ctx.Done OR VMM exit, suitable for
@@ -83,8 +74,7 @@ type liveSandbox struct {
 	message  string
 }
 
-// Executor implements nodectrlclient.SandboxEventHandler. One
-// Executor per sandboxd process — concurrent dispatches share the
+// Executor handles sandbox lifecycle events. Concurrent dispatches share the
 // same baseline config and stdout writer.
 type Executor struct {
 	base      sandbox.Config
@@ -134,16 +124,7 @@ type Executor struct {
 	netEnabled bool
 	// egressProxy, when non-nil, drives Phase-J proxy-env + CA
 	// injection on every image-backed dispatch (see Config.EgressProxy).
-	egressProxy               *EgressProxy
-	workspaceDisks            WorkspaceDiskPreparer
-	workspaceDiskDefaultBytes uint64
-	workspaceDiskPollInterval time.Duration
-	newWorkspaceVMController  func(string) (workspaceVMController, error)
-	dialWorkspaceGuest        func(context.Context, string, uint32) (net.Conn, error)
-	getWorkspaceUsage         func(context.Context, func(context.Context) (net.Conn, error)) (workspacesnapshot.Usage, error)
-	getWorkspaceCapacity      func(context.Context, func(context.Context) (net.Conn, error)) (uint64, error)
-	growWorkspaceGuest        func(context.Context, func(context.Context) (net.Conn, error)) error
-	waitWorkspaceGuestRetry   func(context.Context) error
+	egressProxy *EgressProxy
 	// observerDir, when non-empty, is the absolute parent directory
 	// under which each dispatch gets a per-uid host-side observer log
 	// (<observerDir>/<uid>/observer.jsonl). resolveBootConfig defaults
@@ -174,12 +155,10 @@ type Executor struct {
 	// CID the ABI allows for a guest (0/1/2 are reserved).
 	nextCID atomic.Uint32
 
-	mu                    sync.Mutex
-	live                  map[string]*liveSandbox
-	running               map[string]context.CancelFunc
-	deleted               map[string]time.Time
-	diskMu                sync.RWMutex
-	workspaceDiskControls map[string]*workspaceDiskRuntime
+	mu      sync.Mutex
+	live    map[string]*liveSandbox
+	running map[string]context.CancelFunc
+	deleted map[string]time.Time
 }
 
 // Config bundles the Executor's dependencies. The baseline
@@ -252,15 +231,6 @@ type Config struct {
 	// into the bundle rootfs. Leave nil to keep direct egress (the
 	// pre-Phase-J behaviour).
 	EgressProxy *EgressProxy
-	// WorkspaceDisks enables retained qcow2 disks for dispatched Workspaces.
-	// It requires VsockDir, which also holds the per-Sandbox VMM API socket.
-	WorkspaceDisks WorkspaceDiskPreparer
-	// WorkspaceDiskDefaultBytes overrides the allowance used when a Workspace
-	// spec leaves disk_bytes unset. Zero selects workspacedisk.DefaultDiskBytes.
-	WorkspaceDiskDefaultBytes uint64
-	// WorkspaceDiskPollInterval controls automatic 90%-usage checks. Zero
-	// selects ten seconds; tests may use a longer interval and poll directly.
-	WorkspaceDiskPollInterval time.Duration
 	// ObserverDir, when non-empty, is the absolute parent directory
 	// under which each dispatched VM gets a per-uid host-side observer
 	// log. `daft-sandboxd serve` sets it to the per-sandbox state dir
@@ -323,9 +293,9 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.Runner == nil {
 		cfg.Runner = sandbox.Serve
 	}
-	if cfg.Bridger != nil || cfg.AttachRegistry != nil || cfg.JobRegistry != nil || cfg.NetEnabled || cfg.WorkspaceDisks != nil {
+	if cfg.Bridger != nil || cfg.AttachRegistry != nil || cfg.JobRegistry != nil || cfg.NetEnabled {
 		if cfg.VsockDir == "" {
-			return nil, errors.New("sandboxexec: VsockDir required when Bridger, AttachRegistry, JobRegistry, NetEnabled, or WorkspaceDisks is set")
+			return nil, errors.New("sandboxexec: VsockDir required when Bridger, AttachRegistry, JobRegistry, or NetEnabled is set")
 		}
 		if !filepath.IsAbs(cfg.VsockDir) {
 			return nil, fmt.Errorf("sandboxexec: VsockDir %q must be absolute", cfg.VsockDir)
@@ -340,12 +310,6 @@ func New(cfg Config) (*Executor, error) {
 	if cfg.BuildTimeout == 0 {
 		cfg.BuildTimeout = defaultBuildTimeout
 	}
-	if cfg.WorkspaceDiskPollInterval <= 0 {
-		cfg.WorkspaceDiskPollInterval = defaultWorkspaceDiskPollInterval
-	}
-	if cfg.WorkspaceDiskDefaultBytes == 0 {
-		cfg.WorkspaceDiskDefaultBytes = workspacedisk.DefaultDiskBytes
-	}
 	// A configured build image is only useful if the built result can be
 	// pushed back; pair them at construction so a misconfigured node fails
 	// fast here rather than after wasting a build VM boot at first dispatch.
@@ -353,36 +317,26 @@ func New(cfg Config) (*Executor, error) {
 		return nil, errors.New("sandboxexec: BuildPushTransport required when BuildImageRef is set")
 	}
 	e := &Executor{
-		base:                      cfg.Base,
-		stdout:                    cfg.Stdout,
-		run:                       cfg.Runner,
-		assembler:                 cfg.Assembler,
-		bridger:                   cfg.Bridger,
-		attachRegistry:            cfg.AttachRegistry,
-		jobRegistry:               cfg.JobRegistry,
-		observerRegistry:          cfg.ObserverRegistry,
-		summaryRegistry:           cfg.SummaryRegistry,
-		observeSummary:            cfg.ObserveSummary,
-		vsockDir:                  cfg.VsockDir,
-		netEnabled:                cfg.NetEnabled,
-		egressProxy:               cfg.EgressProxy,
-		workspaceDisks:            cfg.WorkspaceDisks,
-		workspaceDiskDefaultBytes: cfg.WorkspaceDiskDefaultBytes,
-		workspaceDiskPollInterval: cfg.WorkspaceDiskPollInterval,
-		newWorkspaceVMController:  newWorkspaceVMController,
-		dialWorkspaceGuest:        sandbox.DialGuestVsock,
-		getWorkspaceUsage:         workspacesnapshot.GetUsage,
-		getWorkspaceCapacity:      workspacesnapshot.GetCapacity,
-		growWorkspaceGuest:        workspacesnapshot.Grow,
-		waitWorkspaceGuestRetry:   waitWorkspaceGuestRetry,
-		observerDir:               cfg.ObserverDir,
-		buildImageRef:             cfg.BuildImageRef,
-		buildRunner:               cfg.BuildRunner,
-		buildTimeout:              cfg.BuildTimeout,
-		live:                      map[string]*liveSandbox{},
-		running:                   map[string]context.CancelFunc{},
-		deleted:                   map[string]time.Time{},
-		workspaceDiskControls:     map[string]*workspaceDiskRuntime{},
+		base:             cfg.Base,
+		stdout:           cfg.Stdout,
+		run:              cfg.Runner,
+		assembler:        cfg.Assembler,
+		bridger:          cfg.Bridger,
+		attachRegistry:   cfg.AttachRegistry,
+		jobRegistry:      cfg.JobRegistry,
+		observerRegistry: cfg.ObserverRegistry,
+		summaryRegistry:  cfg.SummaryRegistry,
+		observeSummary:   cfg.ObserveSummary,
+		vsockDir:         cfg.VsockDir,
+		netEnabled:       cfg.NetEnabled,
+		egressProxy:      cfg.EgressProxy,
+		observerDir:      cfg.ObserverDir,
+		buildImageRef:    cfg.BuildImageRef,
+		buildRunner:      cfg.BuildRunner,
+		buildTimeout:     cfg.BuildTimeout,
+		live:             map[string]*liveSandbox{},
+		running:          map[string]context.CancelFunc{},
+		deleted:          map[string]time.Time{},
 	}
 	// New guarantees BuildPushTransport is non-nil whenever a build can run
 	// (BuildImageRef set), so the closure needs no nil guard of its own.
@@ -395,25 +349,17 @@ func New(cfg Config) (*Executor, error) {
 	return e, nil
 }
 
-// LiveSnapshot returns the wire-shaped set of sandboxes the Executor
-// currently knows about. Wired into nodectrlclient.Config so each
-// Heartbeat carries the level-triggered reconciliation signal that
-// drives Workspace.status.observed_generation upstream (Slice B4d).
-//
-// Snapshot semantics: a sandbox is included until it transitions to
-// a terminal phase AND the orchestrator has had a heartbeat to
-// observe that terminal state. Terminal entries are dropped from
-// the live map on the next snapshot to keep the wire payload
-// bounded; the orchestrator's reconciler treats absence as "exited"
-// going forward.
-func (e *Executor) LiveSnapshot() []*nodectrlv1.LiveSandbox {
+// LiveSnapshot returns the sandboxes the Executor currently knows about.
+// This retained snapshot API is not currently wired into the local CLI.
+// Terminal entries are reported once, then removed from the live map.
+func (e *Executor) LiveSnapshot() []*LiveSandbox {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	out := make([]*nodectrlv1.LiveSandbox, 0, len(e.live))
+	out := make([]*LiveSandbox, 0, len(e.live))
 	var drop []string
 	for uid, ls := range e.live {
-		out = append(out, &nodectrlv1.LiveSandbox{
-			Uid:      ls.uid,
+		out = append(out, &LiveSandbox{
+			UID:      ls.uid,
 			Phase:    ls.phase,
 			ExitCode: ls.exitCode,
 			Message:  ls.message,
@@ -425,13 +371,12 @@ func (e *Executor) LiveSnapshot() []*nodectrlv1.LiveSandbox {
 	for _, uid := range drop {
 		delete(e.live, uid)
 	}
-	// Sort by uid so heartbeats are byte-stable across replays —
-	// makes test golden-file comparisons trivial.
-	slices.SortFunc(out, func(a, b *nodectrlv1.LiveSandbox) int {
+	// Sort by UID for deterministic snapshots.
+	slices.SortFunc(out, func(a, b *LiveSandbox) int {
 		switch {
-		case a.GetUid() < b.GetUid():
+		case a.UID < b.UID:
 			return -1
-		case a.GetUid() > b.GetUid():
+		case a.UID > b.UID:
 			return 1
 		}
 		return 0
@@ -492,26 +437,22 @@ func ProductionAssembler(deps sandboxboot.Deps) Assembler {
 // attributes but otherwise ignored. Wiring them lands in later
 // slices alongside Workspace + ingress.
 //
-// v1 invokes the runner synchronously, which blocks the
-// nodectrlclient receive loop for the duration of the VM boot
-// (~hundreds of ms warm, multiple seconds cold). Becomes
-// non-blocking once a real concurrency cap and the heartbeat-based
-// reconciler (B4d/B5) land.
+// The runner is invoked synchronously for the lifetime of the VM.
 func (e *Executor) HandleSandboxEvent(
 	ctx context.Context,
-	evt *nodectrlv1.SandboxWatchEvent,
+	evt *SandboxWatchEvent,
 ) error {
 	assert.True(evt != nil,
-		"SandboxEventHandler must never be called with a nil event — nodectrlclient filters them upstream")
-	sb := evt.GetSandbox()
+		"HandleSandboxEvent requires a non-nil event")
+	sb := evt.Sandbox
 	assert.True(sb != nil,
 		"SandboxWatchEvent without a Sandbox payload is an orchestrator bug")
 	uid := sb.GetMetadata().GetUid()
 	assert.True(uid != "", "SandboxWatchEvent without metadata.uid is an orchestrator bug")
-	if evt.GetType() == sandboxv1.EventType_EVENT_TYPE_DELETED {
+	if evt.Type == sandboxv1.EventType_EVENT_TYPE_DELETED {
 		return e.deleteSandbox(ctx, uid)
 	}
-	if evt.GetType() != sandboxv1.EventType_EVENT_TYPE_ADDED {
+	if evt.Type != sandboxv1.EventType_EVENT_TYPE_ADDED {
 		return nil
 	}
 	spec := sb.GetSpec()
@@ -552,8 +493,6 @@ func (e *Executor) HandleSandboxEvent(
 		defer unregisterObserver()
 		unregisterSummary := e.registerSummaryRoute(cfg, uid)
 		defer unregisterSummary()
-		unregisterDiskControl := e.registerWorkspaceDiskControl(ctx, cfg, spec.GetWorkspaceUuid(), uid, e.workspaceDiskAllowance(spec))
-		defer unregisterDiskControl()
 
 		e.markPhase(uid, phaseRunning, 0, "")
 		return e.run(ctx, e.stdout, cfg)
@@ -768,42 +707,7 @@ func (e *Executor) resolveBootConfig(ctx context.Context, uid string, spec *sand
 	e.applyVsockEgress(&cfg, uid, true, true, spec.GetEgressPolicy())
 	e.applyObserverLog(&cfg, uid)
 	e.applyObserveSummary(&cfg, uid)
-	if err := e.applyWorkspaceDisk(&cfg, uid, spec); err != nil {
-		unlock()
-		return sandbox.Config{}, func() {}, err
-	}
 	return cfg, unlock, nil
-}
-
-const workspaceDiskID = "workspace"
-
-func (e *Executor) applyWorkspaceDisk(cfg *sandbox.Config, uid string, spec *sandboxv1.SandboxSpec) error {
-	if e.workspaceDisks == nil {
-		return nil
-	}
-	workspaceID := spec.GetWorkspaceUuid()
-	if workspaceID == "" {
-		return errors.New("sandboxexec: retained disk requires spec.workspace_uuid")
-	}
-	size := e.workspaceDiskAllowance(spec)
-	path, _, err := e.workspaceDisks.Prepare(workspaceID, size)
-	if err != nil {
-		return fmt.Errorf("sandboxexec: prepare workspace disk: %w", err)
-	}
-	cfg.WorkspaceDisk = &sandbox.DiskConfig{Path: path, ID: workspaceDiskID}
-	cfg.APISocket = filepath.Join(e.vsockDir, uid+".api.sock")
-	return nil
-}
-
-func (e *Executor) workspaceDiskAllowance(spec *sandboxv1.SandboxSpec) uint64 {
-	size := spec.GetDiskBytes()
-	if size == 0 {
-		if e.workspaceDiskDefaultBytes == 0 {
-			return workspacedisk.DefaultDiskBytes
-		}
-		return e.workspaceDiskDefaultBytes
-	}
-	return size
 }
 
 // applyObserverLog defaults cfg.ObserverLogPath to a per-uid file
@@ -1160,11 +1064,11 @@ func defaultWorkspaceCPUs() int {
 // detectHostResources reports the host's CPU/RAM capacity for
 // default sizing. A package var so tests can inject a fixed host to
 // exercise defaultWorkspaceMemory's floor/cap; production reads
-// /proc/meminfo + runtime.NumCPU() via nodectrlclient (sandboxd is
+// /proc/meminfo + runtime.NumCPU() via hostresources (sandboxd is
 // Linux-only, so the /proc dependency is fine).
 //
 //nolint:gochecknoglobals // single test seam; no production mutation.
-var detectHostResources = nodectrlclient.DetectResources
+var detectHostResources = hostresources.DetectResources
 
 // defaultWorkspaceMemory returns the guest-RAM string for a real
 // workload dispatch that didn't request a size: a quarter of the

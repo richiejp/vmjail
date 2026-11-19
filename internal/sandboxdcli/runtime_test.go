@@ -10,25 +10,7 @@ import (
 
 	"github.com/richiejp/darkaifactory/internal/bundled"
 	"github.com/richiejp/darkaifactory/internal/sandbox"
-	"github.com/richiejp/darkaifactory/internal/workspacedisk"
 )
-
-func TestWorkspaceDiskDefaultFromEnv(t *testing.T) {
-	t.Setenv(envWorkspaceDiskDefaultBytes, "")
-	if got, err := workspaceDiskDefaultFromEnv(); err != nil || got != workspacedisk.DefaultDiskBytes {
-		t.Fatalf("default = %d, %v", got, err)
-	}
-	t.Setenv(envWorkspaceDiskDefaultBytes, "1073741824")
-	if got, err := workspaceDiskDefaultFromEnv(); err != nil || got != 1<<30 {
-		t.Fatalf("override = %d, %v", got, err)
-	}
-	for _, raw := range []string{"0", "invalid"} {
-		t.Setenv(envWorkspaceDiskDefaultBytes, raw)
-		if _, err := workspaceDiskDefaultFromEnv(); err == nil {
-			t.Fatalf("%q accepted", raw)
-		}
-	}
-}
 
 func TestFormatBytes(t *testing.T) {
 	cases := []struct {

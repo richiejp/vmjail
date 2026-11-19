@@ -74,7 +74,7 @@ func IsHosted(ref string) bool {
 // Transport returns an http.RoundTripper that speaks mTLS to the
 // orchestrator at orchAddr ("host:port") for every request, regardless of
 // the (sentinel) registry name in the ref. tlsCfg is the client mTLS
-// config from identity.ClientTLSConfig.
+// configuration supplied by the caller.
 //
 // ALPN is pinned to HTTP/1.1: large image-blob uploads over HTTP/2
 // deadlock on flow control with go-containerregistry, and the
