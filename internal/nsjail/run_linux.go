@@ -1,6 +1,6 @@
 //go:build linux
 
-package localrun
+package nsjail
 
 import (
 	"context"
@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"slices"
 	"time"
+
+	"github.com/richiejp/vmjail/internal/cli"
 
 	"github.com/richiejp/vmjail/internal/agent"
 	"github.com/richiejp/vmjail/internal/bundled"
@@ -48,7 +50,7 @@ func Run(ctx context.Context, o Options, in io.Reader, out, errout io.Writer) er
 			return err
 		}
 
-		var exit *ExitError
+		var exit *cli.ExitError
 		if err != nil && !errors.As(err, &exit) {
 			return err
 		}
@@ -352,12 +354,12 @@ func runConfigured(ctx context.Context, o Options, cfg sandbox.Config, in io.Rea
 		return fmt.Errorf("guest startup: %w (console: %s)", err, log.Name())
 	}
 
-	err = relay(ctx, conn, in, out, errout)
+	err = cli.RelayCommand(ctx, conn, in, out, errout)
 	if ctx.Err() != nil {
 		return fmt.Errorf("VM deadline/cancellation: %w (console: %s)", ctx.Err(), log.Name())
 	}
 
-	var workload *ExitError
+	var workload *cli.ExitError
 	if err != nil && !errors.As(err, &workload) {
 		return fmt.Errorf("command transport: %w (console: %s)", err, log.Name())
 	}

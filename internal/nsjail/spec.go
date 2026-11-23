@@ -1,4 +1,4 @@
-package localrun
+package nsjail
 
 import (
 	"encoding/json"

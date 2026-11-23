@@ -50,7 +50,7 @@ been removed. A local-run skill is deferred until the CLI workflow is defined.
 
 The local CLI change passes `make verify`: formatting/lint, unit tests, real VM
 integration tests, benchmark checks and all five fuzz targets. Coverage is
-94.79% against the unchanged 94.43% baseline; every gated file meets 80%.
+94.80% against the unchanged 94.43% baseline; every gated file meets 80%.
 Additional non-root minimal-root and resolver tests pass after the final
 permission checks. The Nix package builds, its embedded-assets executable
 successfully boots a VM and preserves exit status, and the portable archive
@@ -145,6 +145,16 @@ five fuzz targets. Coverage is 94.79%, above the previous 94.60% measurement;
 the baseline remains unchanged. Both Nix outputs build, the portable archive
 passes its smoke test, and the packaged executable boots with embedded assets
 and preserves stdin, stdout, stderr and workload exit status.
+
+## nsjail compatibility package
+
+Renamed `internal/localrun` to `internal/nsjail` to identify its compatibility
+role. Moved the argument-independent command relay and workload exit status to
+`internal/cli`, alongside terminal handling, with their existing regression
+tests. Mode selection, mount preparation and option-to-VM configuration remain
+in nsjail. `make verify` passes, including real VM tests. Subsequent direct
+relay failure/cancellation tests pass `make check`, raising total coverage to
+94.80%; the baseline is unchanged.
 
 ## Next implementation work
 

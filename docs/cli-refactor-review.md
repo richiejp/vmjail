@@ -26,7 +26,7 @@ install that mapping before exec; Go also makes mount propagation private for
 
 | Files | Finding and action |
 | --- | --- |
-| `internal/localrun/run_linux.go` (relay portion), `relay_test.go` | Extract session handling into `relay_linux.go`; reuse the job output decoder rather than another stdout/stderr/exit switch. Keep local terminal and input cancellation responsibilities explicit. Test EOF, errors, early command completion and short writes. |
+| `internal/cli/command_linux.go`, `command_linux_test.go` | Move argument-independent session handling to `internal/cli`; reuse the job output decoder rather than another stdout/stderr/exit switch. Keep local terminal and input cancellation responsibilities explicit. Test EOF, errors, early command completion and short writes. |
 | `internal/agent/host_command_linux.go`, `host_command_linux_test.go` | Share framed output writers, PTY startup and process exit decoding with existing job/attach execution. Reuse the initial-container command builder. Preserve independent stdin EOF and output lifetime. |
 | `internal/agent/host_command_other.go` | Keep the platform boundary for unsupported initial-command execution; it is not a second implementation. |
 | `internal/agent/agent.go` | The host-command dispatch selects initial container execution and its completion path. It uses existing configuration, share, listener and gadget setup. |
@@ -50,12 +50,12 @@ both successful completion and a guest error.
 
 | Files | Finding and action |
 | --- | --- |
-| `internal/localrun/options.go` | Share version handling with the existing CLI, organize flag groups, and remove test-only constants from production. Keep nsjail argument semantics and validation separate from sandboxd's image commands. |
-| `internal/localrun/options_test.go` | Keep behavior-focused argument, environment and OCI assertions, with common test fixtures in tests. |
-| `internal/localrun/spec.go` | Replace nested untyped maps and duplicate OCI wire shapes with the shared `internal/ocibundle` types extracted from imagestore. Retain distinct root, mount, capability and namespace policies. |
-| `internal/localrun/run_linux.go` (orchestration), `run_linux_test.go` | Share embedded-artifact defaults with sandboxd, isolate bind staging, remove redundant context setup, and preserve the underlying VM startup failure. Separate preparation, execution and cleanup blocks. |
-| `internal/localrun/view_linux.go`, `view_linux_test.go` | No existing implementation provides its recursive mount cloning, post-clone inspection and pseudo-filesystem masking semantics. Retain these protections; separate parsing, selection, masking and final mount attributes for readability. |
-| `internal/localrun/observe_linux.go` | Retain the per-run host/guest observation layout and required setup errors. Existing sandboxd observation setup has different fallback behavior, so merging them would obscure policy. Separate directory preparation from configuration assignment. |
+| `internal/nsjail/options.go` | Share version handling with the existing CLI, organize flag groups, and remove test-only constants from production. Keep nsjail argument semantics and validation separate from sandboxd's image commands. |
+| `internal/nsjail/options_test.go` | Keep behavior-focused argument, environment and OCI assertions, with common test fixtures in tests. |
+| `internal/nsjail/spec.go` | Replace nested untyped maps and duplicate OCI wire shapes with the shared `internal/ocibundle` types extracted from imagestore. Retain distinct root, mount, capability and namespace policies. |
+| `internal/nsjail/run_linux.go` (orchestration), `run_linux_test.go` | Share embedded-artifact defaults with sandboxd, isolate bind staging, remove redundant context setup, and preserve the underlying VM startup failure. Separate preparation, execution and cleanup blocks. |
+| `internal/nsjail/view_linux.go`, `view_linux_test.go` | No existing implementation provides its recursive mount cloning, post-clone inspection and pseudo-filesystem masking semantics. Retain these protections; separate parsing, selection, masking and final mount attributes for readability. |
+| `internal/nsjail/observe_linux.go` | Retain the per-run host/guest observation layout and required setup errors. Existing sandboxd observation setup has different fallback behavior, so merging them would obscure policy. Separate directory preparation from configuration assignment. |
 
 The shared OCI package contains wire types, not a universal policy engine.
 Image-backed and host-root containers use those same shapes with explicit
@@ -97,3 +97,7 @@ The review found a test-only import cycle after centralizing artifact defaults:
 the bundled integration test imported sandbox from within the bundled package.
 It now uses an external test package and a test-only loader export, without
 expanding the production asset API.
+
+The compatibility package is now named `internal/nsjail`. Shared CLI command
+sessions and workload exit status live in `internal/cli`; mount policy and
+option-to-VM translation remain with the compatibility launcher.

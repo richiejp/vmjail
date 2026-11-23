@@ -1,4 +1,4 @@
-package localrun
+package nsjail
 
 import (
 	"context"
@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/richiejp/vmjail/internal/cli"
 
 	"github.com/richiejp/vmjail/internal/agent"
 	"github.com/richiejp/vmjail/internal/bundled"
@@ -29,7 +31,7 @@ func TestRunModes(t *testing.T) {
 		if calls == 2 {
 			cancel()
 		}
-		return &ExitError{7}
+		return &cli.ExitError{Code: 7}
 	}
 	if err := Run(ctx, Options{Mode: "r"}, os.Stdin, nil, nil); err == nil || calls != 2 {
 		t.Fatal(calls, err)
@@ -91,7 +93,7 @@ func TestRunnerLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := runOnce(ctx, Options{Time: 5, Network: true}, strings.NewReader(""), io.Discard, io.Discard)
-	var status *ExitError
+	var status *cli.ExitError
 	if !errors.As(err, &status) || status.Code != 3 {
 		t.Fatal(err)
 	}
@@ -192,7 +194,10 @@ func TestListenerLifecycle(t *testing.T) {
 		}
 		listenTCP = func(string, string) (net.Listener, error) { return ln, nil }
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		runCommand = func(context.Context, Options, io.Reader, io.Writer, io.Writer) error { cancel(); return &ExitError{7} }
+		runCommand = func(context.Context, Options, io.Reader, io.Writer, io.Writer) error {
+			cancel()
+			return &cli.ExitError{Code: 7}
+		}
 		output := io.Writer(io.Discard)
 		if badOutput {
 			output = brokenOutput{}

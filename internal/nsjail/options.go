@@ -1,5 +1,6 @@
-// Package localrun launches host commands in a local microVM.
-package localrun
+// Package nsjail implements nsjail-compatible command-line options and execution
+// modes using local microVMs.
+package nsjail
 
 import (
 	"context"
@@ -31,11 +32,6 @@ type Options struct {
 	Port       uint16
 	ObserveDir string
 }
-
-// ExitError preserves the workload's exit status independently of setup errors.
-type ExitError struct{ Code int }
-
-func (e *ExitError) Error() string { return fmt.Sprintf("workload exited with status %d", e.Code) }
 
 type RunFunc func(context.Context, Options, io.Reader, io.Writer, io.Writer) error
 

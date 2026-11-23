@@ -1,4 +1,4 @@
-package localrun
+package nsjail
 
 import (
 	"bytes"
@@ -70,10 +70,6 @@ func TestArguments(t *testing.T) {
 	cmd.SetArgs([]string{"version", "extra"})
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("version accepted an unexpected argument")
-	}
-
-	if (&ExitError{7}).Error() != "workload exited with status 7" {
-		t.Fatal("exit status")
 	}
 }
 

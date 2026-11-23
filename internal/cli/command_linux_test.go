@@ -1,4 +1,4 @@
-package localrun
+package cli
 
 import (
 	"bytes"
@@ -54,7 +54,7 @@ func TestRelay(t *testing.T) {
 				done <- nil
 			}()
 			var out, errout bytes.Buffer
-			err := relay(context.Background(), client, strings.NewReader("stdin\x00"), &out, &errout)
+			err := RelayCommand(context.Background(), client, strings.NewReader("stdin\x00"), &out, &errout)
 			switch {
 			case tc.message != "":
 				if err == nil || err.Error() != tc.message {
@@ -124,7 +124,7 @@ func TestFileInputPump(t *testing.T) {
 	if err != nil || string(data) != "pipe input" {
 		t.Fatal(string(data), err)
 	}
-	_ = pumpInput(context.Background(), brokenOutput{}, strings.NewReader("data"))
+	_ = pumpInput(context.Background(), failedOutput{}, strings.NewReader("data"))
 }
 
 // Exit must release the previous VM's input pump before the next VM or
@@ -187,7 +187,7 @@ func runRelayWithIdleInput(t *testing.T, input io.Reader, inputWriter io.Writer)
 	}()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	if err := relay(ctx, client, input, io.Discard, io.Discard); err != nil {
+	if err := RelayCommand(ctx, client, input, io.Discard, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
@@ -209,7 +209,7 @@ func TestRelayInputFailure(t *testing.T) {
 	}()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	err := relay(ctx, client, failingInput{wantErr}, io.Discard, io.Discard)
+	err := RelayCommand(ctx, client, failingInput{wantErr}, io.Discard, io.Discard)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("expected input failure, got %v", err)
 	}
@@ -255,7 +255,7 @@ func TestRelayTerminal(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			done := make(chan error, 1)
-			go func() { done <- relay(ctx, client, slave, io.Discard, io.Discard) }()
+			go func() { done <- RelayCommand(ctx, client, slave, io.Discard, io.Discard) }()
 
 			hello, err := agent.ReadAttachHello(guest)
 			if err != nil {
@@ -290,6 +290,53 @@ func TestRelayTerminal(t *testing.T) {
 			}
 			if *restored != *original {
 				t.Errorf("terminal restored to %+v, want %+v", restored, original)
+			}
+		})
+	}
+}
+
+func TestExitError(t *testing.T) {
+	if got := (&ExitError{7}).Error(); got != "workload exited with status 7" {
+		t.Fatalf("exit error: %s", got)
+	}
+}
+
+func TestRelayTransportFailure(t *testing.T) {
+	const cancellation = "cancellation"
+	for _, phase := range []string{"handshake", "output", cancellation} {
+		t.Run(phase, func(t *testing.T) {
+			client, guest := net.Pipe()
+			t.Cleanup(func() { _ = client.Close(); _ = guest.Close() })
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+
+			done := make(chan error, 1)
+			go func() {
+				if phase == "handshake" {
+					done <- guest.Close()
+					return
+				}
+				if _, err := agent.ReadAttachHello(guest); err != nil {
+					done <- err
+					return
+				}
+				if phase == cancellation {
+					cancel()
+					done <- nil
+					return
+				}
+				done <- guest.Close() // Drop the connection before any exit frame.
+			}()
+
+			err := RelayCommand(ctx, client, strings.NewReader(""), io.Discard, io.Discard)
+			if err == nil {
+				t.Fatal("broken transport reported successful command completion")
+			}
+			if phase == cancellation && !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation error: %v", err)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

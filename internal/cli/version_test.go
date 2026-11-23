@@ -9,9 +9,9 @@ import (
 	"github.com/richiejp/vmjail/internal/version"
 )
 
-type failedVersionOutput struct{}
+type failedOutput struct{}
 
-func (failedVersionOutput) Write([]byte) (int, error) {
+func (failedOutput) Write([]byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
 
@@ -31,7 +31,7 @@ func TestVersionCommand(t *testing.T) {
 	}
 
 	cmd.SetArgs([]string{})
-	cmd.SetOut(failedVersionOutput{})
+	cmd.SetOut(failedOutput{})
 	if err := cmd.Execute(); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("version write error = %v", err)
 	}

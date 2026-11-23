@@ -23,7 +23,7 @@ writes remain in the host directory; there is no remote synchronization step.
 ## Implementation map
 
 - Host-command CLI: [`cmd/vmjail`](../../cmd/vmjail/) and
-  [`internal/localrun`](../../internal/localrun/)
+  [`internal/nsjail`](../../internal/nsjail/)
 - Image/bundle entry point: [`cmd/vmjail-sandboxd`](../../cmd/vmjail-sandboxd/)
 - VM supervision: [`internal/sandbox`](../../internal/sandbox/)
 - Bundle and share assembly: [`internal/sandboxboot`](../../internal/sandboxboot/)

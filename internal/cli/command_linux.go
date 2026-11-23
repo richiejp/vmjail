@@ -1,6 +1,6 @@
 //go:build linux
 
-package localrun
+package cli
 
 import (
 	"context"
@@ -12,21 +12,21 @@ import (
 	"time"
 
 	"github.com/richiejp/vmjail/internal/agent"
-	"github.com/richiejp/vmjail/internal/cli"
 	agentv1 "github.com/richiejp/vmjail/internal/genpb/agent/v1"
 	"golang.org/x/sys/unix"
 )
 
-// relay owns conn. Callers that supply an input other than a file or connection
-// must ensure any blocked Read can return after the command exits.
-func relay(ctx context.Context, conn net.Conn, in io.Reader, out, errout io.Writer) (resultErr error) {
+// RelayCommand relays an initial guest command and owns conn. Callers supplying
+// input other than a file or connection must ensure any blocked Read can return
+// after the command exits.
+func RelayCommand(ctx context.Context, conn net.Conn, in io.Reader, out, errout io.Writer) (resultErr error) {
 	defer func() { _ = conn.Close() }()                         // Also close on handshake or terminal setup failure.
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() }) // Wake reads and writes on cancellation.
 	defer stop()
 
 	hello := &agentv1.AgentAttachHello{}
 	if file, ok := in.(*os.File); ok {
-		terminal := cli.NewTerminal(int(file.Fd()))
+		terminal := NewTerminal(int(file.Fd()))
 		if terminal.IsTTY() {
 			cols, rows, err := terminal.Winsize()
 			if err != nil {

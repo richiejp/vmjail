@@ -1,6 +1,6 @@
 //go:build linux
 
-package localrun
+package nsjail
 
 import (
 	"bufio"

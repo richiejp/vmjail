@@ -12,8 +12,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/richiejp/vmjail/internal/cli"
+
 	"github.com/richiejp/vmjail/internal/cgroupwrap"
-	"github.com/richiejp/vmjail/internal/localrun"
+	"github.com/richiejp/vmjail/internal/nsjail"
 	"github.com/richiejp/vmjail/internal/observability"
 	"github.com/richiejp/vmjail/internal/sandbox"
 	"github.com/richiejp/vmjail/internal/userns"
@@ -25,7 +27,7 @@ var (
 	reexecDelegated = cgroupwrap.ReexecDelegated
 	prepareSubtree  = observability.PrepareDelegatedSubtree
 	namespaceRun    = mountNamespace
-	runLocal        = localrun.Run
+	runLocal        = nsjail.Run
 )
 
 const (
@@ -43,7 +45,7 @@ func main() {
 
 //nolint:contextcheck // Cobra passes ExecuteContext to the command callback.
 func mainCode(ctx context.Context, args []string, in io.Reader, out, errout io.Writer) int {
-	run := func(ctx context.Context, opts localrun.Options, in io.Reader, out, errout io.Writer) error {
+	run := func(ctx context.Context, opts nsjail.Options, in io.Reader, out, errout io.Writer) error {
 		if os.Getenv(privateMountsEnv) == "1" {
 			sandbox.SetVMCgroupParent(os.Getenv(vmCgroupParentEnv))
 			return runLocal(ctx, opts, in, out, errout)
@@ -67,10 +69,10 @@ func mainCode(ctx context.Context, args []string, in io.Reader, out, errout io.W
 
 	// The command invokes run only after parsing and validation. Help and
 	// version do not need a delegated cgroup or mount namespace.
-	cmd := localrun.NewCommand(in, out, errout, run)
+	cmd := nsjail.NewCommand(in, out, errout, run)
 	cmd.SetArgs(args)
 	err := cmd.ExecuteContext(ctx)
-	var status *localrun.ExitError
+	var status *cli.ExitError
 	switch {
 	case errors.As(err, &status):
 		return status.Code
@@ -106,10 +108,10 @@ func waitNamespace(cmd *exec.Cmd) error {
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		if status, ok := exit.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-			return &localrun.ExitError{Code: 128 + int(status.Signal())}
+			return &cli.ExitError{Code: 128 + int(status.Signal())}
 		}
 
-		return &localrun.ExitError{Code: exit.ExitCode()}
+		return &cli.ExitError{Code: exit.ExitCode()}
 	}
 
 	if err != nil {

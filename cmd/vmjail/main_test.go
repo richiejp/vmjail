@@ -13,7 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/richiejp/vmjail/internal/localrun"
+	"github.com/richiejp/vmjail/internal/cli"
+
+	"github.com/richiejp/vmjail/internal/nsjail"
 )
 
 const testCommand = "true"
@@ -67,14 +69,14 @@ func TestMainCode(t *testing.T) {
 		if parent != "/cgroup" {
 			t.Fatalf("VM cgroup parent = %q, want /cgroup", parent)
 		}
-		return &localrun.ExitError{Code: 7}
+		return &cli.ExitError{Code: 7}
 	}
 	if code := run(vmArgs); code != 7 || stderr.Len() != 0 {
 		t.Fatalf("workload status = %d: %s", code, &stderr)
 	}
 
 	t.Setenv(privateMountsEnv, "1")
-	runLocal = func(_ context.Context, opts localrun.Options, _ io.Reader, _, _ io.Writer) error {
+	runLocal = func(_ context.Context, opts nsjail.Options, _ io.Reader, _, _ io.Writer) error {
 		if opts.Hostname != help || len(opts.Command) != 1 || opts.Command[0] != testCommand {
 			t.Fatalf("workload options = %+v", opts)
 		}
@@ -124,7 +126,7 @@ func TestWaitNamespace(t *testing.T) {
 				return
 			}
 
-			var status *localrun.ExitError
+			var status *cli.ExitError
 			if !errors.As(err, &status) || status.Code != tc.code {
 				t.Fatalf("workload status = %v, want %d", err, tc.code)
 			}

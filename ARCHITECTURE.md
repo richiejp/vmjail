@@ -10,8 +10,10 @@ container supplies the workload's process and filesystem environment.
 - [Sandbox](docs/architecture/sandbox.md) and its
   [lifecycle](docs/architecture/sandbox-lifecycle.md): host preparation, guest
   configuration, workload execution and process cleanup.
-- `cmd/vmjail` and `internal/localrun`: nsjail-style argument parsing, filtered
+- `cmd/vmjail` and `internal/nsjail`: nsjail-style argument parsing, filtered
   host exports, generated workload specifications and foreground VM lifetime.
+- `internal/cli`: shared command streaming, terminal setup, exit status and
+  CLI presentation helpers.
 - `internal/imagestore` and `internal/sandboxboot`: OCI image preparation,
   per-run bundles and host-directory share assembly.
 - `internal/sandbox`, `internal/cgroupwrap` and `internal/userns`: VMM/virtiofsd

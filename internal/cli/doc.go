@@ -1,3 +1,3 @@
-// Package cli contains transport-independent terminal, port argument and
-// observation rendering helpers retained for the foreground sandbox CLI.
+// Package cli contains shared command-session, terminal, argument and
+// observation rendering helpers for foreground sandbox CLIs.
 package cli
