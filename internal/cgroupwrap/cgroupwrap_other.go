@@ -12,3 +12,5 @@ import "io"
 func EnsureDelegated(_ io.Writer) error {
 	return nil
 }
+
+func ReexecDelegated(w io.Writer) error { return EnsureDelegated(w) }

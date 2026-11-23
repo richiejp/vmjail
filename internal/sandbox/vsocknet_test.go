@@ -90,6 +90,11 @@ func TestStartVsockNetReceiverRoundTrip(t *testing.T) {
 		sandboxnet.DefaultGatewayMAC, guestMAC)
 
 	got := collectNet()
+	// The reader can observe the reply before the writer increments its counter.
+	for attempt := 0; attempt < 1000 && (got == nil || got.TxBytes == 0); attempt++ {
+		time.Sleep(time.Millisecond)
+		got = collectNet()
+	}
 	if got == nil {
 		t.Fatal("collectNet returned nil after round trip")
 	}

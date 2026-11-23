@@ -33,6 +33,11 @@ func TestDefaultShareDepsWiresStdlibCalls(t *testing.T) {
 	if err := deps.Mount("none", t.TempDir(), "no_such_fs", ""); err == nil {
 		t.Error("expected Mount to fail for bogus fstype")
 	}
+	for _, data := range []string{"", "ro"} {
+		if err := deps.Mount("nonexistent-tag", t.TempDir(), "virtiofs", data); err == nil {
+			t.Fatal("unexpected virtiofs mount")
+		}
+	}
 }
 
 func TestDefaultContainerDepsWiresExec(t *testing.T) {

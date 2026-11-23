@@ -90,13 +90,5 @@ func (p *pipeJobProcess) Cancel() error {
 }
 
 func (p *pipeJobProcess) Wait() (int32, error) {
-	err := p.cmd.Wait()
-	if err == nil {
-		return int32(p.cmd.ProcessState.ExitCode()), nil //nolint:gosec // process exit codes fit int32.
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return int32(exitErr.ExitCode()), nil //nolint:gosec // process exit codes fit int32.
-	}
-	return 1, err
+	return commandExitCode(p.cmd.Wait(), 1)
 }

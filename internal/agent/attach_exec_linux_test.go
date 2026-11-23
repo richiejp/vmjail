@@ -280,25 +280,6 @@ func TestPtyAttachProcessWaitNonExitError(t *testing.T) {
 	}
 }
 
-// TestOpenPtyPairOpensSomething is a minimal smoke test that the
-// allocation function itself works in isolation — the caller side
-// (tests above) drives it through Start, but a direct call gives
-// targeted coverage of the success path and a clean failure mode
-// (we never see the error branches in production unless ptmx is
-// missing, which is exotic enough not to fixture).
-func TestOpenPtyPairOpensSomething(t *testing.T) {
-	master, slave, err := openPtyPair()
-	if err != nil {
-		t.Fatalf("openPtyPair: %v", err)
-	}
-	if err := slave.Close(); err != nil {
-		t.Errorf("close slave: %v", err)
-	}
-	if err := master.Close(); err != nil {
-		t.Errorf("close master: %v", err)
-	}
-}
-
 // TestDefaultAttachCmdBuildsCrunArgs pins the production argv:
 // `crun exec <ContainerID> <argv...>` (or the /bin/sh -l
 // fallback when argv is empty). `-t` is intentionally absent —

@@ -240,22 +240,19 @@ func BuildBundleConfig(
 	}
 
 	cfg = sandbox.Config{
-		ArtifactFiles:      paths.Files,
-		CloudHypervisor:    paths.CloudHypervisor,
-		Kernel:             paths.Kernel,
-		Initramfs:          paths.Initramfs,
-		Virtiofsd:          paths.Virtiofsd,
 		Shares:             buildShares(bundle, opts.Mounts),
 		Bundle:             filepath.Join(BundlesMount, filepath.Base(bundle.Path)),
 		PostStartCommands:  opts.PostStartCommands,
 		CredentialProvider: opts.CredentialProvider,
 	}
+	cfg.ApplyArtifactDefaults(paths)
+
 	return cfg, func() { paths.Close(); bundleTeardown() }, nil
 }
 
-func credentialBundleOptions(opts BootOptions) ([]imagestore.BundleMount, []string, error) {
-	mounts := bundleMountsFromSpec(opts.Mounts)
-	env := opts.Env
+func credentialBundleOptions(opts BootOptions) (mounts []imagestore.BundleMount, env []string, err error) {
+	mounts = bundleMountsFromSpec(opts.Mounts)
+	env = opts.Env
 	if opts.ContainerPersistent {
 		mounts = append(mounts, imagestore.BundleMount{
 			Destination: persistentBinaryTarget,

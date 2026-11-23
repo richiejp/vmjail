@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 
 	"github.com/richiejp/vmjail/internal/observability"
@@ -47,6 +48,13 @@ func EnsureDelegated(stderr io.Writer) error {
 	if delegationOK() {
 		return nil
 	}
+	return ReexecDelegated(stderr)
+}
+
+// ReexecDelegated obtains a fresh scope when an inherited delegated scope is
+// shared with other processes and cannot enable its controllers. On success
+// it replaces the process image; the marker prevents a re-exec loop.
+func ReexecDelegated(stderr io.Writer) error {
 	if os.Getenv(EnvMarker) == "1" {
 		return fmt.Errorf("cgroupwrap: cgroup v2 delegation still unavailable after re-exec " +
 			"under a systemd-run scope; per-VM accounting cgroups are required and cannot be " +
@@ -73,7 +81,7 @@ func EnsureDelegated(stderr io.Writer) error {
 	argv = append(argv, "--scope", "-p", "Delegate=yes", "--quiet", "--", self)
 	argv = append(argv, os.Args[1:]...)
 	env := append(os.Environ(), EnvMarker+"=1")
-	_, _ = fmt.Fprintln(stderr, "vmjail-sandboxd: cgroup not delegated; re-exec under a systemd-run scope to obtain one")
+	_, _ = fmt.Fprintf(stderr, "%s: re-exec under a systemd-run scope for cgroup delegation\n", filepath.Base(self))
 	// execve: on success the process image is replaced and this never
 	// returns. The re-exec'd self re-enters EnsureDelegated, finds itself
 	// delegated, and proceeds.

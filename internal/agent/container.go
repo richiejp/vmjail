@@ -66,25 +66,16 @@ func prefixCopy(w io.Writer, r io.Reader, prefix string) {
 	}
 }
 
-// execContainerLinux is the production implementation of
-// ContainerDeps.Exec. It runs
-// `<ContainerRuntime> run --no-pivot --bundle <bundle> <ContainerID>`
-// and forwards stdout+stderr to w via prefixCopy.
-//
-// --no-pivot: skip pivot_root and chroot into the new rootfs instead.
-// Required because the bundle is delivered via a virtiofs share —
-// pivot_root needs the new root to be its own mountpoint, and a
-// sub-directory of the share isn't. Trade-off: chroot is escapable
-// from inside a privileged process, but the VM is the security
-// boundary anyway.
+// containerRunCommand starts the OCI bundle's initial process. The bundle can
+// live in a virtiofs subdirectory, so crun uses chroot instead of pivot_root.
+func containerRunCommand(ctx context.Context, bundle string) *exec.Cmd {
+	// #nosec G204 -- the trusted host selects the OCI bundle.
+	return exec.CommandContext(ctx, ContainerRuntime, "run", "--no-pivot", "--bundle", bundle, ContainerID)
+}
+
+// execContainerLinux runs the bundle and forwards combined output to w.
 func execContainerLinux(ctx context.Context, w io.Writer, bundle string) error {
-	// #nosec G204 — execing the container runtime IS the agent's
-	// job. ContainerRuntime is a package var the host orchestrator
-	// could only swap by code change; bundle comes from the kernel
-	// cmdline our own host code wrote. There is no untrusted input
-	// here that gosec would help with.
-	cmd := exec.CommandContext(ctx, ContainerRuntime,
-		"run", "--no-pivot", "--bundle", bundle, ContainerID)
+	cmd := containerRunCommand(ctx, bundle)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("stdout pipe: %w", err)

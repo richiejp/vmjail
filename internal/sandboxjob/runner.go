@@ -107,40 +107,16 @@ type process struct {
 func (p *process) receive() {
 	defer close(p.done)
 	defer func() { _ = p.conn.Close() }()
-	//vmjail:lint:disable=forloopbound reason="bounded by terminal JobExit, connection close, or malformed frame"
-	for {
-		frame, err := agent.ReadJobFrame(p.conn)
-		if err != nil {
-			if p.canceled.Load() && (errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF)) {
-				p.setResult(nodejob.Result{}, nil)
-				return
-			}
-			p.setResult(nodejob.Result{Reason: "guest job stream ended before exit"}, err)
+	exit, err := agent.ReadJobOutput(p.conn, p.stdout, p.stderr)
+	if err != nil {
+		if p.canceled.Load() && (errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) || errors.Is(err, io.EOF)) {
+			p.setResult(nodejob.Result{}, nil)
 			return
 		}
-		switch body := frame.GetBody().(type) {
-		case *agentv1.JobFrame_Stdout:
-			if _, err := p.stdout.Write(body.Stdout); err != nil {
-				p.setResult(nodejob.Result{Reason: "write stdout spool: " + err.Error()}, err)
-				return
-			}
-		case *agentv1.JobFrame_Stderr:
-			if _, err := p.stderr.Write(body.Stderr); err != nil {
-				p.setResult(nodejob.Result{Reason: "write stderr spool: " + err.Error()}, err)
-				return
-			}
-		case *agentv1.JobFrame_Exit:
-			if body.Exit == nil {
-				p.setResult(nodejob.Result{Reason: "guest sent nil job exit"}, errors.New("sandboxjob: nil exit"))
-				return
-			}
-			p.setResult(nodejob.Result{ExitCode: body.Exit.GetCode(), Reason: body.Exit.GetError()}, nil)
-			return
-		default:
-			p.setResult(nodejob.Result{Reason: "guest sent empty job frame"}, errors.New("sandboxjob: empty frame"))
-			return
-		}
+		p.setResult(nodejob.Result{Reason: err.Error()}, err)
+		return
 	}
+	p.setResult(nodejob.Result{ExitCode: exit.GetCode(), Reason: exit.GetError()}, nil)
 }
 
 func (p *process) setResult(result nodejob.Result, err error) {

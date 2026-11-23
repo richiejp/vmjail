@@ -22,8 +22,8 @@ import (
 
 	"github.com/richiejp/vmjail/internal/banner"
 	"github.com/richiejp/vmjail/internal/bundled"
+	"github.com/richiejp/vmjail/internal/cli"
 	"github.com/richiejp/vmjail/internal/sandbox"
-	"github.com/richiejp/vmjail/internal/version"
 )
 
 // cacheSubdir is the directory we create under os.UserCacheDir for our
@@ -43,7 +43,7 @@ func NewRootCmd() *cobra.Command {
 			"first run, and boots sandbox VMs from them.",
 		SilenceUsage: true,
 	}
-	root.AddCommand(newVersionCmd())
+	root.AddCommand(cli.NewVersionCommand("vmjail-sandboxd"))
 	root.AddCommand(newHelloCmd())
 	root.AddCommand(newPullCmd())
 	root.AddCommand(newImagesCmd())
@@ -60,21 +60,6 @@ func newDebugCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newRunCmd())
 	return cmd
-}
-
-func newVersionCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "version",
-		Short: "Print the vmjail-sandboxd version",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			if version.Version == "" {
-				return fmt.Errorf("version.Version is empty (broken build)")
-			}
-			_, err := fmt.Fprintln(cmd.OutOrStdout(), version.Version)
-			return err
-		},
-	}
 }
 
 func newHelloCmd() *cobra.Command {
@@ -135,13 +120,8 @@ func runHelloWith(ctx context.Context, w io.Writer, deps helloDeps) error {
 		return err
 	}
 	defer paths.Close()
-	cfg := sandbox.Config{
-		ArtifactFiles:   paths.Files,
-		CloudHypervisor: paths.CloudHypervisor,
-		Kernel:          paths.Kernel,
-		Initramfs:       paths.Initramfs,
-		Virtiofsd:       paths.Virtiofsd,
-	}
+	cfg := sandbox.Config{}
+	cfg.ApplyArtifactDefaults(paths)
 	// Always-on vsock: deliver config + status events over the control
 	// channel rather than the kernel cmdline.
 	vsock, cleanup, err := sandbox.NewStandaloneVsock()

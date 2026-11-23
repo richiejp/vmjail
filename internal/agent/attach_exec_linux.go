@@ -12,17 +12,9 @@ import (
 	"syscall"
 
 	"golang.org/x/sys/unix"
-)
 
-// ptmxPath is the canonical Linux PTY multiplexer. Opening it
-// triggers ptmx_open() in the kernel, which allocates a master
-// from the current mount namespace's devpts — no per-mount perm
-// checks, no CAP_SYS_ADMIN required. u-root's libinit.CreateRootfs
-// (run as PID 1 in our initramfs before exec'ing vmjail-agent) mounts
-// devpts with newinstance + ptmxmode=666 and symlinks /dev/ptmx
-// here, so this path works equally on the agent and on any Linux
-// host running the unit tests.
-const ptmxPath = "/dev/ptmx"
+	"github.com/richiejp/vmjail/internal/pty"
+)
 
 // defaultAttachDeps wires the production AF_VSOCK listener and the
 // crun-exec-with-PTY implementation of ExecAttach.
@@ -117,17 +109,24 @@ func (e *ptyAttachExec) Start(ctx context.Context, req AttachExecRequest) (Attac
 	if e.running != nil && !e.running(ctx) {
 		return nil, ErrContainerNotRunning
 	}
-	master, slave, err := openPtyPair()
+	cols, rows := uint32(0), uint32(0)
+	if req.TTY {
+		cols, rows = req.Cols, req.Rows
+	}
+	return startPTY(e.newCmd(ctx, req), cols, rows)
+}
+
+func startPTY(cmd *exec.Cmd, cols, rows uint32) (*ptyAttachProcess, error) {
+	master, slave, err := pty.Open()
 	if err != nil {
 		return nil, fmt.Errorf("agent: open pty: %w", err)
 	}
-	if req.TTY && req.Cols > 0 && req.Rows > 0 {
+	if cols > 0 && rows > 0 {
 		// Failure here is non-fatal — the PTY still works at its
 		// default 80x24, just sized wrong; a follow-up Resize
 		// from the client will recover.
-		_ = unix.IoctlSetWinsize(int(master.Fd()), unix.TIOCSWINSZ, attachWinsize(req.Cols, req.Rows))
+		_ = unix.IoctlSetWinsize(int(master.Fd()), unix.TIOCSWINSZ, attachWinsize(cols, rows))
 	}
-	cmd := e.newCmd(ctx, req)
 	cmd.Stdin = slave
 	cmd.Stdout = slave
 	cmd.Stderr = slave
@@ -160,35 +159,6 @@ func attachWinsize(cols, rows uint32) *unix.Winsize {
 	c := min(cols, maxDim)
 	r := min(rows, maxDim)
 	return &unix.Winsize{Col: uint16(c), Row: uint16(r)} //nolint:gosec // G115: bounded by maxDim above
-}
-
-// openPtyPair opens /dev/ptmx, unlocks the allocated slave, and
-// opens the matching /dev/pts/<n>. Returns master + slave as
-// *os.File so callers can use the stdlib io.Reader/Writer/Closer
-// surface.
-func openPtyPair() (master, slave *os.File, err error) {
-	fd, err := unix.Open(ptmxPath, unix.O_RDWR|unix.O_NOCTTY, 0)
-	if err != nil {
-		return nil, nil, fmt.Errorf("open %s: %w", ptmxPath, err)
-	}
-	master = os.NewFile(uintptr(fd), ptmxPath)
-	if uerr := unix.IoctlSetPointerInt(fd, unix.TIOCSPTLCK, 0); uerr != nil {
-		_ = master.Close()
-		return nil, nil, fmt.Errorf("unlockpt: %w", uerr)
-	}
-	n, gerr := unix.IoctlGetInt(fd, unix.TIOCGPTN)
-	if gerr != nil {
-		_ = master.Close()
-		return nil, nil, fmt.Errorf("ptsname: %w", gerr)
-	}
-	slavePath := fmt.Sprintf("/dev/pts/%d", n)
-	sfd, oerr := unix.Open(slavePath, unix.O_RDWR|unix.O_NOCTTY, 0)
-	if oerr != nil {
-		_ = master.Close()
-		return nil, nil, fmt.Errorf("open %s: %w", slavePath, oerr)
-	}
-	slave = os.NewFile(uintptr(sfd), slavePath)
-	return master, slave, nil
 }
 
 // ptyAttachProcess implements AttachProcess on top of a PTY master
@@ -236,15 +206,16 @@ func (p *ptyAttachProcess) Close() error {
 // surfaces as a non-nil error so the listener can report it on
 // the Exit frame.
 func (p *ptyAttachProcess) Wait() (int32, error) {
-	err := p.cmd.Wait()
+	return commandExitCode(p.cmd.Wait(), 1)
+}
+
+func commandExitCode(err error, failureCode int32) (int32, error) {
 	if err == nil {
-		// Bounded by Go's exit-code semantics (0..255); fits int32.
-		return int32(p.cmd.ProcessState.ExitCode()), nil //nolint:gosec // G115: exit code 0..255
+		return 0, nil
 	}
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) {
-		// Bounded by Go's exit-code semantics (0..255); fits int32.
-		return int32(exitErr.ExitCode()), nil //nolint:gosec // G115: exit code 0..255
+		return int32(exitErr.ExitCode()), nil //nolint:gosec // OS process exit status fits int32.
 	}
-	return 1, err
+	return failureCode, err
 }

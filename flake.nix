@@ -229,7 +229,8 @@
 
         packages = rec {
 
-          default = vmjail-sandboxd;
+          default = vmjail;
+          vmjail = vmjail-sandboxd;
 
           # Portable x86_64 Linux distribution. The sandbox executable is
           # static and embeds its VMM, kernel, initramfs, and
@@ -244,7 +245,7 @@
           } ''
             root=vmjail-${version}-linux-x86_64
             mkdir -p "$root/bin" $out
-            cp ${vmjail-sandboxd}/bin/vmjail-sandboxd "$root/bin/"
+            cp ${vmjail}/bin/vmjail ${vmjail-sandboxd}/bin/vmjail-sandboxd "$root/bin/"
             tar --sort=name --mtime=@1 --owner=0 --group=0 --numeric-owner \
               -czf "$out/$root.tar.gz" "$root"
             (cd "$out" && ${pkgs.coreutils}/bin/sha256sum "$root.tar.gz" \
@@ -729,8 +730,9 @@
           # vmjail-sandboxd is the single-executable sandbox-host. It
           # embeds cloud-hypervisor, the guest kernel, and the
           # initramfs into the binary at build time, so the resulting
-          # ELF runs on any Linux distro of the same arch with no
-          # external runtime dependencies.
+          # ELF needs no external VM artifact files. The CLI still requires
+          # host KVM, cgroups and namespaces; systemd-run
+          # obtains a dedicated delegated scope when necessary.
           vmjail-sandboxd = pkgs.buildGoModule {
             pname = "vmjail-sandboxd";
             inherit version;
@@ -742,8 +744,8 @@
             # before the Go build, so //go:embed picks them up.
             preBuild = ''
               cp ${cloud-hypervisor}/bin/cloud-hypervisor internal/bundled/assets/cloud-hypervisor
-              cp ${kernel}/bzImage internal/bundled/assets/bzImage
-              cp ${initramfs} internal/bundled/assets/initramfs.cpio.gz
+              cp ${kernel}/vmlinux internal/bundled/assets/vmlinux
+              cp ${initramfs} internal/bundled/assets/initramfs.cpio
               cp ${virtiofsd}/bin/virtiofsd internal/bundled/assets/virtiofsd
             '';
 
@@ -751,10 +753,11 @@
               "-s" "-w"
               "-X github.com/richiejp/vmjail/internal/version.Version=${version}"
             ];
-            subPackages = [ "cmd/vmjail-sandboxd" ];
+            subPackages = [ "cmd/vmjail" "cmd/vmjail-sandboxd" ];
 
             meta = with pkgs.lib; {
-              description = "vmjail sandbox-host (single-executable, statically linked)";
+              description = "Local microVM command runner and sandbox host";
+              mainProgram = "vmjail";
               license = licenses.asl20;
               maintainers = [ ];
               platforms = platforms.linux;
@@ -778,8 +781,9 @@
           # Only u-root's `init` busybox-binary, our agent, and crun end up
           # in the archive — no interpreters, no diagnostic tools, zero
           # setuid (crun is built without the +s helper bits).
-          initramfs = pkgs.runCommand "vmjail-initramfs.cpio.gz" {
-            nativeBuildInputs = [ pkgs.go pkgs.gzip pkgs.cpio ];
+          # Keep cpio uncompressed: decoding gzip added about 42 ms to guest boot.
+          initramfs = pkgs.runCommand "vmjail-initramfs.cpio" {
+            nativeBuildInputs = [ pkgs.go pkgs.cpio ];
           } ''
             export HOME=$TMPDIR
             export GOCACHE=$TMPDIR/go-cache
@@ -804,14 +808,14 @@
               -uinitcmd=/bin/vmjail-agent \
               ./cmds/core/init
 
-            gzip < $TMPDIR/initramfs.cpio > $out
+            cp $TMPDIR/initramfs.cpio $out
           '';
 
           # Linux kernel for the sandbox VM, built from the pinned
           # submodule. Config is assembled from the ground up — tinyconfig
           # + kvm_guest + our microvm/vmjail/hardening fragments (see
-          # configurePhase) — not from defconfig. Output: bzImage (suitable
-          # for Cloud Hypervisor PVH or bzImage boot).
+          # configurePhase) — not from defconfig. Boot the uncompressed ELF
+          # directly through PVH; retain bzImage for the legacy ISO fixture.
           kernel = pkgs.stdenv.mkDerivation {
             pname = "linux-vmjail";
             version = kernelVersion;
@@ -921,6 +925,11 @@
             installPhase = ''
               runHook preInstall
               mkdir -p $out
+              # Match the kernel's own boot-image stripping: retain loadable
+              # code/data, PVH notes and BTF, without DWARF/symbol tables.
+              llvm-objcopy -R .comment -S vmlinux $out/vmlinux
+              llvm-readelf -n $out/vmlinux | grep 'Xen.*0x00000012' > /dev/null
+              llvm-readelf -S $out/vmlinux | grep '\.BTF ' > /dev/null
               cp arch/x86/boot/bzImage $out/bzImage
               cp .config $out/config
               cp System.map $out/System.map
@@ -1232,8 +1241,8 @@
           # The fixture reuses vmjail's small kernel and a u-root initramfs. Its
           # only userspace payload configures eth0 at QEMU slirp's conventional
           # guest address and emits an SSH-2.0 banner on port 22.
-          iso-fixture-initramfs = pkgs.runCommand "vmjail-iso-fixture-initramfs.cpio.gz" {
-            nativeBuildInputs = [ pkgs.go pkgs.gzip pkgs.cpio ];
+          iso-fixture-initramfs = pkgs.runCommand "vmjail-iso-fixture-initramfs.cpio" {
+            nativeBuildInputs = [ pkgs.go pkgs.cpio ];
           } ''
             export HOME=$TMPDIR
             export GOCACHE=$TMPDIR/go-cache
@@ -1248,7 +1257,7 @@
               -files "${vmjail-iso-fixture-init}/bin/vmjail-iso-fixture:bin/vmjail-iso-fixture-init" \
               -uinitcmd=/bin/vmjail-iso-fixture-init \
               ./cmds/core/init
-            gzip < $TMPDIR/initramfs.cpio > $out
+            cp $TMPDIR/initramfs.cpio $out
           '';
 
           iso-ssh-fixture =
@@ -1259,7 +1268,7 @@
                 TIMEOUT 1
                 LABEL vmjail
                   KERNEL /bzImage
-                  INITRD /initramfs.cpio.gz
+                  INITRD /initramfs.cpio
                   APPEND console=ttyS0,115200n8 panic=-1
               '';
             in pkgs.runCommand "vmjail-iso-ssh-fixture" {
@@ -1267,7 +1276,7 @@
             } ''
               mkdir -p $out/iso image/isolinux
               cp ${kernel}/bzImage image/bzImage
-              cp ${iso-fixture-initramfs} image/initramfs.cpio.gz
+              cp ${iso-fixture-initramfs} image/initramfs.cpio
               cp ${pkgs.syslinux}/share/syslinux/isolinux.bin image/isolinux/
               cp ${pkgs.syslinux}/share/syslinux/ldlinux.c32 image/isolinux/
               cp ${isolinuxCfg} image/isolinux/isolinux.cfg

@@ -1,6 +1,6 @@
 //go:build linux && integration
 
-package bundled
+package bundled_test
 
 import (
 	"bytes"
@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/richiejp/vmjail/internal/agent"
+	"github.com/richiejp/vmjail/internal/bundled"
 	"github.com/richiejp/vmjail/internal/sandbox"
 )
 
@@ -30,7 +31,7 @@ func TestSealedAssetsBootContainer(t *testing.T) {
 		}
 		return data
 	}
-	p, err := loadAssets(read(sandbox.EnvCloudHypervisor), read(sandbox.EnvKernel), read(sandbox.EnvInitramfs), read(sandbox.EnvVirtiofsd))
+	p, err := bundled.LoadAssetsForTest(read(sandbox.EnvCloudHypervisor), read(sandbox.EnvKernel), read(sandbox.EnvInitramfs), read(sandbox.EnvVirtiofsd))
 	if err != nil {
 		t.Fatal(err)
 	}

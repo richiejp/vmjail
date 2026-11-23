@@ -10,6 +10,8 @@ container supplies the workload's process and filesystem environment.
 - [Sandbox](docs/architecture/sandbox.md) and its
   [lifecycle](docs/architecture/sandbox-lifecycle.md): host preparation, guest
   configuration, workload execution and process cleanup.
+- `cmd/vmjail` and `internal/localrun`: nsjail-style argument parsing, filtered
+  host exports, generated workload specifications and foreground VM lifetime.
 - `internal/imagestore` and `internal/sandboxboot`: OCI image preparation,
   per-run bundles and host-directory share assembly.
 - `internal/sandbox`, `internal/cgroupwrap` and `internal/userns`: VMM/virtiofsd
@@ -24,14 +26,12 @@ container supplies the workload's process and filesystem environment.
 ## Reduction status
 
 The distributed control plane, web UI and workspace CAS implementation have
-been deleted. Some retained launchers and tests still reference those packages,
-so the complete application does not yet build. This page describes the local
-runtime being retained, not a claim that its replacement CLI is finished.
-
-The next change must separate local launch and observation setup from the old
-remote dispatch paths. Direct host shares already exist, but the launcher must
-preserve bundle ownership, cgroup/user-namespace setup and guest observation
-configuration. See [PLAN.md](PLAN.md) for remaining work and validation status.
+been deleted. The local CLI now runs host commands
+without pulling an image, using filtered host shares and a generated crun
+specification. The retained sandboxd launcher also supports image/bundle
+preparation. See [the CLI experiment report](docs/nsjail-experiment.md) for the
+supported nsjail subset and observed differences, and [PLAN.md](PLAN.md) for
+validation and remaining work.
 
 ## Boundaries
 

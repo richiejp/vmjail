@@ -1,7 +1,6 @@
 # Local sandbox lifecycle
 
-The diagram shows the retained local runtime's responsibilities, not a remote
-state machine or a completed replacement CLI. See the
+The diagram shows the local runtime's responsibilities. See the
 [Graphviz source](diagrams/sandbox-lifecycle.dot).
 
 ![Local sandbox lifecycle](diagrams/sandbox-lifecycle.svg)
@@ -10,7 +9,7 @@ state machine or a completed replacement CLI. See the
 
 | Stage | Work |
 | --- | --- |
-| Prepare | Validate required artifacts, shares, devices and resource configuration; assemble the image bundle and prepare namespaces and cgroups. |
+| Prepare | Validate required artifacts, shares, devices and resource configuration; assemble an image bundle or host-command specification and prepare namespaces and cgroups. |
 | Start | Start virtiofsd sidecars, host control listeners and the VMM. |
 | Configure guest | Deliver configuration over vsock; mount shares, start requested listeners and wait for instrumentation readiness. |
 | Execute | Run the OCI workload with crun. |
@@ -19,8 +18,8 @@ state machine or a completed replacement CLI. See the
 
 `Hello` is a smoke-test runner with a 30-second deadline. `RunToCompletion`
 waits for the guest completion event without that fixed deadline. `Serve`
-supervises a persistent VM until cancellation or VMM exit. The local CLI must
-choose its intended behavior explicitly.
+supervises a persistent VM until cancellation or VMM exit. The local CLI uses `Serve`, receives command output and exit status over its
+command channel, then cancels the VM and waits for cleanup.
 
 ## Initial invariants to formalise
 
@@ -34,7 +33,8 @@ watchdog diagnostics for stalled teardown, and remove the cgroup only after
 child-process cleanup. Finish draining process output before reporting
 completion, while keeping cancellation paths bounded.
 
-The replacement local launcher must preserve this ordering and its tests.
+The local launcher preserves this ordering; its CLI end-to-end tests also
+exercise cancellation, reruns and consecutive TCP requests.
 [Observability](../../OBSERVABILITY.md) describes cgroup membership,
 instrumentation readiness and diagnostic retention.
 

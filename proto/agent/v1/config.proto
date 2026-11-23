@@ -110,6 +110,9 @@ message GuestConfig {
   // for attach/job requests.
   bool container_persistent = 11;
 
+  // Run the OCI entrypoint over the dedicated host command stream.
+  bool host_command = 12;
+
   reserved 10;
   reserved "workspace_disk";
 

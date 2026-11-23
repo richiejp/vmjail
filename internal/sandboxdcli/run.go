@@ -189,11 +189,6 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 	unlock = func() { vsockCleanup(); bundleUnlock() }
 
 	cfg := sandbox.Config{
-		ArtifactFiles:   paths.Files,
-		CloudHypervisor: paths.CloudHypervisor,
-		Kernel:          paths.Kernel,
-		Initramfs:       paths.Initramfs,
-		Virtiofsd:       paths.Virtiofsd,
 		Shares: []*sandbox.ShareConfig{{
 			HostDir:    filepath.Dir(bundle.Path),
 			Tag:        bundlesTag,
@@ -202,6 +197,8 @@ func assembleBootConfig(ctx context.Context, opts runOptions, workspaceDir strin
 		Bundle: filepath.Join(bundlesMount, filepath.Base(bundle.Path)),
 		Vsock:  vsock,
 	}
+	cfg.ApplyArtifactDefaults(paths)
+
 	if workspaceDir != "" {
 		abs, err := filepath.Abs(workspaceDir)
 		if err != nil {

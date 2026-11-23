@@ -30,8 +30,8 @@ func loadAssets(ch, kernel, initramfs, virtiofsd []byte) (p Paths, err error) {
 		executable bool
 	}{
 		{"cloud-hypervisor", ch, true},
-		{"bzImage", kernel, false},
-		{"initramfs.cpio.gz", initramfs, false},
+		{"vmlinux", kernel, false},
+		{"initramfs.cpio", initramfs, false},
 		{"virtiofsd", virtiofsd, true},
 	}
 	paths := []*string{&p.CloudHypervisor, &p.Kernel, &p.Initramfs, &p.Virtiofsd}

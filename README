@@ -8,13 +8,36 @@ sandbox like those using namespaces (e.g. nsjail).
 A local Linux microVM sandbox for running an OCI container with explicit
 host-directory mounts and host/guest observability. Cloud Hypervisor supplies
 the VM, virtiofsd serves the shared directories, and a guest helper runs the
-container with crun.
+container with crun. The default kernel boots directly as an uncompressed
+ELF through PVH, with an uncompressed initramfs and performance-oriented
+kernel compiler optimization.
 
 This repository is being reduced from darkaifactory. The distributed control
 plane, web interface, remote client/MCP facade and workspace CAS have been deleted. The remaining Go packages compile and pass the default test suite.
-The replacement local command wiring is still in progress. The Go module is
-github.com/richiejp/vmjail; the host executable is vmjail-sandboxd and the guest
-helper is vmjail-agent. Configuration variables use the VMJAIL_ prefix.
+The Go module is github.com/richiejp/vmjail. The vmjail CLI runs host commands
+inside a VM with an nsjail-style argument subset; vmjail-sandboxd retains the
+image/bundle interface. The guest helper is vmjail-agent. Configuration
+variables use the VMJAIL_ prefix.
+
+Run a host command
+------------------
+
+    nix build
+    ./result/bin/vmjail -Mo --chroot / -- /bin/sh -c 'echo hello'
+
+    # Allow writes only to a selected host directory.
+    ./result/bin/vmjail -c / -B "$PWD:/work" --cwd /work -- /bin/sh
+
+    # Retain guest IO/process traces and host resource logs.
+    ./result/bin/vmjail -c / --observe-dir ./traces -- /bin/sh
+
+This requires Linux, KVM, user/mount namespaces and a delegated cgroup (automatically obtained through systemd-run when available).
+The selected root supplies executable files and libraries; no container image
+is needed. --chroot / exposes ordinary readable host files. Host kernel
+pseudo-filesystems are masked and /dev, /proc and /sys belong to the guest.
+Without --chroot, the root is empty apart from guest system mounts and explicit
+-R/-B mounts. See docs/nsjail-experiment.md for examples, limitations and the
+implementation report.
 
 Retained capabilities
 ---------------------
@@ -33,14 +56,15 @@ filesystem audit.
 Development
 -----------
 
-The Nix flake and .envrc describe the development toolchain. Existing Makefile
-and deployment targets still need cleanup for local operation. Run the default
-Go tests with go test ./internal/... ./cmd/...; see PLAN.md for validation
-results and outstanding launcher/end-to-end work.
+The Nix flake and .envrc describe the development toolchain. make dev builds
+local artifacts and the CLI; make check runs the fast gates; make verify also
+runs real VM tests, benchmark checks and fuzzing. See docs/nsjail-experiment.md
+for development artifact environment variables and PLAN.md for current work.
 
 Documentation
 -------------
 
+- docs/nsjail-experiment.md: local CLI usage, compatibility and experiment findings.
 - ARCHITECTURE.md: the retained local runtime and component boundaries.
 - OBSERVABILITY.md: host accounting, guest gadgets and diagnostic files.
 - docs/usage/storage-paths.md: local state and cache locations.

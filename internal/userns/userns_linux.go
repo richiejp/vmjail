@@ -64,6 +64,19 @@ var (
 	}
 )
 
+// RootMappedMountNamespace configures a child with a private mount namespace
+// and the current effective UID and GID mapped to root. Go's fork/exec path
+// installs the maps and makes mounts recursively private before exec.
+func RootMappedMountNamespace() *syscall.SysProcAttr {
+	return &syscall.SysProcAttr{
+		Unshareflags:               syscall.CLONE_NEWUSER | syscall.CLONE_NEWNS,
+		UidMappings:                []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Geteuid(), Size: 1}},
+		GidMappings:                []syscall.SysProcIDMap{{ContainerID: 0, HostID: os.Getegid(), Size: 1}},
+		GidMappingsEnableSetgroups: false,
+		Pdeathsig:                  syscall.SIGKILL,
+	}
+}
+
 // Reexec ensures the calling process runs inside a user
 // namespace populated with a multi-range mapping derived from
 // the current user's /etc/subuid + /etc/subgid entries.

@@ -834,3 +834,18 @@ func TestParentReexecRunWithStubsExecutesFullFlow(t *testing.T) {
 		t.Errorf("code = %d, want 0", code)
 	}
 }
+
+func TestRootMappedMountNamespace(t *testing.T) {
+	attr := RootMappedMountNamespace()
+	if attr.Unshareflags != syscall.CLONE_NEWUSER|syscall.CLONE_NEWNS || attr.Pdeathsig != syscall.SIGKILL {
+		t.Fatalf("namespace process attributes = %+v", attr)
+	}
+	wantUID := syscall.SysProcIDMap{ContainerID: 0, HostID: os.Geteuid(), Size: 1}
+	wantGID := syscall.SysProcIDMap{ContainerID: 0, HostID: os.Getegid(), Size: 1}
+	if len(attr.UidMappings) != 1 || attr.UidMappings[0] != wantUID {
+		t.Fatalf("UID mapping = %v, want %v", attr.UidMappings, wantUID)
+	}
+	if len(attr.GidMappings) != 1 || attr.GidMappings[0] != wantGID || attr.GidMappingsEnableSetgroups {
+		t.Fatalf("GID mapping = %v, want %v with setgroups denied", attr.GidMappings, wantGID)
+	}
+}

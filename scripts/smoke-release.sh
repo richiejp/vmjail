@@ -14,8 +14,10 @@ root=$(find "$work" -mindepth 1 -maxdepth 1 -type d -name 'vmjail-*' -print)
 test -n "$root"
 test "$(printf '%s\n' "$root" | wc -l)" -eq 1
 
-test -x "$root/bin/vmjail-sandboxd"
-"$root/bin/vmjail-sandboxd" version >/dev/null
-"$root/bin/vmjail-sandboxd" --help >/dev/null
+for binary in vmjail vmjail-sandboxd; do
+	test -x "$root/bin/$binary"
+	"$root/bin/$binary" version >/dev/null
+	"$root/bin/$binary" --help >/dev/null
+done
 
 echo "portable release smoke passed"

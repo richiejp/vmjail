@@ -1,5 +1,5 @@
 // Package bundled embeds the sandbox-host artifacts (cloud-hypervisor,
-// the guest kernel bzImage, the initramfs cpio) into the vmjail-sandboxd
+// the guest kernel ELF, the initramfs cpio) into the vmjail-sandboxd
 // binary so it can be shipped as a single static executable.
 //
 // Builds outside the project's Nix flake see empty stub files in
@@ -17,10 +17,10 @@ import (
 //go:embed assets/cloud-hypervisor
 var cloudHypervisorBin []byte
 
-//go:embed assets/bzImage
+//go:embed assets/vmlinux
 var kernelBin []byte
 
-//go:embed assets/initramfs.cpio.gz
+//go:embed assets/initramfs.cpio
 var initramfsBin []byte
 
 //go:embed assets/virtiofsd

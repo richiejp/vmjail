@@ -192,8 +192,10 @@ type GuestConfig struct {
 	// misleading boot-complete state and remaining reachable without a target
 	// for attach/job requests.
 	ContainerPersistent bool `protobuf:"varint,11,opt,name=container_persistent,json=containerPersistent,proto3" json:"container_persistent,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	// Run the OCI entrypoint over the dedicated host command stream.
+	HostCommand   bool `protobuf:"varint,12,opt,name=host_command,json=hostCommand,proto3" json:"host_command,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GuestConfig) Reset() {
@@ -292,6 +294,13 @@ func (x *GuestConfig) GetCredentialProvider() string {
 func (x *GuestConfig) GetContainerPersistent() bool {
 	if x != nil {
 		return x.ContainerPersistent
+	}
+	return false
+}
+
+func (x *GuestConfig) GetHostCommand() bool {
+	if x != nil {
+		return x.HostCommand
 	}
 	return false
 }
@@ -616,7 +625,7 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\n" +
 	"\x15agent/v1/config.proto\x12\x0fvmjail.agent.v1\"9\n" +
 	"\x12GuestConfigRequest\x12#\n" +
-	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\xdd\a\n" +
+	"\ragent_version\x18\x01 \x01(\tR\fagentVersion\"\x80\b\n" +
 	"\vGuestConfig\x12\x16\n" +
 	"\x06bundle\x18\x01 \x01(\tR\x06bundle\x12:\n" +
 	"\x06shares\x18\x02 \x03(\v2\".vmjail.agent.v1.GuestConfig.ShareR\x06shares\x12M\n" +
@@ -628,7 +637,8 @@ const file_agent_v1_config_proto_rawDesc = "" +
 	"\rtrace_enabled\x18\a \x01(\bR\ftraceEnabled\x12]\n" +
 	"\x13post_start_commands\x18\b \x03(\v2-.vmjail.agent.v1.GuestConfig.PostStartCommandR\x11postStartCommands\x12/\n" +
 	"\x13credential_provider\x18\t \x01(\tR\x12credentialProvider\x121\n" +
-	"\x14container_persistent\x18\v \x01(\bR\x13containerPersistent\x1ap\n" +
+	"\x14container_persistent\x18\v \x01(\bR\x13containerPersistent\x12!\n" +
+	"\fhost_command\x18\f \x01(\bR\vhostCommand\x1ap\n" +
 	"\x05Share\x12\x10\n" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x1e\n" +
 	"\n" +

@@ -160,6 +160,7 @@ func startVsockConfigServer(ctx context.Context, cfg Config) (stop func(), bootC
 // carries no vmjail.* tokens at all.
 func buildGuestConfig(cfg Config) *agentv1.GuestConfig {
 	gc := &agentv1.GuestConfig{
+		HostCommand:         cfg.HostCommand,
 		Bundle:              cfg.Bundle,
 		CredentialProvider:  cfg.CredentialProvider,
 		ContainerPersistent: cfg.ContainerPersistent,

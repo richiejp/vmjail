@@ -105,9 +105,7 @@ func handleJob(ctx context.Context, w io.Writer, conn net.Conn, executor ExecJob
 	hello, err := ReadJobHello(conn)
 	if err != nil {
 		writeReport(w, jobReportPrefix, "read hello: "+err.Error())
-		_ = WriteJobFrame(conn, &agentv1.JobFrame{Body: &agentv1.JobFrame_Exit{
-			Exit: &agentv1.JobExit{Code: 1, Error: "agent: read job hello: " + err.Error()},
-		}})
+		_ = writeJobExit(conn, &agentv1.JobExit{Code: 1, Error: "agent: read job hello: " + err.Error()})
 		return
 	}
 	jobCtx, cancel := context.WithCancel(ctx)
@@ -117,9 +115,7 @@ func handleJob(ctx context.Context, w io.Writer, conn net.Conn, executor ExecJob
 	})
 	if err != nil {
 		writeReport(w, jobReportPrefix, "exec start: "+err.Error())
-		_ = WriteJobFrame(conn, &agentv1.JobFrame{Body: &agentv1.JobFrame_Exit{
-			Exit: &agentv1.JobExit{Code: 1, Error: "agent: job exec start: " + err.Error()},
-		}})
+		_ = writeJobExit(conn, &agentv1.JobExit{Code: 1, Error: "agent: job exec start: " + err.Error()})
 		return
 	}
 	defer func() { oops.Skip("agent: cancel job process", process.Cancel(), net.ErrClosed, os.ErrProcessDone) }()
@@ -133,11 +129,11 @@ func handleJob(ctx context.Context, w io.Writer, conn net.Conn, executor ExecJob
 		_ = process.Cancel()
 	}()
 
-	var writeMu sync.Mutex
+	streams := jobOutput{conn: conn}
 	var pumps sync.WaitGroup
 	pumps.Add(2)
-	go pumpJobOutput(process.Stdout(), true, conn, &writeMu, process, &pumps)
-	go pumpJobOutput(process.Stderr(), false, conn, &writeMu, process, &pumps)
+	go pumpJobOutput(process.Stdout(), streams.stdout(), process, &pumps)
+	go pumpJobOutput(process.Stderr(), streams.stderr(), process, &pumps)
 	// StdoutPipe and StderrPipe require their readers to reach EOF before Wait:
 	// exec.Cmd.Wait closes both pipes and can otherwise discard a short-lived
 	// command's final output. Process exit closes the writers, so both pumps can
@@ -150,35 +146,90 @@ func handleJob(ctx context.Context, w io.Writer, conn net.Conn, executor ExecJob
 		exit.Error = "agent: job exec wait: " + waitErr.Error()
 		writeReport(w, jobReportPrefix, "exec wait: "+waitErr.Error())
 	}
-	writeMu.Lock()
-	_ = WriteJobFrame(conn, &agentv1.JobFrame{Body: &agentv1.JobFrame_Exit{Exit: exit}})
-	writeMu.Unlock()
+	_ = writeJobExit(conn, exit)
 }
 
-func pumpJobOutput(src io.Reader, stdout bool, conn net.Conn, writeMu *sync.Mutex, process JobProcess, done *sync.WaitGroup) {
+func pumpJobOutput(src io.Reader, dst io.Writer, process JobProcess, done *sync.WaitGroup) {
 	defer done.Done()
-	buf := make([]byte, jobCopyBufSize)
-	//vmjail:lint:disable=forloopbound reason="bounded by process pipe EOF or cancellation closing the pipe"
-	for {
-		n, err := src.Read(buf)
-		if n > 0 {
-			data := append([]byte(nil), buf[:n]...)
-			frame := &agentv1.JobFrame{Body: &agentv1.JobFrame_Stderr{Stderr: data}}
-			if stdout {
-				frame.Body = &agentv1.JobFrame_Stdout{Stdout: data}
-			}
-			writeMu.Lock()
-			writeErr := WriteJobFrame(conn, frame)
-			writeMu.Unlock()
-			if writeErr != nil {
-				_ = process.Cancel()
-				return
-			}
+	if _, err := io.CopyBuffer(dst, src, make([]byte, jobCopyBufSize)); err != nil {
+		oops.Skip("agent: cancel job process after output failure", process.Cancel(), net.ErrClosed, os.ErrProcessDone)
+	}
+}
+
+// jobOutput serializes frames from concurrent stdout and stderr pumps.
+type jobOutput struct {
+	conn io.Writer
+	mu   sync.Mutex
+}
+
+func (o *jobOutput) stdout() jobOutputWriter { return jobOutputWriter{output: o} }
+func (o *jobOutput) stderr() jobOutputWriter { return jobOutputWriter{output: o, stderr: true} }
+
+type jobOutputWriter struct {
+	output *jobOutput
+	stderr bool
+}
+
+func (w jobOutputWriter) Write(data []byte) (int, error) {
+	w.output.mu.Lock()
+	defer w.output.mu.Unlock()
+
+	written := 0
+	for len(data) > 0 {
+		chunk := data[:min(len(data), jobCopyBufSize)]
+		frame := &agentv1.JobFrame{Body: &agentv1.JobFrame_Stdout{Stdout: chunk}}
+		if w.stderr {
+			frame.Body = &agentv1.JobFrame_Stderr{Stderr: chunk}
 		}
+
+		if err := WriteJobFrame(w.output.conn, frame); err != nil {
+			return written, err
+		}
+		written += len(chunk)
+		data = data[len(chunk):]
+	}
+	return written, nil
+}
+
+func writeJobExit(w io.Writer, exit *agentv1.JobExit) error {
+	return WriteJobFrame(w, &agentv1.JobFrame{Body: &agentv1.JobFrame_Exit{Exit: exit}})
+}
+
+// ReadJobOutput drains both output streams through the exit frame. Guest
+// command failures are reported by the exit frame; err describes the stream.
+func ReadJobOutput(r io.Reader, stdout, stderr io.Writer) (*agentv1.JobExit, error) {
+	//vmjail:lint:disable=forloopbound reason="bounded by a terminal exit frame or a stream error"
+	for {
+		frame, err := ReadJobFrame(r)
 		if err != nil {
-			return
+			return nil, fmt.Errorf("guest job stream ended before exit: %w", err)
+		}
+		switch body := frame.GetBody().(type) {
+		case *agentv1.JobFrame_Stdout:
+			if err := writeStreamBytes(stdout, body.Stdout); err != nil {
+				return nil, fmt.Errorf("write stdout spool: %w", err)
+			}
+		case *agentv1.JobFrame_Stderr:
+			if err := writeStreamBytes(stderr, body.Stderr); err != nil {
+				return nil, fmt.Errorf("write stderr spool: %w", err)
+			}
+		case *agentv1.JobFrame_Exit:
+			if body.Exit == nil {
+				return nil, errors.New("guest sent nil job exit")
+			}
+			return body.Exit, nil
+		default:
+			return nil, errors.New("guest sent empty job frame")
 		}
 	}
+}
+
+func writeStreamBytes(dst io.Writer, data []byte) error {
+	n, err := dst.Write(data)
+	if err == nil && n != len(data) {
+		return io.ErrShortWrite
+	}
+	return err
 }
 
 func WriteJobHello(w io.Writer, hello *agentv1.JobHello) error {

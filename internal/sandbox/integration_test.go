@@ -48,7 +48,7 @@ func resolveArtifacts(t testing.TB) Config {
 		CloudHypervisor: artefactPath(t, EnvCloudHypervisor,
 			filepath.Join(repoRoot, "result-ch", "bin", "cloud-hypervisor")),
 		Kernel: artefactPath(t, EnvKernel,
-			filepath.Join(repoRoot, "result-kernel", "bzImage")),
+			filepath.Join(repoRoot, "result-kernel", "vmlinux")),
 		Initramfs: artefactPath(t, EnvInitramfs,
 			filepath.Join(repoRoot, "result-initramfs")),
 		Virtiofsd: artefactPath(t, EnvVirtiofsd,

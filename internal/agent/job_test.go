@@ -308,3 +308,61 @@ func TestRunJobListenerReportsListenAndAcceptErrors(t *testing.T) {
 		})
 	}
 }
+
+// A writer that reports a short write without an error must still yield a
+// transport error, whether the writer is a downstream consumer or the wire.
+type shortJobWriter struct{}
+
+func (shortJobWriter) Write(data []byte) (int, error) { return len(data) / 2, nil }
+
+func TestReadJobOutputRejectsShortWrites(t *testing.T) {
+	for _, stderr := range []bool{false, true} {
+		var wire bytes.Buffer
+		output := jobOutput{conn: &wire}
+		stream := output.stdout()
+		if stderr {
+			stream = output.stderr()
+		}
+		if _, err := stream.Write([]byte("output")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ReadJobOutput(&wire, shortJobWriter{}, shortJobWriter{}); !errors.Is(err, io.ErrShortWrite) {
+			t.Fatalf("stderr=%t: expected short write, got %v", stderr, err)
+		}
+	}
+	if err := WriteJobFrame(shortJobWriter{}, &agentv1.JobFrame{}); !errors.Is(err, io.ErrShortWrite) {
+		t.Fatalf("expected short wire write, got %v", err)
+	}
+}
+
+func TestReadJobOutputDecodesExitAndRejectsUnexpectedFrames(t *testing.T) {
+	var wire, stdout, stderr bytes.Buffer
+	output := jobOutput{conn: &wire}
+	if _, err := output.stdout().Write([]byte("standard output")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := output.stderr().Write([]byte("standard error")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJobExit(&wire, &agentv1.JobExit{Code: 17, Error: "guest failure"}); err != nil {
+		t.Fatal(err)
+	}
+
+	exit, err := ReadJobOutput(&wire, &stdout, &stderr)
+	if err != nil || exit.GetCode() != 17 || exit.GetError() != "guest failure" {
+		t.Fatalf("exit = %v, %v", exit, err)
+	}
+	if stdout.String() != "standard output" || stderr.String() != "standard error" {
+		t.Fatalf("stdout = %q, stderr = %q", stdout.String(), stderr.String())
+	}
+
+	if _, err := ReadJobOutput(&wire, io.Discard, io.Discard); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF before exit, got %v", err)
+	}
+	if err := WriteJobFrame(&wire, &agentv1.JobFrame{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadJobOutput(&wire, io.Discard, io.Discard); err == nil {
+		t.Fatal("empty output frame accepted")
+	}
+}

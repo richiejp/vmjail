@@ -214,12 +214,10 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	// goroutine and returns immediately, so it never blocks the boot before
 	// runContainer below.
 	startPostStart(ctx, w, d)
-	if startNetBridge(ctx, w, d) != nil && bundle != "" {
-		// The container shares the VM's init netns, so it inherits
-		// tap0 + the default route. resolv.conf is the only missing
-		// piece for DNS to resolve through the sandboxnet gateway.
-		WriteContainerResolvConf(w, bundle)
+	if err := configureContainerNetwork(ctx, w, d, bundle); err != nil {
+		return err
 	}
+
 	// Put /sys/fs/cgroup on v2 before crun runs so it manages the
 	// container under the unified hierarchy (see ensureCgroupV2), and
 	// lift the guest's pristine-low rlimits to a normal-host level so the
@@ -254,6 +252,11 @@ func runWith(ctx context.Context, w io.Writer, d runDeps) error {
 	// nothing — the gadgets still attach in the background.
 	if bundle != "" {
 		awaitGadgetsAttached(ctx, w, osReady, exReady, slReady, ioReady)
+	}
+	if cfg.GetHostCommand() {
+		err := runHostCommand(ctx, bundle, d.dialVsock)
+		bootSpan.End()
+		return finishHostCommand(ctx, tracer, w, err)
 	}
 	containerErr := runContainer(ctx, w, d, bundle)
 	bootSpan.End()
@@ -507,4 +510,20 @@ func Main(parent context.Context, stdout, stderr io.Writer, signals ...os.Signal
 	_, werr := fmt.Fprintln(stderr, "vmjail-agent:", err)
 	oops.Must("agent: write Main error", werr)
 	return 1
+}
+
+func configureContainerNetwork(ctx context.Context, w io.Writer, d runDeps, bundle string) error {
+	bridge := startNetBridge(ctx, w, d)
+	if d.cfg.GetHostCommand() && d.cfg.GetNetEnabled() && bridge == nil {
+		return errors.New("agent: requested networking failed")
+	}
+	if bridge != nil && bundle != "" && !d.cfg.GetHostCommand() {
+		WriteContainerResolvConf(w, bundle)
+	}
+	return nil
+}
+
+func finishHostCommand(ctx context.Context, tracer *trace.Tracer, w io.Writer, err error) error {
+	shutdownTracer(ctx, tracer, w)
+	return err
 }

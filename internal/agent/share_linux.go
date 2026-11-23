@@ -12,7 +12,15 @@ import (
 func defaultShareDeps() ShareDeps {
 	return ShareDeps{
 		Mount: func(source, target, fstype, data string) error {
-			return syscall.Mount(source, target, fstype, 0, data)
+			flags := uintptr(0)
+			if fstype == "virtiofs" {
+				flags = syscall.MS_NODEV | syscall.MS_NOSUID
+				if data == "ro" {
+					flags |= syscall.MS_RDONLY
+					data = ""
+				}
+			}
+			return syscall.Mount(source, target, fstype, flags, data)
 		},
 		MkdirAll: os.MkdirAll,
 		ReadFile: os.ReadFile,

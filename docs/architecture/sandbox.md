@@ -22,15 +22,18 @@ writes remain in the host directory; there is no remote synchronization step.
 
 ## Implementation map
 
-- Process setup: [`cmd/vmjail-sandboxd`](../../cmd/vmjail-sandboxd/)
+- Host-command CLI: [`cmd/vmjail`](../../cmd/vmjail/) and
+  [`internal/localrun`](../../internal/localrun/)
+- Image/bundle entry point: [`cmd/vmjail-sandboxd`](../../cmd/vmjail-sandboxd/)
 - VM supervision: [`internal/sandbox`](../../internal/sandbox/)
 - Bundle and share assembly: [`internal/sandboxboot`](../../internal/sandboxboot/)
 - Image storage: [`internal/imagestore`](../../internal/imagestore/)
 - Guest runtime: [`internal/agent`](../../internal/agent/)
 - Observation: [`OBSERVABILITY.md`](../../OBSERVABILITY.md)
 
-These local pieces are retained, but the old command wiring still has imports
-of deleted components. The new local launcher is not yet complete.
+The local CLI exports filtered host files, generates the workload specification
+and relays command input/output over vsock. Its
+[experiment report](../nsjail-experiment.md) describes compatibility limits.
 
 Parent: [Architecture](../../ARCHITECTURE.md).
 Lifecycle: [Sandbox lifecycle](sandbox-lifecycle.md).

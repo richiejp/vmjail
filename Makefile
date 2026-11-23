@@ -1,4 +1,4 @@
-.PHONY: all check check-submodule-revs check-agent-tools check-architecture-docs verify fmt check-fmt lint lint-golangci lint-vmjail test cover cover-check bench bench-check fuzz hooks build build-vmjail-agent build-vmjail-hello-container build-vmjail-sandboxd build-artefacts build-initramfs build-hello-bundle dev integration integration-build proto gen-bpf clean help
+.PHONY: all check check-submodule-revs check-agent-tools check-architecture-docs verify fmt check-fmt lint lint-golangci lint-vmjail test cover cover-check bench bench-check fuzz hooks build build-vmjail build-vmjail-agent build-vmjail-hello-container build-vmjail-sandboxd build-artefacts build-initramfs build-hello-bundle dev integration integration-build proto gen-bpf clean help
 
 # Single source of truth for the version
 VERSION := $(shell cat version.txt)
@@ -81,7 +81,7 @@ help:
 	@echo "  proto       - regenerate Go code from proto/*.proto"
 	@echo "  gen-bpf     - regenerate Tier-2 eBPF gadget loaders (bpf2go)"
 	@echo "  hooks       - install git pre-commit (make verify) + pre-push (nix flake check) hooks into .git/hooks"
-	@echo "  build       - build vmjail, vmjail-agent, vmjail-sandboxd, vmjail-orchestrator into ./bin/ (dev only)"
+	@echo "  build       - build vmjail, vmjail-agent and vmjail-sandboxd into ./bin/ (dev only)"
 	@echo "  dev         - build everything in the dev shell: Go binaries + VM toolchain (kernel/CH/virtiofsd/crun/u-root) + initramfs + bundle"
 
 ## Formatting ----------------------------------------------------------------
@@ -207,9 +207,10 @@ fuzz:
 # Linux + KVM is required, not optional. The pre-commit hook runs
 # this on every commit — there is no graceful degradation.
 
+# Initramfs is uncompressed to avoid guest decompression at every boot.
 # Local artefact outputs. Both live under bin/ (gitignored) so they
 # don't escape into the repo or into /nix/store.
-INITRAMFS_OUT := $(BIN_DIR)/initramfs.cpio.gz
+INITRAMFS_OUT := $(BIN_DIR)/initramfs.cpio
 BUNDLE_OUT    := $(BIN_DIR)/hello-bundle
 # Sandbox-VM toolchain artefacts, built fresh from the flake by
 # `build-artefacts` (nix build -o) instead of exported by the dev shell.
@@ -256,7 +257,6 @@ build-initramfs: build-vmjail-agent build-artefacts
 		-files "$(CURDIR)/$(NIX_CRUN_OUT)/bin/crun:bin/crun" \
 		-uinitcmd=/bin/vmjail-agent \
 		./cmds/core/init
-	@gzip -f -n $(BIN_DIR)/initramfs.cpio
 	@rm -rf $(BIN_DIR)/initramfs-work
 
 # build-hello-bundle assembles the OCI bundle the integration test
@@ -302,14 +302,14 @@ integration: integration-build
 		fi; \
 		export VMJAIL_INITRAMFS=$(CURDIR)/$(INITRAMFS_OUT); \
 			export VMJAIL_BUNDLE=$(CURDIR)/$(BUNDLE_OUT); \
-			export VMJAIL_KERNEL=$(CURDIR)/$(NIX_KERNEL_OUT)/bzImage; \
+			export VMJAIL_KERNEL=$(CURDIR)/$(NIX_KERNEL_OUT)/vmlinux; \
 			export VMJAIL_CLOUD_HYPERVISOR=$(CURDIR)/$(NIX_CHV_OUT)/bin/cloud-hypervisor; \
 			export VMJAIL_VIRTIOFSD=$(CURDIR)/$(NIX_VIRTIOFSD_OUT)/bin/virtiofsd; \
 			runflag=""; [ -n "$$INTEGRATION_RUN" ] && runflag="-run $$INTEGRATION_RUN"; \
 			rc=0; \
 			echo "[e2e] sandbox + sealed assets — in-process host shares the delegated scope: per-VM accounting, limits off"; \
 			sandbox_log=$$(mktemp /tmp/vmjail-integration-sandbox.XXXXXX.log); \
-			if $$delegate go test -v -tags=integration -count=1 -timeout 20m $$runflag -p 1 ./internal/sandbox/ ./internal/bundled/ 9>&- >$$sandbox_log 2>&1; then \
+			if $$delegate go test -v -tags=integration -count=1 -timeout 20m $$runflag -p 1 ./internal/sandbox/ ./internal/bundled/ ./cmd/vmjail/ 9>&- >$$sandbox_log 2>&1; then \
 				tail -2 $$sandbox_log; rm -f $$sandbox_log; \
 			else \
 				echo "[e2e] sandbox failure; full log retained at $$sandbox_log"; \
@@ -342,7 +342,7 @@ hooks:
 #     only by the Nix build (`nix build .#vmjail-sandboxd`). Use Nix
 #     for any release artefact.
 
-build: build-vmjail-agent build-vmjail-sandboxd
+build: build-vmjail build-vmjail-agent build-vmjail-sandboxd
 
 # dev builds every artefact vmjail produces, entirely within the Nix
 # dev shell: the host-side Go binaries (build), the sandbox-VM
@@ -358,21 +358,12 @@ build: build-vmjail-agent build-vmjail-sandboxd
 dev: build build-artefacts build-initramfs build-hello-bundle
 	@echo "[dev] full build complete — artefacts under $(BIN_DIR)/"
 
-build-vmjail-agent:
-	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/vmjail-agent ./cmd/vmjail-agent
-
 # vmjail-hello-container is the workload binary that runs *inside the
-# container*. The integration test's hello-bundle rootfs/hello is a
-# copy of this. Statically linked: it runs against the VM's minimal
-# initramfs, no host libc.
-build-vmjail-hello-container:
+# container*. The integration test copies it into the hello-bundle rootfs.
+GO_BINARIES := vmjail vmjail-agent vmjail-hello-container vmjail-sandboxd
+$(addprefix build-,$(GO_BINARIES)): build-%:
 	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/vmjail-hello-container ./cmd/vmjail-hello-container
-
-build-vmjail-sandboxd:
-	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/vmjail-sandboxd ./cmd/vmjail-sandboxd
+	CGO_ENABLED=0 go build -ldflags '-s -w $(LDFLAGS)' -o $(BIN_DIR)/$* ./cmd/$*
 
 ## Codegen -------------------------------------------------------------------
 

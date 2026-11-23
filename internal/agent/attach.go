@@ -512,13 +512,13 @@ func writeAttachLenPrefixed(w io.Writer, payload []byte) error {
 	var hdr [attachLenPrefix]byte
 	// len(payload) was just bounds-checked above.
 	binary.BigEndian.PutUint32(hdr[:], uint32(len(payload))) //nolint:gosec // G115: bounded by attachMaxFrame above
-	if _, err := w.Write(hdr[:]); err != nil {
+	if err := writeStreamBytes(w, hdr[:]); err != nil {
 		return fmt.Errorf("write length prefix: %w", err)
 	}
 	if len(payload) == 0 {
 		return nil
 	}
-	if _, err := w.Write(payload); err != nil {
+	if err := writeStreamBytes(w, payload); err != nil {
 		return fmt.Errorf("write payload: %w", err)
 	}
 	return nil

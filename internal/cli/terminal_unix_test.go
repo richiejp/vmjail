@@ -11,40 +11,22 @@ package cli
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/richiejp/vmjail/internal/pty"
 )
 
-// openTestPTY opens a /dev/ptmx + /dev/pts/<n> pair and returns
-// them. Same shape as the agent's openPtyPair, redeclared here
-// so the cli test doesn't import the agent package just to reach
-// a private helper.
 func openTestPTY(t *testing.T) (master, slave *os.File) {
 	t.Helper()
-	fd, err := unix.Open("/dev/ptmx", unix.O_RDWR|unix.O_NOCTTY, 0)
+	master, slave, err := pty.Open()
 	if err != nil {
-		t.Fatalf("open /dev/ptmx: %v", err)
+		t.Fatal(err)
 	}
-	master = os.NewFile(uintptr(fd), "/dev/ptmx")
-	t.Cleanup(func() { _ = master.Close() })
-	if err := unix.IoctlSetPointerInt(fd, unix.TIOCSPTLCK, 0); err != nil {
-		t.Fatalf("unlockpt: %v", err)
-	}
-	n, err := unix.IoctlGetInt(fd, unix.TIOCGPTN)
-	if err != nil {
-		t.Fatalf("ptsname: %v", err)
-	}
-	slavePath := fmt.Sprintf("/dev/pts/%d", n)
-	sfd, err := unix.Open(slavePath, unix.O_RDWR|unix.O_NOCTTY, 0)
-	if err != nil {
-		t.Fatalf("open slave: %v", err)
-	}
-	slave = os.NewFile(uintptr(sfd), slavePath)
-	t.Cleanup(func() { _ = slave.Close() })
+	t.Cleanup(func() { _ = master.Close(); _ = slave.Close() })
 	return master, slave
 }
 

@@ -56,12 +56,15 @@ const (
 // absolute on the sandbox-host. The struct is exported so tests and
 // callers can build one without going through the env.
 type Config struct {
+	// HostCommand runs the OCI entrypoint over the dedicated command channel.
+	HostCommand bool
+
 	// ArtifactFiles pins sealed embedded assets; caller owns their lifetime.
 	ArtifactFiles [4]*os.File
 
 	// CloudHypervisor is the path to the cloud-hypervisor binary.
 	CloudHypervisor string
-	// Kernel is the path to the bzImage to boot.
+	// Kernel is the path to the kernel ELF (PVH) or bzImage to boot.
 	Kernel string
 	// Initramfs is the path to the cpio archive to load as initrd.
 	Initramfs string
@@ -598,6 +601,10 @@ func startOneVirtiofsd(ctx context.Context, binary string, share *ShareConfig, c
 		"--shared-dir", share.HostDir,
 		"--sandbox=none",
 	)
+	// Overlayfs cannot traverse lower-layer automounts advertised by virtiofs.
+	if share.Overlay {
+		args = append(args, "--no-announce-submounts")
+	}
 	args = append(args, translateArgs(share.Translate)...)
 	// #nosec G204 — `binary` is cfg.Virtiofsd, an absolute path passed
 	// by the host operator who's already trusted to spawn the VMM, and

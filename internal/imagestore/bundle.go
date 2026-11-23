@@ -15,6 +15,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 
+	"github.com/richiejp/vmjail/internal/ocibundle"
 	"github.com/richiejp/vmjail/internal/oops"
 	"github.com/richiejp/vmjail/internal/trace"
 )
@@ -92,12 +93,7 @@ type BundleOptions struct {
 // BundleMount mirrors the subset of the OCI runtime-spec mount type
 // we expose through BundleOptions. Marshalled into the runtime
 // spec's JSON when present.
-type BundleMount struct {
-	Destination string   `json:"destination"`
-	Type        string   `json:"type,omitempty"`
-	Source      string   `json:"source,omitempty"`
-	Options     []string `json:"options,omitempty"`
-}
+type BundleMount = ocibundle.Mount
 
 // Bundle materialises a runnable bundle for digest. The unpacked
 // rootfs is cached per digest (expensive to recreate — flattening

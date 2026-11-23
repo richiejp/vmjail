@@ -3,6 +3,8 @@ package sandbox
 import (
 	"fmt"
 	"os"
+
+	"github.com/richiejp/vmjail/internal/bundled"
 )
 
 // Env var names. Stable so external scripting (and our integration
@@ -58,4 +60,22 @@ func ConfigFromEnv(requireArtefacts bool) (Config, error) {
 		return Config{}, fmt.Errorf("sandbox: missing required env vars: %v", missing)
 	}
 	return cfg, nil
+}
+
+// ApplyArtifactDefaults records the bundled descriptors and fills any artifact
+// paths the caller has left unset. The caller retains ownership of paths.
+func (cfg *Config) ApplyArtifactDefaults(paths bundled.Paths) {
+	cfg.ArtifactFiles = paths.Files
+	if cfg.CloudHypervisor == "" {
+		cfg.CloudHypervisor = paths.CloudHypervisor
+	}
+	if cfg.Kernel == "" {
+		cfg.Kernel = paths.Kernel
+	}
+	if cfg.Initramfs == "" {
+		cfg.Initramfs = paths.Initramfs
+	}
+	if cfg.Virtiofsd == "" {
+		cfg.Virtiofsd = paths.Virtiofsd
+	}
 }

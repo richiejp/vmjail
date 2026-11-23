@@ -12,133 +12,26 @@ import (
 	"strings"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+
+	"github.com/richiejp/vmjail/internal/ocibundle"
 )
 
-// runtimeSpec is the subset of the OCI runtime spec we generate. It
-// is intentionally incomplete — only fields the agent's `crun run
-// --no-pivot` cares about, mirroring contrib/hello-bundle/config.json.
-//
-// Marshalled as-is to config.json. JSON tags use the OCI spec field
-// names so the result is a valid runtime-spec document.
-type runtimeSpec struct {
-	OCIVersion string             `json:"ociVersion"`
-	Process    runtimeProcess     `json:"process"`
-	Root       runtimeRoot        `json:"root"`
-	Hostname   string             `json:"hostname"`
-	Mounts     []runtimeMount     `json:"mounts"`
-	Linux      runtimeLinuxConfig `json:"linux"`
-}
-
-type runtimeProcess struct {
-	Terminal        bool                `json:"terminal"`
-	User            runtimeUser         `json:"user"`
-	Args            []string            `json:"args"`
-	Env             []string            `json:"env,omitempty"`
-	Cwd             string              `json:"cwd"`
-	Capabilities    runtimeCapabilities `json:"capabilities"`
-	Rlimits         []any               `json:"rlimits"`
-	NoNewPrivileges bool                `json:"noNewPrivileges"`
-}
-
-type runtimeUser struct {
-	UID int `json:"uid"`
-	GID int `json:"gid"`
-}
-
-type runtimeCapabilities struct {
-	Bounding  []string `json:"bounding"`
-	Effective []string `json:"effective"`
-	Permitted []string `json:"permitted"`
-	Ambient   []string `json:"ambient"`
-}
-
-type runtimeRoot struct {
-	Path     string `json:"path"`
-	Readonly bool   `json:"readonly"`
-}
-
-type runtimeMount struct {
-	Destination string   `json:"destination"`
-	Type        string   `json:"type,omitempty"`
-	Source      string   `json:"source,omitempty"`
-	Options     []string `json:"options,omitempty"`
-}
-
-type runtimeLinuxConfig struct {
-	Namespaces    []runtimeNamespace `json:"namespaces"`
-	Resources     *runtimeResources  `json:"resources,omitempty"`
-	Devices       []runtimeDevice    `json:"devices,omitempty"`
-	Seccomp       *runtimeSeccomp    `json:"seccomp,omitempty"`
-	MaskedPaths   []string           `json:"maskedPaths"`
-	ReadonlyPaths []string           `json:"readonlyPaths"`
-}
-
-// runtimeDevice is one OCI `linux.devices` entry: it tells the runtime
-// to mknod the device node INSIDE the container (in its /dev tmpfs)
-// with the given FileMode/UID/GID, rather than bind-mounting the host's
-// node. Used to expose /dev/kvm with a 0666 FileMode so a non-root
-// container can open it — the VM's own node is 0600 root:root (no udev
-// in the initramfs) and a bind would preserve that. FileMode/UID/GID
-// are pointers so the OCI default (inherit) is expressed by omission.
-type runtimeDevice struct {
-	Type     string  `json:"type"`
-	Path     string  `json:"path"`
-	Major    int64   `json:"major"`
-	Minor    int64   `json:"minor"`
-	FileMode *uint32 `json:"fileMode,omitempty"`
-	UID      *uint32 `json:"uid,omitempty"`
-	GID      *uint32 `json:"gid,omitempty"`
-}
-
-// runtimeSeccomp is the container's syscall filter. v0 uses it for one
-// narrow job: deny socket(AF_VSOCK) so a confused workload can't open
-// its own vsock channel to the host. DefaultAction is ALLOW — this is
-// an accidental-breakage guard, not a security sandbox (the VM is the
-// boundary). See PLAN.md "accidental-clobber surface".
-type runtimeSeccomp struct {
-	DefaultAction string                  `json:"defaultAction"`
-	Architectures []string                `json:"architectures,omitempty"`
-	Syscalls      []runtimeSeccompSyscall `json:"syscalls,omitempty"`
-}
-
-// runtimeSeccompSyscall is one rule: when any name in Names is called
-// and every Args predicate matches, take Action (returning ErrnoRet
-// for SCMP_ACT_ERRNO).
-type runtimeSeccompSyscall struct {
-	Names    []string            `json:"names"`
-	Action   string              `json:"action"`
-	ErrnoRet *uint               `json:"errnoRet,omitempty"`
-	Args     []runtimeSeccompArg `json:"args,omitempty"`
-}
-
-// runtimeSeccompArg matches one syscall argument: arg[Index] Op Value.
-type runtimeSeccompArg struct {
-	Index uint64 `json:"index"`
-	Value uint64 `json:"value"`
-	Op    string `json:"op"`
-}
-
-// runtimeResources carries the cgroup resource limits. We only populate
-// the device controller, to let the container open the bind-mounted
-// /dev/kvm — crun's default cgroup-v2 eBPF device filter denies anything
-// outside the standard set, so a bind mount alone is not enough.
-type runtimeResources struct {
-	Devices []runtimeDeviceCgroup `json:"devices,omitempty"`
-}
-
-// runtimeDeviceCgroup is one cgroup device rule. Type/Major/Minor are
-// omitted to mean "all" per the OCI spec.
-type runtimeDeviceCgroup struct {
-	Allow  bool   `json:"allow"`
-	Type   string `json:"type,omitempty"`
-	Major  *int64 `json:"major,omitempty"`
-	Minor  *int64 `json:"minor,omitempty"`
-	Access string `json:"access,omitempty"`
-}
-
-type runtimeNamespace struct {
-	Type string `json:"type"`
-}
+type (
+	runtimeSpec           = ocibundle.Spec
+	runtimeProcess        = ocibundle.Process
+	runtimeUser           = ocibundle.User
+	runtimeCapabilities   = ocibundle.Capabilities
+	runtimeRoot           = ocibundle.Root
+	runtimeMount          = ocibundle.Mount
+	runtimeLinuxConfig    = ocibundle.Linux
+	runtimeDevice         = ocibundle.Device
+	runtimeSeccomp        = ocibundle.Seccomp
+	runtimeSeccompSyscall = ocibundle.SeccompSyscall
+	runtimeSeccompArg     = ocibundle.SeccompArg
+	runtimeResources      = ocibundle.Resources
+	runtimeDeviceCgroup   = ocibundle.DeviceCgroup
+	runtimeNamespace      = ocibundle.Namespace
+)
 
 // buildRuntimeConfig produces a runtime spec for img with overrides
 // from opts applied. The image's Entrypoint+Cmd, Env, and WorkingDir
@@ -158,10 +51,7 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions, rootfs string) (runtim
 		)
 	}
 
-	mounts := defaultRuntimeMounts()
-	for _, m := range opts.ExtraMounts {
-		mounts = append(mounts, runtimeMount(m))
-	}
+	mounts := append(defaultRuntimeMounts(), opts.ExtraMounts...)
 
 	user, err := resolveImageUser(imgCfg.User, rootfs)
 	if err != nil {
@@ -181,14 +71,14 @@ func buildRuntimeConfig(img v1.Image, opts BundleOptions, rootfs string) (runtim
 		caps = applyPrivilegedBuild(caps)
 	}
 	return runtimeSpec{
-		OCIVersion: "1.0.2",
+		OCIVersion: ocibundle.Version,
 		Process: runtimeProcess{
 			User:            user,
 			Args:            args,
 			Env:             mergeEnv(imgCfg.Env, opts.Env),
 			Cwd:             firstNonEmpty(opts.Cwd, imgCfg.WorkingDir, "/"),
-			Capabilities:    caps,
-			Rlimits:         []any{},
+			Capabilities:    &caps,
+			Rlimits:         []ocibundle.Rlimit{},
 			NoNewPrivileges: true,
 		},
 		// Rootfs is mounted writable. v0 design puts the VM at
@@ -235,7 +125,7 @@ func compatibilityCapabilities() runtimeCapabilities {
 // driver by its 10:232 identity. Returns fresh slices so the
 // unconditional defaults stay unprivileged for every non-nested
 // workload.
-func applyNestedVirt(mounts []runtimeMount, linux runtimeLinuxConfig) ([]runtimeMount, runtimeLinuxConfig) {
+func applyNestedVirt(mounts []runtimeMount, linux runtimeLinuxConfig) (updatedMounts []runtimeMount, updatedLinux runtimeLinuxConfig) {
 	kvmMode := uint32(0o666)
 	linux.Devices = append(linux.Devices, runtimeDevice{
 		Type: "c", Path: devKVMPath, Major: 10, Minor: 232, FileMode: &kvmMode,
@@ -266,7 +156,7 @@ func applyNestedVirt(mounts []runtimeMount, linux runtimeLinuxConfig) ([]runtime
 // proto for why this is a deliberate, danger-named opt-in.
 func applyPrivilegedFuseMounts(
 	mounts []runtimeMount, linux runtimeLinuxConfig, caps runtimeCapabilities,
-) ([]runtimeMount, runtimeLinuxConfig, runtimeCapabilities) {
+) (updatedMounts []runtimeMount, updatedLinux runtimeLinuxConfig, updatedCaps runtimeCapabilities) {
 	mounts = append(mounts, runtimeMount{
 		Destination: devFusePath, Type: mountTypeBind, Source: devFusePath,
 		Options: []string{mountOptBind, "rw"},
