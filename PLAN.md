@@ -156,6 +156,36 @@ in nsjail. `make verify` passes, including real VM tests. Subsequent direct
 relay failure/cancellation tests pass `make check`, raising total coverage to
 94.80%; the baseline is unchanged.
 
+## Codex executor integration
+
+Prepared Codex's native stdio environment: the harness stays on the host and
+`codex exec-server --listen stdio` runs inside vmjail. The installed 0.167.0
+executor initializes, reports the guest kernel, preserves exit status, writes
+the shared project and retains VM state between commands. Codex app-server
+successfully creates a thread selecting that environment. The separate
+`~/.codex-vmjail` profile is credential-free, network-enabled at the user's request and uses
+`workspace-write`; the original host profile is unchanged.
+
+The initial Linux 7.0.10 build oopsed during clean teardown; the investigation
+below identified and verified the upstream fix. The default kernel is now
+Linux 7.3.6, which contains that fix. See
+[integration guide and reproducer](docs/usage/codex.md) and
+`scripts/smoke-codex.py`. Login reuse remains unapproved; no credentials were
+copied or linked into the new profile.
+
+## Virtiofs teardown investigation
+
+Staged mount, process, superblock, and inode tracing attributed the Codex guest
+oops to asynchronous FUSE RELEASE requests retaining inodes after an automatic
+virtiofs submount's lifetime. The upstream fix `06b41351779e` makes RELEASE
+synchronous for automatic submounts. An otherwise identical 7.0.10 kernel with
+that patch passed four Codex executor smoke runs, including teardown; the
+unpatched control reproduced `VFS: Busy inodes after unmount of virtiofs` and
+the `generic_shutdown_super+0x121` oops. Codex does not issue the unmount: its
+last exiting thread runs the mount-namespace cleanup. Updating the default
+kernel from 7.0.10 to 7.3.6 incorporates the upstream fix; the Codex smoke test
+must continue to verify clean executor teardown.
+
 ## Next implementation work
 
 1. Decide which further nsjail features merit support: Kafel policies, cgroup

@@ -29,10 +29,10 @@
         fetchSubmodule = name: builtins.fetchGit {
           inherit (submoduleRevs.${name}) url rev;
         };
-        kernelVersion = "7.0.10";
+        kernelVersion = "7.3.6";
         linuxSrc = pkgs.fetchurl {
           url = "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${kernelVersion}.tar.xz";
-          hash = "sha256-CUl362LCDj0ZOf6BqSlYofmH8zlEblMvqGljsoBOMtw=";
+          hash = "sha256-gYPUdadqD6/6ktbNUAr0IfWJ39AwCg8QYLuHXhHUVyM=";
         };
         uRootSrc = fetchSubmodule "u-root";
         cloudHypervisorSrc = fetchSubmodule "cloud-hypervisor";

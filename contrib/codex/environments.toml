@@ -1,0 +1,24 @@
+# Copy to the host Codex profile's environments.toml and replace all paths.
+# NixOS example: only the toolchain and selected workspace enter the VM.
+default = "vmjail"
+include_local = false
+
+[[environments]]
+id = "vmjail"
+program = "/absolute/path/to/vmjail"
+initialize_timeout_sec = 30
+args = [
+  "-t", "0",
+  "--use_pasta",
+  "-T", "/codex",
+  "-R", "/nix/store",
+  "-R", "/run/current-system/sw",
+  "-R", "/bin",
+  "-B", "/absolute/path/to/project",
+  "--cwd", "/absolute/path/to/project",
+  "-E", "PATH=/run/current-system/sw/bin:/bin",
+  "-E", "HOME=/codex",
+  "-E", "CODEX_HOME=/codex",
+  "--", "/nix/store/REPLACE-codex/bin/codex",
+  "exec-server", "--listen", "stdio",
+]

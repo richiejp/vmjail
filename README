@@ -67,6 +67,7 @@ Documentation
 - docs/nsjail-experiment.md: local CLI usage, compatibility and experiment findings.
 - ARCHITECTURE.md: the retained local runtime and component boundaries.
 - OBSERVABILITY.md: host accounting, guest gadgets and diagnostic files.
+- docs/usage/codex.md: run the Codex command executor inside vmjail.
 - docs/usage/storage-paths.md: local state and cache locations.
 - CONTRIBUTING.md: development and verification rules.
 - PLAN.md: current scope, build status and next steps.
